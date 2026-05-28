@@ -1,15 +1,16 @@
 import os
 import csv
 
-directory = "/home/knamikas/BioXFELproject/alchemyTesting_python/FeTest"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+directory = BASE_DIR
 
 file="metalpdb_feion.tsv"
-filename = '/home/knamikas/Downloads/metalpdb_report.tsv'
-hemefile = '/home/knamikas/BioXFELproject/alchemyTesting_python/FeTest/metalpdb_heme.tsv'
+filename = os.path.join(BASE_DIR, "metalpdb_report.tsv")
+hemefile = os.path.join(directory, "metalpdb_heme.tsv")
 newhemefile = os.path.join(directory, "heme_ccds.txt")
 new_file = os.path.join(directory, "fe_s_ccds.txt")
 
-nifile = '/home/knamikas/Downloads/metalpdb_report(1).tsv'
+nifile = os.path.join(BASE_DIR, "metalpdb_report(1).tsv")
 nilist = os.path.join(directory, "NI/ni_pdbs.txt")
 
 

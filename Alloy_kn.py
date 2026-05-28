@@ -29,8 +29,9 @@ def find_metal_match(string):
         j += 1
     return False
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if debug_mode == 1:
-    directory = "/home/knamikas/BioXFELproject/alchemyTesting_python/"
+    directory = BASE_DIR
 else:
     directory = input("What directory should file be downloaded and unzipped to?")
 

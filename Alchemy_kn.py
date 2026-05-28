@@ -6,8 +6,9 @@ import subprocess
 
 # home directory containing python script. files will also download and unzip
 # to this directory but that could be changed. 
-directory="/home/knamikas/BioXFELproject/alchemyTesting_python/" 
-FILE_PATH="/home/knamikas/BioXFELproject/alchemyTesting_python/" 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+directory = BASE_DIR
+FILE_PATH = BASE_DIR + os.sep
 
 #get resolution and wavelength
 
@@ -15,7 +16,7 @@ def alchemy(pdbID):
 # use subprocess to run mtz dump and put the info in a temporary file (this gets
 # overwritten each time the program loops through the code for a different pdb
 # identifier. stderr catches errors
-    input_file = '/home/knamikas/CCP4I2_PROJECTS/7cup/CCP4_JOBS/job_18/18_7cup_fphiout_prosmart_refmac.mtz'
+    input_file = os.path.join(directory, f"{pdbID}_0cyc.mtz")
     output_file = os.path.join(directory, "tempmtz")
     with open(output_file, "w") as out:
         subprocess.run(["mtzdump", "HKLIN", input_file],
@@ -95,9 +96,9 @@ def alchemy(pdbID):
         pass
 # Run Edstats
     res_limits = f'reslo={lowres},reshi={highres}\n'
-    command = ['edstats', "XYZIN", '/home/knamikas/CCP4I2_PROJECTS/7cup/CCP4_JOBS/job_18/18_7cup_xyzout_prosmart_refmac.pdb',
-               'MAPIN1', '/home/knamikas/CCP4I2_PROJECTS/7cup/CCP4_JOBS/job_18/18_7cup_fphiout_prosmart_refmac.mtz',
-               "MAPIN2", '/home/knamikas/CCP4I2_PROJECTS/7cup/CCP4_JOBS/job_18/18_7cup_diffphiout_prosmart_refmac.mtz',
+    command = ['edstats', "XYZIN", os.path.join(directory, f"{pdbID}_0cyc.pdb"),
+               'MAPIN1', os.path.join(directory, f"{pdbID}_fo.map"),
+               "MAPIN2", os.path.join(directory, f"{pdbID}_df.map"),
                "XYZOUT", os.path.join(directory, pdbID+"_rszd.pdb"),
                "OUT", os.path.join(directory, pdbID+"_stats.out"),
                "QQDOUT", os.path.join(directory, pdbID+"_qq.out")

@@ -14,6 +14,7 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning) #bunch of extra warnings printed for
 warnings.filterwarnings("ignore", category=UserWarning) # every entry dont want them printing
                                                         # for 10,000 entries
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 debug = 1
 
 # make this 1 if you want only positive distributions and -1 if you want both sides
@@ -51,7 +52,7 @@ def calculate_dpi(pdbStructure, pdbID):
         nobs = None
         rfree = None
 
-        with open(os.path.join(directory_use, f'{pdbID}.pdb'), 'r') as f:
+        with open(os.path.join(directory, f'{pdbID}.pdb'), 'r') as f:
                 for line in f:
                         if "MATTHEWS COEFFICIENT" in line:
                                 vm = line.split()[-1]
@@ -119,7 +120,7 @@ def get_bonding_info(name):
                 #print(neighbor_name)
 
         # for side chain oxygens - neighbor name is smth like OE1 or OD1                        
-        elif (neighbor.get_name().startswith("O"):
+        elif neighbor.get_name().startswith("O"):
                 bonding_info = f"{neighbor_name} O {metal.element}"
 
         #something else - like his N
@@ -139,7 +140,7 @@ def find_dist(info, dpi):
         diffs = []
         groups = []
         scores = []
-        with open("/media/knamikas/Elements/BioXFELproject/BioXFELproject/alchemyTesting_python/FeTest/fe_distances_literature_combined.csv", 'r') as f:
+        with open(os.path.join(directory, "fe_distances_literature_combined.csv"), 'r') as f:
                 for line in f:
                         if info in line:
                                 lines.append(line.strip())
@@ -188,7 +189,7 @@ def get_sigma(atom, chain, number):
                 search_for = f'{atom}  {chain} {number}'
                 try:
                         #print('trying metal')
-                        with open(os.path.join(metal_directory_use, f'{atom}_Data')) as f:
+                        with open(os.path.join(metal_directory, f'{atom}_Data')) as f:
                                 for line in f:
                                         if search_for in line:
                                         #print(f'{line}')
@@ -202,7 +203,7 @@ def get_sigma(atom, chain, number):
                 search_for = f'{atom} {chain} {number}'
                 try:
                         #print('trying cofactor')
-                        with open(os.path.join(metal_directory_use, 'Cofactor_metal_data')) as f:
+                        with open(os.path.join(metal_directory, 'Cofactor_metal_data')) as f:
                                   for line in f:
                                         if search_for in line:
                                         #print(f'{line}')
@@ -218,8 +219,8 @@ def get_sigma(atom, chain, number):
 # loop lets you set fixed file locations or enter new ones each run.         
 if debug == 1:
         # csv list of pdb ids to analyze 
-        fileIn = "/home/knamikas/BioXFELproject/alchemyTesting_python/FeTest/missingids.txt"
-        directory = "/home/knamikas/BioXFELproject/alchemyTesting_python/FeTest/"
+        fileIn = os.path.join(BASE_DIR, "missingids.txt")
+        directory = BASE_DIR
 
 
 else:
@@ -277,8 +278,6 @@ all_bonds = pd.DataFrame()
 # common but no data exists for
 no_bond_data = []
 i = 0
-start_from = pdbList.index('7die')
-i = start_from
 while i < len(pdbList):
     pdbID = str(pdbList[i])
     print(pdbID)
@@ -447,17 +446,17 @@ while i < len(pdbList):
                                                                         
     if not dist_info.empty:
             print(dist_info)
-            dist_info.to_csv(os.path.join(directory_old, 'fe_bonds_all_final.csv'), mode='a', index=False, sep=',', header=False)
+            dist_info.to_csv(os.path.join(directory, 'fe_bonds_all_final.csv'), mode='a', index=False, sep=',', header=False)
 
 
             
     i +=1
 ##
 ##print(fe_only)
-#all_bonds.to_csv(os.path.join(directory_old, 'fe_bonds_all.txt'), index=False, sep='\t')
+#all_bonds.to_csv(os.path.join(directory, 'fe_bonds_all.txt'), index=False, sep='\t')
 
 print(f'Couldnt find pdb files for {len(skipped)} pdbids')
-#with open(os.path.join(directory_use, 'pdbfileonhd.txt'), 'w') as f:
+#with open(os.path.join(directory, 'pdbfileonhd.txt'), 'w') as f:
 #        f.write(skipped)
 
 print(skipped)
