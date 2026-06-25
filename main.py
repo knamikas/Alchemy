@@ -37,6 +37,7 @@ from multiprocessing import Pool, cpu_count
 
 from Alchemy_kn import run_alchemy
 from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
+from bond_analysis import run_bond_analysis, BOND_COLUMNS
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
@@ -171,16 +172,28 @@ def enumerate_entries(root, state, limit=None):
     keeps small --max-pdbs debug runs fast instead of walking all ~24k entries.
     """
     ids = []
+    skipped = 0
     for hashdir in sorted(os.listdir(root)):
         hp = os.path.join(root, hashdir)
         if not os.path.isdir(hp):
             continue
-        for pid in sorted(os.listdir(hp)):
+        try:
+            entries = sorted(os.listdir(hp))
+        except (PermissionError, OSError) as e:
+            # Common with partially-synced/locked-down mirrors: skip rather than
+            # aborting the whole enumeration on one unreadable hashdir.
+            skipped += 1
+            print(f"  warning: skipping unreadable dir {hp}: {e}", flush=True)
+            continue
+        for pid in entries:
             ep = os.path.join(hp, pid)
             if os.path.isdir(ep) and has_state_files(ep, pid, state):
                 ids.append(pid)
                 if limit is not None and len(ids) >= limit:
                     return ids
+    if skipped:
+        print(f"  note: skipped {skipped} unreadable hashdir(s) under {root}",
+              flush=True)
     return ids
 
 
@@ -198,7 +211,8 @@ def process(pdbID):
     t0 = time.monotonic()
     out_dir = os.path.join(cfg["output_dir"], pdbID)
     result = {"pdbID": pdbID, "status": "error", "n": 0,
-              "runtime": 0.0, "error": "", "rows": [], "header": None}
+              "runtime": 0.0, "error": "", "rows": [], "header": None,
+              "bond_rows": [], "n_bonds": 0}
     try:
         entry = entry_dir_for(cfg["root"], pdbID)
         if not os.path.isdir(entry):
@@ -210,7 +224,18 @@ def process(pdbID):
         res = run_alchemy(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
         rows, header = run_analysis(pdbID, res["stats_out"],
                                     METALS_SET, cfg["cofactors"])
-        result.update(status="ok", n=len(rows), rows=rows, header=header)
+        bond_rows = []
+        if cfg["bonds"]:
+            # A bond-stage failure must not lose the edstats rows already computed.
+            try:
+                bond_rows = run_bond_analysis(
+                    pdbID, pdb, entry, rows,
+                    {"data_json": os.path.join(entry, "data.json"),
+                     "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi})
+            except Exception as e:  # noqa: BLE001
+                result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
+        result.update(status="ok", n=len(rows), rows=rows, header=header,
+                      bond_rows=bond_rows, n_bonds=len(bond_rows))
     except FileNotFoundError as e:
         result.update(status="skip", error=f"missing input: {e}"[:300])
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
@@ -258,6 +283,9 @@ def parse_args(argv=None):
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
                     help="skip ids already present in manifest.csv")
+    ap.add_argument("--no-bonds", dest="bonds", action="store_false",
+                    help="skip the metal-ligand bond-distance stage (edstats stats only)")
+    ap.set_defaults(bonds=True)
     return ap.parse_args(argv)
 
 
@@ -272,6 +300,7 @@ def main(argv=None):
     root = args.pdb_redo_root
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
     stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
+    bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
 
     if args.id:
         ids = [args.id]
@@ -295,46 +324,60 @@ def main(argv=None):
 
     cfg = {"root": root, "state": args.refine_state, "env": env,
            "output_dir": args.output_dir, "cofactors": cofactors,
-           "keep": args.keep_intermediates}
+           "keep": args.keep_intermediates, "bonds": args.bonds}
 
     append = args.resume and os.path.exists(manifest_path)
     man_fh = open(manifest_path, "a" if append else "w", newline="")
     stats_fh = open(stats_path, "a" if append else "w", newline="")
+    bonds_fh = open(bonds_path, "a" if append else "w", newline="") if args.bonds else None
     man_w = csv.writer(man_fh)
     stats_w = csv.writer(stats_fh)
+    bonds_w = csv.writer(bonds_fh) if bonds_fh else None
     if not append:
-        man_w.writerow(["pdbID", "status", "n_metals", "runtime_s", "error"])
+        man_w.writerow(["pdbID", "status", "n_metals", "n_bonds", "runtime_s", "error"])
     stats_header_written = append and os.path.getsize(stats_path) > 0
-    stats_header = None
+    bonds_header_written = bool(bonds_fh) and append and os.path.getsize(bonds_path) > 0
 
     counts = {"ok": 0, "skip": 0, "error": 0}
     n_rows = 0
+    n_bonds = 0
     try:
         with Pool(args.workers, initializer=_init_worker, initargs=(cfg,)) as pool:
             for k, r in enumerate(pool.imap_unordered(process, ids, chunksize=1), 1):
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
-                man_w.writerow([r["pdbID"], r["status"], r["n"],
+                man_w.writerow([r["pdbID"], r["status"], r["n"], r["n_bonds"],
                                 r["runtime"], r["error"]])
                 man_fh.flush()
                 if r["rows"]:
                     if not stats_header_written and r["header"]:
-                        stats_header = ["pdbID", "category"] + r["header"]
-                        stats_w.writerow(stats_header)
+                        stats_w.writerow(["pdbID", "category"] + r["header"])
                         stats_header_written = True
                     for row in r["rows"]:
                         stats_w.writerow([row["pdbID"], row["category"]] + row["fields"])
                         n_rows += 1
                     stats_fh.flush()
+                if bonds_w and r["bond_rows"]:
+                    if not bonds_header_written:
+                        bonds_w.writerow(BOND_COLUMNS)
+                        bonds_header_written = True
+                    for b in r["bond_rows"]:
+                        bonds_w.writerow([b[c] for c in BOND_COLUMNS])
+                        n_bonds += 1
+                    bonds_fh.flush()
                 if k % 200 == 0 or k == len(ids):
                     print(f"[{k}/{len(ids)}] ok={counts['ok']} "
                           f"skip={counts['skip']} error={counts['error']} "
-                          f"rows={n_rows}", flush=True)
+                          f"rows={n_rows} bonds={n_bonds}", flush=True)
     finally:
         man_fh.close()
         stats_fh.close()
+        if bonds_fh:
+            bonds_fh.close()
 
     print(f"Done. ok={counts['ok']} skip={counts['skip']} error={counts['error']}; "
           f"{n_rows} metal/cofactor rows -> {stats_path}", flush=True)
+    if args.bonds:
+        print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
     return 0
 
 
