@@ -17,7 +17,8 @@ debug = 0
 
 # Set directory containg Alchemy outputs
 
-directory = "/home/knamikas/BioXFELproject/alchemyTesting_python"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+directory = BASE_DIR
 
 metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN']
 
@@ -33,7 +34,7 @@ allMetals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN',
 
 
 #fileIn = input ("Enter CSV file for PDB identifiers: ")
-fileIn = "/home/knamikas/BioXFELproject/alchemyTesting_python/alchemyTest.txt"
+fileIn = os.path.join(BASE_DIR, "alchemyTest.txt")
 
 with open(fileIn, "r") as file:
 	pdbString = file.read()

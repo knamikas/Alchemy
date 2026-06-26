@@ -26,7 +26,8 @@ BASE_URL="https://pdb-redo.eu/db/"      # PDB-REDO download directory
 
 # home directory containing python script. files will also download and unzip
 # to this directory
-directory = "/home/knamikas/BioXFELproject/alchemyTesting_python/" 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+directory = BASE_DIR
 
 #these two functions take a pdb ID 4 letter input and download a file for
 #that ID. prints downloaded if the file exists and returns the error otherwise
@@ -34,22 +35,22 @@ directory = "/home/knamikas/BioXFELproject/alchemyTesting_python/"
 # download function; tries to get mtz file; if that exists also downloads
 # coordinates
 def download_data(pdb):
-        url = f'{BASE_URL}{pdb}/{pdb}_0cyc.mtz.gz"
+        url = f"{BASE_URL}{pdb}/{pdb}_0cyc.mtz.gz"
         filename = pdb+"_0cyc.mtz.gz"
         response = requests.get(url, stream=True)
         if response.status_code == 200:
-                with open(directory+filename, 'wb') as f:
+                with open(os.path.join(directory, filename), 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                                 f.write(chunk)
                 print(f"MTZ file downloaded")
-                url = f'{BASE_URL}{pdb}/{pdb}_0cyc.pdb.gz"
+                url = f"{BASE_URL}{pdb}/{pdb}_0cyc.pdb.gz"
                 filename = pdb+"_0cyc.pdb.gz"
                 response = requests.get(url, stream=True)
                 if response.status_code == 200:
-                with open(directory+filename, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                print(f"PDB file downloaded")
+                        with open(os.path.join(directory, filename), 'wb') as f:
+                                for chunk in response.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                        print(f"PDB file downloaded")
                 else:
                         print(f"error downloading pdb file: {response.status_code}")
 
@@ -63,20 +64,20 @@ def download_data(pdb):
 
 def unzip(pdbID):
         # unzip PDB file, if it exists otherwise print an error
-        if os.path.exists(FILE_PATH+pdbID+"_0cyc.pdb.gz")==True:
-                gunzip(FILE_PATH+pdbID+"_0cyc.pdb.gz")
+        if os.path.exists(os.path.join(directory, pdbID+"_0cyc.pdb.gz"))==True:
+                gunzip(os.path.join(directory, pdbID+"_0cyc.pdb.gz"))
         else:
                 print("No pdb file exists for "+pdbID)
         #unzip MTZ file if it exists, otherwise print an error
-        if os.path.exists(FILE_PATH+pdbID+"_0cyc.mtz.gz")==True:
-                gunzip(FILE_PATH+pdbID+"_0cyc.mtz.gz")
+        if os.path.exists(os.path.join(directory, pdbID+"_0cyc.mtz.gz"))==True:
+                gunzip(os.path.join(directory, pdbID+"_0cyc.mtz.gz"))
                 print("unzipped both files for "+pdbID)
         else:
                 print("No mtz file exists for "+pdbID)
         
 
-if debug = 1:
-        fileIn = "alchemyTest.txt"
+if debug == 1:
+        fileIn = os.path.join(BASE_DIR, "alchemyTest.txt")
 else:
         fileIn = input ("Enter CSV file for PDB identifiers: ")
 
