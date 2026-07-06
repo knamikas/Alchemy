@@ -38,6 +38,7 @@ import re
 from Analysisv2_kn import metals, uncommonMetals
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
 # Any element symbol we treat as a metal of interest (matched against the PDB
 # element column, which is more reliable than residue-name matching).
@@ -101,7 +102,7 @@ def _load_literature(path):
     return lit
 
 
-LIT = _load_literature(os.path.join(BASE_DIR, "metal_distances_info.txt"))
+LIT = _load_literature(os.path.join(DATA_DIR, "metal_distances_info.txt"))
 
 
 # --------------------------------------------------------------------------- #
