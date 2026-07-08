@@ -13,14 +13,14 @@ Requirements
 * CCP4 `fft` and `edstats` on PATH -- either already sourced, or via --ccp4-setup
   pointing at a CCP4 setup script (e.g. <CCP4>/bin/ccp4.setup-sh).
 * Run under a Python env with gemmi + Biopython (e.g. `conda run -n metal python
-  main.py ...`). gemmi is needed only for the 0cyc/besttls states (gunzip +
+  src/main.py ...`). gemmi is needed only for the 0cyc/besttls states (gunzip +
   CIF->PDB) and the resolution fallback.
 
 Examples
 --------
-  conda run -n metal python main.py --id 109m \
+  conda run -n metal python src/main.py --id 109m \
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
-  conda run -n metal python main.py --max-pdbs 20 --workers 4 \
+  conda run -n metal python src/main.py --max-pdbs 20 --workers 4 \
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
 """
 import argparse
@@ -39,7 +39,7 @@ from Alchemy_kn import run_alchemy
 from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
 from bond_analysis import run_bond_analysis, BOND_COLUMNS
 
-REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
 METALS_SET = set(metals) | set(uncommonMetals)
 

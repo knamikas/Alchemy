@@ -11,22 +11,22 @@ cofactors, optionally renders map images, and computes metal–ligand bond-lengt
 
 > Originated in the BioXFEL project; the `*_kn.py` files are Python ports of earlier scripts.
 > There is **no package, build system, or test suite** — scripts are run directly with
-> `python <script>.py`, and `main.py` is the batch entry point.
+> `python <path/to/script>.py`, and `src/main.py` is the batch entry point.
 
 ---
 
 ## Quick start
 
-The fastest path is the batch driver `main.py`, which runs the core pipeline over the local
+The fastest path is the batch driver `src/main.py`, which runs the core pipeline over the local
 PDB-REDO mirror without downloading anything:
 
 ```bash
 # Smoke test: 109m = myoglobin, expect an FE row
-conda run -n metal python main.py --id 109m --ccp4-setup <path/to/ccp4.setup-sh>
+conda run -n metal python src/main.py --id 109m --ccp4-setup <path/to/ccp4.setup-sh>
 
 # A handful of structures with 6 metals (300d) and a no-metal DNA control (100d)
-conda run -n metal python main.py --id 300d --ccp4-setup <…>
-conda run -n metal python main.py --id 100d --ccp4-setup <…>
+conda run -n metal python src/main.py --id 300d --ccp4-setup <…>
+conda run -n metal python src/main.py --id 100d --ccp4-setup <…>
 ```
 
 Results stream to `output/metal_stats_all.csv` (real-space stats),
@@ -38,7 +38,7 @@ Results stream to `output/metal_stats_all.csv` (real-space stats),
 
 - **CCP4 suite** on `PATH` — `fft`, `edstats` (core pipeline), plus `mtzdump` / `ccp4mg`
   (legacy / image rendering). The core pipeline is unusable without CCP4. Pass
-  `--ccp4-setup <…/ccp4.setup-sh>` to `main.py` (it is sourced in a subshell and verified at
+  `--ccp4-setup <…/ccp4.setup-sh>` to `src/main.py` (it is sourced in a subshell and verified at
   startup) or pre-source it.
 - **Python packages**: `requests`, `sh` (for `gunzip`), `gemmi`, `biopython` (`Bio.PDB`),
   `numpy`, `pandas`, `seaborn`, `matplotlib`. The `metal`, `biotools`, and `vinda` conda envs
@@ -48,9 +48,9 @@ There is no `requirements.txt`.
 
 ---
 
-## Batch pipeline — `main.py`
+## Batch pipeline — `src/main.py`
 
-`main.py` is the primary entry point for running the pipeline (stages 2 → 3, plus the
+`src/main.py` is the primary entry point for running the pipeline (stages 2 → 3, plus the
 bond-distance stage) across a
 local PDB-REDO mirror (default `/datasets/bioinfo/pdb-redo/`, layout
 `<root>/<id[1:3]>/<id>/`, ~24.6k entries). It does not download anything — it reads each
@@ -93,11 +93,11 @@ entry's files in place and writes only under `--output-dir` (default `./output/`
 The scripts run in sequence; each consumes files written by the previous one into a single
 shared working directory.
 
-### 1. `Assistant_kn.py` — fetch
+### 1. `legacy/Assistant_kn.py` — fetch
 Downloads `{pdb}_0cyc.mtz(.gz)` and `{pdb}_0cyc.pdb(.gz)` from PDB-REDO and gunzips them.
-*(Superseded by `main.py` for the local-mirror workflow, which reads files in place.)*
+*(Superseded by `src/main.py` for the local-mirror workflow, which reads files in place.)*
 
-### 2. `Alchemy_kn.py` — maps & real-space stats
+### 2. `src/Alchemy_kn.py` — maps & real-space stats
 Exposes `run_alchemy(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env)`: runs CCP4 `fft`
 (Fo and difference maps) + `edstats`, producing `{pdb}_stats.out` / `_rszd.pdb` / `_qq.out` /
 logs in `out_dir`. The MTZ must have `FWT / PHWT / DELFWT / PHDELWT` columns.
@@ -105,23 +105,23 @@ logs in `out_dir`. The MTZ must have `FWT / PHWT / DELFWT / PHDELWT` columns.
 > The old `mtzdump` resolution-scrape, the `7cup` special case, and the anomalous-map branch
 > were dropped from the core path; resolution is now passed in by the caller.
 
-### 3. `Analysisv2_kn.py` — parse metals & cofactors
+### 3. `src/Analysisv2_kn.py` — parse metals & cofactors
 Exposes `load_cofactors()` and `run_analysis(pdbID, stats_out, metals_set, cofactor_set)`,
 which parses `{pdb}_stats.out` and returns structured rows for metal ions and metallocofactors.
 Matching is on the parsed `fields[0]` token (fixes the old `startswith(f"{x:<4}")`
 4-char / 5-char-CCD bug). A `__main__` block reproduces the legacy per-structure file dump.
 
-### 4. `Autoplotv3_kn.py` — render map images
+### 4. `legacy/Autoplotv3_kn.py` — render map images
 Reads the `*_Data` files, finds metal coordinates in `{pdb}_rszd.pdb`, fills a `default.mgpic`
 template with map contour levels (from `_edstats.log`), and calls `ccp4mg` to render images.
 
 > ⚠️ Image rendering is reported as **broken on modern Ubuntu** (works on Ubuntu 16).
 
-### 5. `bond_analysis.py` — bond-distance analysis (integrated into `main.py`)
+### 5. `src/bond_analysis.py` — bond-distance analysis (integrated into `src/main.py`)
 Exposes `run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, dpi_inputs)`: uses Biopython
 to find **all** metal atoms, runs a 4 Å neighbor search, and for each metal–ligand contact to a
 coordinating residue/water computes the bond length and a resolution-aware z-score against
-`metal_distances_info.txt`:
+`src/data/metal_distances_info.txt`:
 
 ```
 z = (d_observed − μ) / sqrt(DPI² + σ_lit²)
@@ -134,7 +134,7 @@ scraped is absent from PDB-REDO files). edstats sigmas are joined in-process fro
 `run_analysis` rows. Bonds with no literature reference (e.g. Ni, uncommon metals) or a missing
 DPI input still emit the measured distance with NaN in the derived columns.
 
-> Generalized port of the legacy **`fe_biopython_analysis_dpi_final.py`** (Fe-only, multi-source
+> Generalized port of the legacy **`legacy/fe_biopython_analysis_dpi_final.py`** (Fe-only, multi-source
 > literature file, header-scraped DPI), which remains in the repo for reference but is no longer
 > used. The port also fixes a key-matching bug that had silently dropped all His-N / Cys-S bonds.
 
@@ -142,19 +142,19 @@ DPI input still emit the measured distance with NaN in the derived columns.
 
 ## Supporting / one-off scripts
 
-- **`Alloy_kn.py`** — scans the PDB Chemical Component Dictionary (`components.cif`, fetched via
+- **`scripts/Alloy_kn.py`** — scans the PDB Chemical Component Dictionary (`components.cif`, fetched via
   gemmi) for any component whose formula or atoms contain a metal, regenerating
-  `metallocofactors_id.txt`. Run this to refresh the cofactor list (the CCD updates weekly).
-- **`metal_pdb_read.py`** — extracts PDB-ID lists from [MetalPDB](https://metalweb.cerm.unifi.it/)
+  `src/data/metallocofactors_id.txt`. Run this to refresh the cofactor list (the CCD updates weekly).
+- **`scripts/metal_pdb_read.py`** — extracts PDB-ID lists from [MetalPDB](https://metalweb.cerm.unifi.it/)
   `.tsv` exports (search MetalPDB by a metal of interest, export, then extract the IDs).
 
 ---
 
 ## Reference data files (committed)
 
-- **`metallocofactors_id.txt`** — `{CCD_id}\t{formula}` for all metal-containing CCD components
-  (current as of 2025-06-16). Consumed by `Analysisv2_kn.py`; regenerated by `Alloy_kn.py`.
-- **`metal_distances_info.txt`** — `residue atom metal avg_bond_dist st_dev` reference bond
+- **`src/data/metallocofactors_id.txt`** — `{CCD_id}\t{formula}` for all metal-containing CCD components
+  (current as of 2025-06-16). Consumed by `src/Analysisv2_kn.py`; regenerated by `scripts/Alloy_kn.py`.
+- **`src/data/metal_distances_info.txt`** — `residue atom metal avg_bond_dist st_dev` reference bond
   lengths (Harding 2006). Consumed by the bond-distance analysis.
 
 ---
@@ -162,17 +162,17 @@ DPI input still emit the measured distance with NaN in the derived columns.
 ## Critical conventions before running anything
 
 - **Hardcoded absolute paths.** The standalone `*_kn.py` scripts have machine-specific paths
-  near the top (and inside `Alchemy_kn.py`'s `edstats` calls and `find_dist` / `get_sigma` in
+  near the top (and inside `src/Alchemy_kn.py`'s `edstats` calls and `find_dist` / `get_sigma` in
   the bond script). These must be edited for the current machine — the standalone scripts will
-  not run unmodified. `main.py` uses repo-relative paths and is the maintained path.
+  not run unmodified. `src/main.py` uses repo-relative paths and is the maintained path.
 - **`debug` flag at the top of most files** toggles hardcoded inputs vs. interactive `input()`
-  prompts, and in `Alchemy_kn.py` / `Autoplotv3_kn.py` toggles hardcoded test data or disables
+  prompts, and in `src/Alchemy_kn.py` / `legacy/Autoplotv3_kn.py` toggles hardcoded test data or disables
   image generation. Check it before running a standalone script.
 - **Standalone input** is a comma-separated list of 4-char PDB IDs in a text file (default
-  `alchemyTest.txt`), read and split on `,`. (`main.py` instead takes `--id` / `--id-file`.)
+  `alchemyTest.txt`), read and split on `,`. (`src/main.py` instead takes `--id` / `--id-file`.)
 - **Standalone scripts append (`'a'`)** to output files, and several `os.makedirs` / `os.mkdir`
   calls fail if the target already exists — delete prior `{pdb}metals/`, `{pdb}images/`, and
-  stale output files before re-running, or you will get duplicated rows / errors. `main.py`
+  stale output files before re-running, or you will get duplicated rows / errors. `src/main.py`
   manages its own work dirs and supports `--resume`.
 - **`edstats` column layout matters.** Metal sigma values are read by fixed column index from
   `*_stats.out` / `*_Data` lines (fields `[12]`, `[13]`, `[14]` for magnitude / neg / pos;
@@ -185,12 +185,12 @@ DPI input still emit the measured distance with NaN in the derived columns.
 These standalone scripts contain bugs that prevent execution as-is (treat fixing them as
 expected work):
 
-- **`Assistant_kn.py`** — unterminated f-strings (mismatched `'` / `"` on the URL lines),
+- **`legacy/Assistant_kn.py`** — unterminated f-strings (mismatched `'` / `"` on the URL lines),
   `if debug = 1:` (assignment, not `==`), and mis-indented `with` blocks.
-- **`fe_biopython_analysis_dpi_final.py`** — stray `(` in
+- **`legacy/fe_biopython_analysis_dpi_final.py`** — stray `(` in
   `elif (neighbor.get_name().startswith("O"):`, and references to undefined names
   (`directory_use`, `metal_directory_use`, `directory_old`, hardcoded
   `start_from = pdbList.index('7die')`).
-- **`Analysisv2_kn.py`** — legacy cofactor matching used `startswith` on the first 4 chars, so
+- **`src/Analysisv2_kn.py`** — legacy cofactor matching used `startswith` on the first 4 chars, so
   newer 5-char CCD IDs were mishandled (fixed in the `run_analysis` token match used by
-  `main.py`).
+  `src/main.py`).

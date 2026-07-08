@@ -11,6 +11,7 @@
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
 # common metals to search for
 metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN']
@@ -32,7 +33,7 @@ def load_cofactors(path=None):
     the id token.
     """
     if path is None:
-        path = os.path.join(BASE_DIR, "metallocofactors_id.txt")
+        path = os.path.join(DATA_DIR, "metallocofactors_id.txt")
     cofactor_set = set()
     with open(path) as f:
         for line in f:

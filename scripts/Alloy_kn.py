@@ -30,8 +30,10 @@ def find_metal_match(string):
     return False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(BASE_DIR)
+DATA_DIR = os.path.join(REPO_DIR, "src", "data")
 if debug_mode == 1:
-    directory = BASE_DIR
+    directory = DATA_DIR
 else:
     directory = input("What directory should file be downloaded and unzipped to?")
 
@@ -176,5 +178,4 @@ print(f'Checked {count2} components missing formulas and added {count3} that con
 
     
         
-
 
