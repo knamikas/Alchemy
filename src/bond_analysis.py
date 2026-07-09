@@ -58,18 +58,22 @@ NAN = float("nan")
 # :238-249), used only to tag each metal's environment in parent_type. CLUSTER is
 # checked before HEMES, matching the legacy precedence for the codes in both lists.
 CLUSTER = {
-    'F3S', 'SF4', 'FES', 'SRM', 'HC1', 'HC0', 'CFM', 'CLP', 'CLF', 'FE2',
-    'WCC', 'FS1', 'NFS', 'F4S', 'XCC', 'CU1', 'SF3', 'FSX', 'HCN', '1CL',
-    'FS5', '402', '4WW', '4WX', '4WV', '6ML', '9S8', 'Q46', '9SQ', '8JU',
-    'LPJ', 'FU8', 'CUV',
+    '0KA', '1CL', '35L', '6ML', '82N', '8JU', '8P8', '9S8', 'A1CBX', 'B51', 'BF8', 
+    'BJ8', 'CFM', 'CFN', 'CLF', 'CLP', 'CUV', 'CZL', 'D6N', 'ER2', 'F3S', 'F4S', 
+    'FES', 'FNE', 'FS0', 'FS2', 'FS3', 'FS4', 'FS5', 'FSF', 'FSO', 'FSX', 'HC0', 
+    'HC1', 'ICE', 'ICG', 'ICH', 'ICS', 'ICZ', 'LPJ', 'MSK', 'NFE', 'NFS', 'NUI', 
+    'Q46', 'RQM', 'S3F', 'S5Q', 'SF3', 'SF4', 'T2N', 'UFF', 'VQ8', 'VV2', 'WCC', 
+    
+    'XCC', 'ZKP'
+
 }
 HEMES = {
-    'HEM', 'HEC', 'DHE', 'SF4', 'SRM', 'HEA', 'CCH', 'HAS', 'HEV',
-    'HEO', 'HDD', 'HE6', 'FDE', 'FDD', 'HDE', 'FE2', 'HEB', 'CU1', 'HCO',
-    'HFM', 'HIF', '2FH', 'POR', 'FMI', 'HME', '1FH', '7HE', '6HE', 'VEA',
-    'VER', 'YT3', 'HDM', 'HKL', 'MOO', 'FEC', 'CLN', 'NTE', 'CUB', 'MH0',
-    'ISW', 'OBV', 'UFE', '522', 'WVP', 'WYP', 'X8P', 'WUP', 'WXP', '89R',
-    'HP5',
+    '1FH', '2FH', '4HE', '522', '6CO', '6CQ', '6HE', '7HE', '7OH', '83L', 
+    '89R', 'A1ADT', 'A1JN4', 'CCH', 'CLN', 'DDH', 'DHE', 'FDD', 'FDE', 'FEC', 
+    'FMI', 'HAS', 'HCO', 'HDD', 'HDE', 'HDM', 'HE6', 'HEA', 'HEB', 'HEC', 'HEM', 
+    'HEO', 'HEV', 'HFM', 'HIF', 'HKL', 'HME', 'HP5', 'ISW', 'MH0', 'MHM', 'MQP', 
+    'N7H', 'NTE', 'OBV', 'POR', 'SIK', 'SRM', 'UFE', 'VEA', 'VER', 'VOV', 'WC5', 
+    'WPC', 'WUF', 'WUP', 'WVP', 'WXP', 'WYP'
 }
 
 # Fixed output schema; main.py imports this so the module and driver never drift.
