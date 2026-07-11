@@ -28,12 +28,14 @@ import csv
 import gzip
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import time
 from multiprocessing import Pool, cpu_count
+import requests
 
 from Alchemy_kn import run_alchemy
 from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
@@ -53,13 +55,41 @@ _CFG = None
 def resolve_env(ccp4_setup):
     """Return the environment dict to run CCP4 under.
 
-    If `ccp4_setup` is given, source it in a bash subshell and capture the
-    resulting environment; otherwise inherit the current environment.
+    If `ccp4_setup` is given and looks like a bash setup script, source it in a
+    bash subshell and capture the resulting environment. If it is a Windows batch
+    launcher, run it in a cmd shell and capture the resulting environment instead.
+    If no setup script is provided, try a few common CCP4 Windows install paths and
+    fall back to the current environment.
     """
     if not ccp4_setup:
-        return os.environ.copy()
+        env = os.environ.copy()
+        for candidate in (
+            r"C:\Users\kalin\CCP4-9\CCP4\ccp4.setup.bat",
+            r"C:\CCP4\ccp4.setup.bat",
+            r"C:\Program Files\CCP4\ccp4.setup.bat",
+        ):
+            if os.path.exists(candidate):
+                ccp4_setup = candidate
+                break
+        if not ccp4_setup:
+            return env
     if not os.path.exists(ccp4_setup):
         raise SystemExit(f"--ccp4-setup not found: {ccp4_setup}")
+
+    if os.path.splitext(ccp4_setup)[1].lower() == ".bat":
+        tmp_cmd = os.path.join(os.environ.get("TEMP", os.getcwd()), "ccp4_env.cmd")
+        with open(tmp_cmd, "w", encoding="utf-8") as fh:
+            fh.write(f'@echo off\r\ncall "{ccp4_setup}"\r\nset\r\n')
+        out = subprocess.run(["cmd", "/c", tmp_cmd], capture_output=True, text=True)
+        if out.returncode != 0:
+            raise SystemExit(f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")
+        env = {}
+        for line in out.stdout.splitlines():
+            if "=" in line and not line.startswith("CMD") and not line.startswith("C:\\"):
+                k, v = line.split("=", 1)
+                env[k] = v
+        return {**os.environ.copy(), **env}
+
     cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null 2>&1 && env -0"
     out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
     if out.returncode != 0:
@@ -78,7 +108,7 @@ def verify_ccp4(env):
     if missing:
         raise SystemExit(
             f"CCP4 tool(s) not found on PATH: {missing}. "
-            f"Provide --ccp4-setup <ccp4.setup-sh> or source CCP4 before running.")
+            f"Provide --ccp4-setup <ccp4.setup-sh or ccp4.setup.bat> or source CCP4 before running.")
 
 
 # --------------------------------------------------------------------------- #
@@ -137,12 +167,13 @@ def prepare_inputs(pdbID, entry_dir, state, work_dir):
     raise ValueError(f"unknown refine state: {state}")
 
 
-def read_resolution(entry_dir, mtz_path):
+def read_resolution(entry_dir, mtz_path, data_json_path=None):
     """Return (reslo, reshi) -- low/high resolution limits for edstats.
 
-    Prefer PDB-REDO data.json (DATARESL/DATARESH); fall back to the MTZ via gemmi.
+    Prefer a supplied data.json (or PDB-REDO data.json) when available;
+    fall back to the MTZ via gemmi.
     """
-    dj = os.path.join(entry_dir, "data.json")
+    dj = data_json_path or os.path.join(entry_dir, "data.json")
     if os.path.exists(dj):
         try:
             props = json.load(open(dj)).get("properties", {})
@@ -163,6 +194,126 @@ def has_state_files(entry_dir, pdbID, state):
         "0cyc": [f"{pdbID}_0cyc.mtz.gz", f"{pdbID}_0cyc.cif.gz"],
     }[state]
     return all(os.path.exists(os.path.join(entry_dir, f)) for f in req)
+
+
+def _download_stream(url, dst, timeout=30):
+    """Download URL to dst. Raise FileNotFoundError on non-200."""
+    try:
+        r = requests.get(url, stream=True, timeout=timeout)
+    except Exception as e:  # network/connection
+        raise FileNotFoundError(f"{url}: {e}")
+    if r.status_code != 200:
+        raise FileNotFoundError(f"{url}: status {r.status_code}")
+    with open(dst, "wb") as fh:
+        for chunk in r.iter_content(8192):
+            if chunk:
+                fh.write(chunk)
+    return dst
+
+
+def download_entry_to_cache(pdbID, cache_root, state):
+    """Download required files for `pdbID` into a mirror-like `cache_root`.
+
+    This tries common PDB-REDO filenames for each refinement `state` and
+    uncompresses when needed so the cache matches the layout expected by the
+    rest of the pipeline.
+    """
+    base = f"https://pdb-redo.eu/db/{pdbID}/"
+    entry = entry_dir_for(cache_root, pdbID)
+    os.makedirs(entry, exist_ok=True)
+    got = []
+    # helper to try url and optionally un-gzip into final name
+    def try_fetch(name, want_uncompress=False):
+        url = base + name
+        dst = os.path.join(entry, name)
+        try:
+            _download_stream(url, dst)
+            got.append(name)
+            return True
+        except FileNotFoundError:
+            return False
+
+    # Download per-state expected files
+    if state == "final":
+        # prefer uncompressed final files, fall back to .gz then uncompress
+        for fname in (f"{pdbID}_final.mtz", f"{pdbID}_final.pdb", "data.json"):
+            if try_fetch(fname):
+                continue
+            gz = fname + ".gz"
+            if try_fetch(gz):
+                # if we need uncompressed final files, gunzip them
+                if fname.endswith(".mtz") or fname.endswith(".pdb"):
+                    _gunzip_to(os.path.join(entry, gz), os.path.join(entry, fname))
+                    os.remove(os.path.join(entry, gz))
+                    got.append(fname)
+    elif state == "besttls":
+        for fname in (f"{pdbID}_besttls.mtz.gz", f"{pdbID}_besttls.pdb.gz", "data.json"):
+            if try_fetch(fname):
+                continue
+            # try uncompressed data.json
+            if fname == "data.json":
+                try_fetch("data.json")
+    elif state == "0cyc":
+        for fname in (f"{pdbID}_0cyc.mtz.gz", f"{pdbID}_0cyc.cif.gz", "data.json"):
+            if try_fetch(fname):
+                continue
+            if fname == "data.json":
+                try_fetch("data.json")
+
+    # Verify we have the files required for the state
+    if not has_state_files(entry, pdbID, state):
+        raise FileNotFoundError(f"PDB-REDO entry {pdbID} missing files for state={state}")
+
+
+def ensure_entry_available(pdbID, mirror_root, cache_root, state):
+    """Return the root (mirror or cache) that contains the required files.
+
+    Preference order: mirror_root (full local mirror) -> cache_root (auto-download).
+    Raises FileNotFoundError when unavailable.
+    """
+    # 1) check full mirror specified by user
+    mirror_entry = entry_dir_for(mirror_root, pdbID)
+    if os.path.isdir(mirror_entry) and has_state_files(mirror_entry, pdbID, state):
+        return mirror_root
+    # 2) check cache
+    cache_entry = entry_dir_for(cache_root, pdbID)
+    if os.path.isdir(cache_entry) and has_state_files(cache_entry, pdbID, state):
+        return cache_root
+    # 3) try to download into cache
+    download_entry_to_cache(pdbID, cache_root, state)
+    if os.path.isdir(cache_entry) and has_state_files(cache_entry, pdbID, state):
+        return cache_root
+    raise FileNotFoundError(pdbID)
+
+
+def resolve_manual_inputs(pdbID, pdb_file=None, mtz_file=None, cif_file=None, work_dir=None):
+    """Return (mtz_path, pdb_path) for a manually supplied local input set."""
+    if not mtz_file:
+        raise ValueError("manual mode requires --mtz-file")
+    if not os.path.exists(mtz_file):
+        raise FileNotFoundError(f"mtz file not found: {mtz_file}")
+
+    if pdb_file:
+        if not os.path.exists(pdb_file):
+            raise FileNotFoundError(f"pdb file not found: {pdb_file}")
+        return mtz_file, pdb_file
+
+    if cif_file:
+        if not os.path.exists(cif_file):
+            raise FileNotFoundError(f"cif file not found: {cif_file}")
+        target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdbID}.pdb")
+        return mtz_file, _cif_to_pdb(cif_file, target_pdb)
+
+    raise ValueError("manual mode requires --pdb-file or --cif-file")
+
+
+def infer_pdb_id_from_path(path):
+    """Infer a 4-char PDB id from a local file name if possible."""
+    if not path:
+        return None
+    stem = os.path.splitext(os.path.basename(path))[0]
+    m = re.match(r"([A-Za-z0-9]{4})(?:_.*)?$", stem)
+    return m.group(1).lower() if m else None
 
 
 def enumerate_entries(root, state, limit=None):
@@ -214,13 +365,30 @@ def process(pdbID):
               "runtime": 0.0, "error": "", "rows": [], "header": None,
               "bond_rows": [], "n_bonds": 0}
     try:
-        entry = entry_dir_for(cfg["root"], pdbID)
-        if not os.path.isdir(entry):
-            result.update(status="skip", error="entry dir missing")
-            return result
-        os.makedirs(out_dir, exist_ok=True)
-        mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
-        reslo, reshi = read_resolution(entry, mtz)
+        if cfg.get("manual_inputs"):
+            os.makedirs(out_dir, exist_ok=True)
+            mtz, pdb = resolve_manual_inputs(
+                pdbID,
+                pdb_file=cfg["manual_inputs"].get("pdb_file"),
+                mtz_file=cfg["manual_inputs"].get("mtz_file"),
+                cif_file=cfg["manual_inputs"].get("cif_file"),
+                work_dir=out_dir,
+            )
+            entry = os.path.dirname(pdb) or out_dir
+            data_json = cfg["manual_inputs"].get("data_json")
+            reslo, reshi = read_resolution(entry, mtz, data_json_path=data_json)
+        else:
+            if cfg["allow_download"]:
+                used_root = ensure_entry_available(pdbID, cfg["mirror_root"], cfg["cache_root"], cfg["state"])
+                entry = entry_dir_for(used_root, pdbID)
+            else:
+                entry = entry_dir_for(cfg["root"], pdbID)
+            if not os.path.isdir(entry):
+                result.update(status="skip", error="entry dir missing")
+                return result
+            os.makedirs(out_dir, exist_ok=True)
+            mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
+            reslo, reshi = read_resolution(entry, mtz)
         res = run_alchemy(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
         rows, header = run_analysis(pdbID, res["stats_out"],
                                     METALS_SET, cfg["cofactors"])
@@ -230,7 +398,7 @@ def process(pdbID):
             try:
                 bond_rows = run_bond_analysis(
                     pdbID, pdb, entry, rows,
-                    {"data_json": os.path.join(entry, "data.json"),
+                    {"data_json": data_json if cfg.get("manual_inputs") else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi})
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
@@ -263,13 +431,40 @@ def load_done(manifest_path):
     return done
 
 
+def load_ids_from_file(path):
+    """Return a list of PDB ids from a comma/newline-separated text file."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"id file not found: {path}")
+    ids = []
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw_line in enumerate(fh, 1):
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            for token in re.split(r"[,\s]+", line):
+                token = token.strip()
+                if not token:
+                    continue
+                if not re.fullmatch(r"[A-Za-z0-9]{4}", token):
+                    raise ValueError(f"invalid PDB id {token!r} at {path}:{lineno}")
+                ids.append(token.lower())
+    return ids
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--id", help="process a single PDB id (else batch the root)")
+    ap.add_argument("--id", help="process a single PDB id")
+    ap.add_argument("--id-file", help="path to a file of PDB ids (comma- and/or newline-separated)")
+    ap.add_argument("--pdb-file", help="path to a local PDB file for manual input mode")
+    ap.add_argument("--mtz-file", help="path to a local MTZ file for manual input mode")
+    ap.add_argument("--cif-file", help="path to a local mmCIF file for manual input mode")
+    ap.add_argument("--data-json", help="optional path to a local data.json for manual input mode")
     ap.add_argument("--pdb-redo-root", default=DEFAULT_ROOT,
                     help="root of the PDB-REDO mirror")
+    ap.add_argument("--pdb-redo-cache", default=os.path.join(REPO_DIR, "pdb-redo-cache"),
+                    help="root of local cache for auto-downloaded PDB-REDO entries")
     ap.add_argument("--refine-state", choices=["final", "0cyc", "besttls"],
                     default="final", help="which refinement state to analyze")
     ap.add_argument("--max-pdbs", type=int, default=None,
@@ -286,7 +481,10 @@ def parse_args(argv=None):
     ap.add_argument("--no-bonds", dest="bonds", action="store_false",
                     help="skip the metal-ligand bond-distance stage (edstats stats only)")
     ap.set_defaults(bonds=True)
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.id and args.id_file:
+        raise SystemExit("use either --id or --id-file, not both")
+    return args
 
 
 def main(argv=None):
@@ -298,12 +496,42 @@ def main(argv=None):
     cofactors = load_cofactors()
 
     root = args.pdb_redo_root
+    cache_root = args.pdb_redo_cache
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
     stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
     bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
 
-    if args.id:
-        ids = [args.id]
+    manual_inputs = None
+    if args.pdb_file or args.mtz_file or args.cif_file:
+        pdbID = args.id or infer_pdb_id_from_path(args.pdb_file) or infer_pdb_id_from_path(args.mtz_file) or infer_pdb_id_from_path(args.cif_file)
+        if not pdbID:
+            print("Manual input mode requires --id or a file name that contains a 4-character PDB id.", flush=True)
+            return 1
+        manual_inputs = {
+            "pdb_file": args.pdb_file,
+            "mtz_file": args.mtz_file,
+            "cif_file": args.cif_file,
+            "data_json": args.data_json,
+        }
+        ids = [pdbID]
+    elif args.id:
+        # Ensure requested single entry is available locally (mirror or cache).
+        try:
+            used_root = ensure_entry_available(args.id, args.pdb_redo_root, cache_root, args.refine_state)
+            if used_root != args.pdb_redo_root:
+                print(f"Auto-downloaded {args.id} into cache at {cache_root}", flush=True)
+            root = used_root
+            ids = [args.id]
+        except FileNotFoundError:
+            print(f"Entry {args.id} not found locally and download failed.", flush=True)
+            return 1
+    elif args.id_file:
+        try:
+            ids = load_ids_from_file(args.id_file)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc), flush=True)
+            return 1
+        print(f"Loaded {len(ids)} IDs from {args.id_file}", flush=True)
     else:
         print(f"Enumerating entries under {root} (state={args.refine_state}) ...",
               flush=True)
@@ -322,9 +550,12 @@ def main(argv=None):
     print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
           f"with {args.workers} worker(s) ...", flush=True)
 
-    cfg = {"root": root, "state": args.refine_state, "env": env,
+    cfg = {"root": root, "mirror_root": args.pdb_redo_root,
+           "cache_root": cache_root, "state": args.refine_state, "env": env,
            "output_dir": args.output_dir, "cofactors": cofactors,
-           "keep": args.keep_intermediates, "bonds": args.bonds}
+           "keep": args.keep_intermediates, "bonds": args.bonds,
+           "allow_download": bool(args.id or args.id_file),
+           "manual_inputs": manual_inputs}
 
     append = args.resume and os.path.exists(manifest_path)
     man_fh = open(manifest_path, "a" if append else "w", newline="")
