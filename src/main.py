@@ -40,6 +40,12 @@ import requests
 from Alchemy_kn import run_alchemy
 from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
 from bond_analysis import run_bond_analysis, BOND_COLUMNS
+from ccp4_setup import (
+    ccp4_tools_available,
+    find_ccp4_setup,
+    load_ccp4_setup_config,
+    save_ccp4_setup,
+)
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
@@ -58,23 +64,12 @@ def resolve_env(ccp4_setup):
     If `ccp4_setup` is given and looks like a bash setup script, source it in a
     bash subshell and capture the resulting environment. If it is a Windows batch
     launcher, run it in a cmd shell and capture the resulting environment instead.
-    If no setup script is provided, try a few common CCP4 Windows install paths and
-    fall back to the current environment.
+    If no setup script is provided, fall back to the current environment.
     """
     if not ccp4_setup:
-        env = os.environ.copy()
-        for candidate in (
-            r"C:\Users\kalin\CCP4-9\CCP4\ccp4.setup.bat",
-            r"C:\CCP4\ccp4.setup.bat",
-            r"C:\Program Files\CCP4\ccp4.setup.bat",
-        ):
-            if os.path.exists(candidate):
-                ccp4_setup = candidate
-                break
-        if not ccp4_setup:
-            return env
+        return os.environ.copy()
     if not os.path.exists(ccp4_setup):
-        raise SystemExit(f"--ccp4-setup not found: {ccp4_setup}")
+        raise SystemExit(f"CCP4 setup file not found: {ccp4_setup}")
 
     if os.path.splitext(ccp4_setup)[1].lower() == ".bat":
         tmp_cmd = os.path.join(os.environ.get("TEMP", os.getcwd()), "ccp4_env.cmd")
@@ -107,8 +102,54 @@ def verify_ccp4(env):
                if shutil.which(t, path=env.get("PATH")) is None]
     if missing:
         raise SystemExit(
-            f"CCP4 tool(s) not found on PATH: {missing}. "
-            f"Provide --ccp4-setup <ccp4.setup-sh or ccp4.setup.bat> or source CCP4 before running.")
+            "CCP4 tools (fft, edstats) were not found on PATH. "
+            "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
+            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell before running."
+        )
+
+
+def default_ccp4_config_files(repo_dir=REPO_DIR):
+    return [
+        os.path.join(repo_dir, ".alchemy", "ccp4.json"),
+        os.path.expanduser("~/.config/alchemy/ccp4.json"),
+        os.path.expanduser("~/.alchemy/ccp4.json"),
+    ]
+
+
+def resolve_ccp4_environment(args):
+    config_files = default_ccp4_config_files(REPO_DIR)
+    config = load_ccp4_setup_config(config_files=config_files)
+    if args.configure_ccp4:
+        saved = save_ccp4_setup(args.configure_ccp4, config_files=config_files)
+        print(f"Saved CCP4 setup path to {', '.join(saved)}", flush=True)
+        return None, None
+
+    environment = os.environ.copy()
+    if ccp4_tools_available(environment):
+        return environment, None
+
+    if args.ccp4_setup:
+        if not os.path.exists(args.ccp4_setup):
+            raise SystemExit(f"CCP4 setup file not found: {args.ccp4_setup}")
+        env = resolve_env(args.ccp4_setup)
+        verify_ccp4(env)
+        return env, args.ccp4_setup
+
+    ccp4_setup = find_ccp4_setup(
+        explicit_setup=None,
+        env=environment,
+        config=config,
+        config_files=config_files,
+    )
+    if ccp4_setup is None:
+        raise SystemExit(
+            "CCP4 tools (fft, edstats) were not found on PATH and no setup file could be auto-detected. "
+            "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
+            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell before running."
+        )
+    env = resolve_env(ccp4_setup)
+    verify_ccp4(env)
+    return env, ccp4_setup
 
 
 # --------------------------------------------------------------------------- #
@@ -473,7 +514,9 @@ def parse_args(argv=None):
                     help="number of worker processes")
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
     ap.add_argument("--ccp4-setup", default=None,
-                    help="CCP4 setup script to source (e.g. .../bin/ccp4.setup-sh)")
+                    help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)")
+    ap.add_argument("--configure-ccp4", default=None,
+                    help="save a CCP4 setup script path for future runs")
     ap.add_argument("--keep-intermediates", action="store_true",
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
@@ -490,8 +533,9 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
 
-    env = resolve_env(args.ccp4_setup)
-    verify_ccp4(env)
+    env, _ = resolve_ccp4_environment(args)
+    if env is None:
+        return 0
     os.makedirs(args.output_dir, exist_ok=True)
     cofactors = load_cofactors()
 
