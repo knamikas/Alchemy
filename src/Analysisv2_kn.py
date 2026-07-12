@@ -42,9 +42,42 @@ def load_cofactors(path=None):
                 cofactor_set.add(cid)
     return cofactor_set
 
+def _build_residue_elements(structure):
+    """Map (resname, chain, resnum) -> set of element symbols (upper) present
+    in that residue, from an already-parsed Biopython structure.
 
-def run_analysis(pdbID, stats_out, metals_set, cofactor_set):
+    edstats rows are per-residue, so this is looked up by the same
+    (resname, chain, resnum) key as the row itself -- no per-atom matching
+    against edstats lines is needed.
+    """
+    lookup = {}
+    try:
+        for model in structure:
+            for chain in model:
+                for residue in chain:
+                    key = (residue.get_resname(), str(chain.id), str(residue.get_id()[1]))
+                    lookup.setdefault(key, set())
+                    for atom in residue:
+                        lookup[key].add(atom.element.upper())
+        return lookup
+    except Exception:
+        return {}
+    
+
+def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     """Parse an edstats stats.out file, returning (rows, header).
+    `structure` is a parsed Biopython structure, shared with run_bond_analysis
+
+    Cofactors are matched by CCD component name (fields[0]) against
+    cofactor_set, as before. Plain metals are matched by the residue's
+    actual atom element(s), read from `structure` -- a single-atom residue
+    whose element is in metals_set is classified as a metal. This avoids
+    misclassifying components whose CCD id happens to look like an element
+    symbol (RNA "U", nitric oxide "NO") and catches metal-ion CCD ids that
+    don't themselves match an element string (e.g. "FE2").
+    If `structure` is not supplied, falls back to name-based metal matching
+    (legacy behaviour) so existing callers without a parsed structure still work.
+    
 
     Matching is done on the parsed residue-name token (fields[0]) against the
     given sets -- this fixes the old `line.startswith(f"{x:<4}")` approach, which
@@ -54,6 +87,7 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set):
     where `fields` is the full whitespace-split edstats line (aligned with
     `header`). `header` is the column-label list from the file's first line.
     """
+    residue_elements = _build_residue_elements(structure) if structure is not None else {}
     rows = []
     header = None
     with open(stats_out) as f:
@@ -67,10 +101,20 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set):
                 header = fields
                 continue
             resname = fields[0]
-            if resname in metals_set:
-                category = "metal"
-            elif resname in cofactor_set:
+            chain = fields[1] if len(fields) > 1 else ""
+            resnum = fields[2] if len(fields) > 2 else ""
+
+            if resname in cofactor_set:
                 category = "cofactor"
+            elif residue_elements:
+                elements = residue_elements.get((resname, chain, resnum))
+                if elements and elements & metals_set:
+                    category = "metal"
+                else:
+                    continue
+            elif resname in metals_set:
+                # no structure supplied -- fall back to legacy name match
+                category = "metal"
             else:
                 continue
             rows.append({

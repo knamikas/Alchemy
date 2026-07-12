@@ -39,7 +39,7 @@ import requests
 
 from Alchemy_kn import run_alchemy
 from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
-from bond_analysis import run_bond_analysis, BOND_COLUMNS
+from bond_analysis import run_bond_analysis, BOND_COLUMNS, load_structure
 from ccp4_setup import (
     ccp4_tools_available,
     find_ccp4_setup,
@@ -447,16 +447,20 @@ def process(pdbID):
             mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
             reslo, reshi = read_resolution(entry, mtz)
         res = run_alchemy(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
+        structure = load_structure(pdbID, pdb)
+
         rows, header = run_analysis(pdbID, res["stats_out"],
-                                    METALS_SET, cfg["cofactors"])
+                                    METALS_SET, cfg["cofactors"], structure=structure)
+
         bond_rows = []
+        
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
                 bond_rows = run_bond_analysis(
                     pdbID, pdb, entry, rows, header,
                     {"data_json": data_json if cfg.get("manual_inputs") else os.path.join(entry, "data.json"),
-                     "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi})
+                     "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi}, structure=structure)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
         result.update(status="ok", n=len(rows), rows=rows, header=header,

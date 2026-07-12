@@ -152,6 +152,11 @@ def _rfree_from_pdb(pdb_path):
         pass
     return NAN
 
+def load_structure(pdbID, pdb_path):
+    """Parse pdb_path once via Biopython; shared by run_analysis and
+    run_bond_analysis so a single entry's coordinate file is only read once."""
+    from Bio.PDB import PDBParser  # lazy import
+    return PDBParser(QUIET=True).get_structure(pdbID, pdb_path)
 
 def _count_ni(structure):
     """Atoms in the model plus water-residue count.
@@ -277,34 +282,46 @@ def _sigma_for(sig, resname, chain, resnum, zd_idx):
         return NAN, NAN, NAN
 
 
-def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, dpi_inputs):
+def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs, structure=None):
     """Return a list of bond-row dicts (keys == BOND_COLUMNS) for one entry.
 
     Parses ``pdb_path`` (the coordinate file edstats consumed), finds all metal
     atoms, and emits one row per metal-ligand contact within CUTOFF to a
     coordinating residue/water. Rows with no literature reference or a NaN DPI
     keep the measured distance and carry NaN in the derived columns.
-    """
-    from Bio.PDB import PDBParser, NeighborSearch  # lazy import
 
-    structure = PDBParser(QUIET=True).get_structure(pdbID, pdb_path)
+    `header` is the edstats column header (from run_analysis) used to locate
+    the ZDm/ZD-m/ZD+m sigma columns; if those columns aren't present, sigma
+    values are emitted as NaN rather than raising.
+    """
+    from Bio.PDB import NeighborSearch  # lazy import
+
+    if structure is None:
+        structure = load_structure(pdbID, pdb_path)
+
     atoms = list(structure.get_atoms())
+
     metal_atoms = [a for a in atoms if a.element.upper() in METAL_ELEMENTS]
     if not metal_atoms:
         return []
 
     dpi, resolution = calculate_dpi(structure, dpi_inputs)
     sig = _sigma_index(stats_rows)
+    zd_idx = _zd_indices(header)
     ns = NeighborSearch(atoms)
 
     rows = []
+
+
     for metal in metal_atoms:
         metal_el = metal.element.upper()
         metal_res = metal.get_parent().get_resname()
         chain = metal.get_full_id()[2]
         resnum = metal.get_parent().get_id()[1]
         ptype = _parent_type(metal_res, metal_el)
-        mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum)
+        mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum, zd_idx)
+
+  
 
         for neighbor in ns.search(metal.coord, CUTOFF, level="A"):
             nb_res = neighbor.get_parent().get_resname()
