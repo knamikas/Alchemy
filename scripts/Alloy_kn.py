@@ -1,70 +1,31 @@
 # Alloy 6/12/2025
-# Script to download CCD and make list of all metallocofactors in the PDB
-# CCD typically updated weekly with PDB, so script asks user if desired to
-# download most recent CCD file
-# need sh, gemmi python packages installed
+# Downloads the wwPDB Chemical Component Dictionary (CCD) and builds
+# metallocofactors_id.txt: the list of CCD component ids that contain a metal
+# (used by Analysisv2_kn.py alongside plain metal-ion matching).
+#
+# Normal pipeline runs should NOT need to run this file directly -- main.py
+# calls refresh_cofactors_if_needed() at startup, which uses the committed
+# metallocofactors_id.txt as-is unless it's missing or stale (per
+# metallocofactors_id.meta.json), in which case it refreshes automatically
+# when network access is available. Use --refresh-cofactors on main.py, or
+# run this file directly with --force, to refresh explicitly.
 
-# Could change search criteria to create custom lists of ligands to search for
-
-import requests
-from sh import gunzip
+import gzip
+import json
 import os
-import gemmi
 import re
-debug_mode = 1
+import shutil
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+import gemmi
+import requests
 
 URL_CCD = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
-
-# function that returns True if the compound to be checked contains a metal and
-# otherwise returns False
-def find_metal_match(string):
-    j = 0
-    while j < len(metals):
-        matches = re.findall(metals[j], string)
-        if len(matches) == 0 :
-            pass
-        else:
-            has_metal = True
-            return True
-        j += 1
-    return False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(REPO_DIR, "src", "data")
-if debug_mode == 1:
-    directory = DATA_DIR
-else:
-    directory = input("What directory should file be downloaded and unzipped to?")
-
-
-
-if debug_mode == 1:
-    pass
-else:
-    
-# loop asks for user input to determine if CCD file should be updated
-# also unzips file
-    while True:
-        download_again = input("Would you like to download most recent CCD? y/n\n")
-
-        if download_again == "y":
-            response = requests.get(URL_CCD, stream=True)
-            if response.status_code == 200:
-                with open(os.path.join(directory, 'components.cif.gz'), 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                gunzip(os.path.join(directory, 'components.cif.gz'))
-                print(f"File downloaded")
-                break
-            else:
-                print(f"error downloading file: {response.status_code}")
-                break
-        elif download_again == "n":
-            break
-
-        else:
-            print("Please enter only y or n")
 
 # all metals to search for
 metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN',
@@ -78,104 +39,186 @@ metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN',
           'RF', 'DB', 'SG']
 
 
-# load and read CCD cif file
-
-cifFile = os.path.join(directory, "components.cif")
-
-print("Reading CCD")
-
-#if debug_mode == 1:
-#    ccd = gemmi.cif.read_file(os.path.join(directory, "testCIF.cif"))
-#else:
-ccd = gemmi.cif.read_file(cifFile)
+def find_metal_match(string):
+    tokens = re.findall(r'[A-Z][a-z]?', string)  # split into element-symbol-like tokens
+    return any(t.upper() in metals for t in tokens)
 
 
-# because we append info to files, delete old copies
-if os.path.exists(os.path.join(directory, "metallocofactors_id.txt")):
-    os.remove(os.path.join(directory, "metallocofactors_id.txt"))
-if os.path.exists(os.path.join(directory, 'missing_formulas.txt')):
-    os.remove(os.path.join(directory, 'missing_formulas.txt'))
-if os.path.exists(os.path.join(directory, 'missingCIF.cif')):
-    os.remove(os.path.join(directory, 'missingCIF.cif'))
+def download_ccd(tmp_dir):
+    """Download and decompress the CCD into tmp_dir. Returns the .cif path."""
+    print(f"Downloading CCD from {URL_CCD} ...", flush=True)
+    gz_path = os.path.join(tmp_dir, "components.cif.gz")
+    response = requests.get(URL_CCD, stream=True, timeout=60)
+    if response.status_code != 200:
+        raise RuntimeError(f"CCD download failed: HTTP {response.status_code}")
 
-# set up some variables to count how many components are anlyzed and
-# an empty cif doc
-missingCIF = gemmi.cif.Document()
-count = 0
-count2 = 0
-count3 = 0
-count4 = 0
+    total_size = int(response.headers.get("Content-Length", 0))
+    downloaded = 0
+    next_report = 10 * 1024 * 1024  # report every 10 MB
+    with open(gz_path, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+            downloaded += len(chunk)
+            if downloaded >= next_report:
+                mb = downloaded / (1024 * 1024)
+                if total_size:
+                    pct = 100 * downloaded / total_size
+                    print(f"  ...downloaded {mb:.0f} MB ({pct:.0f}%)", flush=True)
+                else:
+                    print(f"  ...downloaded {mb:.0f} MB", flush=True)
+                next_report += 10 * 1024 * 1024
+    print(f"Download complete ({downloaded / (1024 * 1024):.0f} MB). Decompressing...", flush=True)
 
-#read through CCD file
-print(f'Analyzing {len(ccd)} components in CCD')
-for block in ccd:
-#extract the values for the component that we are interested in maybe saving
-    comp_id = block.find_value('_chem_comp.id')
-    formula = block.find_value('_chem_comp.formula')
-    upper_formula = formula.strip().upper()
-
-# don't want to include CCD for a plain metal ion
-    if upper_formula in metals:
-        count4 += 1
-        pass
-
-
-# generic marker for unknown ligand - dont want to include in lists
-    elif comp_id  == 'UNL':
-        pass
-
-# If there is no formula recorded, there is a ? returned.  We will instead
-# analyze by individual atom if that's the case 
-    elif formula == '?':
-        count2 += 1
-
-# adding blocks to a cif file for components missing formula - this would be a
-# way to check for errors but can be commented out
-        block = ccd.find_block(f'{comp_id}')
-        add_block = missingCIF.add_copied_block(block, pos=-1)
-
-# keep a doc with IDs of components missing formulas - also for checking and
-# debugging purposes, can be commented out
-        with open(os.path.join(directory, 'missing_formulas.txt'), 'a') as f_write:
-            f_write.write(f"{comp_id}\n")
-
-# use atom symbols instead to check if any metals are present
-        atom_symbols = block.find_values('_chem_comp_atom.type_symbol')
-        i = 0
-        while i < len(atom_symbols):
-            symbol = atom_symbols[i]
-            has_metal = find_metal_match(symbol)
-            if has_metal == True:
-                count3 += 1
-                break
-            i += 1
-# if theres a formula, search the string with each metal abbreviation until a
-# match is found. since we don't care about recording every metal, just if at
-# least one is present, we can stop checking as soon as the first is found
-    else:
-        has_metal = find_metal_match(upper_formula)
-        if has_metal == True:
-            count += 1
-
-# save info to a seperate file if there's a metal
-    if has_metal == True:
-#            print(f'{comp_id} has metal\n')
-        with open(os.path.join(directory, "metallocofactors_id.txt"), 'a') as f_write:
-            f_write.write(f"{comp_id}\t{formula}\n")
-    else:
-        continue
-
-missingCIF.write_file(os.path.join(directory, "missingCIF.cif"))
-
-print(f"Found {count} components with metal")
-print(f'Skipped {count4} metal ions')
-print(f'Checked {count2} components missing formulas and added {count3} that contained metals to metallocofactors list')
-
-    
+    cif_path = os.path.join(tmp_dir, "components.cif")
+    with gzip.open(gz_path, "rb") as fi, open(cif_path, "wb") as fo:
+        shutil.copyfileobj(fi, fo)
+    print("Decompression complete.", flush=True)
+    return cif_path
 
 
+def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
+    """Parse a CCD components.cif file and write metallocofactors_id.txt.
+
+    `debug_dir`, if given, also writes missing_formulas.txt and
+    missingCIF.cif there (components with no recorded formula, checked
+    instead by individual atom symbols) -- optional, for inspection only.
+
+    Returns a dict of counts for logging.
+    """
+    print("Reading CCD")
+    ccd = gemmi.cif.read_file(cif_path)
+
+    missing_cif = gemmi.cif.Document() if debug_dir else None
+    missing_formulas_path = (os.path.join(debug_dir, "missing_formulas.txt")
+                              if debug_dir else None)
+    if missing_formulas_path and os.path.exists(missing_formulas_path):
+        os.remove(missing_formulas_path)
+
+    counts = {"with_metal": 0, "skipped_ions": 0, "missing_formula": 0,
+              "missing_formula_with_metal": 0}
+
+    total = len(ccd)
+    print(f"Analyzing {total} components in CCD")
+    with open(output_path, "w") as f_write:
+        for i, block in enumerate(ccd, 1):
+            if i % 5000 == 0 or i == total:
+                print(f"  ...{i}/{total} components checked", flush=True)
+            has_metal = False
+
+    with open(output_path, "w") as f_write:
+        for block in ccd:
+            has_metal = False
+            comp_id = block.find_value('_chem_comp.id')
+            formula = block.find_value('_chem_comp.formula')
+            atom_symbols = [s.upper() for s in block.find_values('_chem_comp_atom.type_symbol')]
+            is_single_metal_atom = len(atom_symbols) == 1 and atom_symbols[0] in metals
+
+            
+            if is_single_metal_atom:
+                # exactly one atom, and it's a metal -- a plain ion (any charge
+                # state/CCD code), not a cofactor. Handled separately by
+                # element-based ion detection at analysis time.
+                counts["skipped_ions"] += 1
+            elif comp_id == 'UNL':
+                pass  # generic "unknown ligand" marker, never include
+            elif formula == '?':
+                counts["missing_formula"] += 1
+                if missing_cif is not None:
+                    missing_cif.add_copied_block(block, pos=-1)
+                if missing_formulas_path:
+                    with open(missing_formulas_path, 'a') as mf:
+                        mf.write(f"{comp_id}\n")
+                for symbol in block.find_values('_chem_comp_atom.type_symbol'):
+                    if find_metal_match(symbol):
+                        has_metal = True
+                        counts["missing_formula_with_metal"] += 1
+                        break
+            else:
+                if find_metal_match(formula):
+                    has_metal = True
+                    counts["with_metal"] += 1
+
+            if has_metal:
+                f_write.write(f"{comp_id}\t{formula}\n")
+
+    if missing_cif is not None:
+        missing_cif.write_file(os.path.join(debug_dir, "missingCIF.cif"))
+
+    print(f"Found {counts['with_metal']} components with metal")
+    print(f"Skipped {counts['skipped_ions']} metal ions")
+    print(f"Checked {counts['missing_formula']} components missing formulas "
+          f"and added {counts['missing_formula_with_metal']} that contained "
+          f"metals to metallocofactors list")
+    return counts
 
 
-    
-        
+def _is_stale(meta_path, max_age_days):
+    """True if metadata is missing, unreadable, or older than max_age_days."""
+    if not os.path.exists(meta_path):
+        return True
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+        generated = datetime.fromisoformat(meta["generated"])
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        return True
+    return (datetime.now(timezone.utc) - generated) > timedelta(days=max_age_days)
 
+
+def _refresh_cofactors(data_dir):
+    output_path = os.path.join(data_dir, "metallocofactors_id.txt")
+    meta_path = os.path.join(data_dir, "metallocofactors_id.meta.json")
+    with tempfile.TemporaryDirectory() as tmp:
+        cif_path = download_ccd(tmp)
+        counts = build_metallocofactors_list(cif_path, output_path, debug_dir=data_dir)
+        # cif_path (and the whole tmp dir) is deleted automatically here
+    meta = {
+        "generated": datetime.now(timezone.utc).isoformat(),
+        "ccd_source": URL_CCD,
+        "counts": counts,
+    }
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+    return counts
+
+
+def refresh_cofactors_if_needed(data_dir=None, max_age_days=30, force=False):
+    """Ensure metallocofactors_id.txt is present and current.
+
+    If the committed list exists and is fresh (per its metadata) and
+    force=False, does nothing and uses it silently. If missing or stale,
+    attempts an automatic refresh from the CCD. On network/download failure,
+    falls back to the existing list (if any) with a warning, rather than
+    failing the whole pipeline. Raises RuntimeError only if no usable list
+    exists at all and the refresh also failed.
+    """
+    data_dir = data_dir or DATA_DIR
+    list_path = os.path.join(data_dir, "metallocofactors_id.txt")
+    meta_path = os.path.join(data_dir, "metallocofactors_id.meta.json")
+
+    if not force and os.path.exists(list_path) and not _is_stale(meta_path, max_age_days):
+        return
+
+    try:
+        _refresh_cofactors(data_dir)
+        print("Refreshed metallocofactors_id.txt from the CCD.", flush=True)
+    except Exception as e:
+        if os.path.exists(list_path):
+            print(f"Warning: could not refresh cofactor list from CCD ({e}); "
+                  f"using existing metallocofactors_id.txt.", flush=True)
+        else:
+            raise RuntimeError(
+                f"No cofactor list available and refresh failed: {e}") from e
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser(
+        description="Refresh metallocofactors_id.txt from the wwPDB CCD.")
+    p.add_argument("--data-dir", default=DATA_DIR)
+    p.add_argument("--max-age-days", type=int, default=30)
+    p.add_argument("--force", action="store_true",
+                   help="refresh even if the current list is not stale")
+    args = p.parse_args()
+    refresh_cofactors_if_needed(data_dir=args.data_dir,
+                                max_age_days=args.max_age_days, force=args.force)

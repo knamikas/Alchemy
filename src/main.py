@@ -47,9 +47,17 @@ from ccp4_setup import (
     save_ccp4_setup,
 )
 
+
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
 METALS_SET = set(metals) | set(uncommonMetals)
+
+
+sys_scripts_dir = os.path.join(REPO_DIR, "scripts")
+if sys_scripts_dir not in sys.path:
+    sys.path.insert(0, sys_scripts_dir)
+
+from Alloy_kn import refresh_cofactors_if_needed
 
 # config dict shared with worker processes (set once per worker by _init_worker)
 _CFG = None
@@ -550,7 +558,10 @@ def parse_args(argv=None):
                     help="skip ids already present in manifest.csv")
     ap.add_argument("--no-bonds", dest="bonds", action="store_false",
                     help="skip the metal-ligand bond-distance stage (edstats stats only)")
+    ap.add_argument("--refresh-cofactors", action="store_true",
+                    help="force a refresh of metallocofactors_id.txt from the CCD before running")
     ap.set_defaults(bonds=True)
+    
     args = ap.parse_args(argv)
     if args.id and args.id_file:
         raise SystemExit("use either --id or --id-file, not both")
@@ -564,6 +575,12 @@ def main(argv=None):
     if env is None:
         return 0
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    try:
+        refresh_cofactors_if_needed(force=args.refresh_cofactors)
+    except RuntimeError as e:
+        print(str(e), flush=True)
+        return 1
     cofactors = load_cofactors()
 
     root = args.pdb_redo_root
