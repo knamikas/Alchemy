@@ -54,8 +54,7 @@ CUTOFF = 4.0
 
 NAN = float("nan")
 
-# Metallocofactor classifications (verbatim from fe_biopython_analysis_dpi_final.py
-# :238-249), used only to tag each metal's environment in parent_type. CLUSTER is
+# Metallocofactor classifications, used only to tag each metal's environment in parent_type. CLUSTER is
 # checked before HEMES, matching the legacy precedence for the codes in both lists.
 CLUSTER = {
     '0KA', '1CL', '35L', '6ML', '82N', '8JU', '8P8', '9S8', 'A1CBX', 'B51', 'BF8', 
@@ -256,13 +255,24 @@ def _sigma_index(stats_rows):
     return {(r["resname"], str(r["chain"]), str(r["resnum"])): r["fields"]
             for r in stats_rows}
 
+ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
+def _zd_indices(header):
+    """Return column indices for ZDm/ZD-m/ZD+m, or None
+    if the header is missing or doesn't contain all three names."""
+    if not header:
+        return None
+    try:
+        return tuple(header.index(name) for name in ZD_COLUMNS)
+    except ValueError:
+        return None
 
-def _sigma_for(sig, resname, chain, resnum):
+
+def _sigma_for(sig, resname, chain, resnum, zd_idx):
     fields = sig.get((resname, str(chain), str(resnum)))
-    if fields is None:
+    if fields is None or zd_idx is None:
         return NAN, NAN, NAN
     try:
-        return float(fields[12]), float(fields[13]), float(fields[14])
+        return float(fields[zd_idx[0]]), float(fields[zd_idx[1]]), float(fields[zd_idx[2]])
     except (IndexError, ValueError):
         return NAN, NAN, NAN
 

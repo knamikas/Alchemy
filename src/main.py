@@ -58,6 +58,22 @@ _CFG = None
 # --------------------------------------------------------------------------- #
 # CCP4 environment
 # --------------------------------------------------------------------------- #
+def _normalize_path_key(env):
+    """Ensure the PATH variable is accessible under the exact key "PATH".
+
+    Different platforms/shells report it with different casing (Windows'
+    `set` reports "Path"; Unix shells report "PATH"). Python dict lookups
+    are case-sensitive, so downstream code that does env.get("PATH") would
+    silently miss it if the key came back in a different case. This finds
+    any case-variant of "PATH" and consolidates it under the exact
+    all-caps key, leaving every other variable untouched.
+    """
+    for k in list(env):
+        if k.upper() == "PATH" and k != "PATH":
+            env["PATH"] = env.pop(k)
+    return env
+
+
 def resolve_env(ccp4_setup):
     """Return the environment dict to run CCP4 under.
 
@@ -83,7 +99,7 @@ def resolve_env(ccp4_setup):
             if "=" in line and not line.startswith("CMD") and not line.startswith("C:\\"):
                 k, v = line.split("=", 1)
                 env[k] = v
-        return {**os.environ.copy(), **env}
+        return _normalize_path_key({**os.environ.copy(), **env})
 
     cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null 2>&1 && env -0"
     out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
@@ -94,7 +110,7 @@ def resolve_env(ccp4_setup):
         if "=" in chunk:
             k, v = chunk.split("=", 1)
             env[k] = v
-    return env
+    return _normalize_path_key({**os.environ.copy(), **env})
 
 
 def verify_ccp4(env):
@@ -438,7 +454,7 @@ def process(pdbID):
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
                 bond_rows = run_bond_analysis(
-                    pdbID, pdb, entry, rows,
+                    pdbID, pdb, entry, rows, header,
                     {"data_json": data_json if cfg.get("manual_inputs") else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi})
             except Exception as e:  # noqa: BLE001

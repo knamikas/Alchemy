@@ -11,6 +11,7 @@
 # map-coefficient columns (PDB-REDO _final.mtz and refmac output have them).
 import os
 import subprocess
+import shutil
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 directory = BASE_DIR
@@ -40,6 +41,9 @@ def run_alchemy(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None):
 
     def _run(cmd, stdin, logname):
         log_path = os.path.join(out_dir, logname)
+        resolved = shutil.which(cmd[0], path=(env or {}).get("PATH"))
+        if resolved:
+            cmd = [resolved, *cmd[1:]]
         with open(log_path, "w") as log:
             proc = subprocess.run(cmd, input=stdin, text=True, stdout=log,
                                   stderr=subprocess.PIPE, env=env)
