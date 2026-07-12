@@ -39,7 +39,7 @@ import requests
 
 from Alchemy_kn import run_alchemy
 from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
-from bond_analysis import run_bond_analysis, BOND_COLUMNS, load_structure
+from bond_analysis import run_bond_analysis, BOND_COLUMNS, load_structure, NAN
 from ccp4_setup import (
     ccp4_tools_available,
     find_ccp4_setup,
@@ -453,16 +453,23 @@ def process(pdbID):
                                     METALS_SET, cfg["cofactors"], structure=structure)
 
         bond_rows = []
+        coverage_by_metal = {}
         
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
-                bond_rows = run_bond_analysis(
+                bond_rows, coverage_by_metal = run_bond_analysis(
                     pdbID, pdb, entry, rows, header,
                     {"data_json": data_json if cfg.get("manual_inputs") else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi}, structure=structure)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
+        if header:
+            header = header + ["geometry_coverage"]
+        for row in rows:
+            key = (row["resname"], str(row["chain"]), str(row["resnum"]))
+            row["fields"] = row["fields"] + [coverage_by_metal.get(key, NAN)]
+
         result.update(status="ok", n=len(rows), rows=rows, header=header,
                       bond_rows=bond_rows, n_bonds=len(bond_rows))
     except FileNotFoundError as e:

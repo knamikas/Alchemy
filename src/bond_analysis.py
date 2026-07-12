@@ -230,12 +230,15 @@ def _bonding_key(neighbor, nb_res, metal_el):
     return (nb_res, neighbor.element.upper(), metal_el)  # His N, Cys S, ...
 
 
-def _parent_type(metal_res, metal_el):
+def _parent_type(metal, metal_res, metal_el):
     if metal_res in CLUSTER:
         return "cluster"
     if metal_res in HEMES:
         return "heme"
-    if metal_res == metal_el:     # free ion: residue name is the element symbol
+    if metal_el not in METAL_ELEMENTS:
+        return "other"  # defensive: shouldn't happen, metal_atoms is pre-filtered
+    residue = metal.get_parent()
+    if sum(1 for _ in residue) == 1:   # lone atom residue = free ion
         return "ion"
     return "other"
 
@@ -293,6 +296,12 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
     `header` is the edstats column header (from run_analysis) used to locate
     the ZDm/ZD-m/ZD+m sigma columns; if those columns aren't present, sigma
     values are emitted as NaN rather than raising.
+
+    coverage_by_metal maps (resname, chain, resnum) -> geometry_coverage: the
+    fraction of a metal's coordinating contacts (N/O/S, within CUTOFF, to an
+    AA-listed residue -- i.e. exactly the contacts that would produce a row
+    below) that have a literature reference bond length. NaN if the metal has
+    no such contacts at all; 0.0 if it has contacts but none have a reference.
     """
     from Bio.PDB import NeighborSearch  # lazy import
 
@@ -303,7 +312,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
 
     metal_atoms = [a for a in atoms if a.element.upper() in METAL_ELEMENTS]
     if not metal_atoms:
-        return []
+        return [], {}
 
     dpi, resolution = calculate_dpi(structure, dpi_inputs)
     sig = _sigma_index(stats_rows)
@@ -311,6 +320,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
     ns = NeighborSearch(atoms)
 
     rows = []
+    coverage_by_metal = {}
 
 
     for metal in metal_atoms:
@@ -318,11 +328,11 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
         metal_res = metal.get_parent().get_resname()
         chain = metal.get_full_id()[2]
         resnum = metal.get_parent().get_id()[1]
-        ptype = _parent_type(metal_res, metal_el)
+        ptype = _parent_type(metal, metal_res, metal_el)
         mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum, zd_idx)
 
-  
-
+        n_contacts = 0
+        n_with_ref = 0
         for neighbor in ns.search(metal.coord, CUTOFF, level="A"):
             nb_res = neighbor.get_parent().get_resname()
             if nb_res == metal_res:      # self / same cofactor
@@ -339,9 +349,11 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
                 continue
 
             lit = LIT.get(_bonding_key(neighbor, nb_res, metal_el))
+            n_contacts += 1
             if lit is None:
                 mu = stdev = zscore = NAN
             else:
+                n_with_ref += 1
                 mu, stdev = lit
                 zscore = _zscore(dist, mu, stdev, dpi)
 
@@ -366,4 +378,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
                 "parent_type": ptype,
                 "bonded_to": _bonded_to(nb_res),
             })
-    return rows
+        coverage_by_metal[(metal_res, str(chain), str(resnum))] = (
+        round(n_with_ref / n_contacts, 4) if n_contacts > 0 else NAN
+        )
+    return rows, coverage_by_metal
