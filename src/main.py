@@ -134,9 +134,9 @@ def verify_ccp4(env):
 
 def default_ccp4_config_files(repo_dir=REPO_DIR):
     return [
-        os.path.join(repo_dir, ".alchemy", "ccp4.json"),
         os.path.expanduser("~/.config/alchemy/ccp4.json"),
         os.path.expanduser("~/.alchemy/ccp4.json"),
+        os.path.join(repo_dir, ".alchemy", "ccp4.json"),
     ]
 
 
@@ -144,8 +144,21 @@ def resolve_ccp4_environment(args):
     config_files = default_ccp4_config_files(REPO_DIR)
     config = load_ccp4_setup_config(config_files=config_files)
     if args.configure_ccp4:
-        saved = save_ccp4_setup(args.configure_ccp4, config_files=config_files)
-        print(f"Saved CCP4 setup path to {', '.join(saved)}", flush=True)
+        setup_path = os.path.abspath(os.path.expanduser(args.configure_ccp4))
+        if not os.path.exists(setup_path):
+            raise SystemExit(f"CCP4 setup file not found: {setup_path}")
+
+        env = resolve_env(setup_path)
+        try:
+            verify_ccp4(env)
+        except SystemExit as e:
+            raise SystemExit(
+                f"Ran {setup_path}, but CCP4 tools are still not available. {e}"
+            ) from None
+
+        saved = save_ccp4_setup(setup_path, config_files=config_files)
+        print(f"Verified fft and edstats are available; saved CCP4 setup "
+              f"path to {', '.join(saved)}", flush=True)
         return None, None
 
     environment = os.environ.copy()
@@ -269,10 +282,18 @@ def _download_stream(url, dst, timeout=30):
         raise FileNotFoundError(f"{url}: {e}")
     if r.status_code != 200:
         raise FileNotFoundError(f"{url}: status {r.status_code}")
-    with open(dst, "wb") as fh:
-        for chunk in r.iter_content(8192):
-            if chunk:
-                fh.write(chunk)
+    
+    tmp = f"{dst}.{os.getpid()}.part"
+    try:
+        with open(tmp, "wb") as fh:
+            for chunk in r.iter_content(8192):
+                if chunk:
+                    fh.write(chunk)
+        os.replace(tmp, dst)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     return dst
 
 
@@ -506,6 +527,11 @@ def load_done(manifest_path):
                     done.add(row[0])
     return done
 
+def parse_pdb_id(value):
+    if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
+        raise argparse.ArgumentTypeError(
+            "PDB ID must contain exactly four alphanumeric characters")
+    return value.lower()
 
 def load_ids_from_file(path):
     """Return a list of PDB ids from a comma/newline-separated text file."""
@@ -524,14 +550,14 @@ def load_ids_from_file(path):
                 if not re.fullmatch(r"[A-Za-z0-9]{4}", token):
                     raise ValueError(f"invalid PDB id {token!r} at {path}:{lineno}")
                 ids.append(token.lower())
-    return ids
+    return list(dict.fromkeys(ids))
 
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--id", help="process a single PDB id")
+    ap.add_argument("--id", type=parse_pdb_id, help="process a single PDB id (else batch the root)")
     ap.add_argument("--id-file", help="path to a file of PDB ids (comma- and/or newline-separated)")
     ap.add_argument("--pdb-file", help="path to a local PDB file for manual input mode")
     ap.add_argument("--mtz-file", help="path to a local MTZ file for manual input mode")

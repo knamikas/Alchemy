@@ -3,7 +3,7 @@
 For one PDB entry this finds every metal atom, does a Biopython neighbor search,
 and for each metal-ligand contact within 4 A computes the bond length and a
 resolution-aware z-score against the consolidated literature reference distances
-in ``metal_distances_info.txt`` (Harding 2006):
+in ``metal_distances_info.txt`` (Harding 2006 and Zheng et al. 2008 [Ni only]):
 
     z = (d_observed - mu) / sqrt(DPI**2 + sigma_lit**2)
 

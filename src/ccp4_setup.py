@@ -41,25 +41,21 @@ def load_ccp4_setup_config(config_files=None):
 
 def save_ccp4_setup(setup_path, config_files=None):
     config_files = config_files or DEFAULT_CONFIG_FILES
-    saved = []
-    for config_file in config_files:
-        if not config_file:
-            continue
-        path = Path(config_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = {}
-        if path.exists():
-            try:
-                with path.open("r", encoding="utf-8") as fh:
-                    data = json.load(fh) or {}
-            except (OSError, json.JSONDecodeError):
-                data = {}
-        data["ccp4_setup"] = setup_path
-        with path.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        saved.append(str(path))
-    return saved
+    target = config_files[0]  # write only to the primary user-level location
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh) or {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    data["ccp4_setup"] = setup_path
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    return [str(path)]
 
 
 def prompt_for_ccp4_setup(config_files=None):
