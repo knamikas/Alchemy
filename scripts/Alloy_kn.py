@@ -27,6 +27,23 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(BASE_DIR)
 DATA_DIR = os.path.join(REPO_DIR, "src", "data")
 
+
+def _default_cache_dir():
+    """Untracked, per-user location for runtime cofactor-list refreshes.
+
+    Kept separate from DATA_DIR (the tracked repo copy) so a normal run never
+    dirties `git status`, two processes never race on the same tracked file,
+    and this works even if the repo checkout itself is read-only.
+    """
+    override = os.environ.get("ALCHEMY_CACHE_DIR")
+    if override:
+        return override
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "alchemy")
+
+
+CACHE_DIR = _default_cache_dir()
+
 # all metals to search for
 metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN',
           'CD', 'HG', 'PT', 'MO', 'AL', 'BE', 'BA', 'RU', 'V', 'SR',
@@ -104,10 +121,6 @@ def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
             if i % 5000 == 0 or i == total:
                 print(f"  ...{i}/{total} components checked", flush=True)
             has_metal = False
-
-    with open(output_path, "w") as f_write:
-        for block in ccd:
-            has_metal = False
             comp_id = block.find_value('_chem_comp.id')
             formula = block.find_value('_chem_comp.formula')
             atom_symbols = [s.upper() for s in block.find_values('_chem_comp_atom.type_symbol')]
@@ -168,22 +181,37 @@ def _is_stale(meta_path, max_age_days):
 def _refresh_cofactors(data_dir):
     output_path = os.path.join(data_dir, "metallocofactors_id.txt")
     meta_path = os.path.join(data_dir, "metallocofactors_id.meta.json")
-    with tempfile.TemporaryDirectory() as tmp:
+    # dir=data_dir keeps the temp files on the same filesystem as the target,
+    # so the os.replace() calls below are guaranteed atomic (os.replace raises
+    # "Invalid cross-device link" if src/dst are on different filesystems).
+    with tempfile.TemporaryDirectory(dir=data_dir) as tmp:
         cif_path = download_ccd(tmp)
-        counts = build_metallocofactors_list(cif_path, output_path, debug_dir=data_dir)
-        # cif_path (and the whole tmp dir) is deleted automatically here
-    meta = {
-        "generated": datetime.now(timezone.utc).isoformat(),
-        "ccd_source": URL_CCD,
-        "counts": counts,
-    }
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
+        tmp_output_path = os.path.join(tmp, "metallocofactors_id.txt")
+        counts = build_metallocofactors_list(cif_path, tmp_output_path, debug_dir=data_dir)
+
+        meta = {
+            "generated": datetime.now(timezone.utc).isoformat(),
+            "ccd_source": URL_CCD,
+            "counts": counts,
+        }
+        tmp_meta_path = os.path.join(tmp, "metallocofactors_id.meta.json")
+        with open(tmp_meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        # Both files generated successfully -- swap them into place atomically
+        # so a failure above never leaves the committed list/metadata
+        # truncated or partially written.
+        os.replace(tmp_output_path, output_path)
+        os.replace(tmp_meta_path, meta_path)
+        # cif_path (and the rest of the tmp dir) is deleted automatically here
     return counts
 
 
 def refresh_cofactors_if_needed(data_dir=None, max_age_days=30, force=False):
     """Ensure metallocofactors_id.txt is present and current.
+
+    Runtime refreshes are written to `cache_dir` (an untracked, per-user
+    location) -- never to `data_dir`, the tracked copy shipped in the repo.
 
     If the committed list exists and is fresh (per its metadata) and
     force=False, does nothing and uses it silently. If missing or stale,
@@ -193,23 +221,42 @@ def refresh_cofactors_if_needed(data_dir=None, max_age_days=30, force=False):
     exists at all and the refresh also failed.
     """
     data_dir = data_dir or DATA_DIR
-    list_path = os.path.join(data_dir, "metallocofactors_id.txt")
-    meta_path = os.path.join(data_dir, "metallocofactors_id.meta.json")
+    cache_dir = cache_dir or CACHE_DIR
+    os.makedirs(cache_dir, exist_ok=True)
 
-    if not force and os.path.exists(list_path) and not _is_stale(meta_path, max_age_days):
+    cache_list_path = os.path.join(cache_dir, "metallocofactors_id.txt")
+    cache_meta_path = os.path.join(cache_dir, "metallocofactors_id.meta.json")
+
+    if not force and os.path.exists(cache_list_path) and not _is_stale(cache_meta_path, max_age_days):
         return
 
     try:
-        _refresh_cofactors(data_dir)
-        print("Refreshed metallocofactors_id.txt from the CCD.", flush=True)
+        _refresh_cofactors(cache_dir)
+        print("Refreshed metallocofactors_id.txt in the local cache.", flush=True)
     except Exception as e:
-        if os.path.exists(list_path):
+        if force:
+            # The caller explicitly asked for a refresh -- silently falling
+            # back to a stale list would look like the refresh succeeded.
+            raise RuntimeError(f"Forced cofactor refresh failed: {e}") from e
+        if os.path.exists(cache_list_path):
             print(f"Warning: could not refresh cofactor list from CCD ({e}); "
-                  f"using existing metallocofactors_id.txt.", flush=True)
+                  f"using existing cached metallocofactors_id.txt.", flush=True)
+        elif os.path.exists(os.path.join(data_dir, "metallocofactors_id.txt")):
+            print(f"Warning: could not refresh cofactor list from CCD ({e}); "
+                  f"using the committed metallocofactors_id.txt from {data_dir}.", flush=True)
         else:
             raise RuntimeError(
                 f"No cofactor list available and refresh failed: {e}") from e
 
+def active_cofactors_path(data_dir=None, cache_dir=None):
+    """Return whichever metallocofactors_id.txt should be used right now:
+    the cached refresh if one exists, otherwise the tracked repo copy."""
+    data_dir = data_dir or DATA_DIR
+    cache_dir = cache_dir or CACHE_DIR
+    cache_path = os.path.join(cache_dir, "metallocofactors_id.txt")
+    if os.path.exists(cache_path):
+        return cache_path
+    return os.path.join(data_dir, "metallocofactors_id.txt")
 
 if __name__ == "__main__":
     import argparse

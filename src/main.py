@@ -57,7 +57,7 @@ sys_scripts_dir = os.path.join(REPO_DIR, "scripts")
 if sys_scripts_dir not in sys.path:
     sys.path.insert(0, sys_scripts_dir)
 
-from Alloy_kn import refresh_cofactors_if_needed
+from Alloy_kn import refresh_cofactors_if_needed, active_cofactors_path
 
 # config dict shared with worker processes (set once per worker by _init_worker)
 _CFG = None
@@ -607,7 +607,7 @@ def main(argv=None):
     except RuntimeError as e:
         print(str(e), flush=True)
         return 1
-    cofactors = load_cofactors()
+    cofactors = load_cofactors(active_cofactors_path())
 
     root = args.pdb_redo_root
     cache_root = args.pdb_redo_cache

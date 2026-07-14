@@ -31,9 +31,14 @@ def load_cofactors(path=None):
 
     The file is "{ccd_id}\\t{formula}" per line (see Alloy_kn.py). We keep only
     the id token.
+
+    If `path` is not given, defers to Alloy_kn.active_cofactors_path(), which
+    picks up an untracked, per-user cache refresh if one exists and falls
+    back to the tracked repo copy in DATA_DIR otherwise.
     """
     if path is None:
-        path = os.path.join(DATA_DIR, "metallocofactors_id.txt")
+        from Alloy_kn import active_cofactors_path  # lazy: avoid import cycle at module load
+        path = active_cofactors_path()
     cofactor_set = set()
     with open(path) as f:
         for line in f:
