@@ -48,20 +48,27 @@ def _build_residue_elements(structure):
 
     edstats rows are per-residue, so this is looked up by the same
     (resname, chain, resnum) key as the row itself -- no per-atom matching
-    against edstats lines is needed.
+    against edstats lines is needed. `resnum` includes the insertion code
+    (e.g. "42A"), matching how edstats concatenates it into the residue
+    number token in stats.out; residues with no insertion code (icode " ")
+    keep a bare numeric string (e.g. "42").
     """
     lookup = {}
     try:
         for model in structure:
             for chain in model:
                 for residue in chain:
-                    key = (residue.get_resname(), str(chain.id), str(residue.get_id()[1]))
-                    lookup.setdefault(key, set())
-                    for atom in residue:
-                        lookup[key].add(atom.element.upper())
+                    for residue in chain:
+                        _, resseq, icode = residue.get_id()
+                        resnum = f"{resseq}{icode.strip()}"
+                        key = (residue.get_resname(), str(chain.id), resnum)
+                        lookup.setdefault(key, set())
+                        for atom in residue:
+                            lookup[key].add(atom.element.upper())
         return lookup
-    except Exception:
-        return {}
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to build residue-element lookup from structure: {e}") from e
     
 
 def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
@@ -87,7 +94,12 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     where `fields` is the full whitespace-split edstats line (aligned with
     `header`). `header` is the column-label list from the file's first line.
     """
-    residue_elements = _build_residue_elements(structure) if structure is not None else {}
+
+    if structure is None:
+        raise ValueError(
+            "A parsed structure is required for element-based metal identification")
+    residue_elements = _build_residue_elements(structure)
+
     rows = []
     header = None
     with open(stats_out) as f:
@@ -106,17 +118,13 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
 
             if resname in cofactor_set:
                 category = "cofactor"
-            elif residue_elements:
+            else:
                 elements = residue_elements.get((resname, chain, resnum))
-                if elements and elements & metals_set:
+                if elements and len(elements) == 1 and elements[0] in metals_set:
                     category = "metal"
                 else:
                     continue
-            elif resname in metals_set:
-                # no structure supplied -- fall back to legacy name match
-                category = "metal"
-            else:
-                continue
+
             rows.append({
                 "pdbID": pdbID,
                 "category": category,

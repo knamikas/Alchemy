@@ -297,7 +297,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
     the ZDm/ZD-m/ZD+m sigma columns; if those columns aren't present, sigma
     values are emitted as NaN rather than raising.
 
-    coverage_by_metal maps (resname, chain, resnum) -> geometry_coverage: the
+    aa_coverage_by_metal maps (resname, chain, resnum) -> aa_geometry_coverage: the
     fraction of a metal's coordinating contacts (N/O/S, within CUTOFF, to an
     AA-listed residue -- i.e. exactly the contacts that would produce a row
     below) that have a literature reference bond length. NaN if the metal has
@@ -320,19 +320,21 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
     ns = NeighborSearch(atoms)
 
     rows = []
-    coverage_by_metal = {}
+    contacts_by_key = {}
+    with_ref_by_key = {}
 
 
     for metal in metal_atoms:
         metal_el = metal.element.upper()
         metal_res = metal.get_parent().get_resname()
         chain = metal.get_full_id()[2]
-        resnum = metal.get_parent().get_id()[1]
+        _, resseq, icode = metal.get_parent().get_id()
+        resnum = f"{resseq}{icode.strip()}"
         ptype = _parent_type(metal, metal_res, metal_el)
         mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum, zd_idx)
 
-        n_contacts = 0
-        n_with_ref = 0
+        key = (metal_res, str(chain), str(resnum))
+        contacts_by_key.setdefault(key, 0)
         for neighbor in ns.search(metal.coord, CUTOFF, level="A"):
             nb_res = neighbor.get_parent().get_resname()
             if nb_res == metal_res:      # self / same cofactor
@@ -349,11 +351,11 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
                 continue
 
             lit = LIT.get(_bonding_key(neighbor, nb_res, metal_el))
-            n_contacts += 1
+            contacts_by_key[key] = contacts_by_key.get(key, 0) + 1
             if lit is None:
                 mu = stdev = zscore = NAN
             else:
-                n_with_ref += 1
+                with_ref_by_key[key] = with_ref_by_key.get(key, 0) + 1
                 mu, stdev = lit
                 zscore = _zscore(dist, mu, stdev, dpi)
 
@@ -378,7 +380,9 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
                 "parent_type": ptype,
                 "bonded_to": _bonded_to(nb_res),
             })
-        coverage_by_metal[(metal_res, str(chain), str(resnum))] = (
-        round(n_with_ref / n_contacts, 4) if n_contacts > 0 else NAN
-        )
-    return rows, coverage_by_metal
+        
+        aa_coverage_by_metal = {
+        key: round(with_ref_by_key.get(key, 0) / n_contacts, 4) if n_contacts > 0 else NAN
+        for key, n_contacts in contacts_by_key.items()
+    }
+    return rows, aa_coverage_by_metal
