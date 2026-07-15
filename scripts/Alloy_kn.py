@@ -207,7 +207,8 @@ def _refresh_cofactors(data_dir):
     return counts
 
 
-def refresh_cofactors_if_needed(data_dir=None, max_age_days=30, force=False):
+def refresh_cofactors_if_needed(data_dir=None, cache_dir=None, max_age_days=30, force=False):
+
     """Ensure metallocofactors_id.txt is present and current.
 
     Runtime refreshes are written to `cache_dir` (an untracked, per-user

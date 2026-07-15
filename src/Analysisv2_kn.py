@@ -125,7 +125,7 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
                 category = "cofactor"
             else:
                 elements = residue_elements.get((resname, chain, resnum))
-                if elements and len(elements) == 1 and elements[0] in metals_set:
+                if elements and len(elements) == 1 and next(iter(elements)) in metals_set:
                     category = "metal"
                 else:
                     continue
