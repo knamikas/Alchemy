@@ -161,19 +161,21 @@ def load_structure(pdbID, pdb_path):
 def _count_ni(structure):
     """Atoms in the model plus water-residue count.
 
-    Faithful port of fe_biopython_analysis_dpi_final.py:88-101: every atom is
-    counted, and each water residue adds 1 more (so water oxygens are counted
-    twice). Preserved intentionally to match the original DPI definition.
+    Ni represents the effective number of fully-occupied atom
+    sites; a partial-occupancy atom contributes less scattering signal than
+    a full atom. Each atom is weighted by its occupancy (0-1) rather than
+    counted as a flat 1, as Blow (2002) indicates that the simplified equations assume
+    full occupancy of every atom.
     """
-    n_atoms = n_water = 0
+    n_atoms = 0.0
     for model in structure:
         for chain in model:
             for residue in chain:
-                if residue.id[0] == "W":
-                    n_water += 1
-                for _ in residue:
-                    n_atoms += 1
-    return n_atoms + n_water
+                for atom in residue:
+                    if atom.element.upper() == "H":
+                        continue  # riding atoms, not independently refined
+                    n_atoms += atom.get_occupancy()
+    return n_atoms
 
 
 def calculate_dpi(structure, dpi_inputs):
