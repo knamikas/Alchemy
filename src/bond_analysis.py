@@ -34,6 +34,8 @@ import json
 import math
 import os
 import re
+from Bio.PDB.Atom import DisorderedAtom
+
 
 from Analysisv2_kn import metals, uncommonMetals
 
@@ -165,7 +167,8 @@ def _count_ni(structure):
     sites; a partial-occupancy atom contributes less scattering signal than
     a full atom. Each atom is weighted by its occupancy (0-1) rather than
     counted as a flat 1, as Blow (2002) indicates that the simplified equations assume
-    full occupancy of every atom.
+    full occupancy of every atom. Disordered atoms have their occupancies explicitly  
+    summed over each location. (Default behavior is to use the occupancy of 1 location.)
     """
     n_atoms = 0.0
     for model in structure:
@@ -173,8 +176,11 @@ def _count_ni(structure):
             for residue in chain:
                 for atom in residue:
                     if atom.element.upper() == "H":
-                        continue  # riding atoms, not independently refined
-                    n_atoms += atom.get_occupancy()
+                        continue
+                    if isinstance(atom, DisorderedAtom):
+                        n_atoms += sum(a.get_occupancy() for a in atom.disordered_get_list())
+                    else:
+                        n_atoms += atom.get_occupancy()
     return n_atoms
 
 
