@@ -31,9 +31,14 @@ def load_cofactors(path=None):
 
     The file is "{ccd_id}\\t{formula}" per line (see Alloy_kn.py). We keep only
     the id token.
+
+    If `path` is not given, defers to Alloy_kn.active_cofactors_path(), which
+    picks up an untracked, per-user cache refresh if one exists and falls
+    back to the tracked repo copy in DATA_DIR otherwise.
     """
     if path is None:
-        path = os.path.join(DATA_DIR, "metallocofactors_id.txt")
+        from Alloy_kn import active_cofactors_path  # lazy: avoid import cycle at module load
+        path = active_cofactors_path()
     cofactor_set = set()
     with open(path) as f:
         for line in f:
@@ -42,9 +47,49 @@ def load_cofactors(path=None):
                 cofactor_set.add(cid)
     return cofactor_set
 
+def _build_residue_elements(structure):
+    """Map (resname, chain, resnum) -> set of element symbols (upper) present
+    in that residue, from an already-parsed Biopython structure.
 
-def run_analysis(pdbID, stats_out, metals_set, cofactor_set):
+    edstats rows are per-residue, so this is looked up by the same
+    (resname, chain, resnum) key as the row itself -- no per-atom matching
+    against edstats lines is needed. `resnum` includes the insertion code
+    (e.g. "42A"), matching how edstats concatenates it into the residue
+    number token in stats.out; residues with no insertion code (icode " ")
+    keep a bare numeric string (e.g. "42").
+    """
+    lookup = {}
+    try:
+        for model in structure:
+            for chain in model:
+                for residue in chain:
+                    for residue in chain:
+                        _, resseq, icode = residue.get_id()
+                        resnum = f"{resseq}{icode.strip()}"
+                        key = (residue.get_resname(), str(chain.id), resnum)
+                        lookup.setdefault(key, set())
+                        for atom in residue:
+                            lookup[key].add(atom.element.upper())
+        return lookup
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to build residue-element lookup from structure: {e}") from e
+    
+
+def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     """Parse an edstats stats.out file, returning (rows, header).
+    `structure` is a parsed Biopython structure, shared with run_bond_analysis
+
+    Cofactors are matched by CCD component name (fields[0]) against
+    cofactor_set, as before. Plain metals are matched by the residue's
+    actual atom element(s), read from `structure` -- a single-atom residue
+    whose element is in metals_set is classified as a metal. This avoids
+    misclassifying components whose CCD id happens to look like an element
+    symbol (RNA "U", nitric oxide "NO") and catches metal-ion CCD ids that
+    don't themselves match an element string (e.g. "FE2").
+    If `structure` is not supplied, falls back to name-based metal matching
+    (legacy behaviour) so existing callers without a parsed structure still work.
+    
 
     Matching is done on the parsed residue-name token (fields[0]) against the
     given sets -- this fixes the old `line.startswith(f"{x:<4}")` approach, which
@@ -54,6 +99,12 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set):
     where `fields` is the full whitespace-split edstats line (aligned with
     `header`). `header` is the column-label list from the file's first line.
     """
+
+    if structure is None:
+        raise ValueError(
+            "A parsed structure is required for element-based metal identification")
+    residue_elements = _build_residue_elements(structure)
+
     rows = []
     header = None
     with open(stats_out) as f:
@@ -67,12 +118,18 @@ def run_analysis(pdbID, stats_out, metals_set, cofactor_set):
                 header = fields
                 continue
             resname = fields[0]
-            if resname in metals_set:
-                category = "metal"
-            elif resname in cofactor_set:
+            chain = fields[1] if len(fields) > 1 else ""
+            resnum = fields[2] if len(fields) > 2 else ""
+
+            if resname in cofactor_set:
                 category = "cofactor"
             else:
-                continue
+                elements = residue_elements.get((resname, chain, resnum))
+                if elements and len(elements) == 1 and next(iter(elements)) in metals_set:
+                    category = "metal"
+                else:
+                    continue
+
             rows.append({
                 "pdbID": pdbID,
                 "category": category,

@@ -27,6 +27,9 @@ conda run -n metal python src/main.py --id 109m --ccp4-setup <path/to/ccp4.setup
 # A handful of structures with 6 metals (300d) and a no-metal DNA control (100d)
 conda run -n metal python src/main.py --id 300d --ccp4-setup <…>
 conda run -n metal python src/main.py --id 100d --ccp4-setup <…>
+
+# Run a selected list of structures from a file
+conda run -n metal python src/main.py --id-file src/data/sample_ids_list.txt --ccp4-setup <…>
 ```
 
 Results stream to `output/metal_stats_all.csv` (real-space stats),
@@ -69,7 +72,8 @@ entry's files in place and writes only under `--output-dir` (default `./output/`
 
 | Option | Purpose |
 | --- | --- |
-| `--id <pdbid>` | Run a single structure (else batch the whole root). |
+| `--id <pdbid>` | Run a single structure. |
+| `--id-file <path>` | Run a list of structures from a comma- and/or newline-separated file. |
 | `--refine-state {final,0cyc,besttls}` | Which refinement files to use (default `final`). |
 | `--output-dir <path>` | Output directory (default `./output/`). |
 | `--workers <n>` | Parallelism via `multiprocessing.Pool` (default `cpu_count() - 2`). |

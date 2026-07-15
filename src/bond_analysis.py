@@ -3,7 +3,7 @@
 For one PDB entry this finds every metal atom, does a Biopython neighbor search,
 and for each metal-ligand contact within 4 A computes the bond length and a
 resolution-aware z-score against the consolidated literature reference distances
-in ``metal_distances_info.txt`` (Harding 2006):
+in ``metal_distances_info.txt`` (Harding 2006 and Zheng et al. 2008 [Ni only]):
 
     z = (d_observed - mu) / sqrt(DPI**2 + sigma_lit**2)
 
@@ -34,6 +34,8 @@ import json
 import math
 import os
 import re
+from Bio.PDB.Atom import DisorderedAtom
+
 
 from Analysisv2_kn import metals, uncommonMetals
 
@@ -44,18 +46,19 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # element column, which is more reliable than residue-name matching).
 METAL_ELEMENTS = set(metals) | set(uncommonMetals)
 
-# Coordinating residues (and water) for which the reference table has data. The
+# Coordinating residues (and water). The
 # legacy list duplicated CYS; deduped here. A neighbor whose residue is not in
 # this set is ignored.
-AA = {"ASP", "CYS", "GLU", "HIS", "TYR", "THR", "SER", "HOH"}
+AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+      "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+      "HOH"}
 
 # Max metal-ligand interaction distance (Gucwa et al. 2024 / CMM program).
 CUTOFF = 4.0
 
 NAN = float("nan")
 
-# Metallocofactor classifications (verbatim from fe_biopython_analysis_dpi_final.py
-# :238-249), used only to tag each metal's environment in parent_type. CLUSTER is
+# Metallocofactor classifications, used only to tag each metal's environment in parent_type. CLUSTER is
 # checked before HEMES, matching the legacy precedence for the codes in both lists.
 CLUSTER = {
     '0KA', '1CL', '35L', '6ML', '82N', '8JU', '8P8', '9S8', 'A1CBX', 'B51', 'BF8', 
@@ -153,23 +156,34 @@ def _rfree_from_pdb(pdb_path):
         pass
     return NAN
 
+def load_structure(pdbID, pdb_path):
+    """Parse pdb_path once via Biopython; shared by run_analysis and
+    run_bond_analysis so a single entry's coordinate file is only read once."""
+    from Bio.PDB import PDBParser  # lazy import
+    return PDBParser(QUIET=True).get_structure(pdbID, pdb_path)
 
 def _count_ni(structure):
     """Atoms in the model plus water-residue count.
 
-    Faithful port of fe_biopython_analysis_dpi_final.py:88-101: every atom is
-    counted, and each water residue adds 1 more (so water oxygens are counted
-    twice). Preserved intentionally to match the original DPI definition.
+    Ni represents the effective number of fully-occupied atom
+    sites; a partial-occupancy atom contributes less scattering signal than
+    a full atom. Each atom is weighted by its occupancy (0-1) rather than
+    counted as a flat 1, as Blow (2002) indicates that the simplified equations assume
+    full occupancy of every atom. Disordered atoms have their occupancies explicitly  
+    summed over each location. (Default behavior is to use the occupancy of 1 location.)
     """
-    n_atoms = n_water = 0
+    n_atoms = 0.0
     for model in structure:
         for chain in model:
             for residue in chain:
-                if residue.id[0] == "W":
-                    n_water += 1
-                for _ in residue:
-                    n_atoms += 1
-    return n_atoms + n_water
+                for atom in residue:
+                    if atom.element.upper() == "H":
+                        continue
+                    if isinstance(atom, DisorderedAtom):
+                        n_atoms += sum(a.get_occupancy() for a in atom.disordered_get_list())
+                    else:
+                        n_atoms += atom.get_occupancy()
+    return n_atoms
 
 
 def calculate_dpi(structure, dpi_inputs):
@@ -226,12 +240,15 @@ def _bonding_key(neighbor, nb_res, metal_el):
     return (nb_res, neighbor.element.upper(), metal_el)  # His N, Cys S, ...
 
 
-def _parent_type(metal_res, metal_el):
+def _parent_type(metal, metal_res, metal_el):
     if metal_res in CLUSTER:
         return "cluster"
     if metal_res in HEMES:
         return "heme"
-    if metal_res == metal_el:     # free ion: residue name is the element symbol
+    if metal_el not in METAL_ELEMENTS:
+        return "other"  # defensive: shouldn't happen, metal_atoms is pre-filtered
+    residue = metal.get_parent()
+    if sum(1 for _ in residue) == 1:   # lone atom residue = free ion
         return "ion"
     return "other"
 
@@ -256,46 +273,78 @@ def _sigma_index(stats_rows):
     return {(r["resname"], str(r["chain"]), str(r["resnum"])): r["fields"]
             for r in stats_rows}
 
+ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
+def _zd_indices(header):
+    """Return column indices for ZDm/ZD-m/ZD+m, or None
+    if the header is missing or doesn't contain all three names."""
+    if not header:
+        return None
+    try:
+        return tuple(header.index(name) for name in ZD_COLUMNS)
+    except ValueError:
+        return None
 
-def _sigma_for(sig, resname, chain, resnum):
+
+def _sigma_for(sig, resname, chain, resnum, zd_idx):
     fields = sig.get((resname, str(chain), str(resnum)))
-    if fields is None:
+    if fields is None or zd_idx is None:
         return NAN, NAN, NAN
     try:
-        return float(fields[12]), float(fields[13]), float(fields[14])
+        return float(fields[zd_idx[0]]), float(fields[zd_idx[1]]), float(fields[zd_idx[2]])
     except (IndexError, ValueError):
         return NAN, NAN, NAN
 
 
-def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, dpi_inputs):
+def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs, structure=None):
     """Return a list of bond-row dicts (keys == BOND_COLUMNS) for one entry.
 
     Parses ``pdb_path`` (the coordinate file edstats consumed), finds all metal
     atoms, and emits one row per metal-ligand contact within CUTOFF to a
     coordinating residue/water. Rows with no literature reference or a NaN DPI
     keep the measured distance and carry NaN in the derived columns.
-    """
-    from Bio.PDB import PDBParser, NeighborSearch  # lazy import
 
-    structure = PDBParser(QUIET=True).get_structure(pdbID, pdb_path)
+    `header` is the edstats column header (from run_analysis) used to locate
+    the ZDm/ZD-m/ZD+m sigma columns; if those columns aren't present, sigma
+    values are emitted as NaN rather than raising.
+
+    aa_coverage_by_metal maps (resname, chain, resnum) -> aa_geometry_coverage: the
+    fraction of a metal's coordinating contacts (N/O/S, within CUTOFF, to an
+    AA-listed residue -- i.e. exactly the contacts that would produce a row
+    below) that have a literature reference bond length. NaN if the metal has
+    no such contacts at all; 0.0 if it has contacts but none have a reference.
+    """
+    from Bio.PDB import NeighborSearch  # lazy import
+
+    if structure is None:
+        structure = load_structure(pdbID, pdb_path)
+
     atoms = list(structure.get_atoms())
+
     metal_atoms = [a for a in atoms if a.element.upper() in METAL_ELEMENTS]
     if not metal_atoms:
-        return []
+        return [], {}
 
     dpi, resolution = calculate_dpi(structure, dpi_inputs)
     sig = _sigma_index(stats_rows)
+    zd_idx = _zd_indices(header)
     ns = NeighborSearch(atoms)
 
     rows = []
+    contacts_by_key = {}
+    with_ref_by_key = {}
+
+
     for metal in metal_atoms:
         metal_el = metal.element.upper()
         metal_res = metal.get_parent().get_resname()
         chain = metal.get_full_id()[2]
-        resnum = metal.get_parent().get_id()[1]
-        ptype = _parent_type(metal_res, metal_el)
-        mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum)
+        _, resseq, icode = metal.get_parent().get_id()
+        resnum = f"{resseq}{icode.strip()}"
+        ptype = _parent_type(metal, metal_res, metal_el)
+        mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum, zd_idx)
 
+        key = (metal_res, str(chain), str(resnum))
+        contacts_by_key.setdefault(key, 0)
         for neighbor in ns.search(metal.coord, CUTOFF, level="A"):
             nb_res = neighbor.get_parent().get_resname()
             if nb_res == metal_res:      # self / same cofactor
@@ -312,9 +361,11 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, dpi_inputs):
                 continue
 
             lit = LIT.get(_bonding_key(neighbor, nb_res, metal_el))
+            contacts_by_key[key] = contacts_by_key.get(key, 0) + 1
             if lit is None:
                 mu = stdev = zscore = NAN
             else:
+                with_ref_by_key[key] = with_ref_by_key.get(key, 0) + 1
                 mu, stdev = lit
                 zscore = _zscore(dist, mu, stdev, dpi)
 
@@ -339,4 +390,9 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, dpi_inputs):
                 "parent_type": ptype,
                 "bonded_to": _bonded_to(nb_res),
             })
-    return rows
+        
+        aa_coverage_by_metal = {
+        key: round(with_ref_by_key.get(key, 0) / n_contacts, 4) if n_contacts > 0 else NAN
+        for key, n_contacts in contacts_by_key.items()
+    }
+    return rows, aa_coverage_by_metal
