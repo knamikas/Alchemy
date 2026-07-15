@@ -46,10 +46,12 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # element column, which is more reliable than residue-name matching).
 METAL_ELEMENTS = set(metals) | set(uncommonMetals)
 
-# Coordinating residues (and water) for which the reference table has data. The
+# Coordinating residues (and water). The
 # legacy list duplicated CYS; deduped here. A neighbor whose residue is not in
 # this set is ignored.
-AA = {"ASP", "CYS", "GLU", "HIS", "TYR", "THR", "SER", "HOH"}
+AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+      "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+      "HOH"}
 
 # Max metal-ligand interaction distance (Gucwa et al. 2024 / CMM program).
 CUTOFF = 4.0
