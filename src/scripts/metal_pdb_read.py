@@ -1,3 +1,5 @@
+"""Extract PDB IDs from MetalPDB TSV exports."""
+
 import os
 import csv
 
@@ -56,5 +58,4 @@ with open(nilist, 'w') as f:
 
 print(ids)
 print(countsite)
-
 

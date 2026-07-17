@@ -24,8 +24,7 @@ import requests
 URL_CCD = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_DIR = os.path.dirname(BASE_DIR)
-DATA_DIR = os.path.join(REPO_DIR, "src", "data")
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
 
 def _default_cache_dir():
