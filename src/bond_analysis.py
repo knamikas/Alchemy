@@ -1,4 +1,4 @@
-"""Metal-ligand bond-distance stage (generalized port of the legacy Fe script).
+"""Metal-ligand bond-distance analysis for the Alchemy pipeline.
 
 For one PDB entry this finds every metal atom, does a Biopython neighbor search,
 and for each metal-ligand contact within 4 A computes the bond length and a
@@ -12,23 +12,12 @@ per-atom coordinate uncertainty; adding it in quadrature with the literature
 spread makes the same absolute deviation more significant in a high-resolution
 structure than in a low-resolution one.
 
-This is a clean, self-contained generalization of
-``fe_biopython_analysis_dpi_final.py`` (which only handled Fe, read a multi-source
-literature file that no longer exists, and scraped DPI inputs that are absent from
-PDB-REDO files). ``main.py`` calls ``run_bond_analysis`` from its per-entry worker.
-
-Notable differences from the legacy script (all deliberate):
-* All metals (``Analysisv2_kn.metals`` + ``uncommonMetals``), not just Fe.
-* One z-score from the single Harding set; the old pdb2/pdb3/csd2/csd3 columns
-  are gone.
-* Bonding keys are exact ``(residue, atom, metal)`` tuples looked up in a dict --
-  the old code built a comma-delimited key for N/S atoms and substring-matched,
-  so His-N and Cys-S bonds silently never matched the space-delimited file.
-* DPI inputs come from PDB-REDO ``data.json`` (NREFCNT, RFFIN) and the ASU volume
-  is computed directly from the crystal cell / symmetry (gemmi), not from the
-  unavailable Matthews coefficient. Missing inputs yield NaN rather than dropping.
-* edstats sigma values are joined from the in-memory ``run_analysis`` rows, not
-  from legacy per-structure ``{atom}_Data`` dump files.
+The analysis covers every configured metal element, uses exact
+``(residue, atom, metal)`` reference-distance keys, and reads DPI inputs from
+PDB-REDO ``data.json``. The asymmetric-unit volume is computed from the crystal
+cell and symmetry with gemmi. Missing inputs produce NaN derived values without
+discarding measured bond geometry. ``main.py`` calls ``run_bond_analysis`` from
+its per-entry worker and supplies edstats rows in memory for the sigma join.
 """
 import json
 import math
@@ -46,9 +35,8 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # element column, which is more reliable than residue-name matching).
 METAL_ELEMENTS = set(metals) | set(uncommonMetals)
 
-# Coordinating residues (and water). The
-# legacy list duplicated CYS; deduped here. A neighbor whose residue is not in
-# this set is ignored.
+# Coordinating residues (and water). A neighbor whose residue is not in this
+# set is ignored.
 AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
       "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
       "HOH"}
@@ -58,8 +46,8 @@ CUTOFF = 4.0
 
 NAN = float("nan")
 
-# Metallocofactor classifications, used only to tag each metal's environment in parent_type. CLUSTER is
-# checked before HEMES, matching the legacy precedence for the codes in both lists.
+# Metallocofactor classifications, used only to tag each metal's environment in
+# parent_type. CLUSTER is checked before HEMES for codes present in both sets.
 CLUSTER = {
     '0KA', '1CL', '35L', '6ML', '82N', '8JU', '8P8', '9S8', 'A1CBX', 'B51', 'BF8', 
     'BJ8', 'CFM', 'CFN', 'CLF', 'CLP', 'CUV', 'CZL', 'D6N', 'ER2', 'F3S', 'F4S', 
@@ -118,9 +106,9 @@ LIT = _load_literature(os.path.join(DATA_DIR, "metal_distances_info.txt"))
 def _asu_volume(mtz_path, pdb_path):
     """Asymmetric-unit volume (A^3) = unit-cell volume / number of symmetry ops.
 
-    This is the quantity the legacy code approximated via ``mw * Matthews``;
-    computing it from the cell + space group is exact and needs no header scrape.
-    Prefer the MTZ (matches the diffraction data); fall back to the PDB CRYST1.
+    Computing this from the cell and space group is exact and needs no header
+    scrape. Prefer the MTZ (matching the diffraction data); fall back to PDB
+    CRYST1 metadata.
     """
     import gemmi  # lazy: only the metal/biotools/vinda envs have it
     cell = sg = None
