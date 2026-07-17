@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 directory = BASE_DIR
 
 
-def run_alchemy(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None):
+def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None):
     """Compute Fo and difference maps with `fft`, then run `edstats`.
 
     Parameters
@@ -84,5 +84,5 @@ if __name__ == "__main__":
     p.add_argument("--reshi", type=float, required=True,
                    help="high resolution limit (smaller number)")
     args = p.parse_args()
-    print(run_alchemy(args.pdbID, args.mtz, args.pdb, args.out_dir,
+    print(run_density_analysis(args.pdbID, args.mtz, args.pdb, args.out_dir,
                       args.reslo, args.reshi))

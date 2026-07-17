@@ -81,9 +81,9 @@ The driver selects the requested refinement state:
 Resolution limits come from PDB-REDO `data.json` when available, with an MTZ
 fallback through gemmi.
 
-### 2. Maps and real-space statistics — `src/Alchemy_kn.py`
+### 2. Maps and real-space statistics — `src/density_analysis.py`
 
-`run_alchemy()` runs:
+`run_density_analysis()` runs:
 
 1. CCP4 `fft` with `FWT/PHWT` to produce a 2mFo-DFc map.
 2. CCP4 `fft` with `DELFWT/PHDELWT` to produce an mFo-DFc difference map.
@@ -92,12 +92,12 @@ fallback through gemmi.
 
 The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
 
-### 3. Metal and cofactor identification — `src/Analysisv2_kn.py`
+### 3. Metal and cofactor identification — `src/metal_identification.py`
 
-`run_analysis()` parses the edstats table. Plain metal ions are identified from
+`extract_metal_statistics()` parses the edstats table. Plain metal ions are identified from
 their actual atom elements in the parsed structure. Metal-containing cofactors
 are matched against the Chemical Component Dictionary list maintained by
-`src/Alloy_kn.py`.
+`src/build_metallocofactor_catalog.py`.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 
@@ -134,7 +134,7 @@ geometry and NaN derived values.
 | `--ccp4-setup <path>` | Source and verify a CCP4 setup script for this run. |
 | `--configure-ccp4 <path>` | Save a CCP4 setup script path for later runs. |
 
-## Cofactor reference maintenance — `src/Alloy_kn.py`
+## Cofactor reference maintenance — `src/build_metallocofactor_catalog.py`
 
 Before processing entries, the pipeline checks its metal-containing cofactor
 list. A current list in the user cache is reused; a missing or stale list is
@@ -143,7 +143,7 @@ under the user cache (normally `~/.cache/alchemy/`) so normal runs do not modify
 the repository. If refreshing fails, the pipeline falls back to an available
 cached or committed list.
 
-## Supporting utility — `src/scripts/metal_pdb_read.py`
+## Supporting utility — `src/scripts/extract_metalpdb_ids.py`
 
 This standalone data-preparation utility extracts four-character PDB IDs from a
 manually downloaded MetalPDB TSV report. It is not imported by the analysis

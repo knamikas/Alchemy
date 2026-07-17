@@ -26,7 +26,7 @@ import re
 from Bio.PDB.Atom import DisorderedAtom
 
 
-from Analysisv2_kn import metals, uncommonMetals
+from metal_identification import metals, uncommonMetals
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -145,7 +145,7 @@ def _rfree_from_pdb(pdb_path):
     return NAN
 
 def load_structure(pdbID, pdb_path):
-    """Parse pdb_path once via Biopython; shared by run_analysis and
+    """Parse pdb_path once via Biopython; shared by extract_metal_statistics and
     run_bond_analysis so a single entry's coordinate file is only read once."""
     from Bio.PDB import PDBParser  # lazy import
     return PDBParser(QUIET=True).get_structure(pdbID, pdb_path)
@@ -291,7 +291,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
     coordinating residue/water. Rows with no literature reference or a NaN DPI
     keep the measured distance and carry NaN in the derived columns.
 
-    `header` is the edstats column header (from run_analysis) used to locate
+    `header` is the edstats column header (from extract_metal_statistics) used to locate
     the ZDm/ZD-m/ZD+m sigma columns; if those columns aren't present, sigma
     values are emitted as NaN rather than raising.
 

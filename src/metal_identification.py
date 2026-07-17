@@ -4,7 +4,7 @@
 # header, and each data line begins with a residue/component name. Column layout
 # (0-indexed): 0 = residue name (RT), 1 = chain (CI), 2 = residue number (RN).
 #
-# `run_analysis` returns structured rows for metal ions and metal-containing
+# `extract_metal_statistics` returns structured rows for metal ions and metal-containing
 # cofactors; `main.py` aggregates these across many structures.
 
 # common metals to search for
@@ -20,18 +20,18 @@ uncommonMetals = ['CD', 'HG', 'PT', 'MO', 'AL', 'BE', 'BA', 'RU', 'V', 'SR', 'CS
                   'FM', 'MD', 'NO', 'LR', 'RF', 'DB', 'SG']
 
 
-def load_cofactors(path=None):
+def load_cofactor_ids(path=None):
     """Return a set of metal-containing CCD ids from metallocofactors_id.txt.
 
-    The file is "{ccd_id}\\t{formula}" per line (see Alloy_kn.py). We keep only
+    The file is "{ccd_id}\\t{formula}" per line (see build_metallocofactor_catalog.py). We keep only
     the id token.
 
-    If `path` is not given, defers to Alloy_kn.active_cofactors_path(), which
+    If `path` is not given, defers to build_metallocofactor_catalog.active_cofactors_path(), which
     picks up an untracked, per-user cache refresh if one exists and falls
     back to the bundled `src/data` copy otherwise.
     """
     if path is None:
-        from Alloy_kn import active_cofactors_path  # lazy: avoid import cycle at module load
+        from build_metallocofactor_catalog import active_cofactors_path  # lazy: avoid import cycle at module load
         path = active_cofactors_path()
     cofactor_set = set()
     with open(path) as f:
@@ -70,7 +70,7 @@ def _build_residue_elements(structure):
             f"Failed to build residue-element lookup from structure: {e}") from e
     
 
-def run_analysis(pdbID, stats_out, metals_set, cofactor_set, structure=None):
+def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     """Parse an edstats stats.out file, returning (rows, header).
     `structure` is a parsed Biopython structure, shared with run_bond_analysis
 

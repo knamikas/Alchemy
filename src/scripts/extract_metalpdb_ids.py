@@ -58,4 +58,3 @@ with open(nilist, 'w') as f:
 
 print(ids)
 print(countsite)
-

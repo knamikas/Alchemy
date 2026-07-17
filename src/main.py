@@ -37,9 +37,9 @@ import time
 from multiprocessing import Pool, cpu_count
 import requests
 
-from Alchemy_kn import run_alchemy
-from Analysisv2_kn import metals, uncommonMetals, load_cofactors, run_analysis
-from Alloy_kn import refresh_cofactors_if_needed, active_cofactors_path
+from density_analysis import run_density_analysis
+from metal_identification import metals, uncommonMetals, load_cofactor_ids, extract_metal_statistics
+from build_metallocofactor_catalog import refresh_cofactors_if_needed, active_cofactors_path
 from bond_analysis import run_bond_analysis, BOND_COLUMNS, load_structure, NAN
 from ccp4_setup import (
     ccp4_tools_available,
@@ -469,10 +469,10 @@ def process(pdbID):
             os.makedirs(out_dir, exist_ok=True)
             mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
             reslo, reshi = read_resolution(entry, mtz)
-        res = run_alchemy(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
+        res = run_density_analysis(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
         structure = load_structure(pdbID, pdb)
 
-        rows, header = run_analysis(pdbID, res["stats_out"],
+        rows, header = extract_metal_statistics(pdbID, res["stats_out"],
                                     METALS_SET, cfg["cofactors"], structure=structure)
 
         bond_rows = []
@@ -601,7 +601,7 @@ def main(argv=None):
     except RuntimeError as e:
         print(str(e), flush=True)
         return 1
-    cofactors = load_cofactors(active_cofactors_path())
+    cofactors = load_cofactor_ids(active_cofactors_path())
 
     root = args.pdb_redo_root
     cache_root = args.pdb_redo_cache
