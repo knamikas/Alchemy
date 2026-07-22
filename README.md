@@ -127,7 +127,7 @@ geometry and NaN derived values.
 | `--output-dir <path>` | Set the result directory. |
 | `--workers <n>` | Set multiprocessing parallelism. |
 | `--max-pdbs <n>` | Limit a run for testing. |
-| `--resume` | Skip IDs already recorded in the manifest. |
+| `--resume` | Skip entries completed with `ok`; retry `partial`, `skip`, and `error` entries without duplicating their existing rows. |
 | `--no-bonds` | Skip bond-distance analysis. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
 | `--refresh-cofactors` | Force a fresh wwPDB cofactor-list build. |
@@ -165,4 +165,5 @@ pipeline.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - A failure in bond analysis does not discard real-space-statistics rows already
-  calculated for that entry; the manifest records the bond-stage error.
+  calculated for that entry; the manifest records the entry as `partial` with
+  the bond-stage error.

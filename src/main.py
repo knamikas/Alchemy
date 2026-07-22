@@ -33,6 +33,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from multiprocessing import Pool, cpu_count
 import requests
@@ -493,7 +494,8 @@ def process(pdbID):
             key = (row["resname"], str(row["chain"]), str(row["resnum"]))
             row["fields"] = row["fields"] + [aa_coverage_by_metal.get(key, NAN)]
 
-        result.update(status="ok", n=len(rows), rows=rows, header=header,
+        status = "partial" if result["error"] else "ok"
+        result.update(status=status, n=len(rows), rows=rows, header=header,
                       bond_rows=bond_rows, n_bonds=len(bond_rows))
     except FileNotFoundError as e:
         result.update(status="skip", error=f"missing input: {e}"[:300])
@@ -510,16 +512,58 @@ def process(pdbID):
 # Driver
 # --------------------------------------------------------------------------- #
 def load_done(manifest_path):
-    """PDB ids already recorded in an existing manifest (for --resume)."""
+    """PDB IDs successfully completed in an existing manifest."""
     done = set()
     if os.path.exists(manifest_path):
-        with open(manifest_path) as f:
-            reader = csv.reader(f)
-            next(reader, None)  # header
-            for row in reader:
-                if row:
-                    done.add(row[0])
+        with open(manifest_path, newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames and {"pdbID", "status"}.issubset(reader.fieldnames):
+                for row in reader:
+                    if row.get("status", "").strip().lower() == "ok":
+                        pdbID = row.get("pdbID", "").strip().lower()
+                        if pdbID:
+                            done.add(pdbID)
     return done
+
+
+def remove_csv_rows_for_ids(path, pdb_ids):
+    """Atomically remove data rows for retried PDB IDs, preserving the header."""
+    retry_ids = {pdbID.lower() for pdbID in pdb_ids}
+    if not retry_ids or not os.path.exists(path):
+        return
+
+    directory = os.path.dirname(os.path.abspath(path))
+    original_mode = os.stat(path).st_mode
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.",
+                                    suffix=".tmp", dir=directory, text=True)
+    try:
+        removed = False
+        with open(path, newline="") as src, os.fdopen(fd, "w", newline="") as dst:
+            reader = csv.reader(src)
+            writer = csv.writer(dst)
+            header = next(reader, None)
+            if header is not None:
+                writer.writerow(header)
+            for row in reader:
+                if row and row[0].strip().lower() in retry_ids:
+                    removed = True
+                    continue
+                writer.writerow(row)
+        if removed:
+            os.chmod(tmp_path, original_mode)
+            os.replace(tmp_path, path)
+        else:
+            os.unlink(tmp_path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
@@ -575,7 +619,7 @@ def parse_args(argv=None):
     ap.add_argument("--keep-intermediates", action="store_true",
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
-                    help="skip ids already present in manifest.csv")
+                    help="skip ids already recorded with status ok; retry incomplete ids")
     ap.add_argument("--no-bonds", dest="bonds", action="store_false",
                     help="skip the metal-ligand bond-distance stage (edstats stats only)")
     ap.add_argument("--refresh-cofactors", action="store_true",
@@ -655,6 +699,15 @@ def main(argv=None):
     if not ids:
         print("No entries to process.", flush=True)
         return 0
+
+    if args.resume:
+        # Retried partial/error/skip entries may already have result rows from a
+        # previous attempt. Remove only those IDs so the replacement rows do not
+        # create duplicates; each file is rewritten atomically.
+        remove_csv_rows_for_ids(manifest_path, ids)
+        remove_csv_rows_for_ids(stats_path, ids)
+        remove_csv_rows_for_ids(bonds_path, ids)
+
     print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
           f"with {args.workers} worker(s) ...", flush=True)
 
@@ -677,16 +730,12 @@ def main(argv=None):
     stats_header_written = append and os.path.getsize(stats_path) > 0
     bonds_header_written = bool(bonds_fh) and append and os.path.getsize(bonds_path) > 0
 
-    counts = {"ok": 0, "skip": 0, "error": 0}
+    counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     n_rows = 0
     n_bonds = 0
     try:
         with Pool(args.workers, initializer=_init_worker, initargs=(cfg,)) as pool:
             for k, r in enumerate(pool.imap_unordered(process, ids, chunksize=1), 1):
-                counts[r["status"]] = counts.get(r["status"], 0) + 1
-                man_w.writerow([r["pdbID"], r["status"], r["n"], r["n_bonds"],
-                                r["runtime"], r["error"]])
-                man_fh.flush()
                 if r["rows"]:
                     if not stats_header_written and r["header"]:
                         stats_w.writerow(["pdbID", "category"] + r["header"])
@@ -703,9 +752,16 @@ def main(argv=None):
                         bonds_w.writerow([b[c] for c in BOND_COLUMNS])
                         n_bonds += 1
                     bonds_fh.flush()
+                # The manifest is the completion marker for --resume, so write
+                # it only after this entry's result rows have been flushed.
+                man_w.writerow([r["pdbID"], r["status"], r["n"], r["n_bonds"],
+                                r["runtime"], r["error"]])
+                man_fh.flush()
+                counts[r["status"]] = counts.get(r["status"], 0) + 1
                 if k % 200 == 0 or k == len(ids):
                     print(f"[{k}/{len(ids)}] ok={counts['ok']} "
-                          f"skip={counts['skip']} error={counts['error']} "
+                          f"partial={counts['partial']} skip={counts['skip']} "
+                          f"error={counts['error']} "
                           f"rows={n_rows} bonds={n_bonds}", flush=True)
     finally:
         man_fh.close()
@@ -713,7 +769,8 @@ def main(argv=None):
         if bonds_fh:
             bonds_fh.close()
 
-    print(f"Done. ok={counts['ok']} skip={counts['skip']} error={counts['error']}; "
+    print(f"Done. ok={counts['ok']} partial={counts['partial']} "
+          f"skip={counts['skip']} error={counts['error']}; "
           f"{n_rows} metal/cofactor rows -> {stats_path}", flush=True)
     if args.bonds:
         print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
