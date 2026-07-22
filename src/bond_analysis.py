@@ -378,8 +378,8 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs
                 "parent_type": ptype,
                 "bonded_to": _bonded_to(nb_res),
             })
-        
-        aa_coverage_by_metal = {
+
+    aa_coverage_by_metal = {
         key: round(with_ref_by_key.get(key, 0) / n_contacts, 4) if n_contacts > 0 else NAN
         for key, n_contacts in contacts_by_key.items()
     }

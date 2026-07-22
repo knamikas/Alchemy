@@ -57,13 +57,12 @@ def _build_residue_elements(structure):
         for model in structure:
             for chain in model:
                 for residue in chain:
-                    for residue in chain:
-                        _, resseq, icode = residue.get_id()
-                        resnum = f"{resseq}{icode.strip()}"
-                        key = (residue.get_resname(), str(chain.id), resnum)
-                        lookup.setdefault(key, set())
-                        for atom in residue:
-                            lookup[key].add(atom.element.upper())
+                    _, resseq, icode = residue.get_id()
+                    resnum = f"{resseq}{icode.strip()}"
+                    key = (residue.get_resname(), str(chain.id), resnum)
+                    lookup.setdefault(key, set())
+                    for atom in residue:
+                        lookup[key].add(atom.element.upper())
         return lookup
     except Exception as e:
         raise RuntimeError(
