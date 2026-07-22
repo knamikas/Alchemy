@@ -1,7 +1,7 @@
-# Alloy 6/12/2025
+# Metallocofactor catalog builder 6/12/2025
 # Downloads the wwPDB Chemical Component Dictionary (CCD) and builds
 # metallocofactors_id.txt: the list of CCD component ids that contain a metal
-# (used by Analysisv2_kn.py alongside plain metal-ion matching).
+# (used by metal_identification.py alongside plain metal-ion matching).
 #
 # Normal pipeline runs should NOT need to run this file directly -- main.py
 # calls refresh_cofactors_if_needed() at startup, which uses the committed
@@ -24,8 +24,7 @@ import requests
 URL_CCD = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_DIR = os.path.dirname(BASE_DIR)
-DATA_DIR = os.path.join(REPO_DIR, "src", "data")
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
 
 def _default_cache_dir():
