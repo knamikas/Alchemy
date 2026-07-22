@@ -41,37 +41,9 @@ def load_cofactor_ids(path=None):
                 cofactor_set.add(cid)
     return cofactor_set
 
-def _build_residue_elements(structure):
-    """Map (resname, chain, resnum) -> set of element symbols (upper) present
-    in that residue, from an already-parsed Biopython structure.
-
-    edstats rows are per-residue, so this is looked up by the same
-    (resname, chain, resnum) key as the row itself -- no per-atom matching
-    against edstats lines is needed. `resnum` includes the insertion code
-    (e.g. "42A"), matching how edstats concatenates it into the residue
-    number token in stats.out; residues with no insertion code (icode " ")
-    keep a bare numeric string (e.g. "42").
-    """
-    lookup = {}
-    try:
-        for model in structure:
-            for chain in model:
-                for residue in chain:
-                    _, resseq, icode = residue.get_id()
-                    resnum = f"{resseq}{icode.strip()}"
-                    key = (residue.get_resname(), str(chain.id), resnum)
-                    lookup.setdefault(key, set())
-                    for atom in residue:
-                        lookup[key].add(atom.element.upper())
-        return lookup
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to build residue-element lookup from structure: {e}") from e
-    
-
 def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     """Parse an edstats stats.out file, returning (rows, header).
-    `structure` is a parsed Biopython structure, shared with run_bond_analysis
+    `structure` is the shared first-model Gemmi context used by bond analysis.
 
     Cofactors are matched by CCD component name (fields[0]) against
     cofactor_set, as before. Plain metals are matched by the residue's
@@ -84,15 +56,23 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
     Matching is done on the parsed residue-name token (fields[0]) against the
     given sets, including CCD ids longer than four characters.
 
-    `rows` is a list of dicts: {pdbID, category, resname, chain, resnum, fields}
-    where `fields` is the full whitespace-split edstats line (aligned with
-    `header`). `header` is the column-label list from the file's first line.
+    Output is site-level: a multi-metal cofactor repeats its residue-level
+    EDSTATS values once per selected metal site. Each row carries ``site`` and
+    ``site_key`` internally so downstream contact summaries cannot collide for
+    multiple metals or duplicate author residue identifiers.
+
+    A cofactor row that has no matching coordinate residue or no selected metal
+    site is retained once with ``site=None``. Machine-readable row status fields
+    distinguish an identifier-join failure from a matched cofactor that simply
+    has no selected configured metal. This preserves the residue-level EDSTATS
+    observation without pretending that a metal site was available for geometry
+    analysis.
     """
 
     if structure is None:
         raise ValueError(
             "A parsed structure is required for element-based metal identification")
-    residue_elements = _build_residue_elements(structure)
+    metals_upper = {element.upper() for element in metals_set}
 
     rows = []
     header = None
@@ -108,23 +88,60 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                 continue
             resname = fields[0]
             chain = fields[1] if len(fields) > 1 else ""
+            if chain in (".", "?"):
+                chain = ""
             resnum = fields[2] if len(fields) > 2 else ""
-
-            if resname in cofactor_set:
-                category = "cofactor"
+            matched_residues = structure.residues_for_author(
+                resname, chain, resnum)
+            if not matched_residues:
+                mapping_status = "coordinate_residue_not_found"
+            elif len(matched_residues) == 1:
+                mapping_status = "matched"
             else:
-                elements = residue_elements.get((resname, chain, resnum))
-                if elements and len(elements) == 1 and next(iter(elements)) in metals_set:
+                mapping_status = "multiple_coordinate_residues"
+
+            is_cofactor = resname in cofactor_set
+            emitted_site = False
+            for residue in matched_residues:
+                metal_sites = [atom for atom in residue.contact_atoms
+                               if atom.element_known and
+                               atom.element in metals_upper]
+                if is_cofactor:
+                    category = "cofactor"
+                elif (residue.chemical_atom_site_count == 1 and
+                      len(metal_sites) == 1):
                     category = "metal"
                 else:
                     continue
+                for site in metal_sites:
+                    emitted_site = True
+                    rows.append({
+                        "pdbID": pdbID,
+                        "category": category,
+                        "resname": resname,
+                        "chain": chain,
+                        "resnum": resnum,
+                        "fields": list(fields),
+                        "coordinate_mapping_status": mapping_status,
+                        "selected_metal_site_status": "selected",
+                        "site": site,
+                        "site_key": site.source_key,
+                        "residue_key": residue.key,
+                    })
 
-            rows.append({
-                "pdbID": pdbID,
-                "category": category,
-                "resname": resname,
-                "chain": fields[1] if len(fields) > 1 else "",
-                "resnum": fields[2] if len(fields) > 2 else "",
-                "fields": fields,
-            })
+            if is_cofactor and not emitted_site:
+                rows.append({
+                    "pdbID": pdbID,
+                    "category": "cofactor",
+                    "resname": resname,
+                    "chain": chain,
+                    "resnum": resnum,
+                    "fields": list(fields),
+                    "coordinate_mapping_status": mapping_status,
+                    "selected_metal_site_status": "no_selected_metal",
+                    "site": None,
+                    "site_key": None,
+                    "residue_key": (matched_residues[0].key
+                                    if len(matched_residues) == 1 else None),
+                })
     return rows, header

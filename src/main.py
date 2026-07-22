@@ -3,18 +3,17 @@
 
 For each PDB entry this computes 2mFo-DFc and mFo-DFc maps (CCP4 `fft`) and runs
 `edstats`, then extracts per-atom real-space statistics for metal ions and
-metal-containing cofactors. Results are streamed to two CSVs under --output-dir:
+metal-containing cofactors. Results are streamed to three CSVs under --output-dir:
 
-  metal_stats_all.csv  -- one row per metal/cofactor atom (pdbID + edstats columns)
-  manifest.csv         -- one row per entry: pdbID,status,n_metals,runtime_s,error
+  metal_stats_all.csv  -- one row per selected metal site
+  metal_bonds_all.csv  -- one row per retained candidate contact
+  manifest.csv         -- one row per entry with status and provenance
 
 Requirements
 ------------
 * CCP4 `fft` and `edstats` on PATH -- either already sourced, or via --ccp4-setup
   pointing at a CCP4 setup script (e.g. <CCP4>/bin/ccp4.setup-sh).
-* Run under a Python env with gemmi + Biopython (e.g. `conda run -n metal python
-  src/main.py ...`). gemmi is needed only for the 0cyc/besttls states (gunzip +
-  CIF->PDB) and the resolution fallback.
+* Run under a Python environment with gemmi>=0.7.0 and requests.
 
 Examples
 --------
@@ -27,6 +26,7 @@ import argparse
 import csv
 import gzip
 import json
+import math
 import os
 import re
 import shlex
@@ -41,7 +41,14 @@ import requests
 from density_analysis import run_density_analysis
 from metal_identification import metals, uncommonMetals, load_cofactor_ids, extract_metal_statistics
 from build_metallocofactor_catalog import refresh_cofactors_if_needed, active_cofactors_path
-from bond_analysis import run_bond_analysis, BOND_COLUMNS, load_structure, NAN
+from bond_analysis import (
+    BOND_COLUMNS,
+    NAN,
+    STATS_EXTRA_COLUMNS,
+    load_structure,
+    run_bond_analysis,
+    stats_extra_values,
+)
 from ccp4_setup import (
     ccp4_tools_available,
     find_ccp4_setup,
@@ -53,6 +60,22 @@ from ccp4_setup import (
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
 METALS_SET = set(metals) | set(uncommonMetals)
+
+MODEL_POLICY = "first"
+ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
+SYMMETRY_POLICY = "crystal-inclusive-primary-with-explicit-summary"
+ALCHEMY_VERSION = "0.1.0"
+
+MANIFEST_COLUMNS = [
+    "pdbID", "status", "retryable", "n_metals", "n_bonds", "runtime_s",
+    "reason_codes", "warning_codes", "error", "alchemy_version", "alchemy_commit",
+    "gemmi_version", "ccp4_version", "refinement_state",
+    "source_coordinate_format", "analysis_coordinate_format",
+    "coordinate_conversion_performed", "source_coordinate_path",
+    "analysis_coordinate_path", "model_policy", "input_model_count",
+    "model_analyzed", "multi_model_structure", "altloc_policy",
+    "symmetry_contact_policy",
+]
 
 # config dict shared with worker processes (set once per worker by _init_worker)
 _CFG = None
@@ -207,6 +230,10 @@ def _cif_to_pdb(cif_path, dst):
         raise FileNotFoundError(cif_path)
     structure = gemmi.read_structure(cif_path)
     structure.setup_entities()
+    # EDSTATS consumes PDB coordinates, whose chain field is one character.
+    # Shorten deterministically before writing, then analyze this exact PDB so
+    # EDSTATS and Alchemy never join identifiers from different representations.
+    structure.shorten_chain_names()
     structure.write_pdb(dst)
     return dst
 
@@ -432,6 +459,56 @@ def enumerate_entries(root, state, limit=None):
 # --------------------------------------------------------------------------- #
 # Worker
 # --------------------------------------------------------------------------- #
+def _coordinate_provenance(cfg):
+    manual = cfg.get("manual_inputs")
+    if manual:
+        converted = bool(manual.get("cif_file") and not manual.get("pdb_file"))
+        return ("mmcif" if converted else "pdb", "pdb", converted)
+    converted = cfg["state"] == "0cyc"
+    return ("mmcif" if converted else "pdb", "pdb", converted)
+
+
+def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
+    manual = cfg.get("manual_inputs")
+    if manual:
+        return manual.get("pdb_file") or manual.get("cif_file") or ""
+    if cfg["state"] == "besttls":
+        return os.path.join(entry, f"{pdb_id}_besttls.pdb.gz")
+    if cfg["state"] == "0cyc":
+        return os.path.join(entry, f"{pdb_id}_0cyc.cif.gz")
+    return analysis_path
+
+
+def _alchemy_commit():
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"], cwd=REPO_DIR,
+            capture_output=True, text=True, check=True)
+        commit = completed.stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=REPO_DIR, capture_output=True, text=True, check=True)
+        return commit + ("+dirty" if dirty.stdout.strip() else "")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def _gemmi_version():
+    try:
+        import gemmi
+        return gemmi.__version__
+    except Exception:
+        return "unknown"
+
+
+def _ccp4_version(env):
+    for key in ("CCP4_VERSION", "CCP4_VERSION_CODE", "CCP4VER"):
+        if env.get(key):
+            return env[key]
+    ccp4_root = env.get("CCP4", "")
+    return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
+
+
 def _init_worker(cfg):
     global _CFG
     _CFG = cfg
@@ -442,9 +519,24 @@ def process(pdbID):
     cfg = _CFG
     t0 = time.monotonic()
     out_dir = os.path.join(cfg["output_dir"], pdbID)
+    source_format, analysis_format, converted = _coordinate_provenance(cfg)
     result = {"pdbID": pdbID, "status": "error", "n": 0,
               "runtime": 0.0, "error": "", "rows": [], "header": None,
-              "bond_rows": [], "n_bonds": 0}
+              "bond_rows": [], "n_bonds": 0, "retryable": True,
+              "reason_codes": [], "warning_codes": [],
+              "alchemy_version": ALCHEMY_VERSION,
+              "alchemy_commit": cfg["alchemy_commit"],
+              "gemmi_version": cfg["gemmi_version"],
+              "ccp4_version": cfg["ccp4_version"],
+              "refinement_state": cfg["state"],
+              "source_coordinate_format": source_format,
+              "analysis_coordinate_format": analysis_format,
+              "coordinate_conversion_performed": converted,
+              "source_coordinate_path": "", "analysis_coordinate_path": "",
+              "model_policy": MODEL_POLICY, "input_model_count": "",
+              "model_analyzed": "", "multi_model_structure": "",
+              "altloc_policy": ALTLOC_POLICY,
+              "symmetry_contact_policy": SYMMETRY_POLICY}
     try:
         if cfg.get("manual_inputs"):
             os.makedirs(out_dir, exist_ok=True)
@@ -470,37 +562,119 @@ def process(pdbID):
             os.makedirs(out_dir, exist_ok=True)
             mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
             reslo, reshi = read_resolution(entry, mtz)
+        result.update(
+            source_coordinate_path=_source_coordinate_path(
+                cfg, pdbID, entry, pdb),
+            analysis_coordinate_path=pdb,
+        )
         res = run_density_analysis(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
         structure = load_structure(pdbID, pdb)
+        result.update(
+            analysis_coordinate_format=structure.analysis_coordinate_format,
+            input_model_count=structure.input_model_count,
+            model_analyzed=structure.model_analyzed,
+            multi_model_structure=structure.multi_model_structure,
+            warning_codes=list(structure.warning_codes),
+        )
 
         rows, header = extract_metal_statistics(pdbID, res["stats_out"],
                                     METALS_SET, cfg["cofactors"], structure=structure)
+        # Reaching this point means the entry's core inputs and density stage
+        # succeeded. Any limitations discovered below are terminal unless a
+        # later stage explicitly identifies a transient failure.
+        result["retryable"] = False
+
+        identification_reason_codes = []
+        for row in rows:
+            mapping_status = row.get("coordinate_mapping_status", "")
+            site_status = row.get("selected_metal_site_status", "")
+            if mapping_status == "coordinate_residue_not_found":
+                identification_reason_codes.append(
+                    "cofactor_coordinate_join_failed")
+            elif mapping_status == "multiple_coordinate_residues":
+                identification_reason_codes.append(
+                    "ambiguous_coordinate_residue_join")
+            elif site_status == "no_selected_metal":
+                identification_reason_codes.append(
+                    "cofactor_without_selected_metal")
+        identification_reason_codes = list(dict.fromkeys(
+            identification_reason_codes))
 
         bond_rows = []
-        aa_coverage_by_metal = {}
+        site_summaries = {}
+        bond_meta = {"partial_reason_codes": [],
+                     "warning_codes": list(structure.warning_codes),
+                     "messages": [], "retryable": False}
         
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
-                bond_rows, aa_coverage_by_metal = run_bond_analysis(
+                bond_rows, site_summaries, bond_meta = run_bond_analysis(
                     pdbID, pdb, entry, rows, header,
                     {"data_json": data_json if cfg.get("manual_inputs") else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi}, structure=structure)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
+                result["reason_codes"] = ["bond_stage_failure"]
+                result["retryable"] = True
         if header:
-            header = header + ["aa_geometry_coverage"]
+            header = header + ["aa_geometry_coverage"] + STATS_EXTRA_COLUMNS
         for row in rows:
-            key = (row["resname"], str(row["chain"]), str(row["resnum"]))
-            row["fields"] = row["fields"] + [aa_coverage_by_metal.get(key, NAN)]
+            summary = dict(site_summaries.get(row.get("site_key"), {}))
+            summary["coordinate_mapping_status"] = row.get(
+                "coordinate_mapping_status", "")
+            summary["selected_metal_site_status"] = row.get(
+                "selected_metal_site_status", "")
+            coverage = summary.get("geometry_coverage_crystal", NAN)
+            if isinstance(coverage, float) and not math.isfinite(coverage):
+                coverage = summary.get("geometry_coverage_explicit", NAN)
+            extra = stats_extra_values(structure, row.get("site"), summary)
+            row["fields"] = (row["fields"] + [coverage] +
+                             [extra[column] for column in STATS_EXTRA_COLUMNS])
 
-        status = "partial" if result["error"] else "ok"
-        result.update(status=status, n=len(rows), rows=rows, header=header,
+        partial_reason_codes = list(dict.fromkeys(
+            identification_reason_codes +
+            list(bond_meta["partial_reason_codes"])))
+        result["reason_codes"] = list(dict.fromkeys(
+            result["reason_codes"] + partial_reason_codes))
+        reason_messages = {
+            "cofactor_coordinate_join_failed":
+                "cofactor EDSTATS row did not match a coordinate residue",
+            "ambiguous_coordinate_residue_join":
+                "EDSTATS row matched multiple coordinate residues",
+            "cofactor_without_selected_metal":
+                "matched cofactor has no selected configured metal site",
+        }
+        messages = [reason_messages[code]
+                    for code in identification_reason_codes]
+        messages.extend(bond_meta["messages"])
+        if messages:
+            existing_error = result["error"]
+            result["error"] = "; ".join(
+                ([existing_error] if existing_error else []) + messages)[:300]
+        if bond_meta.get("retryable", False):
+            result["retryable"] = True
+        result["warning_codes"] = list(dict.fromkeys(
+            result["warning_codes"] + bond_meta.get("warning_codes", [])))
+        status = "partial" if result["reason_codes"] else "ok"
+        if status == "ok":
+            result["retryable"] = False
+        # Count coordinate-model metal sites, not emitted statistics rows.
+        # A failed EDSTATS join can leave a diagnostic row without a site even
+        # though bond analysis still found and evaluated the deposited metal.
+        selected_site_count = len(structure.metal_atoms(
+            METALS_SET, canonical=True))
+        result.update(status=status, n=selected_site_count,
+                      rows=rows, header=header,
                       bond_rows=bond_rows, n_bonds=len(bond_rows))
     except FileNotFoundError as e:
-        result.update(status="skip", error=f"missing input: {e}"[:300])
+        result.update(status="skip", retryable=True,
+                      reason_codes=["missing_input"],
+                      error=f"missing input: {e}"[:300])
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
-        result.update(status="error", error=f"{type(e).__name__}: {e}"[:300])
+        result.update(status="error", retryable=True,
+                      reason_codes=["unexpected_processing_error"],
+                      error=f"{type(e).__name__}: {e}"[:300])
     finally:
         result["runtime"] = round(time.monotonic() - t0, 2)
         if not cfg["keep"] and os.path.isdir(out_dir):
@@ -512,14 +686,18 @@ def process(pdbID):
 # Driver
 # --------------------------------------------------------------------------- #
 def load_done(manifest_path):
-    """PDB IDs successfully completed in an existing manifest."""
+    """PDB IDs whose result is terminal in an existing manifest."""
     done = set()
     if os.path.exists(manifest_path):
         with open(manifest_path, newline="") as f:
             reader = csv.DictReader(f)
             if reader.fieldnames and {"pdbID", "status"}.issubset(reader.fieldnames):
                 for row in reader:
-                    if row.get("status", "").strip().lower() == "ok":
+                    status = row.get("status", "").strip().lower()
+                    retryable = row.get("retryable", "").strip().lower()
+                    terminal_partial = (status == "partial" and
+                                        retryable in ("false", "0", "no"))
+                    if status == "ok" or terminal_partial:
                         pdbID = row.get("pdbID", "").strip().lower()
                         if pdbID:
                             done.add(pdbID)
@@ -564,6 +742,39 @@ def remove_csv_rows_for_ids(path, pdb_ids):
         except OSError:
             pass
         raise
+
+
+def _csv_header(path):
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    with open(path, newline="") as handle:
+        return next(csv.reader(handle), None)
+
+
+def validate_resume_schemas(manifest_path, stats_path, bonds_path,
+                            bonds_enabled=True):
+    """Refuse to append migration rows beneath an incompatible old header."""
+    manifest_header = _csv_header(manifest_path)
+    if manifest_header is not None and manifest_header != MANIFEST_COLUMNS:
+        raise ValueError(
+            "Existing manifest.csv uses an incompatible schema; choose a new "
+            "--output-dir for this Gemmi migration run.")
+
+    stats_header = _csv_header(stats_path)
+    if stats_header is not None:
+        expected_suffix = ["aa_geometry_coverage"] + STATS_EXTRA_COLUMNS
+        if (stats_header[:2] != ["pdbID", "category"] or
+                stats_header[-len(expected_suffix):] != expected_suffix):
+            raise ValueError(
+                "Existing metal_stats_all.csv uses an incompatible schema; "
+                "choose a new --output-dir for this Gemmi migration run.")
+
+    if bonds_enabled:
+        bonds_header = _csv_header(bonds_path)
+        if bonds_header is not None and bonds_header != BOND_COLUMNS:
+            raise ValueError(
+                "Existing metal_bonds_all.csv uses an incompatible schema; "
+                "choose a new --output-dir for this Gemmi migration run.")
 
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
@@ -619,7 +830,7 @@ def parse_args(argv=None):
     ap.add_argument("--keep-intermediates", action="store_true",
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
-                    help="skip ids already recorded with status ok; retry incomplete ids")
+                    help="skip terminal ok/partial results; retry retryable incomplete ids")
     ap.add_argument("--no-bonds", dest="bonds", action="store_false",
                     help="skip the metal-ligand bond-distance stage (edstats stats only)")
     ap.add_argument("--refresh-cofactors", action="store_true",
@@ -652,6 +863,13 @@ def main(argv=None):
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
     stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
     bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
+    if args.resume:
+        try:
+            validate_resume_schemas(manifest_path, stats_path, bonds_path,
+                                    bonds_enabled=args.bonds)
+        except ValueError as exc:
+            print(str(exc), flush=True)
+            return 1
 
     manual_inputs = None
     if args.pdb_file or args.mtz_file or args.cif_file:
@@ -716,17 +934,21 @@ def main(argv=None):
            "output_dir": args.output_dir, "cofactors": cofactors,
            "keep": args.keep_intermediates, "bonds": args.bonds,
            "allow_download": bool(args.id or args.id_file),
-           "manual_inputs": manual_inputs}
+           "manual_inputs": manual_inputs,
+           "alchemy_commit": _alchemy_commit(),
+           "gemmi_version": _gemmi_version(),
+           "ccp4_version": _ccp4_version(env)}
 
-    append = args.resume and os.path.exists(manifest_path)
+    append = (args.resume and os.path.exists(manifest_path) and
+              os.path.getsize(manifest_path) > 0)
     man_fh = open(manifest_path, "a" if append else "w", newline="")
     stats_fh = open(stats_path, "a" if append else "w", newline="")
     bonds_fh = open(bonds_path, "a" if append else "w", newline="") if args.bonds else None
-    man_w = csv.writer(man_fh)
+    man_w = csv.DictWriter(man_fh, fieldnames=MANIFEST_COLUMNS)
     stats_w = csv.writer(stats_fh)
     bonds_w = csv.writer(bonds_fh) if bonds_fh else None
     if not append:
-        man_w.writerow(["pdbID", "status", "n_metals", "n_bonds", "runtime_s", "error"])
+        man_w.writeheader()
     stats_header_written = append and os.path.getsize(stats_path) > 0
     bonds_header_written = bool(bonds_fh) and append and os.path.getsize(bonds_path) > 0
 
@@ -754,8 +976,15 @@ def main(argv=None):
                     bonds_fh.flush()
                 # The manifest is the completion marker for --resume, so write
                 # it only after this entry's result rows have been flushed.
-                man_w.writerow([r["pdbID"], r["status"], r["n"], r["n_bonds"],
-                                r["runtime"], r["error"]])
+                manifest_row = {column: r.get(column, "")
+                                for column in MANIFEST_COLUMNS}
+                manifest_row.update(
+                    n_metals=r["n"], n_bonds=r["n_bonds"],
+                    runtime_s=r["runtime"],
+                    reason_codes="|".join(r.get("reason_codes", [])),
+                    warning_codes="|".join(r.get("warning_codes", [])),
+                )
+                man_w.writerow(manifest_row)
                 man_fh.flush()
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
                 if k % 200 == 0 or k == len(ids):
