@@ -1,7 +1,8 @@
 """Metal-ligand bond-distance analysis for the Alchemy pipeline.
 
-For one PDB entry this finds every metal atom, does a Biopython neighbor search,
-and for each metal-ligand contact within 4 A computes the bond length and a
+For one PDB entry this finds every metal atom in the first model, uses Gemmi to
+search explicit and crystallographic-symmetry neighbors, and for each retained
+candidate contact within 4 A computes the distance and a
 resolution-aware z-score against the consolidated literature reference distances
 in ``metal_distances_info.txt`` (Harding 2006 and Zheng et al. 2008 [Ni only]):
 
@@ -23,10 +24,12 @@ import json
 import math
 import os
 import re
-from Bio.PDB.Atom import DisorderedAtom
-
 
 from metal_identification import metals, uncommonMetals
+from structure_analysis import (
+    count_ni,
+    load_structure,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -35,14 +38,23 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # element column, which is more reliable than residue-name matching).
 METAL_ELEMENTS = set(metals) | set(uncommonMetals)
 
-# Coordinating residues (and water). A neighbor whose residue is not in this
-# set is ignored.
+# Recognized amino-acid donors. Waters are recognized separately with Gemmi's
+# Residue.is_water(), which also handles WAT, H2O, and DOD.
 AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
       "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-      "HOH"}
+      }
 
 # Max metal-ligand interaction distance (Gucwa et al. 2024 / CMM program).
 CUTOFF = 4.0
+SEARCH_EPSILON = 1e-6
+
+# Gemmi's ContactSearch uses 0.8 A by default to distinguish near-coincident
+# symmetry images of an atom intended to occupy a special position.  NeighborSearch
+# returns those images unfiltered, so Alchemy applies the same cutoff explicitly.
+SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
+
+# Conservative manuscript cutoff for a reference-covered geometry outlier.
+ZSCORE_OUTLIER_CUTOFF = 6.0
 
 NAN = float("nan")
 
@@ -73,6 +85,57 @@ BOND_COLUMNS = [
     "neighbor_resname", "neighbor_atom", "neighbor_element", "distance",
     "literature_distance", "literature_stdev", "zscore", "dpi", "resolution",
     "sigma_mag", "sigma_neg", "sigma_pos", "parent_type", "bonded_to",
+    "model_id", "metal_model_index", "metal_chain_index",
+    "metal_residue_index", "metal_atom_index", "metal_atom", "metal_icode",
+    "metal_altloc", "metal_occupancy", "metal_occupancy_valid",
+    "metal_occupancy_status", "metal_conformer_mean_occupancy",
+    "metal_altloc_options", "metal_altloc_selection_fallback",
+    "neighbor_chain", "neighbor_resnum", "neighbor_icode",
+    "neighbor_model_index", "neighbor_chain_index", "neighbor_residue_index",
+    "neighbor_atom_index", "neighbor_altloc", "neighbor_occupancy",
+    "neighbor_occupancy_valid", "neighbor_occupancy_status",
+    "neighbor_conformer_mean_occupancy", "neighbor_altloc_options",
+    "neighbor_altloc_selection_fallback", "alternative_conformers_present",
+    "altloc_selection_fallback", "neighbor_class", "candidate_contact",
+    "reference_covered", "geometry_outlier", "geometry_consistent",
+    "zscore_outlier_cutoff", "contact_scope", "symmetry_contact",
+    "symmetry_image_index", "symmetry_operation", "cell_translation_x",
+    "cell_translation_y", "cell_translation_z", "transformed_neighbor_x",
+    "transformed_neighbor_y", "transformed_neighbor_z",
+]
+
+
+# Appended after the dynamic EDSTATS header in metal_stats_all.csv.
+STATS_EXTRA_COLUMNS = [
+    "model_policy", "input_model_count", "model_analyzed", "model_id",
+    "multi_model_structure", "metal_model_index", "metal_chain_index",
+    "metal_residue_index", "metal_atom_index", "metal_resname", "metal_chain",
+    "metal_resnum", "metal_atom", "metal_element", "metal_icode",
+    "metal_altloc", "metal_occupancy", "metal_occupancy_valid",
+    "metal_occupancy_status",
+    "metal_conformer_mean_occupancy", "metal_altloc_options",
+    "alternative_conformers_present", "altloc_selection_fallback",
+    "coordinate_mapping_status", "selected_metal_site_status",
+    "dpi", "resolution", "occupancy_weighted_atom_count",
+    "dpi_unavailable_reason",
+    "candidate_contact_count", "reference_covered_contact_count",
+    "geometry_outlier_contact_count", "geometry_consistent_contact_count",
+    "explicit_contact_count", "symmetry_contact_count", "crystal_contact_count",
+    "geometry_outlier_count_explicit", "geometry_outlier_count_crystal",
+    "geometry_coverage_explicit", "geometry_coverage_crystal",
+    "explicit_geometry_status", "crystal_geometry_status",
+    "symmetry_contact_scope", "geometry_classification_changes_with_symmetry",
+    "coordination_depends_on_crystallographic_symmetry",
+    "symmetry_search_available", "symmetry_search_failure_reason",
+    "occupancy_validation_failed", "missing_occupancy_count",
+    "invalid_occupancy_count", "zero_occupancy_atom_count",
+    "metal_zero_occupancy", "geometry_not_assessed_reason",
+    "duplicate_atom_records_present", "duplicate_atom_record_count",
+    "duplicate_atom_coordinate_conflict_count",
+    "malformed_duplicate_atom_name_count", "raw_occupancy_mapping_failed",
+    "raw_occupancy_mapping_failure_reason",
+    "unknown_element_atom_count", "element_validation_warning",
+    "zscore_outlier_cutoff",
 ]
 
 
@@ -110,7 +173,7 @@ def _asu_volume(mtz_path, pdb_path):
     scrape. Prefer the MTZ (matching the diffraction data); fall back to PDB
     CRYST1 metadata.
     """
-    import gemmi  # lazy: only the metal/biotools/vinda envs have it
+    import gemmi
     cell = sg = None
     try:
         mtz = gemmi.read_mtz_file(mtz_path)
@@ -144,38 +207,13 @@ def _rfree_from_pdb(pdb_path):
         pass
     return NAN
 
-def load_structure(pdbID, pdb_path):
-    """Parse pdb_path once via Biopython; shared by extract_metal_statistics and
-    run_bond_analysis so a single entry's coordinate file is only read once."""
-    from Bio.PDB import PDBParser  # lazy import
-    return PDBParser(QUIET=True).get_structure(pdbID, pdb_path)
-
 def _count_ni(structure):
-    """Atoms in the model plus water-residue count.
-
-    Ni represents the effective number of fully-occupied atom
-    sites; a partial-occupancy atom contributes less scattering signal than
-    a full atom. Each atom is weighted by its occupancy (0-1) rather than
-    counted as a flat 1, as Blow (2002) indicates that the simplified equations assume
-    full occupancy of every atom. Disordered atoms have their occupancies explicitly  
-    summed over each location. (Default behavior is to use the occupancy of 1 location.)
-    """
-    n_atoms = 0.0
-    for model in structure:
-        for chain in model:
-            for residue in chain:
-                for atom in residue:
-                    if atom.element.upper() == "H":
-                        continue
-                    if isinstance(atom, DisorderedAtom):
-                        n_atoms += sum(a.get_occupancy() for a in atom.disordered_get_list())
-                    else:
-                        n_atoms += atom.get_occupancy()
-    return n_atoms
+    """Compatibility wrapper for the shared first-model DPI atom count."""
+    return count_ni(structure)
 
 
-def calculate_dpi(structure, dpi_inputs):
-    """Return ``(dpi, resolution)``; either may be NaN. Never raises.
+def _calculate_dpi_details(structure, dpi_inputs):
+    """Return ``(dpi, resolution, reason_code)``. Never raises.
 
     DPI = 1.28 * ni**0.5 * va**(1/3) * nobs**(-5/6) * rfree  (Blow 2002 eq. 7).
     Resolution is metadata only (it is implicit in va/nobs, not a separate term).
@@ -203,14 +241,30 @@ def calculate_dpi(structure, dpi_inputs):
         ni = _count_ni(structure)
 
         if not all(isinstance(x, float) or isinstance(x, int) for x in (nobs, rfree, va)):
-            return NAN, resolution
+            return NAN, resolution, "invalid_dpi_metadata"
         if not (math.isfinite(nobs) and math.isfinite(rfree) and math.isfinite(va)
                 and nobs > 0 and rfree > 0 and va > 0 and ni > 0):
-            return NAN, resolution
+            if structure.occupancy_validation_failed:
+                reason = "invalid_occupancy"
+            elif not math.isfinite(nobs) or nobs <= 0:
+                reason = "missing_or_invalid_reflection_count"
+            elif not math.isfinite(rfree) or rfree <= 0:
+                reason = "missing_or_invalid_rfree"
+            elif not math.isfinite(va) or va <= 0:
+                reason = "missing_or_invalid_asu_volume"
+            else:
+                reason = "invalid_dpi_atom_count"
+            return NAN, resolution, reason
         dpi = 1.28 * (ni ** 0.5) * (va ** (1 / 3)) * (nobs ** (-5 / 6)) * rfree
-        return round(dpi, 4), resolution
+        return round(dpi, 4), resolution, ""
     except Exception:
-        return NAN, resolution
+        return NAN, resolution, "dpi_calculation_failed"
+
+
+def calculate_dpi(structure, dpi_inputs):
+    """Return ``(dpi, resolution)`` while retaining the historical public API."""
+    dpi, resolution, _ = _calculate_dpi_details(structure, dpi_inputs)
+    return dpi, resolution
 
 
 # --------------------------------------------------------------------------- #
@@ -218,35 +272,31 @@ def calculate_dpi(structure, dpi_inputs):
 # --------------------------------------------------------------------------- #
 def _bonding_key(neighbor, nb_res, metal_el):
     """Exact (residue, atom, metal) key matching metal_distances_info.txt columns."""
-    name = neighbor.get_name()
-    if nb_res == "HOH":
+    name = neighbor.atom_name.strip()
+    if neighbor.is_water:
         return ("HOH", "O", metal_el)
     if name == "O":               # backbone carbonyl O -> literal "CA" row
         return ("CA", "O", metal_el)
     if name.startswith("O"):      # side-chain O (OD1/OE1/OG/OH/...)
         return (nb_res, "O", metal_el)
-    return (nb_res, neighbor.element.upper(), metal_el)  # His N, Cys S, ...
+    return (nb_res, neighbor.element, metal_el)  # His N, Cys S, ...
 
 
-def _parent_type(metal, metal_res, metal_el):
+def _parent_type(structure, metal, metal_res, metal_el):
     if metal_res in CLUSTER:
         return "cluster"
     if metal_res in HEMES:
         return "heme"
     if metal_el not in METAL_ELEMENTS:
         return "other"  # defensive: shouldn't happen, metal_atoms is pre-filtered
-    residue = metal.get_parent()
-    if sum(1 for _ in residue) == 1:   # lone atom residue = free ion
+    residue = structure.residue_for_atom(metal)
+    if residue.chemical_atom_site_count == 1:
         return "ion"
     return "other"
 
 
-def _bonded_to(nb_res):
-    if nb_res == "HOH":
-        return "HOH"
-    if nb_res in AA:
-        return "P"
-    return nb_res
+def _bonded_to(is_water=False):
+    return "HOH" if is_water else "P"
 
 
 def _zscore(dist, mu, stdev, dpi):
@@ -283,104 +333,447 @@ def _sigma_for(sig, resname, chain, resnum, zd_idx):
         return NAN, NAN, NAN
 
 
-def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header, dpi_inputs, structure=None):
-    """Return a list of bond-row dicts (keys == BOND_COLUMNS) for one entry.
+def _contact_sort_key(contact):
+    neighbor = contact["neighbor"]
+    return (neighbor.chain_index, neighbor.residue_index, neighbor.atom_index,
+            contact["symmetry_operation"], contact["translation"],
+            contact["transformed_position"])
 
-    Parses ``pdb_path`` (the coordinate file edstats consumed), finds all metal
-    atoms, and emits one row per metal-ligand contact within CUTOFF to a
-    coordinating residue/water. Rows with no literature reference or a NaN DPI
-    keep the measured distance and carry NaN in the derived columns.
 
-    `header` is the edstats column header (from extract_metal_statistics) used to locate
-    the ZDm/ZD-m/ZD+m sigma columns; if those columns aren't present, sigma
-    values are emitted as NaN rather than raising.
+def _transformed_distance(a, b):
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
-    aa_coverage_by_metal maps (resname, chain, resnum) -> aa_geometry_coverage: the
-    fraction of a metal's coordinating contacts (N/O/S, within CUTOFF, to an
-    AA-listed residue -- i.e. exactly the contacts that would produce a row
-    below) that have a literature reference bond length. NaN if the metal has
-    no such contacts at all; 0.0 if it has contacts but none have a reference.
+
+def _special_position_preference(contact):
+    """Choose a stable representative for near-coincident symmetry images.
+
+    Prefer an explicit image when one exists so an off-axis refinement artifact
+    cannot turn an otherwise explicit contact into a symmetry-dependent one.
+    Within the same scope, retain the shortest contact and then use stable
+    symmetry provenance to break any remaining tie.
     """
-    from Bio.PDB import NeighborSearch  # lazy import
+    return (contact["symmetry_contact"], contact["distance_raw"],
+            contact["symmetry_image_index"], contact["symmetry_operation"],
+            contact["translation"], contact["transformed_position"])
 
+
+def _deduplicate_special_position_contacts(candidates):
+    """Collapse near-coincident images of each deposited source atom.
+
+    Sorting each source-atom group before the spatial comparison makes the
+    result independent of Gemmi's NeighborSearch mark order.  Images farther
+    apart than Gemmi's special-position cutoff remain distinct contacts.
+    """
+    by_source = {}
+    for candidate in candidates:
+        by_source.setdefault(candidate["neighbor"].source_key, []).append(candidate)
+
+    contacts = []
+    for source_key in sorted(by_source):
+        retained = []
+        for candidate in sorted(by_source[source_key],
+                                key=_special_position_preference):
+            if any(
+                _transformed_distance(
+                    current["transformed_position"],
+                    candidate["transformed_position"],
+                ) <= SPECIAL_POSITION_DEDUP_CUTOFF
+                for current in retained
+            ):
+                continue
+            retained.append(candidate)
+        contacts.extend(retained)
+    contacts.sort(key=_contact_sort_key)
+    return contacts
+
+
+def _collect_contacts(structure, search, metal, include_symmetry):
+    """Return unique candidate contacts for one metal and one search scope."""
+    candidates = []
+    marks = search.find_atoms(metal.pos, "\x00", min_dist=0.0,
+                              radius=CUTOFF + SEARCH_EPSILON)
+    for mark in marks:
+        neighbor = structure.atom_for_mark(mark)
+        if neighbor is None:
+            continue
+        residue = structure.residue_for_atom(neighbor)
+        if neighbor.element not in ("N", "O", "S"):
+            continue
+        if not (neighbor.occupancy_valid and neighbor.occupancy > 0.0):
+            continue
+        if not (residue.is_water or residue.residue_name in AA):
+            continue
+
+        if include_symmetry:
+            nearest = structure.structure.cell.find_nearest_pbc_image(
+                metal.pos, neighbor.pos, mark.image_idx)
+            transformed = structure.structure.cell.find_nearest_pbc_position(
+                metal.pos, neighbor.pos, mark.image_idx)
+            translation = tuple(int(value) for value in nearest.pbc_shift)
+            symmetry_contact = nearest.sym_idx != 0 or translation != (0, 0, 0)
+            operation = nearest.symmetry_code()
+            distance = float(nearest.dist())
+        else:
+            transformed = neighbor.pos
+            translation = (0, 0, 0)
+            symmetry_contact = False
+            operation = "1_555"
+            distance = math.sqrt(
+                (metal.x - neighbor.x) ** 2 +
+                (metal.y - neighbor.y) ** 2 +
+                (metal.z - neighbor.z) ** 2)
+
+        # A symmetry copy is a distinct residue image. Exclude only the actual
+        # source residue in the explicit asymmetric unit.
+        if neighbor.residue_key == metal.residue_key and not symmetry_contact:
+            continue
+        if not (0.0 < distance <= CUTOFF + 1e-9):
+            continue
+
+        position = (float(transformed.x), float(transformed.y), float(transformed.z))
+        candidates.append({
+            "neighbor": neighbor,
+            "distance_raw": distance,
+            "transformed_position": position,
+            "symmetry_contact": symmetry_contact,
+            "contact_scope": "symmetry" if symmetry_contact else "explicit",
+            "symmetry_image_index": int(mark.image_idx),
+            "symmetry_operation": operation,
+            "translation": translation,
+        })
+
+    return _deduplicate_special_position_contacts(candidates)
+
+
+def _annotate_contacts(contacts, metal_element, dpi):
+    for contact in contacts:
+        neighbor = contact["neighbor"]
+        reported_distance = round(contact["distance_raw"], 3)
+        literature = LIT.get(_bonding_key(neighbor, neighbor.residue_name,
+                                          metal_element))
+        if literature is None:
+            mu = stdev = zscore = NAN
+        else:
+            mu, stdev = literature
+            zscore = _zscore(reported_distance, mu, stdev, dpi)
+        contact.update(
+            distance=reported_distance,
+            literature_distance=mu,
+            literature_stdev=stdev,
+            zscore=zscore,
+            reference_covered=literature is not None,
+            geometry_outlier=(abs(zscore) >= ZSCORE_OUTLIER_CUTOFF
+                              if math.isfinite(zscore) else ""),
+            geometry_consistent=(abs(zscore) < ZSCORE_OUTLIER_CUTOFF
+                                 if math.isfinite(zscore) else ""),
+        )
+
+
+def _scope_summary(contacts, metal_zero_occupancy, unavailable=False):
+    if unavailable:
+        return {
+            "candidate": NAN, "covered": NAN, "outlier": NAN,
+            "consistent": NAN, "coverage": NAN, "status": "",
+        }
+    candidate = len(contacts)
+    covered = sum(bool(contact["reference_covered"]) for contact in contacts)
+    outlier = sum(contact["geometry_outlier"] is True for contact in contacts)
+    consistent = sum(contact["geometry_consistent"] is True for contact in contacts)
+    assessable = outlier + consistent
+    if metal_zero_occupancy or assessable == 0:
+        status = "insufficient data"
+    elif outlier:
+        status = "suspect"
+    else:
+        status = "plausible"
+    coverage = round(covered / candidate, 4) if candidate else NAN
+    return {
+        "candidate": candidate,
+        "covered": covered,
+        "outlier": outlier,
+        "consistent": consistent,
+        "coverage": coverage,
+        "status": status,
+    }
+
+
+def _site_summary(metal, explicit_contacts, crystal_contacts,
+                  dpi, resolution, ni, dpi_reason):
+    metal_zero = metal.occupancy_valid and metal.occupancy == 0.0
+    explicit = _scope_summary(explicit_contacts, metal_zero)
+    crystal_available = crystal_contacts is not None
+    crystal = _scope_summary(crystal_contacts or [], metal_zero,
+                             unavailable=not crystal_available)
+    primary = crystal if crystal_available else explicit
+    symmetry_count = (sum(contact["symmetry_contact"]
+                          for contact in crystal_contacts)
+                      if crystal_available else NAN)
+    if not crystal_available:
+        symmetry_scope = ""
+        changed = ""
+        depends = ""
+    elif symmetry_count == 0:
+        symmetry_scope = "none"
+        changed = explicit["status"] != crystal["status"]
+        depends = False
+    elif explicit["candidate"] == 0:
+        symmetry_scope = "symmetry_only"
+        changed = explicit["status"] != crystal["status"]
+        depends = True
+    else:
+        symmetry_scope = "additional"
+        changed = explicit["status"] != crystal["status"]
+        depends = True
+
+    reasons = []
+    if metal_zero:
+        reasons.append("metal_zero_occupancy")
+    if dpi_reason:
+        reasons.append(dpi_reason)
+    if not crystal_available:
+        reasons.append("symmetry_search_unavailable")
+    elif primary["consistent"] + primary["outlier"] == 0:
+        reasons.append("no_assessable_reference_contacts")
+    return {
+        "dpi": dpi,
+        "resolution": resolution,
+        "occupancy_weighted_atom_count": (
+            round(ni, 6) if math.isfinite(ni) else NAN),
+        "dpi_unavailable_reason": dpi_reason,
+        "candidate_contact_count": primary["candidate"],
+        "reference_covered_contact_count": primary["covered"],
+        "geometry_outlier_contact_count": primary["outlier"],
+        "geometry_consistent_contact_count": primary["consistent"],
+        "explicit_contact_count": explicit["candidate"],
+        "symmetry_contact_count": symmetry_count,
+        "crystal_contact_count": crystal["candidate"],
+        "geometry_outlier_count_explicit": explicit["outlier"],
+        "geometry_outlier_count_crystal": crystal["outlier"],
+        "geometry_coverage_explicit": explicit["coverage"],
+        "geometry_coverage_crystal": crystal["coverage"],
+        "explicit_geometry_status": explicit["status"],
+        "crystal_geometry_status": crystal["status"],
+        "symmetry_contact_scope": symmetry_scope,
+        "geometry_classification_changes_with_symmetry": changed,
+        "coordination_depends_on_crystallographic_symmetry": depends,
+        "metal_zero_occupancy": metal_zero,
+        "geometry_not_assessed_reason": "|".join(dict.fromkeys(reasons)),
+    }
+
+
+def stats_extra_values(structure, metal=None, summary=None):
+    """Return fixed per-site values appended to an EDSTATS row."""
+    summary = summary or {}
+    residue = structure.residue_for_atom(metal) if metal is not None else None
+    values = {
+        "model_policy": structure.model_policy,
+        "input_model_count": structure.input_model_count,
+        "model_analyzed": structure.model_analyzed,
+        "model_id": structure.analyzed_model_id,
+        "multi_model_structure": structure.multi_model_structure,
+        "metal_model_index": metal.model_index if metal else "",
+        "metal_chain_index": metal.chain_index if metal else "",
+        "metal_residue_index": metal.residue_index if metal else "",
+        "metal_atom_index": metal.atom_index if metal else "",
+        "metal_resname": metal.residue_name if metal else "",
+        "metal_chain": metal.chain_id if metal else "",
+        "metal_resnum": metal.resnum if metal else "",
+        "metal_atom": metal.atom_name if metal else "",
+        "metal_element": metal.element if metal else "",
+        "metal_icode": metal.insertion_code if metal else "",
+        "metal_altloc": metal.altloc if metal else "",
+        "metal_occupancy": metal.occupancy if metal else NAN,
+        "metal_occupancy_valid": metal.occupancy_valid if metal else "",
+        "metal_occupancy_status": metal.occupancy_status if metal else "",
+        "metal_conformer_mean_occupancy": (
+            residue.selected_conformer_mean_occupancy if residue else NAN),
+        "metal_altloc_options": residue.altloc_options if residue else "",
+        "alternative_conformers_present": (
+            residue.alternative_conformers_present if residue else ""),
+        "altloc_selection_fallback": (
+            residue.altloc_selection_fallback if residue else ""),
+        "symmetry_search_available": structure.symmetry_search_available,
+        "symmetry_search_failure_reason": structure.symmetry_search_failure_reason,
+        "occupancy_validation_failed": structure.occupancy_validation_failed,
+        "missing_occupancy_count": structure.missing_occupancy_count,
+        "invalid_occupancy_count": structure.invalid_occupancy_count,
+        "zero_occupancy_atom_count": structure.zero_occupancy_atom_count,
+        "duplicate_atom_records_present": structure.duplicate_atom_records_present,
+        "duplicate_atom_record_count": structure.duplicate_atom_record_count,
+        "duplicate_atom_coordinate_conflict_count": (
+            structure.duplicate_coordinate_conflict_count),
+        "malformed_duplicate_atom_name_count": (
+            structure.malformed_duplicate_atom_name_count),
+        "raw_occupancy_mapping_failed": structure.raw_occupancy_mapping_failed,
+        "raw_occupancy_mapping_failure_reason": (
+            structure.raw_occupancy_mapping_failure_reason),
+        "unknown_element_atom_count": structure.unknown_element_atom_count,
+        "element_validation_warning": structure.element_validation_warning,
+        "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
+    }
+    for column in STATS_EXTRA_COLUMNS:
+        values.setdefault(column, summary.get(column, ""))
+    values.update({key: value for key, value in summary.items()
+                   if key in STATS_EXTRA_COLUMNS})
+    return values
+
+
+def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
+              sigma, parent_type):
+    neighbor = contact["neighbor"]
+    metal_residue = structure.residue_for_atom(metal)
+    neighbor_residue = structure.residue_for_atom(neighbor)
+    x, y, z = contact["transformed_position"]
+    tx, ty, tz = contact["translation"]
+    mag, neg, pos = sigma
+    return {
+        "pdbID": pdb_id,
+        "metal_resname": metal.residue_name,
+        "metal_chain": metal.chain_id,
+        "metal_resnum": metal.resnum,
+        "metal_element": metal.element,
+        "neighbor_resname": neighbor.residue_name,
+        "neighbor_atom": neighbor.atom_name,
+        "neighbor_element": neighbor.element,
+        "distance": contact["distance"],
+        "literature_distance": contact["literature_distance"],
+        "literature_stdev": contact["literature_stdev"],
+        "zscore": contact["zscore"],
+        "dpi": dpi,
+        "resolution": resolution,
+        "sigma_mag": mag, "sigma_neg": neg, "sigma_pos": pos,
+        "parent_type": parent_type,
+        "bonded_to": _bonded_to(neighbor.is_water),
+        "model_id": structure.analyzed_model_id,
+        "metal_model_index": metal.model_index,
+        "metal_chain_index": metal.chain_index,
+        "metal_residue_index": metal.residue_index,
+        "metal_atom_index": metal.atom_index,
+        "metal_atom": metal.atom_name,
+        "metal_icode": metal.insertion_code,
+        "metal_altloc": metal.altloc,
+        "metal_occupancy": metal.occupancy,
+        "metal_occupancy_valid": metal.occupancy_valid,
+        "metal_occupancy_status": metal.occupancy_status,
+        "metal_conformer_mean_occupancy": (
+            metal_residue.selected_conformer_mean_occupancy),
+        "metal_altloc_options": metal_residue.altloc_options,
+        "metal_altloc_selection_fallback": (
+            metal_residue.altloc_selection_fallback),
+        "neighbor_chain": neighbor.chain_id,
+        "neighbor_resnum": neighbor.resnum,
+        "neighbor_icode": neighbor.insertion_code,
+        "neighbor_model_index": neighbor.model_index,
+        "neighbor_chain_index": neighbor.chain_index,
+        "neighbor_residue_index": neighbor.residue_index,
+        "neighbor_atom_index": neighbor.atom_index,
+        "neighbor_altloc": neighbor.altloc,
+        "neighbor_occupancy": neighbor.occupancy,
+        "neighbor_occupancy_valid": neighbor.occupancy_valid,
+        "neighbor_occupancy_status": neighbor.occupancy_status,
+        "neighbor_conformer_mean_occupancy": (
+            neighbor_residue.selected_conformer_mean_occupancy),
+        "neighbor_altloc_options": neighbor_residue.altloc_options,
+        "neighbor_altloc_selection_fallback": (
+            neighbor_residue.altloc_selection_fallback),
+        "alternative_conformers_present": (
+            metal_residue.alternative_conformers_present or
+            neighbor_residue.alternative_conformers_present),
+        "altloc_selection_fallback": (
+            metal_residue.altloc_selection_fallback or
+            neighbor_residue.altloc_selection_fallback),
+        "neighbor_class": "water" if neighbor.is_water else "amino_acid",
+        "candidate_contact": True,
+        "reference_covered": contact["reference_covered"],
+        "geometry_outlier": contact["geometry_outlier"],
+        "geometry_consistent": contact["geometry_consistent"],
+        "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
+        "contact_scope": contact["contact_scope"],
+        "symmetry_contact": contact["symmetry_contact"],
+        "symmetry_image_index": contact["symmetry_image_index"],
+        "symmetry_operation": contact["symmetry_operation"],
+        "cell_translation_x": tx, "cell_translation_y": ty,
+        "cell_translation_z": tz,
+        "transformed_neighbor_x": round(x, 6),
+        "transformed_neighbor_y": round(y, 6),
+        "transformed_neighbor_z": round(z, 6),
+    }
+
+
+def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
+                      dpi_inputs, structure=None):
+    """Return ``(contact_rows, site_summaries, entry_metadata)``.
+
+    Crystal-inclusive contacts are emitted as the primary rows when symmetry is
+    available. Explicit-only and crystal-inclusive summaries are both retained
+    per metal site. Missing literature or DPI inputs never discard a measured
+    candidate-contact distance.
+    """
+    del entry_dir  # retained in the call signature for compatibility
     if structure is None:
         structure = load_structure(pdbID, pdb_path)
 
-    atoms = list(structure.get_atoms())
+    metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
+    metadata = {
+        "partial_reason_codes": [],
+        "warning_codes": list(structure.warning_codes),
+        "messages": [],
+        "retryable": False,
+    }
+    if not metals_in_model:
+        return [], {}, metadata
 
-    metal_atoms = [a for a in atoms if a.element.upper() in METAL_ELEMENTS]
-    if not metal_atoms:
-        return [], {}
+    dpi, resolution, dpi_reason = _calculate_dpi_details(structure, dpi_inputs)
+    ni = _count_ni(structure)
+    if dpi_reason:
+        metadata["partial_reason_codes"].append(dpi_reason)
+        metadata["messages"].append(f"DPI unavailable: {dpi_reason}")
+    if not structure.symmetry_search_available:
+        metadata["partial_reason_codes"].append("symmetry_search_unavailable")
+        metadata["messages"].append(
+            "symmetry search unavailable: " +
+            (structure.symmetry_search_failure_reason or "unknown reason"))
 
-    dpi, resolution = calculate_dpi(structure, dpi_inputs)
+    explicit_search = structure.make_neighbor_search(
+        CUTOFF + SEARCH_EPSILON, include_symmetry=False,
+        positive_occupancy_only=True)
+    crystal_search = None
+    if structure.symmetry_search_available:
+        crystal_search = structure.make_neighbor_search(
+            CUTOFF + SEARCH_EPSILON, include_symmetry=True,
+            positive_occupancy_only=True)
     sig = _sigma_index(stats_rows)
     zd_idx = _zd_indices(header)
-    ns = NeighborSearch(atoms)
 
     rows = []
-    contacts_by_key = {}
-    with_ref_by_key = {}
+    summaries = {}
+    for metal in metals_in_model:
+        explicit = _collect_contacts(structure, explicit_search, metal, False)
+        _annotate_contacts(explicit, metal.element, dpi)
+        crystal = None
+        if crystal_search is not None:
+            crystal = _collect_contacts(structure, crystal_search, metal, True)
+            _annotate_contacts(crystal, metal.element, dpi)
+        summary = _site_summary(metal, explicit, crystal, dpi,
+                                resolution, ni, dpi_reason)
+        summaries[metal.source_key] = summary
+        if summary["metal_zero_occupancy"]:
+            metadata["partial_reason_codes"].append("metal_zero_occupancy")
+            metadata["messages"].append(
+                f"zero-occupancy metal: {metal.chain_id}/{metal.resnum}/"
+                f"{metal.atom_name}")
 
+        primary_contacts = crystal if crystal is not None else explicit
+        sigma = _sigma_for(sig, metal.residue_name, metal.chain_id,
+                           metal.resnum, zd_idx)
+        parent_type = _parent_type(structure, metal, metal.residue_name,
+                                   metal.element)
+        rows.extend(_bond_row(pdbID, structure, metal, contact, dpi,
+                              resolution, sigma, parent_type)
+                    for contact in primary_contacts)
 
-    for metal in metal_atoms:
-        metal_el = metal.element.upper()
-        metal_res = metal.get_parent().get_resname()
-        chain = metal.get_full_id()[2]
-        _, resseq, icode = metal.get_parent().get_id()
-        resnum = f"{resseq}{icode.strip()}"
-        ptype = _parent_type(metal, metal_res, metal_el)
-        mag, neg, pos = _sigma_for(sig, metal_res, chain, resnum, zd_idx)
-
-        key = (metal_res, str(chain), str(resnum))
-        contacts_by_key.setdefault(key, 0)
-        for neighbor in ns.search(metal.coord, CUTOFF, level="A"):
-            nb_res = neighbor.get_parent().get_resname()
-            if nb_res == metal_res:      # self / same cofactor
-                continue
-            if nb_res not in AA:         # no reference data for this residue
-                continue
-            if neighbor.element.upper() not in ("O", "N", "S"):
-                continue                 # only N/O/S are ligand donors here (skip C, etc.)
-            dist = metal - neighbor      # Biopython: Euclidean distance (A)
-            if dist > CUTOFF:
-                continue
-            dist = round(dist, 3)
-            if dist == 0.0:
-                continue
-
-            lit = LIT.get(_bonding_key(neighbor, nb_res, metal_el))
-            contacts_by_key[key] = contacts_by_key.get(key, 0) + 1
-            if lit is None:
-                mu = stdev = zscore = NAN
-            else:
-                with_ref_by_key[key] = with_ref_by_key.get(key, 0) + 1
-                mu, stdev = lit
-                zscore = _zscore(dist, mu, stdev, dpi)
-
-            rows.append({
-                "pdbID": pdbID,
-                "metal_resname": metal_res,
-                "metal_chain": chain,
-                "metal_resnum": resnum,
-                "metal_element": metal_el,
-                "neighbor_resname": nb_res,
-                "neighbor_atom": neighbor.get_name(),
-                "neighbor_element": neighbor.element,
-                "distance": dist,
-                "literature_distance": mu,
-                "literature_stdev": stdev,
-                "zscore": zscore,
-                "dpi": dpi,
-                "resolution": resolution,
-                "sigma_mag": mag,
-                "sigma_neg": neg,
-                "sigma_pos": pos,
-                "parent_type": ptype,
-                "bonded_to": _bonded_to(nb_res),
-            })
-        
-        aa_coverage_by_metal = {
-        key: round(with_ref_by_key.get(key, 0) / n_contacts, 4) if n_contacts > 0 else NAN
-        for key, n_contacts in contacts_by_key.items()
-    }
-    return rows, aa_coverage_by_metal
+    metadata["partial_reason_codes"] = list(dict.fromkeys(
+        metadata["partial_reason_codes"]))
+    metadata["warning_codes"] = list(dict.fromkeys(metadata["warning_codes"]))
+    metadata["messages"] = list(dict.fromkeys(metadata["messages"]))
+    return rows, summaries, metadata

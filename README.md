@@ -3,8 +3,10 @@
 Alchemy evaluates how well metal atoms in protein crystal structures are
 supported by experimental electron density. For each PDB entry, it calculates
 2mFo-DFc and mFo-DFc maps, extracts per-residue real-space statistics, identifies
-metal ions and metal-containing cofactors, and measures metal-ligand bond
-geometry against literature reference distances.
+metal ions and metal-containing cofactors, and measures candidate metal-contact
+geometry against literature reference distances. Crystal contacts describe the
+deposited crystallographic model; they do not by themselves establish that a
+metal or ligand is biologically functional.
 
 `src/main.py` is the maintained batch entry point. It can read a local PDB-REDO
 mirror, download explicitly requested entries into a local cache, or process
@@ -28,21 +30,36 @@ conda run -n metal python src/main.py \
 
 Results are written to:
 
-- `output/metal_stats_all.csv` — real-space statistics for metals and
-  metal-containing cofactors.
-- `output/metal_bonds_all.csv` — metal-ligand distances and reference-based
-  z-scores.
-- `output/manifest.csv` — per-entry status, counts, runtime, and errors.
+- `output/metal_stats_all.csv` — one row per selected metal site, with
+  real-space statistics, DPI and validation provenance, and explicit-only
+  versus crystal-inclusive contact summaries. A cofactor containing multiple
+  selected metal sites repeats its residue-level EDSTATS values once per site.
+  Diagnostic rows for cofactors that cannot be matched to a coordinate site may
+  have blank site-specific fields; `coordinate_mapping_status` and
+  `selected_metal_site_status` distinguish failed joins from cofactors without
+  a selected metal. These permanent limitations are also reported as terminal
+  `partial` manifest outcomes and are not counted as metal sites.
+- `output/metal_bonds_all.csv` — one row per retained candidate contact,
+  including distance, reference-based z-score, conformer selection, and
+  crystallographic-symmetry provenance.
+- `output/manifest.csv` — per-entry status and reason, runtime, input
+  provenance, and relevant software and analysis-policy versions. Its
+  `n_metals` value counts distinct selected coordinate-model sites, not
+  diagnostic or repeated EDSTATS rows.
 
 ## Dependencies
 
 - **CCP4** with `fft` and `edstats` on `PATH`. Pass
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
   `--configure-ccp4`.
-- **Python packages:** `requests`, `gemmi`, and `biopython` (`Bio.PDB`).
+- **Python packages:** `gemmi>=0.7.0` and `requests`, as declared in
+  `pyproject.toml`.
 
-The `metal`, `biotools`, and `vinda` Conda environments used by this project
-already contain gemmi and Biopython. There is currently no `requirements.txt`.
+Install the Python dependencies in the environment used to run Alchemy:
+
+```bash
+python -m pip install "gemmi>=0.7.0" requests
+```
 
 ## Input modes
 
@@ -94,25 +111,59 @@ The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
 
 ### 3. Metal and cofactor identification — `src/metal_identification.py`
 
-`extract_metal_statistics()` parses the edstats table. Plain metal ions are identified from
-their actual atom elements in the parsed structure. Metal-containing cofactors
-are matched against the Chemical Component Dictionary list maintained by
+`extract_metal_statistics()` parses the edstats table. Gemmi supplies the atom
+elements used to identify plain metal ions; atom or residue names are not used
+to infer an element. Metal-containing cofactors are matched against the Chemical
+Component Dictionary list maintained by
 `src/build_metallocofactor_catalog.py`.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 
-`run_bond_analysis()` uses Biopython to find configured metal elements and their
-N/O/S ligand contacts within 4 Å. Where a literature reference is available, it
-calculates:
+Gemmi parses the same coordinate representation supplied to EDSTATS. For a
+multi-model structure, Alchemy analyzes the first model only for metal
+identification, DPI, and contact searching; model count and the selected-model
+policy are recorded with the results. Atoms from different models are never
+combined.
+
+Alternative conformations are selected coherently per residue. Blank-altloc
+atoms are shared, while the named conformer with the highest mean valid atomic
+occupancy is selected (ties are resolved by altloc label). This avoids creating
+an artificial residue by choosing A/B alternatives independently for each atom.
+Every neighboring residue is considered independently, and the selected and
+available alternatives are recorded.
+
+`run_bond_analysis()` finds positive-occupancy N/O/S candidate contacts no more
+than 4 Å from a configured metal, outside the metal's own residue, in a
+recognized amino acid or water. These are candidate contacts, not automatically
+chemical bonds or biologically relevant ligands. Alchemy reports both contacts
+to atoms explicitly present in the analyzed model and contacts generated by
+crystallographic symmetry. Crystal-inclusive geometry is the primary
+crystallographic result, while explicit-only counts and geometry are retained
+separately. Symmetry-related rows record the generating operation and unit-cell
+translation. Near-coincident images of the same deposited atom within Gemmi's
+0.8 Å special-position cutoff are collapsed, while the stricter 0.001 Å
+tolerance remains reserved for conflicting duplicate coordinate records.
+
+Where a literature reference is available, Alchemy calculates:
 
 ```text
 z = (d_observed - mu) / sqrt(DPI^2 + sigma_lit^2)
 ```
 
+Following the method used in the in-preparation Alchemy manuscript,
+reference-covered contacts with `|Zbond| >= 6` are geometry outliers. Contacts
+without a reference distance or complete DPI inputs are still emitted with
+their measured geometry and NaN derived values. The `geometry_outlier` and
+`geometry_consistent` columns are nullable booleans: a blank value means that
+geometry was not assessed, not that the contact passed or failed the cutoff.
+
 The DPI is calculated from PDB-REDO reflection and R-free metadata, the
-asymmetric-unit volume, and occupancy-weighted atom counts. Contacts without a
-reference distance or complete DPI inputs are still emitted with their measured
-geometry and NaN derived values.
+asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen and
+non-deuterium atoms in the first model. Alternate positions contribute
+separately to this global sum. A missing, non-finite, negative, or greater-than-
+one occupancy makes DPI unavailable rather than being silently repaired;
+contact distances that do not require DPI are retained. Zero occupancy is valid
+for `Ni` but is not accepted as evidence for a candidate contact.
 
 ## Important options
 
@@ -127,7 +178,7 @@ geometry and NaN derived values.
 | `--output-dir <path>` | Set the result directory. |
 | `--workers <n>` | Set multiprocessing parallelism. |
 | `--max-pdbs <n>` | Limit a run for testing. |
-| `--resume` | Skip IDs already recorded in the manifest. |
+| `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
 | `--no-bonds` | Skip bond-distance analysis. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
 | `--refresh-cofactors` | Force a fresh wwPDB cofactor-list build. |
@@ -165,4 +216,14 @@ pipeline.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - A failure in bond analysis does not discard real-space-statistics rows already
-  calculated for that entry; the manifest records the bond-stage error.
+  calculated for that entry; the manifest records the entry as `partial` with
+  the bond-stage error.
+- `partial` describes usable but incomplete scientific output; it does not by
+  itself mean that rerunning can repair the entry. Deterministic limitations,
+  such as invalid deposited occupancy or unavailable symmetry metadata, are
+  recorded as `partial` with `retryable=false`. Transient processing failures
+  are recorded with `retryable=true`. `--resume` uses that field so terminal
+  entries do not run forever.
+- The Gemmi migration expands all three CSV schemas. `--resume` refuses to mix
+  new rows with incompatible pre-migration headers; use a new `--output-dir`
+  for the first Gemmi-based run.
