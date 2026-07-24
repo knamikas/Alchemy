@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 """Batch-run the Alchemy core pipeline over PDB-REDO entries.
 
-For each PDB entry this computes 2mFo-DFc and mFo-DFc maps (CCP4 `fft`) and runs
+For each PDB entry this validates/corrects its Fourier map coefficients with
+CCP4 `mtzfix`, computes 2mFo-DFc and mFo-DFc maps with `fft`, and runs
 `edstats`, then extracts per-atom real-space statistics for metal ions and
-metal-containing cofactors. Results are streamed to three CSVs under --output-dir:
+metal-containing cofactors. Results are streamed to three CSVs under
+--output-dir:
 
   metal_stats_all.csv  -- one row per selected metal site
   metal_bonds_all.csv  -- one row per retained candidate contact
@@ -11,8 +13,9 @@ metal-containing cofactors. Results are streamed to three CSVs under --output-di
 
 Requirements
 ------------
-* CCP4 `fft` and `edstats` on PATH -- either already sourced, or via --ccp4-setup
-  pointing at a CCP4 setup script (e.g. <CCP4>/bin/ccp4.setup-sh).
+* CCP4 `mtzfix`, `fft`, and `edstats` on PATH -- either already sourced, or via
+  --ccp4-setup pointing at a CCP4 setup script
+  (e.g. <CCP4>/bin/ccp4.setup-sh).
 * Run under a Python environment with gemmi>=0.7.0.
 
 Examples
@@ -51,6 +54,7 @@ from bond_analysis import (
     stats_extra_values,
 )
 from ccp4_setup import (
+    REQUIRED_CCP4_TOOLS,
     ccp4_tools_available,
     find_ccp4_setup,
     load_ccp4_setup_config,
@@ -141,11 +145,11 @@ def resolve_env(ccp4_setup):
 
 
 def verify_ccp4(env):
-    missing = [t for t in ("fft", "edstats")
+    missing = [t for t in REQUIRED_CCP4_TOOLS
                if shutil.which(t, path=env.get("PATH")) is None]
     if missing:
         raise SystemExit(
-            "CCP4 tools (fft, edstats) were not found on PATH. "
+            f"Required CCP4 tools were not found on PATH: {', '.join(missing)}. "
             "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
             "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell before running."
         )
@@ -176,7 +180,7 @@ def resolve_ccp4_environment(args):
             ) from None
 
         saved = save_ccp4_setup(setup_path, config_files=config_files)
-        print(f"Verified fft and edstats are available; saved CCP4 setup "
+        print(f"Verified {', '.join(REQUIRED_CCP4_TOOLS)} are available; saved CCP4 setup "
               f"path to {', '.join(saved)}", flush=True)
         return None, None
 
@@ -199,7 +203,8 @@ def resolve_ccp4_environment(args):
     )
     if ccp4_setup is None:
         raise SystemExit(
-            "CCP4 tools (fft, edstats) were not found on PATH and no setup file could be auto-detected. "
+            f"Required CCP4 tools ({', '.join(REQUIRED_CCP4_TOOLS)}) were not "
+            "found on PATH and no setup file could be auto-detected. "
             "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
             "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell before running."
         )

@@ -5,6 +5,8 @@ import shutil
 import sys
 
 
+REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "edstats")
+
 DEFAULT_CONFIG_FILES = [
     os.path.expanduser("~/.config/alchemy/ccp4.json"),
     os.path.expanduser("~/.alchemy/ccp4.json"),
@@ -106,4 +108,7 @@ def find_ccp4_setup(explicit_setup=None, env=None, config=None, config_files=Non
 
 def ccp4_tools_available(env=None):
     env = env or os.environ.copy()
-    return all(shutil.which(tool, path=env.get("PATH")) is not None for tool in ("fft", "edstats"))
+    return all(
+        shutil.which(tool, path=env.get("PATH")) is not None
+        for tool in REQUIRED_CCP4_TOOLS
+    )

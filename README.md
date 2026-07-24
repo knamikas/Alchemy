@@ -49,7 +49,7 @@ Results are written to:
 
 ## Dependencies
 
-- **CCP4** with `fft` and `edstats` on `PATH`. Pass
+- **CCP4** with `mtzfix`, `fft`, and `edstats` on `PATH`. Pass
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
   `--configure-ccp4`.
 - **Python package:** `gemmi>=0.7.0`, as declared in `pyproject.toml`.
@@ -101,9 +101,14 @@ fallback through gemmi.
 
 `run_density_analysis()` runs:
 
-1. CCP4 `fft` with `FWT/PHWT` to produce a 2mFo-DFc map.
-2. CCP4 `fft` with `DELFWT/PHDELWT` to produce an mFo-DFc difference map.
-3. CCP4 `edstats` to produce per-residue real-space statistics and an RSZD
+1. CCP4 `mtzfix` to check and, when needed, correct the Fourier map
+   coefficients, including their centric and acentric consistency. If the input
+   passes, MTZFIX intentionally writes no replacement and the original MTZ is
+   used.
+2. CCP4 `fft` with `FWT/PHWT` from that validated MTZ to produce a 2mFo-DFc map.
+3. CCP4 `fft` with `DELFWT/PHDELWT` from that validated MTZ to produce an
+   mFo-DFc difference map.
+4. CCP4 `edstats` to produce per-residue real-space statistics and an RSZD
    coordinate file.
 
 The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
