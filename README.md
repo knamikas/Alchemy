@@ -52,13 +52,12 @@ Results are written to:
 - **CCP4** with `fft` and `edstats` on `PATH`. Pass
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
   `--configure-ccp4`.
-- **Python packages:** `gemmi>=0.7.0` and `requests`, as declared in
-  `pyproject.toml`.
+- **Python package:** `gemmi>=0.7.0`, as declared in `pyproject.toml`.
 
 Install the Python dependencies in the environment used to run Alchemy:
 
 ```bash
-python -m pip install "gemmi>=0.7.0" requests
+python -m pip install "gemmi>=0.7.0"
 ```
 
 ## Input modes

@@ -17,9 +17,10 @@ import re
 import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 import gemmi
-import requests
 
 URL_CCD = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 
@@ -64,25 +65,31 @@ def download_ccd(tmp_dir):
     """Download and decompress the CCD into tmp_dir. Returns the .cif path."""
     print(f"Downloading CCD from {URL_CCD} ...", flush=True)
     gz_path = os.path.join(tmp_dir, "components.cif.gz")
-    response = requests.get(URL_CCD, stream=True, timeout=60)
-    if response.status_code != 200:
-        raise RuntimeError(f"CCD download failed: HTTP {response.status_code}")
+    try:
+        response = urlopen(URL_CCD, timeout=60)
+    except HTTPError as e:
+        raise RuntimeError(f"CCD download failed: HTTP {e.code}") from e
 
-    total_size = int(response.headers.get("Content-Length", 0))
-    downloaded = 0
-    next_report = 10 * 1024 * 1024  # report every 10 MB
-    with open(gz_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
-            downloaded += len(chunk)
-            if downloaded >= next_report:
-                mb = downloaded / (1024 * 1024)
-                if total_size:
-                    pct = 100 * downloaded / total_size
-                    print(f"  ...downloaded {mb:.0f} MB ({pct:.0f}%)", flush=True)
-                else:
-                    print(f"  ...downloaded {mb:.0f} MB", flush=True)
-                next_report += 10 * 1024 * 1024
+    with response:
+        status = response.getcode()
+        if status != 200:
+            raise RuntimeError(f"CCD download failed: HTTP {status}")
+
+        total_size = int(response.headers.get("Content-Length", 0))
+        downloaded = 0
+        next_report = 10 * 1024 * 1024  # report every 10 MB
+        with open(gz_path, "wb") as f:
+            while chunk := response.read(8192):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if downloaded >= next_report:
+                    mb = downloaded / (1024 * 1024)
+                    if total_size:
+                        pct = 100 * downloaded / total_size
+                        print(f"  ...downloaded {mb:.0f} MB ({pct:.0f}%)", flush=True)
+                    else:
+                        print(f"  ...downloaded {mb:.0f} MB", flush=True)
+                    next_report += 10 * 1024 * 1024
     print(f"Download complete ({downloaded / (1024 * 1024):.0f} MB). Decompressing...", flush=True)
 
     cif_path = os.path.join(tmp_dir, "components.cif")

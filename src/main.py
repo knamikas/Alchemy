@@ -13,7 +13,7 @@ Requirements
 ------------
 * CCP4 `fft` and `edstats` on PATH -- either already sourced, or via --ccp4-setup
   pointing at a CCP4 setup script (e.g. <CCP4>/bin/ccp4.setup-sh).
-* Run under a Python environment with gemmi>=0.7.0 and requests.
+* Run under a Python environment with gemmi>=0.7.0.
 
 Examples
 --------
@@ -36,7 +36,8 @@ import sys
 import tempfile
 import time
 from multiprocessing import Pool, cpu_count
-import requests
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 from density_analysis import run_density_analysis
 from metal_identification import metals, uncommonMetals, load_cofactor_ids, extract_metal_statistics
@@ -299,17 +300,20 @@ def has_state_files(entry_dir, pdbID, state):
 def _download_stream(url, dst, timeout=30):
     """Download URL to dst. Raise FileNotFoundError on non-200."""
     try:
-        r = requests.get(url, stream=True, timeout=timeout)
-    except Exception as e:  # network/connection
-        raise FileNotFoundError(f"{url}: {e}")
-    if r.status_code != 200:
-        raise FileNotFoundError(f"{url}: status {r.status_code}")
-    
+        response = urlopen(url, timeout=timeout)
+    except HTTPError as e:
+        raise FileNotFoundError(f"{url}: status {e.code}") from e
+    except (OSError, ValueError) as e:  # network/connection or invalid URL
+        raise FileNotFoundError(f"{url}: {e}") from e
+
     tmp = f"{dst}.{os.getpid()}.part"
     try:
-        with open(tmp, "wb") as fh:
-            for chunk in r.iter_content(8192):
-                if chunk:
+        with response:
+            status = response.getcode()
+            if status != 200:
+                raise FileNotFoundError(f"{url}: status {status}")
+            with open(tmp, "wb") as fh:
+                while chunk := response.read(8192):
                     fh.write(chunk)
         os.replace(tmp, dst)
     except Exception:
