@@ -17,6 +17,7 @@ import re
 import shutil
 import tempfile
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -99,7 +100,11 @@ def download_ccd(tmp_dir):
     return cif_path
 
 
-def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
+def build_metallocofactors_list(
+        cif_path: str,
+        output_path: str,
+        debug_dir: Optional[str] = None,
+        ):
     """Parse a CCD components.cif file and write metallocofactors_id.txt.
 
     `debug_dir`, if given, also writes missing_formulas.txt and
@@ -160,7 +165,7 @@ def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
             if has_metal:
                 f_write.write(f"{comp_id}\t{formula}\n")
 
-    if missing_cif is not None:
+    if missing_cif is not None and debug_dir is not None:
         missing_cif.write_file(os.path.join(debug_dir, "missingCIF.cif"))
 
     print(f"Found {counts['with_metal']} components with metal")

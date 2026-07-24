@@ -36,7 +36,17 @@ def _icode(value: str) -> str:
     return "" if value in ("", " ", "\x00", ".", "?") else str(value)
 
 
+def _residue_number(residue: gemmi.Residue) -> int:
+    number = residue.seqid.num
+    if number is None:
+        raise ValueError(
+            f"residue {residue.name!r} has no author sequence number")
+    return number
+
+
 def _valid_occupancy(value: object) -> bool:
+    if not isinstance(value, (int, float, str)):
+        return False
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -56,10 +66,27 @@ class RawOccupancy:
     status: str
     atom_name: str = ""
     altloc: str = ""
+    chain_id: str = ""
+    residue_name: str = ""
+    residue_number: str = ""
+    insertion_code: str = ""
+    serial: Optional[int] = None
+    source_order: int = 0
 
     @property
     def valid(self) -> bool:
         return self.status == "valid"
+
+    @property
+    def stable_identity(self) -> Tuple[str, str, str, str, str, str]:
+        return (
+            self.chain_id,
+            self.residue_name,
+            self.residue_number,
+            self.insertion_code,
+            self.atom_name,
+            self.altloc,
+        )
 
 
 @dataclass
@@ -85,8 +112,8 @@ class AtomSite:
     occupancy: float
     occupancy_valid: bool
     occupancy_status: str
-    serial: int
-    formal_charge: int
+    serial: Optional[int]
+    formal_charge: Optional[int]
     x: float
     y: float
     z: float
@@ -281,33 +308,105 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
                     continue
                 while model_index >= len(records):
                     records.append([])
+                source_order = len(records[model_index])
+                serial_text = line[6:11].strip()
+                try:
+                    serial = int(serial_text)
+                except (TypeError, ValueError, OverflowError):
+                    serial = None
+                atom_name = line[12:16].strip()
+                altloc = _altloc(line[16:17])
+                residue_name = line[17:20].strip()
+                chain_id = line[21:22].strip()
+                residue_number = line[22:26].strip()
+                insertion_code = _icode(line[26:27])
                 text = line[54:60] if len(line) >= 55 else ""
                 stripped = text.strip()
                 if not stripped:
-                    records[model_index].append(RawOccupancy(
-                        None, "missing", line[12:16].strip(),
-                        _altloc(line[16:17])))
-                    continue
-                try:
-                    value = float(stripped)
-                except (TypeError, ValueError, OverflowError):
-                    records[model_index].append(
-                        RawOccupancy(None, "invalid_non_numeric",
-                                     line[12:16].strip(),
-                                     _altloc(line[16:17])))
-                    continue
-                if not math.isfinite(value):
-                    status = "invalid_non_finite"
-                elif value < 0.0 or value > 1.0:
-                    status = "invalid_range"
+                    value = None
+                    status = "missing"
                 else:
-                    status = "valid"
+                    try:
+                        value = float(stripped)
+                    except (TypeError, ValueError, OverflowError):
+                        value = None
+                        status = "invalid_non_numeric"
+                    else:
+                        if not math.isfinite(value):
+                            status = "invalid_non_finite"
+                        elif value < 0.0 or value > 1.0:
+                            status = "invalid_range"
+                        else:
+                            status = "valid"
                 records[model_index].append(RawOccupancy(
-                    value, status, line[12:16].strip(),
-                    _altloc(line[16:17])))
+                    value=value,
+                    status=status,
+                    atom_name=atom_name,
+                    altloc=altloc,
+                    chain_id=chain_id,
+                    residue_name=residue_name,
+                    residue_number=residue_number,
+                    insertion_code=insertion_code,
+                    serial=serial,
+                    source_order=source_order,
+                ))
     except OSError as exc:
         return [], str(exc)
     return records, ""
+
+
+def _gemmi_atom_identity(chain: gemmi.Chain, residue: gemmi.Residue,
+                         atom: gemmi.Atom
+                         ) -> Tuple[str, str, str, str, str, str]:
+    return (
+        str(chain.name),
+        str(residue.name),
+        str(_residue_number(residue)),
+        _icode(residue.seqid.icode),
+        str(atom.name).strip(),
+        _altloc(atom.altloc),
+    )
+
+
+def _match_raw_occupancies(
+        model: gemmi.Model,
+        raw_records: Sequence[RawOccupancy],
+        ) -> Tuple[List[Optional[RawOccupancy]], int, int]:
+    """Match PDB records to Gemmi atoms without relying on traversal order.
+
+    Gemmi may merge repeated chain segments when reading a PDB file. Stable
+    author identifiers locate each record after that regrouping; atom serials
+    disambiguate malformed duplicate identifiers when possible.
+    """
+    raw_by_identity: Dict[
+        Tuple[str, str, str, str, str, str], List[RawOccupancy]
+    ] = defaultdict(list)
+    for raw in raw_records:
+        raw_by_identity[raw.stable_identity].append(raw)
+
+    matches: List[Optional[RawOccupancy]] = []
+    unmatched_gemmi = 0
+    for chain in model:
+        for residue in chain:
+            for atom in residue:
+                candidates = raw_by_identity.get(
+                    _gemmi_atom_identity(chain, residue, atom), [])
+                if not candidates:
+                    matches.append(None)
+                    unmatched_gemmi += 1
+                    continue
+
+                match_index = 0
+                serial = atom.serial
+                if serial is not None:
+                    for index, candidate in enumerate(candidates):
+                        if candidate.serial == serial:
+                            match_index = index
+                            break
+                matches.append(candidates.pop(match_index))
+
+    unmatched_raw = sum(len(records) for records in raw_by_identity.values())
+    return matches, unmatched_gemmi, unmatched_raw
 
 
 def _occupancy_for_atom(atom: gemmi.Atom,
@@ -459,36 +558,44 @@ def load_structure(pdb_id: str, path: str) -> StructureContext:
     raw_first = raw_models[0] if raw_models else []
     gemmi_atoms = [atom for chain in model for residue in chain for atom in residue]
     gemmi_atom_count = len(gemmi_atoms)
-    identity_mismatch = (len(raw_first) == gemmi_atom_count and any(
-        raw.atom_name != str(atom.name).strip() or
-        raw.altloc != _altloc(atom.altloc)
-        for raw, atom in zip(raw_first, gemmi_atoms)))
+    raw_matches: List[Optional[RawOccupancy]]
+    unmatched_gemmi = 0
+    unmatched_raw = 0
+    if analysis_format == "pdb":
+        raw_matches, unmatched_gemmi, unmatched_raw = _match_raw_occupancies(
+            model, raw_first)
+    else:
+        raw_matches = [None] * gemmi_atom_count
     mapping_failed = (analysis_format == "pdb" and
-                      (len(raw_first) != gemmi_atom_count or identity_mismatch))
+                      bool(raw_error or unmatched_gemmi or unmatched_raw))
     mapping_reason = raw_error
     if mapping_failed and not mapping_reason:
         if len(raw_first) != gemmi_atom_count:
             mapping_reason = (f"raw_atom_count_mismatch:{len(raw_first)}!="
-                              f"{gemmi_atom_count}")
+                              f"{gemmi_atom_count};unmatched_gemmi="
+                              f"{unmatched_gemmi};unmatched_raw={unmatched_raw}")
         else:
-            mapping_reason = "raw_atom_identity_mismatch"
+            mapping_reason = (
+                f"raw_atom_identity_mismatch:unmatched_gemmi="
+                f"{unmatched_gemmi};unmatched_raw={unmatched_raw}")
 
     all_sites: List[AtomSite] = []
-    source_order = 0
+    gemmi_order = 0
     for chain_index, chain in enumerate(model):
         for residue_index, residue in enumerate(chain):
-            number = int(residue.seqid.num)
+            number = _residue_number(residue)
             insertion = _icode(residue.seqid.icode)
             resnum = f"{number}{insertion}"
             for atom_index, atom in enumerate(residue):
-                raw = (raw_first[source_order]
-                       if not mapping_failed and source_order < len(raw_first)
-                       else None)
+                raw = (raw_matches[gemmi_order]
+                       if gemmi_order < len(raw_matches) else None)
                 occupancy, occupancy_valid, occupancy_status = _occupancy_for_atom(
                     atom, raw)
-                if mapping_failed:
+                if analysis_format == "pdb" and raw is None:
                     occupancy_valid = False
                     occupancy_status = "raw_mapping_failed"
+                source_order = (raw.source_order if raw is not None
+                                else len(raw_first) + gemmi_order)
                 element = str(atom.element.name).upper()
                 element_known = element not in ("", "X")
                 all_sites.append(AtomSite(
@@ -511,15 +618,15 @@ def load_structure(pdb_id: str, path: str) -> StructureContext:
                     occupancy=occupancy,
                     occupancy_valid=occupancy_valid,
                     occupancy_status=occupancy_status,
-                    serial=int(atom.serial),
-                    formal_charge=int(atom.charge),
+                    serial=atom.serial,
+                    formal_charge=atom.charge,
                     x=float(atom.pos.x), y=float(atom.pos.y), z=float(atom.pos.z),
                     is_water=bool(residue.is_water()),
                     is_hydrogen=(element in ("H", "D") or
                                  bool(atom.element.is_hydrogen)),
                     gemmi_atom=atom,
                 ))
-                source_order += 1
+                gemmi_order += 1
 
     # Occupancy provenance is counted before malformed exact duplicates are
     # collapsed, so an invalid deposited record is never silently hidden.

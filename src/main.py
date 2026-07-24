@@ -39,6 +39,7 @@ import sys
 import tempfile
 import time
 from multiprocessing import Pool, cpu_count
+from typing import Any, Dict, Optional
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -83,7 +84,7 @@ MANIFEST_COLUMNS = [
 ]
 
 # config dict shared with worker processes (set once per worker by _init_worker)
-_CFG = None
+_CFG: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -224,7 +225,7 @@ def entry_dir_for(root, pdbID):
 def _gunzip_to(src_gz, dst):
     if not os.path.exists(src_gz):
         raise FileNotFoundError(src_gz)
-    with gzip.open(src_gz, "rb") as fi, open(dst, "wb") as fo:
+    with gzip.GzipFile(src_gz, "rb") as fi, open(dst, "wb") as fo:
         shutil.copyfileobj(fi, fo)
     return dst
 
@@ -505,7 +506,7 @@ def _alchemy_commit():
 def _gemmi_version():
     try:
         import gemmi
-        return gemmi.__version__
+        return str(getattr(gemmi, "__version__", "unknown"))
     except Exception:
         return "unknown"
 
@@ -518,17 +519,21 @@ def _ccp4_version(env):
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-def _init_worker(cfg):
+def _init_worker(cfg: Dict[str, Any]) -> None:
     global _CFG
     _CFG = cfg
 
 
 def process(pdbID):
-    """Run the core pipeline for one entry. Returns a result dict (never raises)."""
+    """Run one initialized worker entry and return its result dictionary."""
     cfg = _CFG
+    if cfg is None:
+        raise RuntimeError("worker configuration has not been initialized")
     t0 = time.monotonic()
     out_dir = os.path.join(cfg["output_dir"], pdbID)
     source_format, analysis_format, converted = _coordinate_provenance(cfg)
+    manual_inputs = cfg.get("manual_inputs")
+    data_json = None
     result = {"pdbID": pdbID, "status": "error", "n": 0,
               "runtime": 0.0, "error": "", "rows": [], "header": None,
               "bond_rows": [], "n_bonds": 0, "retryable": True,
@@ -547,17 +552,17 @@ def process(pdbID):
               "altloc_policy": ALTLOC_POLICY,
               "symmetry_contact_policy": SYMMETRY_POLICY}
     try:
-        if cfg.get("manual_inputs"):
+        if manual_inputs:
             os.makedirs(out_dir, exist_ok=True)
             mtz, pdb = resolve_manual_inputs(
                 pdbID,
-                pdb_file=cfg["manual_inputs"].get("pdb_file"),
-                mtz_file=cfg["manual_inputs"].get("mtz_file"),
-                cif_file=cfg["manual_inputs"].get("cif_file"),
+                pdb_file=manual_inputs.get("pdb_file"),
+                mtz_file=manual_inputs.get("mtz_file"),
+                cif_file=manual_inputs.get("cif_file"),
                 work_dir=out_dir,
             )
             entry = os.path.dirname(pdb) or out_dir
-            data_json = cfg["manual_inputs"].get("data_json")
+            data_json = manual_inputs.get("data_json")
             reslo, reshi = read_resolution(entry, mtz, data_json_path=data_json)
         else:
             if cfg["allow_download"]:
@@ -620,7 +625,7 @@ def process(pdbID):
             try:
                 bond_rows, site_summaries, bond_meta = run_bond_analysis(
                     pdbID, pdb, entry, rows, header,
-                    {"data_json": data_json if cfg.get("manual_inputs") else os.path.join(entry, "data.json"),
+                    {"data_json": data_json if manual_inputs else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi}, structure=structure)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
@@ -955,7 +960,7 @@ def main(argv=None):
     bonds_fh = open(bonds_path, "a" if append else "w", newline="") if args.bonds else None
     man_w = csv.DictWriter(man_fh, fieldnames=MANIFEST_COLUMNS)
     stats_w = csv.writer(stats_fh)
-    bonds_w = csv.writer(bonds_fh) if bonds_fh else None
+    bonds_w = csv.writer(bonds_fh) if bonds_fh is not None else None
     if not append:
         man_w.writeheader()
     stats_header_written = append and os.path.getsize(stats_path) > 0
@@ -975,7 +980,8 @@ def main(argv=None):
                         stats_w.writerow([row["pdbID"], row["category"]] + row["fields"])
                         n_rows += 1
                     stats_fh.flush()
-                if bonds_w and r["bond_rows"]:
+                if (bonds_w is not None and bonds_fh is not None and
+                        r["bond_rows"]):
                     if not bonds_header_written:
                         bonds_w.writerow(BOND_COLUMNS)
                         bonds_header_written = True
