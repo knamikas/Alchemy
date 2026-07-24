@@ -48,8 +48,9 @@ AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
 CUTOFF = 4.0
 SEARCH_EPSILON = 1e-6
 
-# Harding's coordination-group definition retains donor atoms no farther than
-# the target metal-donor distance plus 0.75 A.
+# First-sphere definition: donor distance <= target distance + 0.75 A.
+# Harding, M. M. (2004), Acta Cryst. D60, 849-859.
+# https://doi.org/10.1107/S0907444904004081
 FIRST_SPHERE_TOLERANCE = 0.75
 
 # Gemmi's ContactSearch uses 0.8 A by default to distinguish near-coincident
