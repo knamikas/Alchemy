@@ -8,7 +8,7 @@ metal-containing cofactors. Results are streamed to three CSVs under
 --output-dir:
 
   metal_stats_all.csv  -- one row per selected metal site
-  metal_bonds_all.csv  -- one row per retained candidate contact
+  metal_bonds_all.csv  -- one row per retained first-sphere contact
   manifest.csv         -- one row per entry with status and provenance
 
 Requirements

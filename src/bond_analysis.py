@@ -1,8 +1,8 @@
 """Metal-ligand bond-distance analysis for the Alchemy pipeline.
 
 For one PDB entry this finds every metal atom in the first model, uses Gemmi to
-search explicit and crystallographic-symmetry neighbors, and for each retained
-candidate contact within 4 A computes the distance and a
+search explicit and crystallographic-symmetry neighbors within 4 A, filters
+those candidates to the first coordination sphere, and computes a
 resolution-aware z-score against the consolidated literature reference distances
 in ``metal_distances_info.txt`` (Harding 2006 and Zheng et al. 2008 [Ni only]):
 
@@ -44,9 +44,13 @@ AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
       "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
       }
 
-# Max metal-ligand interaction distance (Gucwa et al. 2024 / CMM program).
+# Broad candidate-search radius. This must not be treated as a bond cutoff.
 CUTOFF = 4.0
 SEARCH_EPSILON = 1e-6
+
+# Harding's coordination-group definition retains donor atoms no farther than
+# the target metal-donor distance plus 0.75 A.
+FIRST_SPHERE_TOLERANCE = 0.75
 
 # Gemmi's ContactSearch uses 0.8 A by default to distinguish near-coincident
 # symmetry images of an atom intended to occupy a special position.  NeighborSearch
@@ -79,7 +83,9 @@ HEMES = {
     'WPC', 'WUF', 'WUP', 'WVP', 'WXP', 'WYP'
 }
 
-# Fixed output schema; main.py imports this so the module and driver never drift.
+# Fixed output schema; main.py imports this so the module and driver never
+# drift. Legacy "candidate" field names are retained for CSV compatibility,
+# but now describe contacts that passed the first-sphere filter.
 BOND_COLUMNS = [
     "pdbID", "metal_resname", "metal_chain", "metal_resnum", "metal_element",
     "neighbor_resname", "neighbor_atom", "neighbor_element", "distance",
@@ -161,6 +167,11 @@ def _load_literature(path):
 
 
 LIT = _load_literature(os.path.join(DATA_DIR, "metal_distances_info.txt"))
+FIRST_SPHERE_TARGETS = {}
+for (_, donor, metal_element), (target, _) in LIT.items():
+    key = (metal_element, donor)
+    FIRST_SPHERE_TARGETS[key] = max(
+        target, FIRST_SPHERE_TARGETS.get(key, -math.inf))
 
 
 # --------------------------------------------------------------------------- #
@@ -387,8 +398,42 @@ def _deduplicate_special_position_contacts(candidates):
     return contacts
 
 
+def _first_sphere_cutoff(metal, neighbor):
+    """Return the maximum direct metal-donor distance for this atom pair."""
+    literature = LIT.get(_bonding_key(
+        neighbor, neighbor.residue_name, metal.element))
+    if literature is not None:
+        target = literature[0]
+    else:
+        # The scoring table may omit a residue-specific donor while still
+        # defining the same donor element for this metal. Use the largest such
+        # target only for sphere membership; exact references remain mandatory
+        # for z-score calculation.
+        target = FIRST_SPHERE_TARGETS.get(
+            (metal.element, neighbor.element))
+        if target is None:
+            return NAN
+    return min(CUTOFF, target + FIRST_SPHERE_TOLERANCE)
+
+
+def _retain_first_sphere(candidates, metal):
+    """Discard broad-shell candidates that are not plausible direct bonds."""
+    retained = []
+    unsupported_pairs = set()
+    for candidate in candidates:
+        neighbor = candidate["neighbor"]
+        cutoff = _first_sphere_cutoff(metal, neighbor)
+        if not math.isfinite(cutoff):
+            unsupported_pairs.add((metal.element, neighbor.element))
+            continue
+        if candidate["distance_raw"] <= cutoff + SEARCH_EPSILON:
+            candidate["first_sphere_cutoff"] = cutoff
+            retained.append(candidate)
+    return retained, unsupported_pairs
+
+
 def _collect_contacts(structure, search, metal, include_symmetry):
-    """Return unique candidate contacts for one metal and one search scope."""
+    """Return unique first-sphere contacts for one metal and search scope."""
     candidates = []
     marks = search.find_atoms(metal.pos, "\x00", min_dist=0.0,
                               radius=CUTOFF + SEARCH_EPSILON)
@@ -442,7 +487,9 @@ def _collect_contacts(structure, search, metal, include_symmetry):
             "translation": translation,
         })
 
-    return _deduplicate_special_position_contacts(candidates)
+    first_sphere, unsupported_pairs = _retain_first_sphere(candidates, metal)
+    return (_deduplicate_special_position_contacts(first_sphere),
+            unsupported_pairs)
 
 
 def _annotate_contacts(contacts, metal_element, dpi):
@@ -704,10 +751,11 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
                       dpi_inputs, structure=None):
     """Return ``(contact_rows, site_summaries, entry_metadata)``.
 
-    Crystal-inclusive contacts are emitted as the primary rows when symmetry is
-    available. Explicit-only and crystal-inclusive summaries are both retained
-    per metal site. Missing literature or DPI inputs never discard a measured
-    candidate-contact distance.
+    Only external first-coordination-sphere contacts are emitted; atoms in the
+    metal's own residue remain excluded. Crystal-inclusive contacts are the
+    primary rows when symmetry is available. Explicit-only and
+    crystal-inclusive summaries are both retained per metal site. Missing DPI
+    does not prevent first-sphere classification or distance reporting.
     """
     del entry_dir  # retained in the call signature for compatibility
     if structure is None:
@@ -748,12 +796,23 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
     rows = []
     summaries = {}
     for metal in metals_in_model:
-        explicit = _collect_contacts(structure, explicit_search, metal, False)
+        explicit, unsupported_pairs = _collect_contacts(
+            structure, explicit_search, metal, False)
         _annotate_contacts(explicit, metal.element, dpi)
         crystal = None
         if crystal_search is not None:
-            crystal = _collect_contacts(structure, crystal_search, metal, True)
+            crystal, crystal_unsupported = _collect_contacts(
+                structure, crystal_search, metal, True)
+            unsupported_pairs.update(crystal_unsupported)
             _annotate_contacts(crystal, metal.element, dpi)
+        if unsupported_pairs:
+            metadata["partial_reason_codes"].append(
+                "missing_first_sphere_reference")
+            pairs = ", ".join(
+                f"{metal_element}-{donor_element}"
+                for metal_element, donor_element in sorted(unsupported_pairs))
+            metadata["messages"].append(
+                f"first-sphere reference unavailable for {pairs}")
         summary = _site_summary(metal, explicit, crystal, dpi,
                                 resolution, ni, dpi_reason)
         summaries[metal.source_key] = summary
