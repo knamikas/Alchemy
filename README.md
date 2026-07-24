@@ -87,12 +87,11 @@ four-character PDB ID cannot be inferred from the filenames.
 
 ### 1. Input preparation — `src/main.py`
 
-The driver selects the requested refinement state:
-
-- `final`: uncompressed `{id}_final.mtz` and `{id}_final.pdb`.
-- `besttls`: compressed best-TLS MTZ and PDB files.
-- `0cyc`: compressed zero-cycle MTZ and mmCIF files; gemmi converts the mmCIF
-  coordinates to PDB format in the work directory.
+The automatic PDB-REDO workflow analyzes only the final re-refined and rebuilt
+model. It uses `{id}_final.mtz` with `{id}_final.pdb` when the PDB compatibility
+export is available. Otherwise it converts `{id}_final.cif` to an analysis PDB
+with gemmi. Alternative coordinate/MTZ pairs can still be supplied through the
+manual-file options.
 
 Resolution limits come from PDB-REDO `data.json` when available, with an MTZ
 fallback through gemmi.
@@ -192,7 +191,6 @@ and atom serial rather than parser traversal order.
 | `--id <pdbid>` | Process one PDB ID. |
 | `--id-file <path>` | Process IDs from a comma-, whitespace-, or newline-separated file. |
 | `--pdb-file`, `--cif-file`, `--mtz-file` | Process manually supplied structure data. |
-| `--refine-state {final,0cyc,besttls}` | Choose the PDB-REDO refinement state. |
 | `--pdb-redo-root <path>` | Set the local mirror root. |
 | `--pdb-redo-cache <path>` | Set the cache for downloaded entries. |
 | `--output-dir <path>` | Set the result directory. |

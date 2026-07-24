@@ -232,7 +232,7 @@ def _gunzip_to(src_gz, dst):
 
 def _cif_to_pdb(cif_path, dst):
     """Convert a (optionally gzipped) mmCIF coordinate file to PDB via gemmi."""
-    import gemmi  # imported lazily; only the 0cyc state needs it
+    import gemmi
     if not os.path.exists(cif_path):
         raise FileNotFoundError(cif_path)
     structure = gemmi.read_structure(cif_path)
@@ -302,33 +302,49 @@ def _first_model_pdb(pdb_path, dst):
     return dst, model_count
 
 
-def prepare_inputs(pdbID, entry_dir, state, work_dir):
-    """Return (mtz_path, pdb_path) for the requested refinement state.
+def _first_existing(*paths):
+    return next((path for path in paths if os.path.exists(path)), None)
 
-    `final` is read directly from the dataset (uncompressed PDB + MTZ). `besttls`
-    and `0cyc` are decompressed/converted into work_dir. Raises FileNotFoundError
-    (-> "skip") when the required source files are absent.
+
+def prepare_inputs(pdbID, entry_dir, work_dir):
+    """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
+
+    Prefer the final PDB coordinates because EDSTATS consumes PDB directly.
+    When that compatibility export is unavailable, convert the authoritative
+    final mmCIF file in the work directory. Compressed mirrors are accepted for
+    either format.
     """
-    if state == "final":
-        mtz = os.path.join(entry_dir, f"{pdbID}_final.mtz")
-        pdb = os.path.join(entry_dir, f"{pdbID}_final.pdb")
-        for p in (mtz, pdb):
-            if not os.path.exists(p):
-                raise FileNotFoundError(p)
+    mtz = _first_existing(
+        os.path.join(entry_dir, f"{pdbID}_final.mtz"),
+        os.path.join(entry_dir, f"{pdbID}_final.mtz.gz"),
+    )
+    if mtz is None:
+        raise FileNotFoundError(
+            os.path.join(entry_dir, f"{pdbID}_final.mtz"))
+    if mtz.endswith(".gz"):
+        mtz = _gunzip_to(
+            mtz, os.path.join(work_dir, f"{pdbID}_final.mtz"))
+
+    pdb = _first_existing(
+        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
+        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
+    )
+    if pdb is not None:
+        if pdb.endswith(".gz"):
+            pdb = _gunzip_to(
+                pdb, os.path.join(work_dir, f"{pdbID}_final.pdb"))
         return mtz, pdb
-    if state == "besttls":
-        mtz = _gunzip_to(os.path.join(entry_dir, f"{pdbID}_besttls.mtz.gz"),
-                         os.path.join(work_dir, f"{pdbID}_besttls.mtz"))
-        pdb = _gunzip_to(os.path.join(entry_dir, f"{pdbID}_besttls.pdb.gz"),
-                         os.path.join(work_dir, f"{pdbID}_besttls.pdb"))
-        return mtz, pdb
-    if state == "0cyc":
-        mtz = _gunzip_to(os.path.join(entry_dir, f"{pdbID}_0cyc.mtz.gz"),
-                         os.path.join(work_dir, f"{pdbID}_0cyc.mtz"))
-        pdb = _cif_to_pdb(os.path.join(entry_dir, f"{pdbID}_0cyc.cif.gz"),
-                          os.path.join(work_dir, f"{pdbID}_0cyc.pdb"))
-        return mtz, pdb
-    raise ValueError(f"unknown refine state: {state}")
+
+    cif = _first_existing(
+        os.path.join(entry_dir, f"{pdbID}_final.cif"),
+        os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
+    )
+    if cif is None:
+        raise FileNotFoundError(
+            f"{pdbID}_final.pdb or {pdbID}_final.cif")
+    pdb = _cif_to_pdb(
+        cif, os.path.join(work_dir, f"{pdbID}_final_from_cif.pdb"))
+    return mtz, pdb
 
 
 def read_resolution(entry_dir, mtz_path, data_json_path=None):
@@ -351,13 +367,19 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
     return m.resolution_low(), m.resolution_high()
 
 
-def has_state_files(entry_dir, pdbID, state):
-    req = {
-        "final": [f"{pdbID}_final.mtz", f"{pdbID}_final.pdb"],
-        "besttls": [f"{pdbID}_besttls.mtz.gz", f"{pdbID}_besttls.pdb.gz"],
-        "0cyc": [f"{pdbID}_0cyc.mtz.gz", f"{pdbID}_0cyc.cif.gz"],
-    }[state]
-    return all(os.path.exists(os.path.join(entry_dir, f)) for f in req)
+def has_final_files(entry_dir, pdbID):
+    """Whether an entry has final map coefficients and usable coordinates."""
+    mtz = _first_existing(
+        os.path.join(entry_dir, f"{pdbID}_final.mtz"),
+        os.path.join(entry_dir, f"{pdbID}_final.mtz.gz"),
+    )
+    coordinates = _first_existing(
+        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
+        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
+        os.path.join(entry_dir, f"{pdbID}_final.cif"),
+        os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
+    )
+    return mtz is not None and coordinates is not None
 
 
 def _download_stream(url, dst, timeout=30):
@@ -386,77 +408,56 @@ def _download_stream(url, dst, timeout=30):
     return dst
 
 
-def download_entry_to_cache(pdbID, cache_root, state):
-    """Download required files for `pdbID` into a mirror-like `cache_root`.
-
-    This tries common PDB-REDO filenames for each refinement `state` and
-    uncompresses when needed so the cache matches the layout expected by the
-    rest of the pipeline.
-    """
+def download_entry_to_cache(pdbID, cache_root):
+    """Download final PDB-REDO files into a mirror-like ``cache_root``."""
     base = f"https://pdb-redo.eu/db/{pdbID}/"
     entry = entry_dir_for(cache_root, pdbID)
     os.makedirs(entry, exist_ok=True)
-    got = []
-    # helper to try url and optionally un-gzip into final name
-    def try_fetch(name, want_uncompress=False):
+
+    def try_fetch(name):
         url = base + name
         dst = os.path.join(entry, name)
         try:
             _download_stream(url, dst)
-            got.append(name)
             return True
         except FileNotFoundError:
             return False
 
-    # Download per-state expected files
-    if state == "final":
-        # prefer uncompressed final files, fall back to .gz then uncompress
-        for fname in (f"{pdbID}_final.mtz", f"{pdbID}_final.pdb", "data.json"):
-            if try_fetch(fname):
-                continue
-            gz = fname + ".gz"
-            if try_fetch(gz):
-                # if we need uncompressed final files, gunzip them
-                if fname.endswith(".mtz") or fname.endswith(".pdb"):
-                    _gunzip_to(os.path.join(entry, gz), os.path.join(entry, fname))
-                    os.remove(os.path.join(entry, gz))
-                    got.append(fname)
-    elif state == "besttls":
-        for fname in (f"{pdbID}_besttls.mtz.gz", f"{pdbID}_besttls.pdb.gz", "data.json"):
-            if try_fetch(fname):
-                continue
-            # try uncompressed data.json
-            if fname == "data.json":
-                try_fetch("data.json")
-    elif state == "0cyc":
-        for fname in (f"{pdbID}_0cyc.mtz.gz", f"{pdbID}_0cyc.cif.gz", "data.json"):
-            if try_fetch(fname):
-                continue
-            if fname == "data.json":
-                try_fetch("data.json")
+    def fetch_variant(name):
+        if (_first_existing(
+                os.path.join(entry, name),
+                os.path.join(entry, name + ".gz")) is not None):
+            return True
+        return try_fetch(name) or try_fetch(name + ".gz")
 
-    # Verify we have the files required for the state
-    if not has_state_files(entry, pdbID, state):
-        raise FileNotFoundError(f"PDB-REDO entry {pdbID} missing files for state={state}")
+    fetch_variant(f"{pdbID}_final.mtz")
+    if not fetch_variant(f"{pdbID}_final.pdb"):
+        fetch_variant(f"{pdbID}_final.cif")
+    if not os.path.exists(os.path.join(entry, "data.json")):
+        try_fetch("data.json")
+
+    if not has_final_files(entry, pdbID):
+        raise FileNotFoundError(
+            f"PDB-REDO entry {pdbID} is missing final model files")
 
 
-def ensure_entry_available(pdbID, mirror_root, cache_root, state):
-    """Return the root (mirror or cache) that contains the required files.
+def ensure_entry_available(pdbID, mirror_root, cache_root):
+    """Return the root (mirror or cache) containing the final model files.
 
     Preference order: mirror_root (full local mirror) -> cache_root (auto-download).
     Raises FileNotFoundError when unavailable.
     """
     # 1) check full mirror specified by user
     mirror_entry = entry_dir_for(mirror_root, pdbID)
-    if os.path.isdir(mirror_entry) and has_state_files(mirror_entry, pdbID, state):
+    if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdbID):
         return mirror_root
     # 2) check cache
     cache_entry = entry_dir_for(cache_root, pdbID)
-    if os.path.isdir(cache_entry) and has_state_files(cache_entry, pdbID, state):
+    if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdbID):
         return cache_root
     # 3) try to download into cache
-    download_entry_to_cache(pdbID, cache_root, state)
-    if os.path.isdir(cache_entry) and has_state_files(cache_entry, pdbID, state):
+    download_entry_to_cache(pdbID, cache_root)
+    if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdbID):
         return cache_root
     raise FileNotFoundError(pdbID)
 
@@ -491,8 +492,8 @@ def infer_pdb_id_from_path(path):
     return m.group(1).lower() if m else None
 
 
-def enumerate_entries(root, state, limit=None):
-    """All PDB ids under `root` that have the required files for `state`.
+def enumerate_entries(root, limit=None):
+    """All PDB ids under ``root`` that have final model files.
 
     If `limit` is given, stop after collecting that many (sorted) ids -- this
     keeps small --max-pdbs debug runs fast instead of walking all ~24k entries.
@@ -513,7 +514,7 @@ def enumerate_entries(root, state, limit=None):
             continue
         for pid in entries:
             ep = os.path.join(hp, pid)
-            if os.path.isdir(ep) and has_state_files(ep, pid, state):
+            if os.path.isdir(ep) and has_final_files(ep, pid):
                 ids.append(pid)
                 if limit is not None and len(ids) >= limit:
                     return ids
@@ -526,12 +527,13 @@ def enumerate_entries(root, state, limit=None):
 # --------------------------------------------------------------------------- #
 # Worker
 # --------------------------------------------------------------------------- #
-def _coordinate_provenance(cfg):
+def _coordinate_provenance(cfg, source_path):
     manual = cfg.get("manual_inputs")
     if manual:
         converted = bool(manual.get("cif_file") and not manual.get("pdb_file"))
         return ("mmcif" if converted else "pdb", "pdb", converted)
-    converted = cfg["state"] == "0cyc"
+    coordinate_name = source_path.lower()
+    converted = coordinate_name.endswith((".cif", ".cif.gz"))
     return ("mmcif" if converted else "pdb", "pdb", converted)
 
 
@@ -539,11 +541,12 @@ def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
     manual = cfg.get("manual_inputs")
     if manual:
         return manual.get("pdb_file") or manual.get("cif_file") or ""
-    if cfg["state"] == "besttls":
-        return os.path.join(entry, f"{pdb_id}_besttls.pdb.gz")
-    if cfg["state"] == "0cyc":
-        return os.path.join(entry, f"{pdb_id}_0cyc.cif.gz")
-    return analysis_path
+    return _first_existing(
+        os.path.join(entry, f"{pdb_id}_final.pdb"),
+        os.path.join(entry, f"{pdb_id}_final.pdb.gz"),
+        os.path.join(entry, f"{pdb_id}_final.cif"),
+        os.path.join(entry, f"{pdb_id}_final.cif.gz"),
+    ) or analysis_path
 
 
 def _alchemy_commit():
@@ -588,7 +591,6 @@ def process(pdbID):
         raise RuntimeError("worker configuration has not been initialized")
     t0 = time.monotonic()
     out_dir = os.path.join(cfg["output_dir"], pdbID)
-    source_format, analysis_format, converted = _coordinate_provenance(cfg)
     manual_inputs = cfg.get("manual_inputs")
     data_json = None
     result = {"pdbID": pdbID, "status": "error", "n": 0,
@@ -599,10 +601,10 @@ def process(pdbID):
               "alchemy_commit": cfg["alchemy_commit"],
               "gemmi_version": cfg["gemmi_version"],
               "ccp4_version": cfg["ccp4_version"],
-              "refinement_state": cfg["state"],
-              "source_coordinate_format": source_format,
-              "analysis_coordinate_format": analysis_format,
-              "coordinate_conversion_performed": converted,
+              "refinement_state": "manual" if manual_inputs else "final",
+              "source_coordinate_format": "",
+              "analysis_coordinate_format": "pdb",
+              "coordinate_conversion_performed": False,
               "source_coordinate_path": "", "analysis_coordinate_path": "",
               "model_policy": MODEL_POLICY, "input_model_count": "",
               "model_analyzed": "", "multi_model_structure": "",
@@ -623,7 +625,8 @@ def process(pdbID):
             reslo, reshi = read_resolution(entry, mtz, data_json_path=data_json)
         else:
             if cfg["allow_download"]:
-                used_root = ensure_entry_available(pdbID, cfg["mirror_root"], cfg["cache_root"], cfg["state"])
+                used_root = ensure_entry_available(
+                    pdbID, cfg["mirror_root"], cfg["cache_root"])
                 entry = entry_dir_for(used_root, pdbID)
             else:
                 entry = entry_dir_for(cfg["root"], pdbID)
@@ -631,16 +634,22 @@ def process(pdbID):
                 result.update(status="skip", error="entry dir missing")
                 return result
             os.makedirs(out_dir, exist_ok=True)
-            mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
+            mtz, pdb = prepare_inputs(pdbID, entry, out_dir)
             reslo, reshi = read_resolution(entry, mtz)
         source_pdb = pdb
+        source_coordinate_path = _source_coordinate_path(
+            cfg, pdbID, entry, source_pdb)
+        source_format, analysis_format, converted = _coordinate_provenance(
+            cfg, source_coordinate_path)
         model1_pdb = os.path.join(out_dir, f"{pdbID}_model1.pdb")
         if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
             model1_pdb = os.path.join(out_dir, f"{pdbID}_analysis_model1.pdb")
         pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
         result.update(
-            source_coordinate_path=_source_coordinate_path(
-                cfg, pdbID, entry, source_pdb),
+            source_coordinate_format=source_format,
+            analysis_coordinate_format=analysis_format,
+            coordinate_conversion_performed=converted,
+            source_coordinate_path=source_coordinate_path,
             analysis_coordinate_path=pdb,
         )
         res = run_density_analysis(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
@@ -893,8 +902,6 @@ def parse_args(argv=None):
                     help="root of the PDB-REDO mirror")
     ap.add_argument("--pdb-redo-cache", default=os.path.join(REPO_DIR, "pdb-redo-cache"),
                     help="root of local cache for auto-downloaded PDB-REDO entries")
-    ap.add_argument("--refine-state", choices=["final", "0cyc", "besttls"],
-                    default="final", help="which refinement state to analyze")
     ap.add_argument("--max-pdbs", type=int, default=None,
                     help="debug cap: process only the first N entries")
     ap.add_argument("--workers", type=int, default=max(1, cpu_count() - 2),
@@ -964,7 +971,8 @@ def main(argv=None):
     elif args.id:
         # Ensure requested single entry is available locally (mirror or cache).
         try:
-            used_root = ensure_entry_available(args.id, args.pdb_redo_root, cache_root, args.refine_state)
+            used_root = ensure_entry_available(
+                args.id, args.pdb_redo_root, cache_root)
             if used_root != args.pdb_redo_root:
                 print(f"Auto-downloaded {args.id} into cache at {cache_root}", flush=True)
             root = used_root
@@ -980,11 +988,10 @@ def main(argv=None):
             return 1
         print(f"Loaded {len(ids)} IDs from {args.id_file}", flush=True)
     else:
-        print(f"Enumerating entries under {root} (state={args.refine_state}) ...",
-              flush=True)
+        print(f"Enumerating final PDB-REDO entries under {root} ...", flush=True)
         # Early-stop only when capping and not resuming (resume needs the full set).
         limit = args.max_pdbs if (args.max_pdbs and not args.resume) else None
-        ids = enumerate_entries(root, args.refine_state, limit=limit)
+        ids = enumerate_entries(root, limit=limit)
     if args.resume:
         done = load_done(manifest_path)
         ids = [i for i in ids if i not in done]
@@ -1007,7 +1014,7 @@ def main(argv=None):
           f"with {args.workers} worker(s) ...", flush=True)
 
     cfg = {"root": root, "mirror_root": args.pdb_redo_root,
-           "cache_root": cache_root, "state": args.refine_state, "env": env,
+           "cache_root": cache_root, "env": env,
            "output_dir": args.output_dir, "cofactors": cofactors,
            "keep": args.keep_intermediates, "bonds": args.bonds,
            "allow_download": bool(args.id or args.id_file),
