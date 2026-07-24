@@ -76,6 +76,7 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
 
     rows = []
     header = None
+    model_column = None
     with open(stats_out) as f:
         for line in f:
             stripped = line.strip()
@@ -85,7 +86,29 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             if header is None:
                 # first non-empty line is the edstats column header
                 header = fields
+                model_column = next(
+                    (index for index, name in enumerate(header)
+                     if name.upper() == "MN"),
+                    None,
+                )
                 continue
+            if model_column is not None:
+                if model_column >= len(fields):
+                    # EDSTATS emits one short "_" separator row when XYZIN
+                    # contains an explicit MODEL/ENDMDL wrapper.
+                    if fields and fields[0] == "_":
+                        continue
+                    raise ValueError("EDSTATS row is missing its MN model value")
+                try:
+                    row_model = int(fields[model_column])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"invalid EDSTATS MN model value: "
+                        f"{fields[model_column]!r}") from exc
+                if row_model != structure.model_analyzed:
+                    raise ValueError(
+                        f"EDSTATS returned model {row_model}, but Alchemy's "
+                        f"model policy selected model {structure.model_analyzed}")
             resname = fields[0]
             chain = fields[1] if len(fields) > 1 else ""
             if chain in (".", "?"):

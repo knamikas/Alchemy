@@ -126,8 +126,10 @@ Component Dictionary list maintained by
 Gemmi parses the same coordinate representation supplied to EDSTATS. For a
 multi-model structure, Alchemy analyzes the first model only for metal
 identification, DPI, and contact searching; model count and the selected-model
-policy are recorded with the results. Atoms from different models are never
-combined.
+policy are recorded with the results. Before map statistics are calculated,
+Alchemy writes a first-model-only PDB and supplies that exact coordinate file
+to both EDSTATS and Gemmi. Atoms and density statistics from different models
+are never combined.
 
 Alternative conformations are selected coherently per residue. Blank-altloc
 atoms are shared, while the named conformer with the highest mean valid atomic

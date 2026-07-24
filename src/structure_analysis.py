@@ -541,11 +541,20 @@ def _symmetry_metadata(structure: gemmi.Structure) -> Tuple[bool, str]:
         return False, f"symmetry_setup_failed:{type(exc).__name__}"
 
 
-def load_structure(pdb_id: str, path: str) -> StructureContext:
+def load_structure(
+        pdb_id: str,
+        path: str,
+        source_model_count: Optional[int] = None,
+        ) -> StructureContext:
     """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
     structure = gemmi.read_structure(path)
     if len(structure) == 0:
         raise ValueError("coordinate file contains no models")
+    input_model_count = (len(structure) if source_model_count is None
+                         else source_model_count)
+    if input_model_count < len(structure):
+        raise ValueError(
+            "source model count cannot be smaller than the analysis model count")
     model = structure[0]
     model_id = str(model.num)
     analysis_format = "mmcif" if os.path.splitext(path)[1].lower() in (
@@ -666,7 +675,7 @@ def load_structure(pdb_id: str, path: str) -> StructureContext:
     symmetry_available, symmetry_reason = _symmetry_metadata(structure)
 
     warnings: List[str] = []
-    if len(structure) > 1:
+    if input_model_count > 1:
         warnings.append("multi_model_structure")
     if duplicate_count:
         warnings.append("duplicate_atom_records")
@@ -700,10 +709,10 @@ def load_structure(pdb_id: str, path: str) -> StructureContext:
         model=model,
         model_index=0,
         model_policy="first",
-        input_model_count=len(structure),
+        input_model_count=input_model_count,
         model_analyzed=1,
         analyzed_model_id=model_id,
-        multi_model_structure=len(structure) > 1,
+        multi_model_structure=input_model_count > 1,
         source_atoms=source_atoms,
         contact_atoms=contact_atoms,
         residues=residues,

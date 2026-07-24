@@ -245,6 +245,63 @@ def _cif_to_pdb(cif_path, dst):
     return dst
 
 
+def _first_model_pdb(pdb_path, dst):
+    """Return a PDB containing only the deposited first coordinate model.
+
+    The extraction is textual so atom records, occupancies, identifiers, and
+    ordering remain exactly as deposited. Gemmi is used only to determine and
+    verify the model count.
+    """
+    import gemmi
+
+    structure = gemmi.read_structure(pdb_path)
+    model_count = len(structure)
+    if model_count == 0:
+        raise ValueError("coordinate file contains no models")
+    if model_count == 1:
+        return pdb_path, model_count
+
+    with open(pdb_path, encoding="utf-8", errors="replace", newline="") as fh:
+        lines = fh.readlines()
+    model_starts = [
+        index for index, line in enumerate(lines)
+        if line[:6].strip().upper() == "MODEL"
+    ]
+    if len(model_starts) < 2:
+        raise ValueError(
+            "Gemmi found multiple models but the PDB MODEL records could not "
+            "be isolated")
+
+    first_start, second_start = model_starts[:2]
+    first_end = next(
+        (index for index in range(first_start, second_start)
+         if lines[index][:6].strip().upper() == "ENDMDL"),
+        None,
+    )
+    if first_end is None:
+        first_block = lines[first_start:second_start]
+        first_block.append("ENDMDL\n")
+    else:
+        first_block = lines[first_start:first_end + 1]
+
+    # NUMMDL describes the source ensemble and would be false in this
+    # first-model-only analysis file. Other crystallographic header records are
+    # retained because EDSTATS needs the same cell and symmetry metadata.
+    header = [
+        line for line in lines[:first_start]
+        if line[:6].strip().upper() != "NUMMDL"
+    ]
+    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+    with open(dst, "w", encoding="utf-8", newline="") as fh:
+        fh.writelines(header)
+        fh.writelines(first_block)
+        fh.write("END\n")
+
+    if len(gemmi.read_structure(dst)) != 1:
+        raise ValueError("failed to create a first-model-only analysis PDB")
+    return dst, model_count
+
+
 def prepare_inputs(pdbID, entry_dir, state, work_dir):
     """Return (mtz_path, pdb_path) for the requested refinement state.
 
@@ -576,13 +633,19 @@ def process(pdbID):
             os.makedirs(out_dir, exist_ok=True)
             mtz, pdb = prepare_inputs(pdbID, entry, cfg["state"], out_dir)
             reslo, reshi = read_resolution(entry, mtz)
+        source_pdb = pdb
+        model1_pdb = os.path.join(out_dir, f"{pdbID}_model1.pdb")
+        if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
+            model1_pdb = os.path.join(out_dir, f"{pdbID}_analysis_model1.pdb")
+        pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
         result.update(
             source_coordinate_path=_source_coordinate_path(
-                cfg, pdbID, entry, pdb),
+                cfg, pdbID, entry, source_pdb),
             analysis_coordinate_path=pdb,
         )
         res = run_density_analysis(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
-        structure = load_structure(pdbID, pdb)
+        structure = load_structure(
+            pdbID, pdb, source_model_count=input_model_count)
         result.update(
             analysis_coordinate_format=structure.analysis_coordinate_format,
             input_model_count=structure.input_model_count,
