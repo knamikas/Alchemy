@@ -50,7 +50,7 @@ from metal_identification import (
     load_cofactor_ids,
 )
 from metal_elements import METAL_ELEMENTS
-from structure_analysis import RESNAME_REMARK_PREFIX
+from structure_analysis import RESNAME_REMARK_PREFIX, blank_if_missing
 from bond_analysis import (
     BOND_COLUMNS,
     NAN,
@@ -287,51 +287,41 @@ def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
     return by_serial
 
 
-def _residue_conversion_records(structure, converted_structure):
-    """Pair source mmCIF residue names with names written to legacy PDB."""
-    source_by_author = {}
-    source_order = []
+def _residue_index_by_author(structure, label):
+    """Index residues by ``(model, chain, resnum)`` with their atom membership.
+
+    Returns the index and the traversal order, so a conversion can be checked
+    for reordering as well as for changed identifiers. ``label`` names the
+    structure in any error raised here.
+    """
+    by_author = {}
+    order = []
     for model_index, model in enumerate(structure):
         for chain in model:
             for residue in chain:
                 number = residue.seqid.num
                 if number is None:
                     raise ValueError(
-                        f"mmCIF residue {residue.name!r} has no author number")
-                insertion = str(residue.seqid.icode)
-                if insertion in ("", " ", "\x00", ".", "?"):
-                    insertion = ""
+                        f"{label} residue {residue.name!r} has no author number")
+                insertion = blank_if_missing(str(residue.seqid.icode))
                 key = (model_index, str(chain.name), f"{number}{insertion}")
-                source_order.append(key)
-                source_by_author.setdefault(key, []).append((
+                order.append(key)
+                by_author.setdefault(key, []).append((
                     str(residue.name),
                     tuple((str(atom.name), str(atom.element.name))
                           for atom in residue),
                 ))
+    return by_author, order
+
+
+def _residue_conversion_records(structure, converted_structure):
+    """Pair source mmCIF residue names with names written to legacy PDB."""
+    source_by_author, source_order = _residue_index_by_author(
+        structure, "mmCIF")
+    converted_by_author, converted_order = _residue_index_by_author(
+        converted_structure, "converted")
 
     records = []
-    converted_by_author = {}
-    converted_order = []
-    for model_index, model in enumerate(converted_structure):
-        for chain in model:
-            for residue in chain:
-                number = residue.seqid.num
-                if number is None:
-                    raise ValueError(
-                        f"converted residue {residue.name!r} has no author number")
-                insertion = str(residue.seqid.icode)
-                if insertion in ("", " ", "\x00", ".", "?"):
-                    insertion = ""
-                converted_chain = str(chain.name)
-                converted_resnum = f"{number}{insertion}"
-                key = (model_index, converted_chain, converted_resnum)
-                converted_order.append(key)
-                converted_by_author.setdefault(key, []).append((
-                    str(residue.name),
-                    tuple((str(atom.name), str(atom.element.name))
-                          for atom in residue),
-                ))
-
     if converted_order != source_order:
         raise ValueError("PDB conversion changed residue ordering")
     if set(converted_by_author) != set(source_by_author):
@@ -1136,28 +1126,23 @@ def _batch_exit_code(counts, retryable_partial_count):
 
 def validate_resume_schemas(manifest_path, stats_path, bonds_path,
                             bonds_enabled=True):
-    """Refuse to append migration rows beneath an incompatible old header."""
-    manifest_header = _csv_header(manifest_path)
-    if manifest_header is not None and manifest_header != MANIFEST_COLUMNS:
-        raise ValueError(
-            "Existing manifest.csv uses an incompatible schema; choose a new "
-            "--output-dir for this Gemmi migration run.")
+    """Refuse to append migration rows beneath an incompatible old header.
 
-    # Compare the whole header, including the EDSTATS block. Appending rows
-    # beneath a header from a different EDSTATS build would misalign every
-    # density column without any other symptom.
-    stats_header = _csv_header(stats_path)
-    if stats_header is not None and stats_header != STATS_COLUMNS:
-        raise ValueError(
-            "Existing metal_stats_all.csv uses an incompatible schema; "
-            "choose a new --output-dir for this Gemmi migration run.")
-
+    Whole headers are compared, including the EDSTATS block of
+    metal_stats_all.csv. Appending rows beneath a header from a different
+    EDSTATS build would misalign every density column without any other
+    symptom.
+    """
+    checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
-        bonds_header = _csv_header(bonds_path)
-        if bonds_header is not None and bonds_header != BOND_COLUMNS:
+        checks.append((bonds_path, BOND_COLUMNS))
+    for path, expected in checks:
+        header = _csv_header(path)
+        if header is not None and header != expected:
             raise ValueError(
-                "Existing metal_bonds_all.csv uses an incompatible schema; "
-                "choose a new --output-dir for this Gemmi migration run.")
+                f"Existing {os.path.basename(path)} uses an incompatible "
+                "schema; choose a new --output-dir for this Gemmi migration "
+                "run.")
 
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):

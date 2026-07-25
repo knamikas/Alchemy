@@ -28,13 +28,22 @@ DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
 RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
 
 
-def _altloc(value: str) -> str:
-    """Return a public altloc label (blank rather than Gemmi's NUL)."""
-    return "" if value in ("", " ", "\x00", ".", "?") else str(value)
+# Blank PDB columns, Gemmi's NUL altloc, and the two mmCIF null tokens all mean
+# "no value here". Altloc labels, insertion codes, and main.py's mmCIF
+# conversion bookkeeping share this one definition.
+MISSING_VALUE_TOKENS = ("", " ", "\x00", ".", "?")
 
 
-def _icode(value: str) -> str:
-    return "" if value in ("", " ", "\x00", ".", "?") else str(value)
+def blank_if_missing(value: str) -> str:
+    """Return ``value``, or blank when it is a missing-value marker."""
+    return "" if value in MISSING_VALUE_TOKENS else str(value)
+
+
+def position_distance(a: Sequence[float], b: Sequence[float]) -> float:
+    """Euclidean distance between two ``(x, y, z)`` triples."""
+    ax, ay, az = a
+    bx, by, bz = b
+    return math.sqrt((ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2)
 
 
 def _residue_number(residue: gemmi.Residue) -> int:
@@ -142,6 +151,10 @@ class AtomSite:
     @property
     def pos(self) -> gemmi.Position:
         return self.gemmi_atom.pos
+
+    @property
+    def xyz(self) -> Tuple[float, float, float]:
+        return self.x, self.y, self.z
 
     @property
     def residue_key(self) -> Tuple[int, int, int]:
@@ -369,11 +382,11 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
                 except (TypeError, ValueError, OverflowError):
                     serial = None
                 atom_name = line[12:16].strip()
-                altloc = _altloc(line[16:17])
+                altloc = blank_if_missing(line[16:17])
                 residue_name = line[17:20].strip()
                 chain_id = line[21:22].strip()
                 residue_number = line[22:26].strip()
-                insertion_code = _icode(line[26:27])
+                insertion_code = blank_if_missing(line[26:27])
                 element, element_status = _parse_pdb_element(line[76:78])
                 text = line[54:60] if len(line) >= 55 else ""
                 stripped = text.strip()
@@ -452,9 +465,9 @@ def _gemmi_atom_identity(chain: gemmi.Chain, residue: gemmi.Residue,
         str(chain.name),
         str(residue.name),
         str(_residue_number(residue)),
-        _icode(residue.seqid.icode),
+        blank_if_missing(residue.seqid.icode),
         str(atom.name).strip(),
-        _altloc(atom.altloc),
+        blank_if_missing(atom.altloc),
     )
 
 
@@ -528,11 +541,6 @@ def _site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
     if candidate.occupancy_valid and candidate.occupancy != current.occupancy:
         return candidate.occupancy > current.occupancy
     return candidate.source_order < current.source_order
-
-
-def _position_distance(a: AtomSite, b: AtomSite) -> float:
-    return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 +
-                     (a.z - b.z) ** 2)
 
 
 def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
@@ -714,7 +722,7 @@ def load_structure(
     for chain_index, chain in enumerate(model):
         for residue_index, residue in enumerate(chain):
             number = _residue_number(residue)
-            insertion = _icode(residue.seqid.icode)
+            insertion = blank_if_missing(residue.seqid.icode)
             resnum = f"{number}{insertion}"
             coordinate_residue_name = str(residue.name)
             source_residue_name = source_residue_names.get(
@@ -748,7 +756,7 @@ def load_structure(
                     atom_index=atom_index,
                     source_order=source_order,
                     atom_name=str(atom.name).strip(),
-                    altloc=_altloc(atom.altloc),
+                    altloc=blank_if_missing(atom.altloc),
                     element=element,
                     element_known=element_known,
                     occupancy=occupancy,
@@ -780,7 +788,7 @@ def load_structure(
             dedup[atom.exact_identity] = atom
             continue
         duplicate_count += 1
-        if (_position_distance(atom, current) >
+        if (position_distance(atom.xyz, current.xyz) >
                 DUPLICATE_ATOM_POSITION_TOLERANCE):
             coordinate_conflicts += 1
         if _site_is_better(atom, current):

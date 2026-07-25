@@ -107,19 +107,30 @@ def _validate_edstats_row(fields, header, indices, line_number):
             f"{model_value!r}") from exc
 
 
+def _classify_residue(residue, metals_upper, cofactor_set):
+    """Return ``(category, metal_sites)`` for one coordinate residue.
+
+    ``category`` is ``"cofactor"``, ``"metal"``, or ``""`` when the residue is
+    neither. The emitted rows and the EDSTATS completeness check below both
+    derive from this single rule, so the set of sites Alchemy demands EDSTATS
+    report cannot drift away from the set it actually emits.
+    """
+    metal_sites = [atom for atom in residue.contact_atoms
+                   if atom.element_known and atom.element in metals_upper]
+    if residue.residue_name in cofactor_set:
+        return "cofactor", metal_sites
+    if residue.chemical_atom_site_count == 1 and len(metal_sites) == 1:
+        return "metal", metal_sites
+    return "", metal_sites
+
+
 def _expected_edstats_residues(structure, metals_upper, cofactor_set):
     """Coordinate residue keys for sites Alchemy expects EDSTATS to report."""
-    expected = set()
-    for residue in structure.residues:
-        metal_sites = [
-            atom for atom in residue.contact_atoms
-            if atom.element_known and atom.element in metals_upper
-        ]
-        if (residue.residue_name in cofactor_set or
-                (residue.chemical_atom_site_count == 1 and
-                 len(metal_sites) == 1)):
-            expected.add(residue.coordinate_author_key)
-    return expected
+    return {
+        residue.coordinate_author_key
+        for residue in structure.residues
+        if _classify_residue(residue, metals_upper, cofactor_set)[0]
+    }
 
 
 def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structure=None):
@@ -211,18 +222,11 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             emitted_site = False
             for residue in matched_residues:
                 resname = residue.residue_name
-                is_cofactor = resname in cofactor_set
-                if is_cofactor:
+                category, metal_sites = _classify_residue(
+                    residue, metals_upper, cofactor_set)
+                if category == "cofactor":
                     matched_cofactor_names.append(resname)
-                metal_sites = [atom for atom in residue.contact_atoms
-                               if atom.element_known and
-                               atom.element in metals_upper]
-                if is_cofactor:
-                    category = "cofactor"
-                elif (residue.chemical_atom_site_count == 1 and
-                      len(metal_sites) == 1):
-                    category = "metal"
-                else:
+                if not category:
                     continue
                 for site in metal_sites:
                     emitted_site = True

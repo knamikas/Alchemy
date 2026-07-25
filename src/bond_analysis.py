@@ -32,6 +32,7 @@ from structure_analysis import (
     count_deposited_ni,
     count_ni,
     load_structure,
+    position_distance,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -369,10 +370,6 @@ def _contact_sort_key(contact):
             contact["transformed_position"])
 
 
-def _transformed_distance(a, b):
-    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
-
-
 def _special_position_preference(contact):
     """Choose a stable representative for near-coincident symmetry images.
 
@@ -403,7 +400,7 @@ def _deduplicate_special_position_contacts(candidates):
         for candidate in sorted(by_source[source_key],
                                 key=_special_position_preference):
             if any(
-                _transformed_distance(
+                position_distance(
                     current["transformed_position"],
                     candidate["transformed_position"],
                 ) <= SPECIAL_POSITION_DEDUP_CUTOFF
@@ -494,10 +491,7 @@ def _collect_contacts(structure, search, metal, include_symmetry):
             strict_ncs_operation_id = ""
             contact_scope = "explicit"
             operation = "1_555"
-            distance = math.sqrt(
-                (metal.x - neighbor.x) ** 2 +
-                (metal.y - neighbor.y) ** 2 +
-                (metal.z - neighbor.z) ** 2)
+            distance = position_distance(metal.xyz, neighbor.xyz)
 
         # A symmetry copy is a distinct residue image. Exclude only the actual
         # source residue in the explicit asymmetric unit.
