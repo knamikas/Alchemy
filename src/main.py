@@ -44,7 +44,13 @@ from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from density_analysis import run_density_analysis
-from metal_identification import metals, uncommonMetals, load_cofactor_ids, extract_metal_statistics
+from metal_identification import (
+    EDSTATS_COLUMNS,
+    metals,
+    uncommonMetals,
+    load_cofactor_ids,
+    extract_metal_statistics,
+)
 from build_metallocofactor_catalog import refresh_cofactors_if_needed, active_cofactors_path
 from structure_analysis import RESNAME_REMARK_PREFIX
 from bond_analysis import (
@@ -86,6 +92,16 @@ MANIFEST_COLUMNS = [
     "model_analyzed", "multi_model_structure", "altloc_policy",
     "symmetry_contact_policy",
 ]
+
+# metal_stats_all.csv schema. The middle block is the EDSTATS residue table,
+# whose column set and order `extract_metal_statistics` validates against
+# EDSTATS_COLUMNS before emitting any row, so the full header is fixed. Defining
+# it once keeps the written header and the --resume compatibility check from
+# disagreeing about the columns between them.
+STATS_COLUMNS = (
+    ["pdbID", "category"] + list(EDSTATS_COLUMNS) +
+    ["aa_geometry_coverage"] + list(STATS_EXTRA_COLUMNS)
+)
 
 # config dict shared with worker processes (set once per worker by _init_worker)
 _CFG: Optional[Dict[str, Any]] = None
@@ -818,7 +834,7 @@ def process(pdbID):
     manual_inputs = cfg.get("manual_inputs")
     data_json = None
     result = {"pdbID": pdbID, "status": "error", "n": 0,
-              "runtime": 0.0, "error": "", "rows": [], "header": None,
+              "runtime": 0.0, "error": "", "rows": [],
               "bond_rows": [], "n_bonds": 0, "retryable": True,
               "reason_codes": [], "warning_codes": [],
               "alchemy_version": ALCHEMY_VERSION,
@@ -934,8 +950,6 @@ def process(pdbID):
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
                 result["reason_codes"] = ["bond_stage_failure"]
                 result["retryable"] = True
-        if header:
-            header = header + ["aa_geometry_coverage"] + STATS_EXTRA_COLUMNS
         for row in rows:
             summary = dict(site_summaries.get(row.get("site_key"), {}))
             summary["coordinate_mapping_status"] = row.get(
@@ -982,7 +996,7 @@ def process(pdbID):
         selected_site_count = len(structure.metal_atoms(
             METALS_SET, canonical=True))
         result.update(status=status, n=selected_site_count,
-                      rows=rows, header=header,
+                      rows=rows,
                       bond_rows=bond_rows, n_bonds=len(bond_rows))
     except FileNotFoundError as e:
         result.update(status="skip", retryable=True,
@@ -1134,14 +1148,14 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
             "Existing manifest.csv uses an incompatible schema; choose a new "
             "--output-dir for this Gemmi migration run.")
 
+    # Compare the whole header, including the EDSTATS block. Appending rows
+    # beneath a header from a different EDSTATS build would misalign every
+    # density column without any other symptom.
     stats_header = _csv_header(stats_path)
-    if stats_header is not None:
-        expected_suffix = ["aa_geometry_coverage"] + STATS_EXTRA_COLUMNS
-        if (stats_header[:2] != ["pdbID", "category"] or
-                stats_header[-len(expected_suffix):] != expected_suffix):
-            raise ValueError(
-                "Existing metal_stats_all.csv uses an incompatible schema; "
-                "choose a new --output-dir for this Gemmi migration run.")
+    if stats_header is not None and stats_header != STATS_COLUMNS:
+        raise ValueError(
+            "Existing metal_stats_all.csv uses an incompatible schema; "
+            "choose a new --output-dir for this Gemmi migration run.")
 
     if bonds_enabled:
         bonds_header = _csv_header(bonds_path)
@@ -1350,7 +1364,7 @@ def main(argv=None):
     stats_w = csv.writer(stats_fh)
     bonds_w = csv.writer(bonds_fh) if bonds_fh is not None else None
     man_w.writeheader()
-    stats_header_written = False
+    stats_w.writerow(STATS_COLUMNS)
     if bonds_w is not None:
         bonds_w.writerow(BOND_COLUMNS)
 
@@ -1365,12 +1379,6 @@ def main(argv=None):
                 persist_result = (
                     not args.resume or _resume_replacement_succeeded(r)
                 )
-                if (persist_result and not stats_header_written and
-                        r["header"]):
-                    stats_w.writerow(
-                        ["pdbID", "category"] + r["header"])
-                    stats_fh.flush()
-                    stats_header_written = True
                 if persist_result and r["rows"]:
                     for row in r["rows"]:
                         stats_w.writerow([row["pdbID"], row["category"]] + row["fields"])

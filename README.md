@@ -255,6 +255,9 @@ fails, the pipeline falls back to an available cached or committed list.
   runs retain completed results.
 - Statistics and bond CSV files retain their column headers when a completed run
   finds no metals or no first-sphere contacts.
+- The statistics header is a fixed schema rather than a copy of whatever EDSTATS
+  emitted, because `extract_metal_statistics` already requires the EDSTATS
+  residue table to match the standard column set and order.
 - Resume retries are staged separately. Existing rows are replaced only after a
   retry produces a terminal result and the retry batch completes; failed or
   interrupted retries leave the previous rows intact. `--resume --no-bonds`
@@ -273,4 +276,6 @@ fails, the pipeline falls back to an available cached or committed list.
   entries do not run forever.
 - The Gemmi migration expands all three CSV schemas. `--resume` refuses to mix
   new rows with incompatible pre-migration headers; use a new `--output-dir`
-  for the first Gemmi-based run.
+  for the first Gemmi-based run. All three headers are compared in full,
+  including the EDSTATS block of `metal_stats_all.csv`, so appended rows cannot
+  be silently misaligned by output from a different EDSTATS build.
