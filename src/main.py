@@ -26,6 +26,7 @@ Examples
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
 """
 import argparse
+import contextlib
 import csv
 import gzip
 import json
@@ -79,6 +80,17 @@ SYMMETRY_POLICY = (
 )
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 ALCHEMY_VERSION = "0.1.0"
+
+# Human-readable text for each EDSTATS-join reason code, reported alongside the
+# machine-readable code in the manifest's error column.
+IDENTIFICATION_REASON_MESSAGES = {
+    "cofactor_coordinate_join_failed":
+        "cofactor EDSTATS row did not match a coordinate residue",
+    "ambiguous_coordinate_residue_join":
+        "EDSTATS row matched multiple coordinate residues",
+    "cofactor_without_selected_metal":
+        "matched cofactor has no selected configured metal site",
+}
 
 MANIFEST_COLUMNS = [
     "pdbID", "status", "retryable", "n_metals", "n_bonds", "runtime_s",
@@ -807,6 +819,123 @@ def _init_worker(cfg: Dict[str, Any]) -> None:
     _CFG = cfg
 
 
+def _initial_result(pdbID, cfg, manual_inputs):
+    """Return the per-entry result skeleton, pre-filled with run provenance.
+
+    Every manifest column is present from the outset so a failure at any stage
+    still yields a complete row.
+    """
+    return {"pdbID": pdbID, "status": "error", "n": 0,
+            "runtime": 0.0, "error": "", "rows": [],
+            "bond_rows": [], "n_bonds": 0, "retryable": True,
+            "reason_codes": [], "warning_codes": [],
+            "alchemy_version": ALCHEMY_VERSION,
+            "alchemy_commit": cfg["alchemy_commit"],
+            "gemmi_version": cfg["gemmi_version"],
+            "ccp4_version": cfg["ccp4_version"],
+            "refinement_state": "manual" if manual_inputs else "final",
+            "source_coordinate_format": "",
+            "analysis_coordinate_format": "pdb",
+            "coordinate_conversion_performed": False,
+            "source_coordinate_path": "", "analysis_coordinate_path": "",
+            "model_policy": MODEL_POLICY, "input_model_count": "",
+            "model_analyzed": "", "multi_model_structure": "",
+            "altloc_policy": ALTLOC_POLICY,
+            "symmetry_contact_policy": SYMMETRY_POLICY}
+
+
+def _resolve_entry_dir(pdbID, cfg):
+    """Locate an entry's PDB-REDO directory, downloading it when permitted."""
+    if cfg["allow_download"]:
+        used_root = ensure_entry_available(
+            pdbID, cfg["mirror_root"], cfg["cache_root"])
+        return entry_dir_for(used_root, pdbID)
+    return entry_dir_for(cfg["root"], pdbID)
+
+
+def _identification_reason_codes(rows):
+    """Deduplicated reason codes for EDSTATS rows that could not be joined."""
+    codes = []
+    for row in rows:
+        mapping_status = row.get("coordinate_mapping_status", "")
+        site_status = row.get("selected_metal_site_status", "")
+        if mapping_status == "coordinate_residue_not_found":
+            codes.append("cofactor_coordinate_join_failed")
+        elif mapping_status == "multiple_coordinate_residues":
+            codes.append("ambiguous_coordinate_residue_join")
+        elif site_status == "no_selected_metal":
+            codes.append("cofactor_without_selected_metal")
+    return list(dict.fromkeys(codes))
+
+
+def _check_row_schema(row, columns, name):
+    """Fail loudly when a row builder and its CSV schema have drifted apart.
+
+    Rows are written by projecting them onto a fixed column list, so a key the
+    builder gained without a matching column would be dropped silently and a
+    column it lost would surface only as a bare KeyError.
+    """
+    expected = set(columns)
+    if row.keys() == expected:
+        return
+    details = []
+    missing = sorted(expected - row.keys())
+    unexpected = sorted(row.keys() - expected)
+    if missing:
+        details.append("missing " + ", ".join(missing))
+    if unexpected:
+        details.append("unexpected " + ", ".join(unexpected))
+    raise RuntimeError(
+        f"{name} row does not match its column schema: " + "; ".join(details))
+
+
+def _append_site_fields(rows, site_summaries, structure):
+    """Extend each EDSTATS row with its per-site contact and provenance values."""
+    for index, row in enumerate(rows):
+        summary = dict(site_summaries.get(row.get("site_key"), {}))
+        summary["coordinate_mapping_status"] = row.get(
+            "coordinate_mapping_status", "")
+        summary["selected_metal_site_status"] = row.get(
+            "selected_metal_site_status", "")
+        coverage = summary.get("geometry_coverage_image_inclusive", NAN)
+        if isinstance(coverage, float) and not math.isfinite(coverage):
+            coverage = summary.get("geometry_coverage_explicit", NAN)
+        extra = stats_extra_values(structure, row.get("site"), summary)
+        if index == 0:
+            _check_row_schema(extra, STATS_EXTRA_COLUMNS,
+                              "metal_stats_all.csv")
+        row["fields"] = (row["fields"] + [coverage] +
+                         [extra[column] for column in STATS_EXTRA_COLUMNS])
+
+
+def _finalize_result(result, identification_codes, bond_meta, structure,
+                     rows, bond_rows):
+    """Merge the stage outcomes into the final status, codes, and counts."""
+    result["reason_codes"] = list(dict.fromkeys(
+        result["reason_codes"] + identification_codes +
+        list(bond_meta["partial_reason_codes"])))
+    messages = [IDENTIFICATION_REASON_MESSAGES[code]
+                for code in identification_codes]
+    messages.extend(bond_meta["messages"])
+    if messages:
+        existing_error = result["error"]
+        result["error"] = "; ".join(
+            ([existing_error] if existing_error else []) + messages)[:300]
+    if bond_meta.get("retryable", False):
+        result["retryable"] = True
+    result["warning_codes"] = list(dict.fromkeys(
+        result["warning_codes"] + bond_meta.get("warning_codes", [])))
+    status = "partial" if result["reason_codes"] else "ok"
+    if status == "ok":
+        result["retryable"] = False
+    # Count coordinate-model metal sites, not emitted statistics rows. A failed
+    # EDSTATS join can leave a diagnostic row without a site even though bond
+    # analysis still found and evaluated the deposited metal.
+    result.update(status=status,
+                  n=len(structure.metal_atoms(METALS_SET, canonical=True)),
+                  rows=rows, bond_rows=bond_rows, n_bonds=len(bond_rows))
+
+
 def process(pdbID):
     """Run one initialized worker entry and return its result dictionary."""
     cfg = _CFG
@@ -818,23 +947,7 @@ def process(pdbID):
     work_dir: Optional[str] = None
     manual_inputs = cfg.get("manual_inputs")
     data_json = None
-    result = {"pdbID": pdbID, "status": "error", "n": 0,
-              "runtime": 0.0, "error": "", "rows": [],
-              "bond_rows": [], "n_bonds": 0, "retryable": True,
-              "reason_codes": [], "warning_codes": [],
-              "alchemy_version": ALCHEMY_VERSION,
-              "alchemy_commit": cfg["alchemy_commit"],
-              "gemmi_version": cfg["gemmi_version"],
-              "ccp4_version": cfg["ccp4_version"],
-              "refinement_state": "manual" if manual_inputs else "final",
-              "source_coordinate_format": "",
-              "analysis_coordinate_format": "pdb",
-              "coordinate_conversion_performed": False,
-              "source_coordinate_path": "", "analysis_coordinate_path": "",
-              "model_policy": MODEL_POLICY, "input_model_count": "",
-              "model_analyzed": "", "multi_model_structure": "",
-              "altloc_policy": ALTLOC_POLICY,
-              "symmetry_contact_policy": SYMMETRY_POLICY}
+    result = _initial_result(pdbID, cfg, manual_inputs)
     try:
         if manual_inputs:
             work_dir = tempfile.mkdtemp(
@@ -851,12 +964,9 @@ def process(pdbID):
             _data_reslo, data_reshi = read_resolution(
                 entry, mtz, data_json_path=data_json)
         else:
-            if cfg["allow_download"]:
-                used_root = ensure_entry_available(
-                    pdbID, cfg["mirror_root"], cfg["cache_root"])
-                entry = entry_dir_for(used_root, pdbID)
-            else:
-                entry = entry_dir_for(cfg["root"], pdbID)
+            # Resolved before any scratch space is created, so a missing entry
+            # never leaves a temporary directory behind.
+            entry = _resolve_entry_dir(pdbID, cfg)
             if not os.path.isdir(entry):
                 result.update(status="skip", error="entry dir missing")
                 return result
@@ -901,28 +1011,14 @@ def process(pdbID):
         # later stage explicitly identifies a transient failure.
         result["retryable"] = False
 
-        identification_reason_codes = []
-        for row in rows:
-            mapping_status = row.get("coordinate_mapping_status", "")
-            site_status = row.get("selected_metal_site_status", "")
-            if mapping_status == "coordinate_residue_not_found":
-                identification_reason_codes.append(
-                    "cofactor_coordinate_join_failed")
-            elif mapping_status == "multiple_coordinate_residues":
-                identification_reason_codes.append(
-                    "ambiguous_coordinate_residue_join")
-            elif site_status == "no_selected_metal":
-                identification_reason_codes.append(
-                    "cofactor_without_selected_metal")
-        identification_reason_codes = list(dict.fromkeys(
-            identification_reason_codes))
+        identification_reason_codes = _identification_reason_codes(rows)
 
         bond_rows = []
         site_summaries = {}
         bond_meta = {"partial_reason_codes": [],
                      "warning_codes": list(structure.warning_codes),
                      "messages": [], "retryable": False}
-        
+
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
@@ -935,54 +1031,9 @@ def process(pdbID):
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
                 result["reason_codes"] = ["bond_stage_failure"]
                 result["retryable"] = True
-        for row in rows:
-            summary = dict(site_summaries.get(row.get("site_key"), {}))
-            summary["coordinate_mapping_status"] = row.get(
-                "coordinate_mapping_status", "")
-            summary["selected_metal_site_status"] = row.get(
-                "selected_metal_site_status", "")
-            coverage = summary.get("geometry_coverage_image_inclusive", NAN)
-            if isinstance(coverage, float) and not math.isfinite(coverage):
-                coverage = summary.get("geometry_coverage_explicit", NAN)
-            extra = stats_extra_values(structure, row.get("site"), summary)
-            row["fields"] = (row["fields"] + [coverage] +
-                             [extra[column] for column in STATS_EXTRA_COLUMNS])
-
-        partial_reason_codes = list(dict.fromkeys(
-            identification_reason_codes +
-            list(bond_meta["partial_reason_codes"])))
-        result["reason_codes"] = list(dict.fromkeys(
-            result["reason_codes"] + partial_reason_codes))
-        reason_messages = {
-            "cofactor_coordinate_join_failed":
-                "cofactor EDSTATS row did not match a coordinate residue",
-            "ambiguous_coordinate_residue_join":
-                "EDSTATS row matched multiple coordinate residues",
-            "cofactor_without_selected_metal":
-                "matched cofactor has no selected configured metal site",
-        }
-        messages = [reason_messages[code]
-                    for code in identification_reason_codes]
-        messages.extend(bond_meta["messages"])
-        if messages:
-            existing_error = result["error"]
-            result["error"] = "; ".join(
-                ([existing_error] if existing_error else []) + messages)[:300]
-        if bond_meta.get("retryable", False):
-            result["retryable"] = True
-        result["warning_codes"] = list(dict.fromkeys(
-            result["warning_codes"] + bond_meta.get("warning_codes", [])))
-        status = "partial" if result["reason_codes"] else "ok"
-        if status == "ok":
-            result["retryable"] = False
-        # Count coordinate-model metal sites, not emitted statistics rows.
-        # A failed EDSTATS join can leave a diagnostic row without a site even
-        # though bond analysis still found and evaluated the deposited metal.
-        selected_site_count = len(structure.metal_atoms(
-            METALS_SET, canonical=True))
-        result.update(status=status, n=selected_site_count,
-                      rows=rows,
-                      bond_rows=bond_rows, n_bonds=len(bond_rows))
+        _append_site_fields(rows, site_summaries, structure)
+        _finalize_result(result, identification_reason_codes, bond_meta,
+                         structure, rows, bond_rows)
     except FileNotFoundError as e:
         result.update(status="skip", retryable=True,
                       reason_codes=["missing_input"],
@@ -1221,6 +1272,156 @@ def parse_args(argv=None):
     return args
 
 
+class _DriverError(Exception):
+    """A user-facing driver failure: the message is printed and the run exits 1."""
+
+
+def _select_entry_ids(args, cache_root):
+    """Resolve the run's work list, returning ``(ids, root, manual_inputs)``.
+
+    Raises ``_DriverError`` when the request cannot be satisfied at all.
+    """
+    root = args.pdb_redo_root
+    if args.pdb_file or args.mtz_file or args.cif_file:
+        pdbID = (
+            args.id or
+            infer_pdb_id_from_path(args.cif_file) or
+            infer_pdb_id_from_path(args.pdb_file) or
+            infer_pdb_id_from_path(args.mtz_file)
+        )
+        if not pdbID:
+            raise _DriverError(
+                "Manual input mode requires --id or a file name that contains "
+                "a 4-character PDB id.")
+        return [pdbID], root, {
+            "pdb_file": args.pdb_file,
+            "mtz_file": args.mtz_file,
+            "cif_file": args.cif_file,
+            "data_json": args.data_json,
+        }
+
+    if args.id:
+        # Ensure requested single entry is available locally (mirror or cache).
+        try:
+            used_root = ensure_entry_available(
+                args.id, args.pdb_redo_root, cache_root)
+        except FileNotFoundError:
+            raise _DriverError(
+                f"Entry {args.id} not found locally and download failed.")
+        if used_root != args.pdb_redo_root:
+            print(f"Auto-downloaded {args.id} into cache at {cache_root}", flush=True)
+        return [args.id], used_root, None
+
+    if args.id_file:
+        try:
+            ids = load_ids_from_file(args.id_file)
+        except (FileNotFoundError, ValueError) as exc:
+            raise _DriverError(str(exc))
+        print(f"Loaded {len(ids)} IDs from {args.id_file}", flush=True)
+        return ids, root, None
+
+    print(f"Enumerating final PDB-REDO entries under {root} ...", flush=True)
+    # Early-stop only when capping and not resuming (resume needs the full set).
+    limit = args.max_pdbs if (args.max_pdbs and not args.resume) else None
+    return enumerate_entries(root, limit=limit), root, None
+
+
+def _manifest_row(result, resume, bonds_enabled, prior_bond_counts):
+    """Project one worker result onto the manifest schema."""
+    row = {column: result.get(column, "") for column in MANIFEST_COLUMNS}
+    n_bonds = result["n_bonds"]
+    if resume and not bonds_enabled:
+        n_bonds = prior_bond_counts.get(result["pdbID"].lower(), n_bonds)
+    row.update(
+        n_metals=result["n"], n_bonds=n_bonds,
+        runtime_s=result["runtime"],
+        reason_codes="|".join(result.get("reason_codes", [])),
+        warning_codes="|".join(result.get("warning_codes", [])),
+    )
+    return row
+
+
+class _ResumeStaging:
+    """Holds retried entries' rows until the whole retry batch has succeeded.
+
+    Rows go to a temporary directory and are merged into the real outputs only
+    once the batch completes, so a failed or interrupted retry leaves the
+    previous rows untouched.
+    """
+
+    def __init__(self, output_dir, targets):
+        self.targets = targets
+        self.dir = tempfile.mkdtemp(prefix=".alchemy-resume-", dir=output_dir)
+        self.staged = tuple(os.path.join(self.dir, os.path.basename(path))
+                            for path in targets)
+        self.replacement_ids = set()
+
+    def commit(self, bonds_enabled):
+        """Replace the retried entries' rows in the real output files."""
+        if not self.replacement_ids:
+            return
+        manifest_path, stats_path, bonds_path = self.targets
+        staged_manifest, staged_stats, staged_bonds = self.staged
+        # Data files are committed before the manifest completion marker. If an
+        # interruption occurs between replacements, the old manifest causes the
+        # entry to be retried safely.
+        _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
+        if bonds_enabled:
+            _merge_csv_replacements(bonds_path, staged_bonds,
+                                    self.replacement_ids)
+        _merge_csv_replacements(manifest_path, staged_manifest,
+                                self.replacement_ids)
+
+    def discard(self):
+        if os.path.isdir(self.dir):
+            shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class _OutputWriters:
+    """The three streamed CSV outputs, with running row counts.
+
+    Each stream is flushed after every entry so an interrupted batch run
+    retains the results it already completed. Headers are written on creation.
+    """
+
+    def __init__(self, manifest_fh, stats_fh, bonds_fh):
+        self._manifest_fh = manifest_fh
+        self._stats_fh = stats_fh
+        self._bonds_fh = bonds_fh
+        self._manifest = csv.DictWriter(manifest_fh,
+                                        fieldnames=MANIFEST_COLUMNS)
+        self._stats = csv.writer(stats_fh)
+        self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
+        self.n_rows = 0
+        self.n_bonds = 0
+        self._manifest.writeheader()
+        self._stats.writerow(STATS_COLUMNS)
+        if self._bonds is not None:
+            self._bonds.writerow(BOND_COLUMNS)
+
+    def write_stats_rows(self, rows):
+        if not rows:
+            return
+        for row in rows:
+            self._stats.writerow(
+                [row["pdbID"], row["category"]] + row["fields"])
+            self.n_rows += 1
+        self._stats_fh.flush()
+
+    def write_bond_rows(self, bond_rows):
+        if self._bonds is None or not bond_rows:
+            return
+        _check_row_schema(bond_rows[0], BOND_COLUMNS, "metal_bonds_all.csv")
+        for bond in bond_rows:
+            self._bonds.writerow([bond[column] for column in BOND_COLUMNS])
+            self.n_bonds += 1
+        self._bonds_fh.flush()
+
+    def write_manifest_row(self, row):
+        self._manifest.writerow(row)
+        self._manifest_fh.flush()
+
+
 def main(argv=None):
     args = parse_args(argv)
 
@@ -1235,7 +1436,6 @@ def main(argv=None):
         return 0
     os.makedirs(args.output_dir, exist_ok=True)
 
-    root = args.pdb_redo_root
     cache_root = args.pdb_redo_cache
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
     stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
@@ -1248,48 +1448,12 @@ def main(argv=None):
             print(str(exc), flush=True)
             return 1
 
-    manual_inputs = None
-    if args.pdb_file or args.mtz_file or args.cif_file:
-        pdbID = (
-            args.id or
-            infer_pdb_id_from_path(args.cif_file) or
-            infer_pdb_id_from_path(args.pdb_file) or
-            infer_pdb_id_from_path(args.mtz_file)
-        )
-        if not pdbID:
-            print("Manual input mode requires --id or a file name that contains a 4-character PDB id.", flush=True)
-            return 1
-        manual_inputs = {
-            "pdb_file": args.pdb_file,
-            "mtz_file": args.mtz_file,
-            "cif_file": args.cif_file,
-            "data_json": args.data_json,
-        }
-        ids = [pdbID]
-    elif args.id:
-        # Ensure requested single entry is available locally (mirror or cache).
-        try:
-            used_root = ensure_entry_available(
-                args.id, args.pdb_redo_root, cache_root)
-            if used_root != args.pdb_redo_root:
-                print(f"Auto-downloaded {args.id} into cache at {cache_root}", flush=True)
-            root = used_root
-            ids = [args.id]
-        except FileNotFoundError:
-            print(f"Entry {args.id} not found locally and download failed.", flush=True)
-            return 1
-    elif args.id_file:
-        try:
-            ids = load_ids_from_file(args.id_file)
-        except (FileNotFoundError, ValueError) as exc:
-            print(str(exc), flush=True)
-            return 1
-        print(f"Loaded {len(ids)} IDs from {args.id_file}", flush=True)
-    else:
-        print(f"Enumerating final PDB-REDO entries under {root} ...", flush=True)
-        # Early-stop only when capping and not resuming (resume needs the full set).
-        limit = args.max_pdbs if (args.max_pdbs and not args.resume) else None
-        ids = enumerate_entries(root, limit=limit)
+    try:
+        ids, root, manual_inputs = _select_entry_ids(args, cache_root)
+    except _DriverError as exc:
+        print(str(exc), flush=True)
+        return 1
+
     if args.resume:
         done = load_done(manifest_path)
         ids = [i for i in ids if i not in done]
@@ -1313,114 +1477,69 @@ def main(argv=None):
            "gemmi_version": _gemmi_version(),
            "ccp4_version": _ccp4_version(env)}
 
-    resume_stage_dir = None
-    replacement_ids = set()
     prior_bond_counts = (
         _manifest_values_by_id(manifest_path, "n_bonds")
         if args.resume and not args.bonds else {}
     )
-    if args.resume:
-        resume_stage_dir = tempfile.mkdtemp(
-            prefix=".alchemy-resume-", dir=args.output_dir)
-        write_manifest_path = os.path.join(
-            resume_stage_dir, "manifest.csv")
-        write_stats_path = os.path.join(
-            resume_stage_dir, "metal_stats_all.csv")
-        write_bonds_path = os.path.join(
-            resume_stage_dir, "metal_bonds_all.csv")
-    else:
-        write_manifest_path = manifest_path
-        write_stats_path = stats_path
-        write_bonds_path = bonds_path
-
-    man_fh = open(write_manifest_path, "w", newline="")
-    stats_fh = open(write_stats_path, "w", newline="")
-    bonds_fh = (open(write_bonds_path, "w", newline="")
-                if args.bonds else None)
-    man_w = csv.DictWriter(man_fh, fieldnames=MANIFEST_COLUMNS)
-    stats_w = csv.writer(stats_fh)
-    bonds_w = csv.writer(bonds_fh) if bonds_fh is not None else None
-    man_w.writeheader()
-    stats_w.writerow(STATS_COLUMNS)
-    if bonds_w is not None:
-        bonds_w.writerow(BOND_COLUMNS)
+    output_paths = (manifest_path, stats_path, bonds_path)
+    staging = (_ResumeStaging(args.output_dir, output_paths)
+               if args.resume else None)
+    write_manifest_path, write_stats_path, write_bonds_path = (
+        staging.staged if staging is not None else output_paths)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     retryable_partial_count = 0
-    n_rows = 0
-    n_bonds = 0
     processing_completed = False
+    writers = None
     try:
-        with Pool(args.workers, initializer=_init_worker, initargs=(cfg,)) as pool:
-            for k, r in enumerate(pool.imap_unordered(process, ids, chunksize=1), 1):
-                persist_result = (
-                    not args.resume or _resume_replacement_succeeded(r)
-                )
-                if persist_result and r["rows"]:
-                    for row in r["rows"]:
-                        stats_w.writerow([row["pdbID"], row["category"]] + row["fields"])
-                        n_rows += 1
-                    stats_fh.flush()
-                if (persist_result and bonds_w is not None and
-                        bonds_fh is not None and
-                        r["bond_rows"]):
-                    for b in r["bond_rows"]:
-                        bonds_w.writerow([b[c] for c in BOND_COLUMNS])
-                        n_bonds += 1
-                    bonds_fh.flush()
-                if persist_result:
-                    # The manifest is the completion marker, so stage it only
-                    # after this entry's result rows have been flushed.
-                    manifest_row = {column: r.get(column, "")
-                                    for column in MANIFEST_COLUMNS}
-                    manifest_n_bonds = r["n_bonds"]
-                    if args.resume and not args.bonds:
-                        manifest_n_bonds = prior_bond_counts.get(
-                            r["pdbID"].lower(), manifest_n_bonds)
-                    manifest_row.update(
-                        n_metals=r["n"], n_bonds=manifest_n_bonds,
-                        runtime_s=r["runtime"],
-                        reason_codes="|".join(r.get("reason_codes", [])),
-                        warning_codes="|".join(r.get("warning_codes", [])),
-                    )
-                    man_w.writerow(manifest_row)
-                    man_fh.flush()
-                    if args.resume:
-                        replacement_ids.add(r["pdbID"].lower())
-                counts[r["status"]] = counts.get(r["status"], 0) + 1
-                if r["status"] == "partial" and r.get("retryable", False):
-                    retryable_partial_count += 1
-                if k % 200 == 0 or k == len(ids):
-                    print(f"[{k}/{len(ids)}] ok={counts['ok']} "
-                          f"partial={counts['partial']} skip={counts['skip']} "
-                          f"error={counts['error']} "
-                          f"rows={n_rows} bonds={n_bonds}", flush=True)
-        processing_completed = True
+        # ExitStack closes whichever handles were opened, so a failure partway
+        # through opening them cannot leak the earlier ones.
+        with contextlib.ExitStack() as handles:
+            writers = _OutputWriters(
+                handles.enter_context(
+                    open(write_manifest_path, "w", newline="")),
+                handles.enter_context(
+                    open(write_stats_path, "w", newline="")),
+                handles.enter_context(
+                    open(write_bonds_path, "w", newline=""))
+                if args.bonds else None,
+            )
+            with Pool(args.workers, initializer=_init_worker,
+                      initargs=(cfg,)) as pool:
+                for k, r in enumerate(
+                        pool.imap_unordered(process, ids, chunksize=1), 1):
+                    if not args.resume or _resume_replacement_succeeded(r):
+                        writers.write_stats_rows(r["rows"])
+                        writers.write_bond_rows(r["bond_rows"])
+                        # The manifest is the completion marker, so write it
+                        # only after this entry's result rows have flushed.
+                        writers.write_manifest_row(_manifest_row(
+                            r, args.resume, args.bonds, prior_bond_counts))
+                        if staging is not None:
+                            staging.replacement_ids.add(r["pdbID"].lower())
+                    counts[r["status"]] = counts.get(r["status"], 0) + 1
+                    if r["status"] == "partial" and r.get("retryable", False):
+                        retryable_partial_count += 1
+                    if k % 200 == 0 or k == len(ids):
+                        print(f"[{k}/{len(ids)}] ok={counts['ok']} "
+                              f"partial={counts['partial']} "
+                              f"skip={counts['skip']} "
+                              f"error={counts['error']} "
+                              f"rows={writers.n_rows} "
+                              f"bonds={writers.n_bonds}", flush=True)
+            processing_completed = True
     finally:
-        man_fh.close()
-        stats_fh.close()
-        if bonds_fh:
-            bonds_fh.close()
-        if (resume_stage_dir is not None and not processing_completed and
-                os.path.isdir(resume_stage_dir)):
-            shutil.rmtree(resume_stage_dir, ignore_errors=True)
+        if staging is not None and not processing_completed:
+            staging.discard()
 
-    if resume_stage_dir is not None:
+    n_rows = writers.n_rows if writers is not None else 0
+    n_bonds = writers.n_bonds if writers is not None else 0
+
+    if staging is not None:
         try:
-            if replacement_ids:
-                # Data files are committed before the manifest completion
-                # marker. If an interruption occurs between replacements, the
-                # old manifest causes the entry to be retried safely.
-                _merge_csv_replacements(
-                    stats_path, write_stats_path, replacement_ids)
-                if args.bonds:
-                    _merge_csv_replacements(
-                        bonds_path, write_bonds_path, replacement_ids)
-                _merge_csv_replacements(
-                    manifest_path, write_manifest_path, replacement_ids)
+            staging.commit(args.bonds)
         finally:
-            if os.path.isdir(resume_stage_dir):
-                shutil.rmtree(resume_stage_dir, ignore_errors=True)
+            staging.discard()
 
     print(f"Done. ok={counts['ok']} partial={counts['partial']} "
           f"skip={counts['skip']} error={counts['error']}; "
