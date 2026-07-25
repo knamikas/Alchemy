@@ -23,6 +23,8 @@ from urllib.request import urlopen
 
 import gemmi
 
+from metal_identification import metals as common_metals, uncommonMetals
+
 URL_CCD = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,16 +47,9 @@ def _default_cache_dir():
 
 CACHE_DIR = _default_cache_dir()
 
-# all metals to search for
-metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN',
-          'CD', 'HG', 'PT', 'MO', 'AL', 'BE', 'BA', 'RU', 'V', 'SR',
-          'CS', 'W', 'AU', 'YB', 'LI', 'GD', 'PB', 'U', 'Y', 'LR',
-          'TI', 'RB', 'AG', 'SM', 'OS', 'PR', 'PD', 'EU', 'TB', 'RE',
-          'RH', 'TA', 'LU', 'HO', 'CR', 'GA', 'LA', 'SN', 'SB', 'CE',
-          'ZR', 'ER', 'TH', 'IN', 'HR', 'SC', 'DY', 'BI', 'PA', 'PU',
-          'AM', 'CM', 'CF', 'GE', 'NB', 'TC', 'ND', 'PM', 'TM', 'PO',
-          'FR', 'RA', 'AC', 'NP', 'BK', 'ES', 'FM', 'MD', 'NO', 'LR',
-          'RF', 'DB', 'SG']
+# Use the same configured elements for plain-site analysis and CCD catalog
+# generation so a symbol cannot be recognized in only one pipeline stage.
+metals = common_metals + uncommonMetals
 
 
 def find_metal_match(string):

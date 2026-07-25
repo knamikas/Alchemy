@@ -12,12 +12,13 @@ metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN']
 
 # uncommon metals to search for
 uncommonMetals = ['CD', 'HG', 'PT', 'MO', 'AL', 'BE', 'BA', 'RU', 'V', 'SR', 'CS',
-                  'W', 'AU', 'YB', 'LI', 'GD', 'PB', 'U', 'Y', 'LR', 'TI', 'RB',
-                  'AG', 'SM', 'OS', 'PR', 'PD', 'EU', 'TB', 'RE', 'RH', 'TA', 'LU',
-                  'HO', 'CR', 'GA', 'LA', 'SN', 'SB', 'CE', 'ZR', 'ER', 'TH', 'IN',
-                  'HR', 'SC', 'DY', 'BI', 'PA', 'PU', 'AM', 'CM', 'CF', 'GE', 'NB',
-                  'TC', 'ND', 'PM', 'TM', 'PO', 'FR', 'RA', 'AC', 'NP', 'BK', 'ES',
-                  'FM', 'MD', 'NO', 'LR', 'RF', 'DB', 'SG']
+                  'W', 'AU', 'IR', 'YB', 'LI', 'GD', 'PB', 'TL', 'U', 'Y',
+                  'LR', 'TI', 'RB', 'AG', 'SM', 'OS', 'PR', 'PD', 'EU', 'TB',
+                  'RE', 'RH', 'HF', 'TA', 'LU', 'HO', 'CR', 'GA', 'LA', 'SN',
+                  'SB', 'CE', 'ZR', 'ER', 'TH', 'IN', 'SC', 'DY', 'BI', 'PA',
+                  'PU', 'AM', 'CM', 'CF', 'GE', 'NB', 'TC', 'ND', 'PM', 'TM',
+                  'PO', 'FR', 'RA', 'AC', 'NP', 'BK', 'ES', 'FM', 'MD', 'NO',
+                  'RF', 'DB', 'SG']
 
 
 def load_cofactor_ids(path=None):
