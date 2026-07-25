@@ -248,10 +248,20 @@ def _calculate_dpi_details(structure, dpi_inputs):
         resolution = float(resolution)
     except (TypeError, ValueError):
         resolution = NAN
+
+    data_json = dpi_inputs.get("data_json")
+    if not data_json:
+        # Manual input mode without --data-json: no metadata source exists, so
+        # the reflection count can never be resolved and DPI is unavailable by
+        # construction. Report that rather than letting open(None) raise a
+        # TypeError into the catch-all below, which mislabelled a missing
+        # argument as a failed calculation.
+        return NAN, resolution, "missing_dpi_metadata_source"
+
     try:
         props = {}
         try:
-            with open(dpi_inputs["data_json"]) as f:
+            with open(data_json) as f:
                 props = json.load(f).get("properties", {})
         except (OSError, ValueError):
             props = {}

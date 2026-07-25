@@ -84,6 +84,11 @@ Use `--mtz-file` with either `--pdb-file` or `--cif-file`. `--data-json` can
 provide optional PDB-REDO metadata for the DPI calculation. Supply `--id` if a
 four-character PDB ID cannot be inferred from the filenames.
 
+Without `--data-json` there is no reflection count, so DPI and every value
+derived from it are unavailable. Bond geometry is still measured and emitted,
+and the omission is reported as `missing_dpi_metadata_source` rather than as a
+calculation failure.
+
 ## Pipeline flow
 
 ### 1. Input preparation — `src/main.py`
