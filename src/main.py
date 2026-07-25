@@ -1156,6 +1156,19 @@ def parse_pdb_id(value):
             "PDB ID must contain exactly four alphanumeric characters")
     return value.lower()
 
+
+def positive_int(value):
+    """Argparse type for integer options that must be at least one."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError(
+            "must be a positive integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def load_ids_from_file(path):
     """Return a list of PDB ids from a comma/newline-separated text file."""
     if not os.path.exists(path):
@@ -1192,8 +1205,9 @@ def parse_args(argv=None):
                     help="root of local cache for auto-downloaded PDB-REDO entries")
     ap.add_argument("--max-pdbs", type=int, default=None,
                     help="debug cap: process only the first N entries")
-    ap.add_argument("--workers", type=int, default=max(1, cpu_count() - 2),
-                    help="number of worker processes")
+    ap.add_argument("--workers", type=positive_int,
+                    default=max(1, cpu_count() - 2),
+                    help="number of worker processes (minimum: 1)")
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
     ap.add_argument("--ccp4-setup", default=None,
                     help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)")

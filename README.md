@@ -214,7 +214,7 @@ and atom serial rather than parser traversal order.
 | `--pdb-redo-root <path>` | Set the local mirror root. |
 | `--pdb-redo-cache <path>` | Set the cache for downloaded entries. |
 | `--output-dir <path>` | Set the result directory. |
-| `--workers <n>` | Set multiprocessing parallelism. |
+| `--workers <n>` | Set multiprocessing parallelism; must be at least 1. |
 | `--max-pdbs <n>` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
 | `--no-bonds` | Skip bond-distance analysis. |
