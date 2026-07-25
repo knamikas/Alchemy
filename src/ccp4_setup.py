@@ -2,7 +2,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import sys
 
 
 REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "edstats")
@@ -58,28 +57,6 @@ def save_ccp4_setup(setup_path, config_files=None):
         json.dump(data, fh, indent=2, sort_keys=True)
         fh.write("\n")
     return [str(path)]
-
-
-def prompt_for_ccp4_setup(config_files=None):
-    config_files = config_files or DEFAULT_CONFIG_FILES
-
-    print("CCP4 tools were not found on PATH and no saved setup path is available.", flush=True)
-    while True:
-        try:
-            raw_path = input("Enter the path to the CCP4 setup script (for example /opt/ccp4/bin/ccp4.setup-sh), or press Enter to cancel: ").strip()
-        except EOFError:
-            return None
-
-        if not raw_path:
-            return None
-
-        setup_path = os.path.expanduser(raw_path)
-        if os.path.exists(setup_path):
-            saved = save_ccp4_setup(setup_path, config_files=config_files)
-            print(f"Saved CCP4 setup path to {', '.join(saved)}", flush=True)
-            return setup_path
-
-        print("That path does not exist. Please enter a valid CCP4 setup script path.", flush=True)
 
 
 def find_ccp4_setup(explicit_setup=None, env=None, config=None, config_files=None, common_candidates=None):

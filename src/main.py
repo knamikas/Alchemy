@@ -940,7 +940,7 @@ def process(pdbID):
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
                 bond_rows, site_summaries, bond_meta = run_bond_analysis(
-                    pdbID, pdb, entry, rows, header,
+                    pdbID, pdb, rows, header,
                     {"data_json": data_json if manual_inputs else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz,
                      "resolution": data_reshi}, structure=structure)

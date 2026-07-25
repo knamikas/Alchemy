@@ -17,7 +17,6 @@ import shutil
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-directory = BASE_DIR
 
 
 def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None):
@@ -113,7 +112,7 @@ if __name__ == "__main__":
     p.add_argument("pdbID")
     p.add_argument("mtz", help="MTZ with FWT/PHWT/DELFWT/PHDELWT columns")
     p.add_argument("pdb", help="coordinate file (edstats XYZIN)")
-    p.add_argument("--out-dir", default=directory)
+    p.add_argument("--out-dir", default=BASE_DIR)
     p.add_argument("--reslo", type=float, required=True,
                    help="low resolution limit (larger number)")
     p.add_argument("--reshi", type=float, required=True,

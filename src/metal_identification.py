@@ -10,14 +10,6 @@
 import math
 import os
 
-from metal_elements import COMMON_METALS, UNCOMMON_METALS
-
-
-# common metals to search for
-metals = list(COMMON_METALS)
-
-# uncommon metals to search for
-uncommonMetals = list(UNCOMMON_METALS)
 
 COFACTOR_CATALOG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),

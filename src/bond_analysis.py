@@ -226,10 +226,6 @@ def _rfree_from_pdb(pdb_path):
         pass
     return NAN
 
-def _count_ni(structure):
-    """Compatibility wrapper for the shared first-model DPI atom count."""
-    return count_ni(structure)
-
 
 def _calculate_dpi_details(structure, dpi_inputs):
     """Return ``(dpi, resolution, reason_code)``. Never raises.
@@ -267,7 +263,7 @@ def _calculate_dpi_details(structure, dpi_inputs):
         rfree = float(rfree) if rfree not in (None, "") else _rfree_from_pdb(dpi_inputs["pdb_path"])
         nobs = float(nobs) if nobs not in (None, "") else NAN
         va = _asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
-        ni = _count_ni(structure)
+        ni = count_ni(structure)
 
         if not all(isinstance(x, float) or isinstance(x, int) for x in (nobs, rfree, va)):
             return NAN, resolution, "invalid_dpi_metadata"
@@ -288,12 +284,6 @@ def _calculate_dpi_details(structure, dpi_inputs):
         return round(dpi, 4), resolution, ""
     except Exception:
         return NAN, resolution, "dpi_calculation_failed"
-
-
-def calculate_dpi(structure, dpi_inputs):
-    """Return ``(dpi, resolution)`` while retaining the historical public API."""
-    dpi, resolution, _ = _calculate_dpi_details(structure, dpi_inputs)
-    return dpi, resolution
 
 
 # --------------------------------------------------------------------------- #
@@ -839,7 +829,7 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
     }
 
 
-def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
+def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
                       dpi_inputs, structure=None):
     """Return ``(contact_rows, site_summaries, entry_metadata)``.
 
@@ -850,7 +840,6 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
     contact is classified as crystallographic, strict NCS, or both. Missing DPI
     does not prevent first-sphere classification or distance reporting.
     """
-    del entry_dir  # retained in the call signature for compatibility
     if structure is None:
         structure = load_structure(pdbID, pdb_path)
 
@@ -865,7 +854,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
         return [], {}, metadata
 
     dpi, resolution, dpi_reason = _calculate_dpi_details(structure, dpi_inputs)
-    ni = _count_ni(structure)
+    ni = count_ni(structure)
     deposited_ni = count_deposited_ni(structure)
     if dpi_reason:
         metadata["partial_reason_codes"].append(dpi_reason)

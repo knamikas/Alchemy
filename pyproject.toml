@@ -17,13 +17,3 @@ data = [
     "*.txt",
     "*.json",
 ]
-
-[project.optional-dependencies]
-test = [
-    "pytest>=7",
-    "tomli>=2; python_version < '3.11'",
-]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests"]

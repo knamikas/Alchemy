@@ -132,7 +132,6 @@ class AtomSite:
     occupancy_valid: bool
     occupancy_status: str
     serial: Optional[int]
-    formal_charge: Optional[int]
     x: float
     y: float
     z: float
@@ -160,10 +159,6 @@ class AtomSite:
     def chemical_site_identity(self) -> Tuple[object, ...]:
         return (*self.residue_key, self.atom_name, self.element)
 
-    @property
-    def author_residue_key(self) -> Tuple[str, str, str]:
-        return self.residue_name, self.chain_id, self.resnum
-
 
 @dataclass
 class ResidueSelection:
@@ -184,7 +179,6 @@ class ResidueSelection:
     contact_atoms: Tuple[AtomSite, ...]
     selected_altloc: str
     selected_conformer_mean_occupancy: Optional[float]
-    altloc_option_means: Mapping[str, Optional[float]]
     altloc_options: str
     alternative_conformers_present: bool
     altloc_selection_fallback: bool
@@ -254,18 +248,6 @@ class StructureContext:
     ] = field(repr=False, default_factory=dict)
 
     @property
-    def dpi_atoms(self) -> Tuple[AtomSite, ...]:
-        return self.source_atoms
-
-    @property
-    def canonical_atoms(self) -> Tuple[AtomSite, ...]:
-        return self.contact_atoms
-
-    @property
-    def model_id(self) -> str:
-        return self.analyzed_model_id
-
-    @property
     def strict_ncs_operation_count(self) -> int:
         return len(self.strict_ncs_operation_ids)
 
@@ -333,19 +315,12 @@ class StructureContext:
         return self._residues_by_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ())
 
-    def metal_atoms(self, elements: Iterable[str], canonical: bool = True,
-                    positive_occupancy: Optional[bool] = None) -> List[AtomSite]:
+    def metal_atoms(self, elements: Iterable[str],
+                    canonical: bool = True) -> List[AtomSite]:
         wanted = {str(element).upper() for element in elements}
         atoms = self.contact_atoms if canonical else self.source_atoms
-        selected = [atom for atom in atoms
-                    if atom.element_known and atom.element in wanted]
-        if positive_occupancy is True:
-            selected = [atom for atom in selected
-                        if atom.occupancy_valid and atom.occupancy > 0]
-        elif positive_occupancy is False:
-            selected = [atom for atom in selected
-                        if not (atom.occupancy_valid and atom.occupancy > 0)]
-        return selected
+        return [atom for atom in atoms
+                if atom.element_known and atom.element in wanted]
 
     def make_neighbor_search(self, radius: float, include_symmetry: bool = True,
                              positive_occupancy_only: bool = True
@@ -644,7 +619,6 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
         contact_atoms=tuple(contact_atoms),
         selected_altloc=selected_altloc,
         selected_conformer_mean_occupancy=selected_mean,
-        altloc_option_means=dict(option_means),
         altloc_options=options,
         alternative_conformers_present=bool(option_means),
         altloc_selection_fallback=fallback,
@@ -781,7 +755,6 @@ def load_structure(
                     occupancy_valid=occupancy_valid,
                     occupancy_status=occupancy_status,
                     serial=atom.serial,
-                    formal_charge=atom.charge,
                     x=float(atom.pos.x), y=float(atom.pos.y), z=float(atom.pos.z),
                     is_water=bool(residue.is_water()),
                     is_hydrogen=(
