@@ -73,6 +73,7 @@ ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
 SYMMETRY_POLICY = (
     "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
 )
+MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 ALCHEMY_VERSION = "0.1.0"
 
 MANIFEST_COLUMNS = [
@@ -524,7 +525,7 @@ def prepare_inputs(pdbID, entry_dir, work_dir):
 
 
 def read_resolution(entry_dir, mtz_path, data_json_path=None):
-    """Return (reslo, reshi) -- low/high resolution limits for edstats.
+    """Return the overall diffraction-data ``(reslo, reshi)`` limits.
 
     Prefer a supplied data.json (or PDB-REDO data.json) when available;
     fall back to the MTZ via gemmi.
@@ -541,6 +542,51 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
     import gemmi
     m = gemmi.read_mtz_file(mtz_path)
     return m.resolution_low(), m.resolution_high()
+
+
+def read_map_column_resolution(mtz_path):
+    """Return the common finite resolution range of both EDSTATS maps.
+
+    EDSTATS receives maps calculated from FWT/PHWT and DELFWT/PHDELWT, so its
+    limits must describe reflections for which all four values are present,
+    rather than the overall range of unrelated columns in the MTZ.
+    """
+    import gemmi
+
+    mtz = gemmi.read_mtz_file(mtz_path)
+    columns = []
+    missing = []
+    for label in MAP_COEFFICIENT_COLUMNS:
+        column = mtz.column_with_label(label)
+        if column is None:
+            missing.append(label)
+        else:
+            columns.append(column)
+    if missing:
+        raise ValueError(
+            "MTZ is missing required map coefficient column(s): "
+            + ", ".join(missing))
+
+    d_values = mtz.make_d_array()
+    row_count = len(d_values)
+    if any(len(column) != row_count for column in columns):
+        raise ValueError(
+            "MTZ map coefficient columns do not match the reflection count")
+
+    usable_count = 0
+    reslo = -math.inf
+    reshi = math.inf
+    for values in zip(d_values, *columns):
+        d_spacing = float(values[0])
+        if (math.isfinite(d_spacing) and d_spacing > 0.0 and
+                all(math.isfinite(float(value)) for value in values[1:])):
+            usable_count += 1
+            reslo = max(reslo, d_spacing)
+            reshi = min(reshi, d_spacing)
+    if usable_count == 0:
+        raise ValueError(
+            "MTZ map coefficient columns have no common finite reflections")
+    return reslo, reshi
 
 
 def has_final_files(entry_dir, pdbID):
@@ -801,7 +847,8 @@ def process(pdbID):
             )
             entry = os.path.dirname(pdb) or work_dir
             data_json = manual_inputs.get("data_json")
-            reslo, reshi = read_resolution(entry, mtz, data_json_path=data_json)
+            _data_reslo, data_reshi = read_resolution(
+                entry, mtz, data_json_path=data_json)
         else:
             if cfg["allow_download"]:
                 used_root = ensure_entry_available(
@@ -815,7 +862,8 @@ def process(pdbID):
             work_dir = tempfile.mkdtemp(
                 prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
             mtz, pdb = prepare_inputs(pdbID, entry, work_dir)
-            reslo, reshi = read_resolution(entry, mtz)
+            _data_reslo, data_reshi = read_resolution(entry, mtz)
+        map_reslo, map_reshi = read_map_column_resolution(mtz)
         source_pdb = pdb
         source_coordinate_path = _source_coordinate_path(
             cfg, pdbID, entry, source_pdb)
@@ -834,7 +882,7 @@ def process(pdbID):
             analysis_coordinate_path=pdb,
         )
         res = run_density_analysis(
-            pdbID, mtz, pdb, work_dir, reslo, reshi, env=cfg["env"])
+            pdbID, mtz, pdb, work_dir, map_reslo, map_reshi, env=cfg["env"])
         structure = load_structure(
             pdbID, pdb, source_model_count=input_model_count)
         result.update(
@@ -880,7 +928,8 @@ def process(pdbID):
                 bond_rows, site_summaries, bond_meta = run_bond_analysis(
                     pdbID, pdb, entry, rows, header,
                     {"data_json": data_json if manual_inputs else os.path.join(entry, "data.json"),
-                     "pdb_path": pdb, "mtz_path": mtz, "resolution": reshi}, structure=structure)
+                     "pdb_path": pdb, "mtz_path": mtz,
+                     "resolution": data_reshi}, structure=structure)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
                 result["reason_codes"] = ["bond_stage_failure"]

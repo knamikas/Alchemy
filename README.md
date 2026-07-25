@@ -101,8 +101,10 @@ reversible mapping for component identifiers that exceed the three-character
 legacy PDB residue-name field. The original CCD identifier is restored after
 EDSTATS so cofactor catalog matching and output retain the mmCIF identity.
 
-Resolution limits come from PDB-REDO `data.json` when available, with an MTZ
-fallback through gemmi.
+The overall diffraction resolution comes from PDB-REDO `data.json` when
+available, with an MTZ fallback through gemmi. EDSTATS instead receives the
+common finite resolution range of `FWT`, `PHWT`, `DELFWT`, and `PHDELWT`, which
+are the columns used to calculate its two maps.
 
 ### 2. Maps and real-space statistics — `src/density_analysis.py`
 

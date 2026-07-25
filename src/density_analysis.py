@@ -29,7 +29,7 @@ def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=N
     mtz_path : str         -- MTZ with FWT/PHWT and DELFWT/PHDELWT columns
     pdb_path : str         -- coordinates (edstats XYZIN)
     out_dir : str          -- all outputs (maps, logs, stats) are written here
-    reslo, reshi : float   -- low / high resolution limits passed to edstats
+    reslo, reshi : float   -- common low/high limits of the four map columns
     env : dict | None      -- process environment (CCP4 on PATH) for subprocesses
 
     MTZFIX creates HKLOUT only when it has corrections to write. If the input
