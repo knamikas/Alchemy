@@ -973,34 +973,80 @@ def load_done(manifest_path):
     return done
 
 
-def remove_csv_rows_for_ids(path, pdb_ids):
-    """Atomically remove data rows for retried PDB IDs, preserving the header."""
-    retry_ids = {pdbID.lower() for pdbID in pdb_ids}
-    if not retry_ids or not os.path.exists(path):
+def _resume_replacement_succeeded(result):
+    """Whether a retry produced a terminal result suitable for replacement."""
+    status = str(result.get("status", "")).strip().lower()
+    return (
+        status == "ok" or
+        (status == "partial" and not bool(result.get("retryable", True)))
+    )
+
+
+def _manifest_values_by_id(path, column):
+    """Return one manifest column keyed by normalized PDB ID."""
+    values = {}
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return values
+    with open(path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            pdb_id = row.get("pdbID", "").strip().lower()
+            if pdb_id:
+                values[pdb_id] = row.get(column, "")
+    return values
+
+
+def _merge_csv_replacements(path, staged_path, pdb_ids):
+    """Atomically replace selected IDs with rows from a completed staging file.
+
+    The existing destination is never changed until the full replacement file
+    has been written successfully. Rows for IDs absent from ``pdb_ids`` are
+    copied verbatim.
+    """
+    replacement_ids = {pdb_id.lower() for pdb_id in pdb_ids}
+    if not replacement_ids:
         return
 
     directory = os.path.dirname(os.path.abspath(path))
-    original_mode = os.stat(path).st_mode
+    original_mode = os.stat(path).st_mode if os.path.exists(path) else None
     fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.",
                                     suffix=".tmp", dir=directory, text=True)
     try:
-        removed = False
-        with open(path, newline="") as src, os.fdopen(fd, "w", newline="") as dst:
-            reader = csv.reader(src)
+        destination_header = None
+        with os.fdopen(fd, "w", newline="") as dst:
             writer = csv.writer(dst)
-            header = next(reader, None)
-            if header is not None:
-                writer.writerow(header)
-            for row in reader:
-                if row and row[0].strip().lower() in retry_ids:
-                    removed = True
-                    continue
-                writer.writerow(row)
-        if removed:
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                with open(path, newline="") as src:
+                    reader = csv.reader(src)
+                    destination_header = next(reader, None)
+                    if destination_header is not None:
+                        writer.writerow(destination_header)
+                    for row in reader:
+                        if (row and
+                                row[0].strip().lower() in replacement_ids):
+                            continue
+                        writer.writerow(row)
+
+            if os.path.exists(staged_path) and os.path.getsize(staged_path) > 0:
+                with open(staged_path, newline="") as staged:
+                    reader = csv.reader(staged)
+                    staged_header = next(reader, None)
+                    if destination_header is None and staged_header is not None:
+                        destination_header = staged_header
+                        writer.writerow(staged_header)
+                    elif (staged_header is not None and
+                          staged_header != destination_header):
+                        raise ValueError(
+                            f"staged CSV schema does not match {path}")
+                    for row in reader:
+                        if (row and
+                                row[0].strip().lower() in replacement_ids):
+                            writer.writerow(row)
+            dst.flush()
+            os.fsync(dst.fileno())
+
+        if original_mode is not None:
             os.chmod(tmp_path, original_mode)
-            os.replace(tmp_path, path)
-        else:
-            os.unlink(tmp_path)
+        os.replace(tmp_path, path)
     except Exception:
         try:
             os.close(fd)
@@ -1190,14 +1236,6 @@ def main(argv=None):
         print("No entries to process.", flush=True)
         return 0
 
-    if args.resume:
-        # Retried partial/error/skip entries may already have result rows from a
-        # previous attempt. Remove only those IDs so the replacement rows do not
-        # create duplicates; each file is rewritten atomically.
-        remove_csv_rows_for_ids(manifest_path, ids)
-        remove_csv_rows_for_ids(stats_path, ids)
-        remove_csv_rows_for_ids(bonds_path, ids)
-
     print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
           f"with {args.workers} worker(s) ...", flush=True)
 
@@ -1211,26 +1249,48 @@ def main(argv=None):
            "gemmi_version": _gemmi_version(),
            "ccp4_version": _ccp4_version(env)}
 
-    append = (args.resume and os.path.exists(manifest_path) and
-              os.path.getsize(manifest_path) > 0)
-    man_fh = open(manifest_path, "a" if append else "w", newline="")
-    stats_fh = open(stats_path, "a" if append else "w", newline="")
-    bonds_fh = open(bonds_path, "a" if append else "w", newline="") if args.bonds else None
+    resume_stage_dir = None
+    replacement_ids = set()
+    prior_bond_counts = (
+        _manifest_values_by_id(manifest_path, "n_bonds")
+        if args.resume and not args.bonds else {}
+    )
+    if args.resume:
+        resume_stage_dir = tempfile.mkdtemp(
+            prefix=".alchemy-resume-", dir=args.output_dir)
+        write_manifest_path = os.path.join(
+            resume_stage_dir, "manifest.csv")
+        write_stats_path = os.path.join(
+            resume_stage_dir, "metal_stats_all.csv")
+        write_bonds_path = os.path.join(
+            resume_stage_dir, "metal_bonds_all.csv")
+    else:
+        write_manifest_path = manifest_path
+        write_stats_path = stats_path
+        write_bonds_path = bonds_path
+
+    man_fh = open(write_manifest_path, "w", newline="")
+    stats_fh = open(write_stats_path, "w", newline="")
+    bonds_fh = (open(write_bonds_path, "w", newline="")
+                if args.bonds else None)
     man_w = csv.DictWriter(man_fh, fieldnames=MANIFEST_COLUMNS)
     stats_w = csv.writer(stats_fh)
     bonds_w = csv.writer(bonds_fh) if bonds_fh is not None else None
-    if not append:
-        man_w.writeheader()
-    stats_header_written = append and os.path.getsize(stats_path) > 0
-    bonds_header_written = bool(bonds_fh) and append and os.path.getsize(bonds_path) > 0
+    man_w.writeheader()
+    stats_header_written = False
+    bonds_header_written = False
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     n_rows = 0
     n_bonds = 0
+    processing_completed = False
     try:
         with Pool(args.workers, initializer=_init_worker, initargs=(cfg,)) as pool:
             for k, r in enumerate(pool.imap_unordered(process, ids, chunksize=1), 1):
-                if r["rows"]:
+                persist_result = (
+                    not args.resume or _resume_replacement_succeeded(r)
+                )
+                if persist_result and r["rows"]:
                     if not stats_header_written and r["header"]:
                         stats_w.writerow(["pdbID", "category"] + r["header"])
                         stats_header_written = True
@@ -1238,7 +1298,8 @@ def main(argv=None):
                         stats_w.writerow([row["pdbID"], row["category"]] + row["fields"])
                         n_rows += 1
                     stats_fh.flush()
-                if (bonds_w is not None and bonds_fh is not None and
+                if (persist_result and bonds_w is not None and
+                        bonds_fh is not None and
                         r["bond_rows"]):
                     if not bonds_header_written:
                         bonds_w.writerow(BOND_COLUMNS)
@@ -1247,29 +1308,57 @@ def main(argv=None):
                         bonds_w.writerow([b[c] for c in BOND_COLUMNS])
                         n_bonds += 1
                     bonds_fh.flush()
-                # The manifest is the completion marker for --resume, so write
-                # it only after this entry's result rows have been flushed.
-                manifest_row = {column: r.get(column, "")
-                                for column in MANIFEST_COLUMNS}
-                manifest_row.update(
-                    n_metals=r["n"], n_bonds=r["n_bonds"],
-                    runtime_s=r["runtime"],
-                    reason_codes="|".join(r.get("reason_codes", [])),
-                    warning_codes="|".join(r.get("warning_codes", [])),
-                )
-                man_w.writerow(manifest_row)
-                man_fh.flush()
+                if persist_result:
+                    # The manifest is the completion marker, so stage it only
+                    # after this entry's result rows have been flushed.
+                    manifest_row = {column: r.get(column, "")
+                                    for column in MANIFEST_COLUMNS}
+                    manifest_n_bonds = r["n_bonds"]
+                    if args.resume and not args.bonds:
+                        manifest_n_bonds = prior_bond_counts.get(
+                            r["pdbID"].lower(), manifest_n_bonds)
+                    manifest_row.update(
+                        n_metals=r["n"], n_bonds=manifest_n_bonds,
+                        runtime_s=r["runtime"],
+                        reason_codes="|".join(r.get("reason_codes", [])),
+                        warning_codes="|".join(r.get("warning_codes", [])),
+                    )
+                    man_w.writerow(manifest_row)
+                    man_fh.flush()
+                    if args.resume:
+                        replacement_ids.add(r["pdbID"].lower())
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
                 if k % 200 == 0 or k == len(ids):
                     print(f"[{k}/{len(ids)}] ok={counts['ok']} "
                           f"partial={counts['partial']} skip={counts['skip']} "
                           f"error={counts['error']} "
                           f"rows={n_rows} bonds={n_bonds}", flush=True)
+        processing_completed = True
     finally:
         man_fh.close()
         stats_fh.close()
         if bonds_fh:
             bonds_fh.close()
+        if (resume_stage_dir is not None and not processing_completed and
+                os.path.isdir(resume_stage_dir)):
+            shutil.rmtree(resume_stage_dir, ignore_errors=True)
+
+    if resume_stage_dir is not None:
+        try:
+            if replacement_ids:
+                # Data files are committed before the manifest completion
+                # marker. If an interruption occurs between replacements, the
+                # old manifest causes the entry to be retried safely.
+                _merge_csv_replacements(
+                    stats_path, write_stats_path, replacement_ids)
+                if args.bonds:
+                    _merge_csv_replacements(
+                        bonds_path, write_bonds_path, replacement_ids)
+                _merge_csv_replacements(
+                    manifest_path, write_manifest_path, replacement_ids)
+        finally:
+            if os.path.isdir(resume_stage_dir):
+                shutil.rmtree(resume_stage_dir, ignore_errors=True)
 
     print(f"Done. ok={counts['ok']} partial={counts['partial']} "
           f"skip={counts['skip']} error={counts['error']}; "

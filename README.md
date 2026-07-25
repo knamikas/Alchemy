@@ -250,6 +250,10 @@ pipeline.
   directory.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
+- Resume retries are staged separately. Existing rows are replaced only after a
+  retry produces a terminal result and the retry batch completes; failed or
+  interrupted retries leave the previous rows intact. `--resume --no-bonds`
+  preserves existing bond rows.
 - A failure in bond analysis does not discard real-space-statistics rows already
   calculated for that entry; the manifest records the entry as `partial` with
   the bond-stage error.
