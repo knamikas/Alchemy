@@ -1511,8 +1511,12 @@ def main(argv=None):
         print("No entries to process.", flush=True)
         return 0
 
+    # A Pool creates every worker up front, so asking for more than there are
+    # entries just pays each one's startup for no work. Costly under the spawn
+    # start method, where each worker re-imports gemmi into its own interpreter.
+    workers = min(args.workers, len(ids))
     print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
-          f"with {args.workers} worker(s) ...", flush=True)
+          f"with {workers} worker(s) ...", flush=True)
 
     cfg = {"root": root, "mirror_root": args.pdb_redo_root,
            "cache_root": cache_root, "env": env,
@@ -1551,7 +1555,7 @@ def main(argv=None):
                     open(write_bonds_path, "w", newline=""))
                 if args.bonds else None,
             )
-            with Pool(args.workers, initializer=_init_worker,
+            with Pool(workers, initializer=_init_worker,
                       initargs=(cfg,)) as pool:
                 for k, r in enumerate(
                         pool.imap_unordered(process, ids, chunksize=1), 1):
