@@ -566,6 +566,7 @@ def read_map_column_resolution(mtz_path):
     rather than the overall range of unrelated columns in the MTZ.
     """
     import gemmi
+    import numpy as np
 
     mtz = gemmi.read_mtz_file(mtz_path)
     columns = []
@@ -587,20 +588,16 @@ def read_map_column_resolution(mtz_path):
         raise ValueError(
             "MTZ map coefficient columns do not match the reflection count")
 
-    usable_count = 0
-    reslo = -math.inf
-    reshi = math.inf
-    for values in zip(d_values, *columns):
-        d_spacing = float(values[0])
-        if (math.isfinite(d_spacing) and d_spacing > 0.0 and
-                all(math.isfinite(float(value)) for value in values[1:])):
-            usable_count += 1
-            reslo = max(reslo, d_spacing)
-            reshi = min(reshi, d_spacing)
-    if usable_count == 0:
+    # A reflection counts only where its d-spacing and all four map
+    # coefficients are finite, so the mask is built across whole rows.
+    usable = np.isfinite(d_values) & (d_values > 0.0)
+    for column in columns:
+        usable &= np.isfinite(column.array)
+    usable_d = d_values[usable]
+    if usable_d.size == 0:
         raise ValueError(
             "MTZ map coefficient columns have no common finite reflections")
-    return reslo, reshi
+    return float(usable_d.max()), float(usable_d.min())
 
 
 def has_final_files(entry_dir, pdbID):
