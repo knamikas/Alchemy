@@ -264,6 +264,9 @@ pipeline.
 - A failure in bond analysis does not discard real-space-statistics rows already
   calculated for that entry; the manifest records the entry as `partial` with
   the bond-stage error.
+- The command exits nonzero when any entry ends as `error`, `skip`, or a
+  retryable `partial`. Completed `ok` and terminal `partial` results exit
+  successfully.
 - `partial` describes usable but incomplete scientific output; it does not by
   itself mean that rerunning can repair the entry. Deterministic limitations,
   such as invalid deposited occupancy or unavailable symmetry metadata, are

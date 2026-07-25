@@ -1115,6 +1115,16 @@ def _csv_header(path):
         return next(csv.reader(handle), None)
 
 
+def _batch_exit_code(counts, retryable_partial_count):
+    """Return failure when one or more entries remain operationally incomplete."""
+    incomplete = (
+        counts.get("error", 0) +
+        counts.get("skip", 0) +
+        retryable_partial_count
+    )
+    return 1 if incomplete else 0
+
+
 def validate_resume_schemas(manifest_path, stats_path, bonds_path,
                             bonds_enabled=True):
     """Refuse to append migration rows beneath an incompatible old header."""
@@ -1331,6 +1341,7 @@ def main(argv=None):
         bonds_w.writerow(BOND_COLUMNS)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
+    retryable_partial_count = 0
     n_rows = 0
     n_bonds = 0
     processing_completed = False
@@ -1378,6 +1389,8 @@ def main(argv=None):
                     if args.resume:
                         replacement_ids.add(r["pdbID"].lower())
                 counts[r["status"]] = counts.get(r["status"], 0) + 1
+                if r["status"] == "partial" and r.get("retryable", False):
+                    retryable_partial_count += 1
                 if k % 200 == 0 or k == len(ids):
                     print(f"[{k}/{len(ids)}] ok={counts['ok']} "
                           f"partial={counts['partial']} skip={counts['skip']} "
@@ -1415,7 +1428,16 @@ def main(argv=None):
           f"{n_rows} metal/cofactor rows -> {stats_path}", flush=True)
     if args.bonds:
         print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
-    return 0
+    exit_code = _batch_exit_code(counts, retryable_partial_count)
+    if exit_code:
+        print(
+            "Alchemy completed with incomplete entries: "
+            f"errors={counts['error']}, skips={counts['skip']}, "
+            f"retryable_partials={retryable_partial_count}.",
+            file=sys.stderr,
+            flush=True,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":
