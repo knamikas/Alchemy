@@ -232,12 +232,6 @@ under the user cache (normally `~/.cache/alchemy/`) so normal runs do not modify
 the repository. If refreshing fails, the pipeline falls back to an available
 cached or committed list.
 
-## Supporting utility — `src/scripts/extract_metalpdb_ids.py`
-
-This standalone data-preparation utility extracts four-character PDB IDs from a
-manually downloaded MetalPDB TSV report. It is not imported by the analysis
-pipeline.
-
 ## Reference data
 
 - `src/data/metallocofactors_id.txt` — committed fallback list of
