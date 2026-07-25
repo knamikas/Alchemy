@@ -1,7 +1,7 @@
 """Metal-ligand bond-distance analysis for the Alchemy pipeline.
 
 For one PDB entry this finds every metal atom in the first model, uses Gemmi to
-search explicit and crystallographic-symmetry neighbors within 4 A, filters
+search explicit, crystallographic, and strict-NCS neighbors within 4 A, filters
 those candidates to the first coordination sphere, and computes a
 resolution-aware z-score against the consolidated literature reference distances
 in ``metal_distances_info.txt`` (Harding 2006 and Zheng et al. 2008 [Ni only]):
@@ -27,6 +27,7 @@ import re
 
 from metal_identification import metals, uncommonMetals
 from structure_analysis import (
+    count_deposited_ni,
     count_ni,
     load_structure,
 )
@@ -106,6 +107,8 @@ BOND_COLUMNS = [
     "altloc_selection_fallback", "neighbor_class", "candidate_contact",
     "reference_covered", "geometry_outlier", "geometry_consistent",
     "zscore_outlier_cutoff", "contact_scope", "symmetry_contact",
+    "crystallographic_contact", "strict_ncs_contact",
+    "strict_ncs_operation_id",
     "symmetry_image_index", "symmetry_operation", "cell_translation_x",
     "cell_translation_y", "cell_translation_z", "transformed_neighbor_x",
     "transformed_neighbor_y", "transformed_neighbor_z",
@@ -124,15 +127,22 @@ STATS_EXTRA_COLUMNS = [
     "alternative_conformers_present", "altloc_selection_fallback",
     "coordinate_mapping_status", "selected_metal_site_status",
     "dpi", "resolution", "occupancy_weighted_atom_count",
+    "deposited_occupancy_weighted_atom_count", "dpi_atom_count_multiplier",
+    "strict_ncs_operation_count", "crystallographic_operation_count",
     "dpi_unavailable_reason",
     "candidate_contact_count", "reference_covered_contact_count",
     "geometry_outlier_contact_count", "geometry_consistent_contact_count",
-    "explicit_contact_count", "symmetry_contact_count", "crystal_contact_count",
-    "geometry_outlier_count_explicit", "geometry_outlier_count_crystal",
-    "geometry_coverage_explicit", "geometry_coverage_crystal",
-    "explicit_geometry_status", "crystal_geometry_status",
-    "symmetry_contact_scope", "geometry_classification_changes_with_symmetry",
+    "explicit_contact_count", "symmetry_contact_count",
+    "image_inclusive_contact_count", "crystallographic_contact_count",
+    "strict_ncs_contact_count", "combined_ncs_crystallographic_contact_count",
+    "geometry_outlier_count_explicit",
+    "geometry_outlier_count_image_inclusive",
+    "geometry_coverage_explicit", "geometry_coverage_image_inclusive",
+    "explicit_geometry_status", "image_inclusive_geometry_status",
+    "generated_contact_scope",
+    "geometry_classification_changes_with_generated_images",
     "coordination_depends_on_crystallographic_symmetry",
+    "coordination_depends_on_strict_ncs",
     "symmetry_search_available", "symmetry_search_failure_reason",
     "occupancy_validation_failed", "missing_occupancy_count",
     "invalid_occupancy_count", "zero_occupancy_atom_count",
@@ -456,13 +466,26 @@ def _collect_contacts(structure, search, metal, include_symmetry):
             transformed = structure.structure.cell.find_nearest_pbc_position(
                 metal.pos, neighbor.pos, mark.image_idx)
             translation = tuple(int(value) for value in nearest.pbc_shift)
-            symmetry_contact = nearest.sym_idx != 0 or translation != (0, 0, 0)
+            image_index = int(nearest.sym_idx)
+            (
+                crystallographic_contact,
+                strict_ncs_contact,
+                strict_ncs_operation_id,
+                contact_scope,
+            ) = structure.image_provenance(image_index, translation)
+            symmetry_contact = (
+                crystallographic_contact or strict_ncs_contact)
             operation = nearest.symmetry_code()
             distance = float(nearest.dist())
         else:
             transformed = neighbor.pos
             translation = (0, 0, 0)
+            image_index = 0
             symmetry_contact = False
+            crystallographic_contact = False
+            strict_ncs_contact = False
+            strict_ncs_operation_id = ""
+            contact_scope = "explicit"
             operation = "1_555"
             distance = math.sqrt(
                 (metal.x - neighbor.x) ** 2 +
@@ -482,8 +505,11 @@ def _collect_contacts(structure, search, metal, include_symmetry):
             "distance_raw": distance,
             "transformed_position": position,
             "symmetry_contact": symmetry_contact,
-            "contact_scope": "symmetry" if symmetry_contact else "explicit",
-            "symmetry_image_index": int(mark.image_idx),
+            "crystallographic_contact": crystallographic_contact,
+            "strict_ncs_contact": strict_ncs_contact,
+            "strict_ncs_operation_id": strict_ncs_operation_id,
+            "contact_scope": contact_scope,
+            "symmetry_image_index": image_index,
             "symmetry_operation": operation,
             "translation": translation,
         })
@@ -545,40 +571,69 @@ def _scope_summary(contacts, metal_zero_occupancy, unavailable=False):
     }
 
 
-def _site_summary(metal, explicit_contacts, crystal_contacts,
-                  dpi, resolution, ni, dpi_reason):
+def _site_summary(metal, explicit_contacts, image_contacts,
+                  dpi, resolution, ni, deposited_ni, dpi_reason, structure):
     metal_zero = metal.occupancy_valid and metal.occupancy == 0.0
     explicit = _scope_summary(explicit_contacts, metal_zero)
-    crystal_available = crystal_contacts is not None
-    crystal = _scope_summary(crystal_contacts or [], metal_zero,
-                             unavailable=not crystal_available)
-    primary = crystal if crystal_available else explicit
-    symmetry_count = (sum(contact["symmetry_contact"]
-                          for contact in crystal_contacts)
-                      if crystal_available else NAN)
-    if not crystal_available:
-        symmetry_scope = ""
+    image_search_available = image_contacts is not None
+    image_inclusive = _scope_summary(
+        image_contacts or [],
+        metal_zero,
+        unavailable=not image_search_available,
+    )
+    primary = image_inclusive if image_search_available else explicit
+    symmetry_count = (
+        sum(contact["symmetry_contact"] for contact in image_contacts)
+        if image_search_available else NAN
+    )
+    crystallographic_count = (
+        sum(contact["crystallographic_contact"] for contact in image_contacts)
+        if image_search_available else NAN
+    )
+    strict_ncs_count = (
+        sum(contact["strict_ncs_contact"] for contact in image_contacts)
+        if image_search_available else NAN
+    )
+    combined_count = (
+        sum(
+            contact["crystallographic_contact"] and
+            contact["strict_ncs_contact"]
+            for contact in image_contacts
+        )
+        if image_search_available else NAN
+    )
+    if not image_search_available:
+        generated_scope = ""
         changed = ""
-        depends = ""
-    elif symmetry_count == 0:
-        symmetry_scope = "none"
-        changed = explicit["status"] != crystal["status"]
-        depends = False
-    elif explicit["candidate"] == 0:
-        symmetry_scope = "symmetry_only"
-        changed = explicit["status"] != crystal["status"]
-        depends = True
+        depends_crystallographic = ""
+        depends_strict_ncs = ""
+    elif not symmetry_count:
+        generated_scope = "none"
+        changed = explicit["status"] != image_inclusive["status"]
+        depends_crystallographic = False
+        depends_strict_ncs = False
+    elif crystallographic_count and strict_ncs_count:
+        generated_scope = "strict_ncs_and_crystallographic"
+        changed = explicit["status"] != image_inclusive["status"]
+        depends_crystallographic = True
+        depends_strict_ncs = True
+    elif crystallographic_count:
+        generated_scope = "crystallographic"
+        changed = explicit["status"] != image_inclusive["status"]
+        depends_crystallographic = True
+        depends_strict_ncs = False
     else:
-        symmetry_scope = "additional"
-        changed = explicit["status"] != crystal["status"]
-        depends = True
+        generated_scope = "strict_ncs"
+        changed = explicit["status"] != image_inclusive["status"]
+        depends_crystallographic = False
+        depends_strict_ncs = True
 
     reasons = []
     if metal_zero:
         reasons.append("metal_zero_occupancy")
     if dpi_reason:
         reasons.append(dpi_reason)
-    if not crystal_available:
+    if not image_search_available:
         reasons.append("symmetry_search_unavailable")
     elif primary["consistent"] + primary["outlier"] == 0:
         reasons.append("no_assessable_reference_contacts")
@@ -587,6 +642,13 @@ def _site_summary(metal, explicit_contacts, crystal_contacts,
         "resolution": resolution,
         "occupancy_weighted_atom_count": (
             round(ni, 6) if math.isfinite(ni) else NAN),
+        "deposited_occupancy_weighted_atom_count": (
+            round(deposited_ni, 6)
+            if math.isfinite(deposited_ni) else NAN),
+        "dpi_atom_count_multiplier": structure.dpi_atom_count_multiplier,
+        "strict_ncs_operation_count": structure.strict_ncs_operation_count,
+        "crystallographic_operation_count": (
+            structure.crystallographic_operation_count),
         "dpi_unavailable_reason": dpi_reason,
         "candidate_contact_count": primary["candidate"],
         "reference_covered_contact_count": primary["covered"],
@@ -594,16 +656,21 @@ def _site_summary(metal, explicit_contacts, crystal_contacts,
         "geometry_consistent_contact_count": primary["consistent"],
         "explicit_contact_count": explicit["candidate"],
         "symmetry_contact_count": symmetry_count,
-        "crystal_contact_count": crystal["candidate"],
+        "image_inclusive_contact_count": image_inclusive["candidate"],
+        "crystallographic_contact_count": crystallographic_count,
+        "strict_ncs_contact_count": strict_ncs_count,
+        "combined_ncs_crystallographic_contact_count": combined_count,
         "geometry_outlier_count_explicit": explicit["outlier"],
-        "geometry_outlier_count_crystal": crystal["outlier"],
+        "geometry_outlier_count_image_inclusive": image_inclusive["outlier"],
         "geometry_coverage_explicit": explicit["coverage"],
-        "geometry_coverage_crystal": crystal["coverage"],
+        "geometry_coverage_image_inclusive": image_inclusive["coverage"],
         "explicit_geometry_status": explicit["status"],
-        "crystal_geometry_status": crystal["status"],
-        "symmetry_contact_scope": symmetry_scope,
-        "geometry_classification_changes_with_symmetry": changed,
-        "coordination_depends_on_crystallographic_symmetry": depends,
+        "image_inclusive_geometry_status": image_inclusive["status"],
+        "generated_contact_scope": generated_scope,
+        "geometry_classification_changes_with_generated_images": changed,
+        "coordination_depends_on_crystallographic_symmetry": (
+            depends_crystallographic),
+        "coordination_depends_on_strict_ncs": depends_strict_ncs,
         "metal_zero_occupancy": metal_zero,
         "geometry_not_assessed_reason": "|".join(dict.fromkeys(reasons)),
     }
@@ -642,6 +709,10 @@ def stats_extra_values(structure, metal=None, summary=None):
             residue.altloc_selection_fallback if residue else ""),
         "symmetry_search_available": structure.symmetry_search_available,
         "symmetry_search_failure_reason": structure.symmetry_search_failure_reason,
+        "strict_ncs_operation_count": structure.strict_ncs_operation_count,
+        "crystallographic_operation_count": (
+            structure.crystallographic_operation_count),
+        "dpi_atom_count_multiplier": structure.dpi_atom_count_multiplier,
         "occupancy_validation_failed": structure.occupancy_validation_failed,
         "missing_occupancy_count": structure.missing_occupancy_count,
         "invalid_occupancy_count": structure.invalid_occupancy_count,
@@ -738,6 +809,9 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
         "contact_scope": contact["contact_scope"],
         "symmetry_contact": contact["symmetry_contact"],
+        "crystallographic_contact": contact["crystallographic_contact"],
+        "strict_ncs_contact": contact["strict_ncs_contact"],
+        "strict_ncs_operation_id": contact["strict_ncs_operation_id"],
         "symmetry_image_index": contact["symmetry_image_index"],
         "symmetry_operation": contact["symmetry_operation"],
         "cell_translation_x": tx, "cell_translation_y": ty,
@@ -753,9 +827,10 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
     """Return ``(contact_rows, site_summaries, entry_metadata)``.
 
     Only external first-coordination-sphere contacts are emitted; atoms in the
-    metal's own residue remain excluded. Crystal-inclusive contacts are the
-    primary rows when symmetry is available. Explicit-only and
-    crystal-inclusive summaries are both retained per metal site. Missing DPI
+    metal's own residue remain excluded. Image-inclusive contacts are the
+    primary rows when symmetry metadata is available. Explicit-only and
+    image-inclusive summaries are retained per metal site, and every generated
+    contact is classified as crystallographic, strict NCS, or both. Missing DPI
     does not prevent first-sphere classification or distance reporting.
     """
     del entry_dir  # retained in the call signature for compatibility
@@ -774,6 +849,7 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
 
     dpi, resolution, dpi_reason = _calculate_dpi_details(structure, dpi_inputs)
     ni = _count_ni(structure)
+    deposited_ni = count_deposited_ni(structure)
     if dpi_reason:
         metadata["partial_reason_codes"].append(dpi_reason)
         metadata["messages"].append(f"DPI unavailable: {dpi_reason}")
@@ -786,9 +862,9 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
     explicit_search = structure.make_neighbor_search(
         CUTOFF + SEARCH_EPSILON, include_symmetry=False,
         positive_occupancy_only=True)
-    crystal_search = None
+    image_search = None
     if structure.symmetry_search_available:
-        crystal_search = structure.make_neighbor_search(
+        image_search = structure.make_neighbor_search(
             CUTOFF + SEARCH_EPSILON, include_symmetry=True,
             positive_occupancy_only=True)
     sig = _sigma_index(stats_rows)
@@ -800,12 +876,12 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
         explicit, unsupported_pairs = _collect_contacts(
             structure, explicit_search, metal, False)
         _annotate_contacts(explicit, metal.element, dpi)
-        crystal = None
-        if crystal_search is not None:
-            crystal, crystal_unsupported = _collect_contacts(
-                structure, crystal_search, metal, True)
-            unsupported_pairs.update(crystal_unsupported)
-            _annotate_contacts(crystal, metal.element, dpi)
+        image_contacts = None
+        if image_search is not None:
+            image_contacts, image_unsupported = _collect_contacts(
+                structure, image_search, metal, True)
+            unsupported_pairs.update(image_unsupported)
+            _annotate_contacts(image_contacts, metal.element, dpi)
         if unsupported_pairs:
             metadata["partial_reason_codes"].append(
                 "missing_first_sphere_reference")
@@ -814,8 +890,17 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
                 for metal_element, donor_element in sorted(unsupported_pairs))
             metadata["messages"].append(
                 f"first-sphere reference unavailable for {pairs}")
-        summary = _site_summary(metal, explicit, crystal, dpi,
-                                resolution, ni, dpi_reason)
+        summary = _site_summary(
+            metal,
+            explicit,
+            image_contacts,
+            dpi,
+            resolution,
+            ni,
+            deposited_ni,
+            dpi_reason,
+            structure,
+        )
         summaries[metal.source_key] = summary
         if summary["metal_zero_occupancy"]:
             metadata["partial_reason_codes"].append("metal_zero_occupancy")
@@ -823,7 +908,8 @@ def run_bond_analysis(pdbID, pdb_path, entry_dir, stats_rows, header,
                 f"zero-occupancy metal: {metal.chain_id}/{metal.resnum}/"
                 f"{metal.atom_name}")
 
-        primary_contacts = crystal if crystal is not None else explicit
+        primary_contacts = (
+            image_contacts if image_contacts is not None else explicit)
         sigma = _sigma_for(sig, metal.residue_name, metal.chain_id,
                            metal.resnum, zd_idx)
         parent_type = _parent_type(structure, metal, metal.residue_name,

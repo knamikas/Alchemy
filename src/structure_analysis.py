@@ -217,6 +217,8 @@ class StructureContext:
     raw_occupancy_mapping_failure_reason: str
     symmetry_search_available: bool
     symmetry_search_failure_reason: str
+    crystallographic_operation_count: int
+    strict_ncs_operation_ids: Tuple[str, ...]
     analysis_coordinate_format: str
     warning_codes: Tuple[str, ...]
     _atom_by_indices: Mapping[Tuple[int, int, int], AtomSite] = field(
@@ -238,6 +240,59 @@ class StructureContext:
     @property
     def model_id(self) -> str:
         return self.analyzed_model_id
+
+    @property
+    def strict_ncs_operation_count(self) -> int:
+        return len(self.strict_ncs_operation_ids)
+
+    @property
+    def dpi_atom_count_multiplier(self) -> int:
+        """Number of full coordinate copies represented in the asymmetric unit."""
+        return 1 + self.strict_ncs_operation_count
+
+    def image_provenance(
+            self,
+            image_index: int,
+            cell_translation: Tuple[int, int, int],
+            ) -> Tuple[bool, bool, str, str]:
+        """Classify a Gemmi cell image as crystallographic and/or strict NCS.
+
+        ``setup_cell_images()`` orders the identity first, followed by the
+        remaining space-group operations. Each strict-NCS transform then adds
+        one complete block of space-group operations. A nonzero unit-cell
+        translation is also crystallographic, including when combined with NCS.
+        See https://gemmi.readthedocs.io/en/stable/analysis.html.
+        """
+        if image_index < 0:
+            raise ValueError("Gemmi image index cannot be negative")
+        operation_count = self.crystallographic_operation_count
+        if operation_count <= 0:
+            raise ValueError("crystallographic operation count is unavailable")
+
+        strict_ncs = image_index >= operation_count
+        crystallographic = (
+            image_index % operation_count != 0 or
+            cell_translation != (0, 0, 0)
+        )
+        ncs_operation_id = ""
+        if strict_ncs:
+            ncs_index = image_index // operation_count - 1
+            if 0 <= ncs_index < len(self.strict_ncs_operation_ids):
+                ncs_operation_id = self.strict_ncs_operation_ids[ncs_index]
+            else:
+                raise ValueError(
+                    f"Gemmi image index {image_index} has no strict-NCS "
+                    "operation")
+
+        if strict_ncs and crystallographic:
+            scope = "strict_ncs_and_crystallographic"
+        elif strict_ncs:
+            scope = "strict_ncs"
+        elif crystallographic:
+            scope = "crystallographic"
+        else:
+            scope = "explicit"
+        return crystallographic, strict_ncs, ncs_operation_id, scope
 
     def atom_for_indices(self, chain_index: int, residue_index: int,
                          atom_index: int) -> Optional[AtomSite]:
@@ -274,7 +329,7 @@ class StructureContext:
         if include_symmetry:
             if not self.symmetry_search_available:
                 raise ValueError(self.symmetry_search_failure_reason or
-                                 "crystallographic symmetry is unavailable")
+                                 "symmetry image search is unavailable")
             cell = self.structure.cell
         else:
             cell = gemmi.UnitCell()
@@ -527,18 +582,36 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
     )
 
 
-def _symmetry_metadata(structure: gemmi.Structure) -> Tuple[bool, str]:
+def _symmetry_metadata(
+        structure: gemmi.Structure,
+        ) -> Tuple[bool, str, int, Tuple[str, ...]]:
+    strict_ncs_ids = tuple(
+        str(operation.id).strip() or f"strict_ncs_{index}"
+        for index, operation in enumerate(
+            (operation for operation in structure.ncs
+             if not bool(operation.given)),
+            start=1,
+        )
+    )
     try:
         cell = structure.cell
         if cell is None or not cell.is_crystal() or cell.volume <= 0:
-            return False, "missing_or_invalid_unit_cell"
+            return False, "missing_or_invalid_unit_cell", 0, strict_ncs_ids
         spacegroup = structure.find_spacegroup()
         if spacegroup is None:
-            return False, "missing_or_invalid_space_group"
+            return False, "missing_or_invalid_space_group", 0, strict_ncs_ids
+        operation_count = len(list(spacegroup.operations()))
+        if operation_count <= 0:
+            return False, "missing_or_invalid_space_group", 0, strict_ncs_ids
         structure.setup_cell_images()
-        return True, ""
+        return True, "", operation_count, strict_ncs_ids
     except Exception as exc:  # one malformed entry must not stop a batch
-        return False, f"symmetry_setup_failed:{type(exc).__name__}"
+        return (
+            False,
+            f"symmetry_setup_failed:{type(exc).__name__}",
+            0,
+            strict_ncs_ids,
+        )
 
 
 def load_structure(
@@ -672,7 +745,12 @@ def load_structure(
                           residue.selected_over_blank_duplicate_count
                           for residue in residues)
     unknown_count = sum(not atom.element_known for atom in source_atoms)
-    symmetry_available, symmetry_reason = _symmetry_metadata(structure)
+    (
+        symmetry_available,
+        symmetry_reason,
+        crystallographic_operation_count,
+        strict_ncs_operation_ids,
+    ) = _symmetry_metadata(structure)
 
     warnings: List[str] = []
     if input_model_count > 1:
@@ -730,6 +808,8 @@ def load_structure(
         raw_occupancy_mapping_failure_reason=mapping_reason,
         symmetry_search_available=symmetry_available,
         symmetry_search_failure_reason=symmetry_reason,
+        crystallographic_operation_count=crystallographic_operation_count,
+        strict_ncs_operation_ids=strict_ncs_operation_ids,
         analysis_coordinate_format=analysis_format,
         warning_codes=tuple(warnings),
         _atom_by_indices=atom_by_indices,
@@ -738,8 +818,8 @@ def load_structure(
     )
 
 
-def count_ni(context: StructureContext) -> float:
-    """Occupancy-weighted non-H/D count from deduplicated first-model sites."""
+def count_deposited_ni(context: StructureContext) -> float:
+    """Occupancy-weighted non-H/D count in deposited first-model records."""
     if context.occupancy_validation_failed:
         return NAN
     total = 0.0
@@ -750,3 +830,16 @@ def count_ni(context: StructureContext) -> float:
             return NAN
         total += atom.occupancy
     return total
+
+
+def count_ni(context: StructureContext) -> float:
+    """Occupancy-weighted non-H/D count for the complete asymmetric unit.
+
+    Gemmi does not add strict-NCS copies to ``model``. Each non-given NCS
+    operation represents one additional full copy in the asymmetric unit, so
+    DPI must count those copies even though their atoms are not deposited.
+    """
+    deposited = count_deposited_ni(context)
+    if not math.isfinite(deposited):
+        return NAN
+    return deposited * context.dpi_atom_count_multiplier

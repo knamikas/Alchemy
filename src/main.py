@@ -69,7 +69,9 @@ METALS_SET = set(metals) | set(uncommonMetals)
 
 MODEL_POLICY = "first"
 ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
-SYMMETRY_POLICY = "crystal-inclusive-primary-with-explicit-summary"
+SYMMETRY_POLICY = (
+    "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
+)
 ALCHEMY_VERSION = "0.1.0"
 
 MANIFEST_COLUMNS = [
@@ -711,7 +713,7 @@ def process(pdbID):
                 "coordinate_mapping_status", "")
             summary["selected_metal_site_status"] = row.get(
                 "selected_metal_site_status", "")
-            coverage = summary.get("geometry_coverage_crystal", NAN)
+            coverage = summary.get("geometry_coverage_image_inclusive", NAN)
             if isinstance(coverage, float) and not math.isfinite(coverage):
                 coverage = summary.get("geometry_coverage_explicit", NAN)
             extra = stats_extra_values(structure, row.get("site"), summary)
