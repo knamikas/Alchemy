@@ -46,12 +46,10 @@ from urllib.request import urlopen
 from density_analysis import run_density_analysis
 from metal_identification import (
     EDSTATS_COLUMNS,
-    metals,
-    uncommonMetals,
-    load_cofactor_ids,
     extract_metal_statistics,
+    load_cofactor_ids,
 )
-from build_metallocofactor_catalog import refresh_cofactors_if_needed, active_cofactors_path
+from metal_elements import METAL_ELEMENTS
 from structure_analysis import RESNAME_REMARK_PREFIX
 from bond_analysis import (
     BOND_COLUMNS,
@@ -72,7 +70,7 @@ from ccp4_setup import (
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
-METALS_SET = set(metals) | set(uncommonMetals)
+METALS_SET = set(METAL_ELEMENTS)
 
 MODEL_POLICY = "first"
 ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
@@ -1233,8 +1231,6 @@ def parse_args(argv=None):
                     help="skip terminal ok/partial results; retry retryable incomplete ids")
     ap.add_argument("--no-bonds", dest="bonds", action="store_false",
                     help="skip the metal-ligand bond-distance stage (edstats stats only)")
-    ap.add_argument("--refresh-cofactors", action="store_true",
-                    help="force a refresh of metallocofactors_id.txt from the CCD before running")
     ap.set_defaults(bonds=True)
     
     args = ap.parse_args(argv)
@@ -1246,17 +1242,16 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
 
+    try:
+        cofactors = load_cofactor_ids()
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"Invalid bundled metallocofactor catalog: {exc}", flush=True)
+        return 1
+
     env, _ = resolve_ccp4_environment(args)
     if env is None:
         return 0
     os.makedirs(args.output_dir, exist_ok=True)
-    
-    try:
-        refresh_cofactors_if_needed(force=args.refresh_cofactors)
-    except RuntimeError as e:
-        print(str(e), flush=True)
-        return 1
-    cofactors = load_cofactor_ids(active_cofactors_path())
 
     root = args.pdb_redo_root
     cache_root = args.pdb_redo_cache

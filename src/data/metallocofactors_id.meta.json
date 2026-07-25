@@ -1,10 +1,14 @@
 {
+  "catalog_schema_version": 1,
+  "builder_version": 0,
   "generated": "2026-07-12T20:37:47.115559+00:00",
   "ccd_source": "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz",
+  "catalog_sha256": "fa3dacff454ad1b75e14762cd06c8c29a2908fb2f59986bcdd180856464e1856",
   "counts": {
     "with_metal": 902,
     "skipped_ions": 79,
     "missing_formula": 0,
-    "missing_formula_with_metal": 0
+    "missing_formula_with_metal": 0,
+    "catalog_entries": 902
   }
 }

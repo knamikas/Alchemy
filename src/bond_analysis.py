@@ -27,7 +27,7 @@ import math
 import os
 import re
 
-from metal_identification import metals, uncommonMetals
+from metal_elements import METAL_ELEMENTS
 from structure_analysis import (
     count_deposited_ni,
     count_ni,
@@ -36,10 +36,6 @@ from structure_analysis import (
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-
-# Any element symbol we treat as a metal of interest (matched against the PDB
-# element column, which is more reliable than residue-name matching).
-METAL_ELEMENTS = set(metals) | set(uncommonMetals)
 
 # Recognized amino-acid donors. Waters are recognized separately with Gemmi's
 # Residue.is_water(), which also handles WAT, H2O, and DOD.

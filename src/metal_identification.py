@@ -8,20 +8,35 @@
 # cofactors; `main.py` aggregates these across many structures.
 
 import math
+import os
+
+from metal_elements import COMMON_METALS, UNCOMMON_METALS
 
 
 # common metals to search for
-metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN']
+metals = list(COMMON_METALS)
 
 # uncommon metals to search for
-uncommonMetals = ['CD', 'HG', 'PT', 'MO', 'AL', 'BE', 'BA', 'RU', 'V', 'SR', 'CS',
-                  'W', 'AU', 'IR', 'YB', 'LI', 'GD', 'PB', 'TL', 'U', 'Y',
-                  'LR', 'TI', 'RB', 'AG', 'SM', 'OS', 'PR', 'PD', 'EU', 'TB',
-                  'RE', 'RH', 'HF', 'TA', 'LU', 'HO', 'CR', 'GA', 'LA', 'SN',
-                  'SB', 'CE', 'ZR', 'ER', 'TH', 'IN', 'SC', 'DY', 'BI', 'PA',
-                  'PU', 'AM', 'CM', 'CF', 'GE', 'NB', 'TC', 'ND', 'PM', 'TM',
-                  'PO', 'FR', 'RA', 'AC', 'NP', 'BK', 'ES', 'FM', 'MD', 'NO',
-                  'RF', 'DB', 'SG']
+uncommonMetals = list(UNCOMMON_METALS)
+
+COFACTOR_CATALOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "data",
+    "metallocofactors_id.txt",
+)
+
+
+def load_cofactor_ids():
+    """Load component IDs from Alchemy's fixed bundled catalog."""
+    with open(COFACTOR_CATALOG_PATH, encoding="utf-8") as handle:
+        cofactor_ids = {
+            line.partition("\t")[0].strip()
+            for line in handle
+            if line.strip()
+        }
+    if not cofactor_ids:
+        raise ValueError("bundled metallocofactor catalog is empty")
+    return cofactor_ids
 
 
 # EDSTATS 1.0.9 standard residue-table schema. The twelve metrics are repeated
@@ -114,27 +129,6 @@ def _expected_edstats_residues(structure, metals_upper, cofactor_set):
             expected.add(residue.coordinate_author_key)
     return expected
 
-
-def load_cofactor_ids(path=None):
-    """Return a set of metal-containing CCD ids from metallocofactors_id.txt.
-
-    The file is "{ccd_id}\\t{formula}" per line (see build_metallocofactor_catalog.py). We keep only
-    the id token.
-
-    If `path` is not given, defers to build_metallocofactor_catalog.active_cofactors_path(), which
-    picks up an untracked, per-user cache refresh if one exists and falls
-    back to the bundled `src/data` copy otherwise.
-    """
-    if path is None:
-        from build_metallocofactor_catalog import active_cofactors_path  # lazy: avoid import cycle at module load
-        path = active_cofactors_path()
-    cofactor_set = set()
-    with open(path) as f:
-        for line in f:
-            cid = line.split("\t")[0].strip()
-            if cid:
-                cofactor_set.add(cid)
-    return cofactor_set
 
 def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     """Parse an edstats stats.out file, returning (rows, header).

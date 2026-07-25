@@ -134,7 +134,7 @@ deposited PDB element field directly; blank or invalid fields are marked unknown
 rather than inferred from atom names. During mmCIF conversion, the explicit
 `_atom_site.type_symbol` is written into that PDB field. Metal-containing
 cofactors are matched against the Chemical Component Dictionary list maintained
-by `src/build_metallocofactor_catalog.py`. A structure with unknown elements
+by `tools/build_metallocofactor_catalog.py`. A structure with unknown elements
 does not receive a DPI because its non-hydrogen atom count is indeterminate.
 EDSTATS' `_` marker is normalized to a blank chain identifier before coordinate
 matching. Its residue table must have the standard 42-column schema, consistent
@@ -235,23 +235,33 @@ and atom serial rather than parser traversal order.
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
 | `--no-bonds` | Skip bond-distance analysis. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
-| `--refresh-cofactors` | Force a fresh wwPDB cofactor-list build. |
 | `--ccp4-setup <path>` | Source and verify a CCP4 setup script for this run. |
 | `--configure-ccp4 <path>` | Save a CCP4 setup script path for later runs. |
 
-## Cofactor reference maintenance — `src/build_metallocofactor_catalog.py`
+## Cofactor reference maintenance
 
-Before processing entries, the pipeline checks its metal-containing cofactor
-list. It prefers a current user-cached list, then the current bundled list, and
-rebuilds from the wwPDB Chemical Component Dictionary only when neither is
-current. Refreshed files are stored under the user cache (normally
-`~/.cache/alchemy/`) so normal runs do not modify the repository. If refreshing
-fails, the pipeline falls back to an available cached or committed list.
+Normal analysis always loads the fixed catalog bundled in `src/data`. It never
+checks the catalog's age, accesses the network, selects a user cache, or
+rebuilds the catalog.
+
+Catalog updates are an explicit developer maintenance operation:
+
+```console
+python tools/build_metallocofactor_catalog.py
+```
+
+The isolated builder downloads the wwPDB Chemical Component Dictionary and
+replaces the bundled catalog and its metadata only after a successful build,
+using atomic replacement for each file. A local CCD snapshot can be supplied
+with `--ccd`. Use `--status` to report the generation time, schema and builder
+versions, entry count, checksum, and integrity of the currently bundled catalog
+without downloading anything. Catalog changes should be reviewed and committed
+as part of a software release before an analysis run.
 
 ## Reference data
 
-- `src/data/metallocofactors_id.txt` — committed fallback list of
-  metal-containing Chemical Component Dictionary IDs.
+- `src/data/metallocofactors_id.txt` — fixed bundled list of metal-containing
+  Chemical Component Dictionary IDs used by every analysis run.
 - `src/data/metallocofactors_id.meta.json` — generation metadata for the
   committed cofactor list.
 - `src/data/metal_distances_info.txt` — reference metal-ligand distances and
