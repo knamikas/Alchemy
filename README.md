@@ -244,8 +244,10 @@ pipeline.
 
 ## Operational notes
 
-- Per-entry maps and logs are removed after their rows are extracted unless
-  `--keep-intermediates` is supplied.
+- Per-entry maps and logs are written to uniquely created working directories
+  and removed after their rows are extracted unless `--keep-intermediates` is
+  supplied. Cleanup never targets a pre-existing `<output-dir>/<pdb-id>`
+  directory.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - A failure in bond analysis does not discard real-space-statistics rows already

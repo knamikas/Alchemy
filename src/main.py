@@ -766,7 +766,9 @@ def process(pdbID):
     if cfg is None:
         raise RuntimeError("worker configuration has not been initialized")
     t0 = time.monotonic()
-    out_dir = os.path.join(cfg["output_dir"], pdbID)
+    # Only a directory created by this invocation may be removed in ``finally``.
+    # A predictable <output-dir>/<pdbID> path could already contain user data.
+    work_dir: Optional[str] = None
     manual_inputs = cfg.get("manual_inputs")
     data_json = None
     result = {"pdbID": pdbID, "status": "error", "n": 0,
@@ -788,15 +790,16 @@ def process(pdbID):
               "symmetry_contact_policy": SYMMETRY_POLICY}
     try:
         if manual_inputs:
-            os.makedirs(out_dir, exist_ok=True)
+            work_dir = tempfile.mkdtemp(
+                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
             mtz, pdb = resolve_manual_inputs(
                 pdbID,
                 pdb_file=manual_inputs.get("pdb_file"),
                 mtz_file=manual_inputs.get("mtz_file"),
                 cif_file=manual_inputs.get("cif_file"),
-                work_dir=out_dir,
+                work_dir=work_dir,
             )
-            entry = os.path.dirname(pdb) or out_dir
+            entry = os.path.dirname(pdb) or work_dir
             data_json = manual_inputs.get("data_json")
             reslo, reshi = read_resolution(entry, mtz, data_json_path=data_json)
         else:
@@ -809,17 +812,19 @@ def process(pdbID):
             if not os.path.isdir(entry):
                 result.update(status="skip", error="entry dir missing")
                 return result
-            os.makedirs(out_dir, exist_ok=True)
-            mtz, pdb = prepare_inputs(pdbID, entry, out_dir)
+            work_dir = tempfile.mkdtemp(
+                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
+            mtz, pdb = prepare_inputs(pdbID, entry, work_dir)
             reslo, reshi = read_resolution(entry, mtz)
         source_pdb = pdb
         source_coordinate_path = _source_coordinate_path(
             cfg, pdbID, entry, source_pdb)
         source_format, analysis_format, converted = _coordinate_provenance(
             cfg, source_coordinate_path)
-        model1_pdb = os.path.join(out_dir, f"{pdbID}_model1.pdb")
+        model1_pdb = os.path.join(work_dir, f"{pdbID}_model1.pdb")
         if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
-            model1_pdb = os.path.join(out_dir, f"{pdbID}_analysis_model1.pdb")
+            model1_pdb = os.path.join(
+                work_dir, f"{pdbID}_analysis_model1.pdb")
         pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
         result.update(
             source_coordinate_format=source_format,
@@ -828,7 +833,8 @@ def process(pdbID):
             source_coordinate_path=source_coordinate_path,
             analysis_coordinate_path=pdb,
         )
-        res = run_density_analysis(pdbID, mtz, pdb, out_dir, reslo, reshi, env=cfg["env"])
+        res = run_density_analysis(
+            pdbID, mtz, pdb, work_dir, reslo, reshi, env=cfg["env"])
         structure = load_structure(
             pdbID, pdb, source_model_count=input_model_count)
         result.update(
@@ -939,8 +945,9 @@ def process(pdbID):
                       error=f"{type(e).__name__}: {e}"[:300])
     finally:
         result["runtime"] = round(time.monotonic() - t0, 2)
-        if not cfg["keep"] and os.path.isdir(out_dir):
-            shutil.rmtree(out_dir, ignore_errors=True)
+        if (not cfg["keep"] and work_dir is not None and
+                os.path.isdir(work_dir)):
+            shutil.rmtree(work_dir, ignore_errors=True)
     return result
 
 
