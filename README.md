@@ -132,7 +132,11 @@ cofactors are matched against the Chemical Component Dictionary list maintained
 by `src/build_metallocofactor_catalog.py`. A structure with unknown elements
 does not receive a DPI because its non-hydrogen atom count is indeterminate.
 EDSTATS' `_` marker is normalized to a blank chain identifier before coordinate
-matching.
+matching. Its residue table must have the standard 42-column schema, consistent
+row widths, finite numeric statistics or the documented `n/a` marker, and a row
+for every selected metal or cofactor residue. Empty, malformed, incomplete, or
+wrong-model output fails the entry instead of being written to the aggregate
+CSV.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 

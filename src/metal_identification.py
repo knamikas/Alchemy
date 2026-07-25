@@ -7,6 +7,9 @@
 # `extract_metal_statistics` returns structured rows for metal ions and metal-containing
 # cofactors; `main.py` aggregates these across many structures.
 
+import math
+
+
 # common metals to search for
 metals = ['NA', 'MG', 'K', 'CA', 'MN', 'FE', 'CO', 'NI', 'CU', 'ZN']
 
@@ -19,6 +22,97 @@ uncommonMetals = ['CD', 'HG', 'PT', 'MO', 'AL', 'BE', 'BA', 'RU', 'V', 'SR', 'CS
                   'PU', 'AM', 'CM', 'CF', 'GE', 'NB', 'TC', 'ND', 'PM', 'TM',
                   'PO', 'FR', 'RA', 'AC', 'NP', 'BK', 'ES', 'FM', 'MD', 'NO',
                   'RF', 'DB', 'SG']
+
+
+# EDSTATS 1.0.9 standard residue-table schema. The twelve metrics are repeated
+# for main-chain, side-chain, and all atoms. ``n/a`` is EDSTATS' documented
+# null marker when a statistic cannot be calculated for an atom group.
+_EDSTATS_METRIC_STEMS = (
+    "BA", "NP", "R", "RG", "SRG", "CCS", "CCP", "ZCCP", "ZO", "ZD",
+    "ZD-", "ZD+",
+)
+EDSTATS_METRIC_COLUMNS = tuple(
+    f"{stem}{atom_group}"
+    for atom_group in ("m", "s", "a")
+    for stem in _EDSTATS_METRIC_STEMS
+)
+EDSTATS_COLUMNS = (
+    "RT", "CI", "RN",
+    *EDSTATS_METRIC_COLUMNS,
+    "MN", "CP", "NR",
+)
+EDSTATS_NULL_VALUE = "n/a"
+
+
+def _validated_edstats_header(fields):
+    """Return column indices after validating the standard EDSTATS schema."""
+    duplicates = sorted({
+        name for name in fields if fields.count(name) > 1
+    })
+    if duplicates:
+        raise ValueError(
+            "EDSTATS header contains duplicate columns: "
+            + ", ".join(duplicates))
+
+    missing = [name for name in EDSTATS_COLUMNS if name not in fields]
+    unexpected = [name for name in fields if name not in EDSTATS_COLUMNS]
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise ValueError("invalid EDSTATS header: " + "; ".join(details))
+    if tuple(fields) != EDSTATS_COLUMNS:
+        raise ValueError("EDSTATS columns are not in the standard order")
+
+    return {name: index for index, name in enumerate(fields)}
+
+
+def _validate_edstats_row(fields, header, indices, line_number):
+    """Validate one residue row and return its model number."""
+    if len(fields) != len(header):
+        raise ValueError(
+            f"EDSTATS row {line_number} has {len(fields)} columns; "
+            f"expected {len(header)}")
+
+    for name in EDSTATS_METRIC_COLUMNS:
+        value = fields[indices[name]]
+        if value.lower() == EDSTATS_NULL_VALUE:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"EDSTATS row {line_number} has a nonnumeric {name} "
+                f"value: {value!r}") from exc
+        if not math.isfinite(number):
+            raise ValueError(
+                f"EDSTATS row {line_number} has a non-finite {name} "
+                f"value: {value!r}")
+
+    model_value = fields[indices["MN"]]
+    try:
+        return int(model_value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"invalid EDSTATS MN model value on row {line_number}: "
+            f"{model_value!r}") from exc
+
+
+def _expected_edstats_residues(structure, metals_upper, cofactor_set):
+    """Coordinate residue keys for sites Alchemy expects EDSTATS to report."""
+    expected = set()
+    for residue in structure.residues:
+        metal_sites = [
+            atom for atom in residue.contact_atoms
+            if atom.element_known and atom.element in metals_upper
+        ]
+        if (residue.residue_name in cofactor_set or
+                (residue.chemical_atom_site_count == 1 and
+                 len(metal_sites) == 1)):
+            expected.add(residue.coordinate_author_key)
+    return expected
 
 
 def load_cofactor_ids(path=None):
@@ -79,9 +173,11 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
 
     rows = []
     header = None
-    model_column = None
-    with open(stats_out) as f:
-        for line in f:
+    indices = None
+    residue_row_count = 0
+    observed_residues = set()
+    with open(stats_out, encoding="utf-8", errors="strict") as f:
+        for line_number, line in enumerate(f, 1):
             stripped = line.strip()
             if not stripped:
                 continue
@@ -89,36 +185,32 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             if header is None:
                 # first non-empty line is the edstats column header
                 header = fields
-                model_column = next(
-                    (index for index, name in enumerate(header)
-                     if name.upper() == "MN"),
-                    None,
-                )
+                indices = _validated_edstats_header(header)
                 continue
-            if model_column is not None:
-                if model_column >= len(fields):
-                    # EDSTATS emits one short "_" separator row when XYZIN
-                    # contains an explicit MODEL/ENDMDL wrapper.
-                    if fields and fields[0] == "_":
-                        continue
-                    raise ValueError("EDSTATS row is missing its MN model value")
-                try:
-                    row_model = int(fields[model_column])
-                except ValueError as exc:
-                    raise ValueError(
-                        f"invalid EDSTATS MN model value: "
-                        f"{fields[model_column]!r}") from exc
-                if row_model != structure.model_analyzed:
-                    raise ValueError(
-                        f"EDSTATS returned model {row_model}, but Alchemy's "
-                        f"model policy selected model {structure.model_analyzed}")
-            coordinate_resname = fields[0]
-            chain = fields[1] if len(fields) > 1 else ""
+
+            # EDSTATS emits one short "_" separator row when XYZIN contains an
+            # explicit MODEL/ENDMDL wrapper.
+            if fields == ["_"]:
+                continue
+
+            if indices is None:  # defensive; header validation sets this
+                raise ValueError("EDSTATS header was not validated")
+            row_model = _validate_edstats_row(
+                fields, header, indices, line_number)
+            if row_model != structure.model_analyzed:
+                raise ValueError(
+                    f"EDSTATS returned model {row_model}, but Alchemy's "
+                    f"model policy selected model {structure.model_analyzed}")
+
+            residue_row_count += 1
+            coordinate_resname = fields[indices["RT"]]
+            chain = fields[indices["CI"]]
             # EDSTATS writes "_" for a blank PDB chain identifier. The other
             # two markers are the equivalent missing-value tokens in mmCIF.
             if chain in (".", "?", "_"):
                 chain = ""
-            resnum = fields[2] if len(fields) > 2 else ""
+            resnum = fields[indices["RN"]]
+            observed_residues.add((coordinate_resname, chain, resnum))
             matched_residues = structure.residues_for_author(
                 coordinate_resname, chain, resnum)
             if not matched_residues:
@@ -186,4 +278,27 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                     "residue_key": (matched_residues[0].key
                                     if len(matched_residues) == 1 else None),
                 })
+
+    if header is None:
+        raise ValueError("EDSTATS output is empty")
+    if residue_row_count == 0:
+        raise ValueError("EDSTATS output contains no residue rows")
+
+    missing_residues = sorted(
+        _expected_edstats_residues(
+            structure, metals_upper, cofactor_set) - observed_residues
+    )
+    if missing_residues:
+        preview = ", ".join(
+            f"{resname}/{chain or '_'}/{resnum}"
+            for resname, chain, resnum in missing_residues[:5]
+        )
+        suffix = (
+            f" (and {len(missing_residues) - 5} more)"
+            if len(missing_residues) > 5 else ""
+        )
+        raise ValueError(
+            "EDSTATS output is incomplete; missing expected residue"
+            f"{'s' if len(missing_residues) != 1 else ''}: "
+            f"{preview}{suffix}")
     return rows, header
