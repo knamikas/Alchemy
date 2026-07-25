@@ -1278,7 +1278,8 @@ def main(argv=None):
     bonds_w = csv.writer(bonds_fh) if bonds_fh is not None else None
     man_w.writeheader()
     stats_header_written = False
-    bonds_header_written = False
+    if bonds_w is not None:
+        bonds_w.writerow(BOND_COLUMNS)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     n_rows = 0
@@ -1290,10 +1291,13 @@ def main(argv=None):
                 persist_result = (
                     not args.resume or _resume_replacement_succeeded(r)
                 )
+                if (persist_result and not stats_header_written and
+                        r["header"]):
+                    stats_w.writerow(
+                        ["pdbID", "category"] + r["header"])
+                    stats_fh.flush()
+                    stats_header_written = True
                 if persist_result and r["rows"]:
-                    if not stats_header_written and r["header"]:
-                        stats_w.writerow(["pdbID", "category"] + r["header"])
-                        stats_header_written = True
                     for row in r["rows"]:
                         stats_w.writerow([row["pdbID"], row["category"]] + row["fields"])
                         n_rows += 1
@@ -1301,9 +1305,6 @@ def main(argv=None):
                 if (persist_result and bonds_w is not None and
                         bonds_fh is not None and
                         r["bond_rows"]):
-                    if not bonds_header_written:
-                        bonds_w.writerow(BOND_COLUMNS)
-                        bonds_header_written = True
                     for b in r["bond_rows"]:
                         bonds_w.writerow([b[c] for c in BOND_COLUMNS])
                         n_bonds += 1

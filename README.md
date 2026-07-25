@@ -250,6 +250,8 @@ pipeline.
   directory.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
+- Statistics and bond CSV files retain their column headers when a completed run
+  finds no metals or no first-sphere contacts.
 - Resume retries are staged separately. Existing rows are replaced only after a
   retry produces a terminal result and the retry batch completes; failed or
   interrupted retries leave the previous rows intact. `--resume --no-bonds`
