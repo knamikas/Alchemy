@@ -11,7 +11,9 @@ in ``metal_distances_info.txt`` (Harding 2006 and Zheng et al. 2008 [Ni only]):
 The DPI (Diffraction-component Precision Index, Blow 2002 eq. 7) is the model's
 per-atom coordinate uncertainty; adding it in quadrature with the literature
 spread makes the same absolute deviation more significant in a high-resolution
-structure than in a low-resolution one.
+structure than in a low-resolution one. A bond involves two atoms, but only one
+DPI enters the denominator: the metal is treated as well enough ordered that its
+positional uncertainty is negligible beside the donor's. See ``_zscore``.
 
 The analysis covers every configured metal element, uses exact
 ``(residue, atom, metal)`` reference-distance keys, and reads DPI inputs from
@@ -59,7 +61,7 @@ FIRST_SPHERE_TOLERANCE = 0.75
 # returns those images unfiltered, so Alchemy applies the same cutoff explicitly.
 SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 
-# Conservative manuscript cutoff for a reference-covered geometry outlier.
+# Conservative cutoff for a reference-covered geometry outlier.
 ZSCORE_OUTLIER_CUTOFF = 6.0
 
 NAN = float("nan")
@@ -321,6 +323,16 @@ def _bonded_to(is_water=False):
 
 
 def _zscore(dist, mu, stdev, dpi):
+    """Bond-distance z-score, ``(dist - mu)/sqrt(stdev^2 + dpi^2)``.
+
+    The denominator carries **one** DPI, not the ``sqrt(2) * DPI`` that an
+    independent-error treatment of two atoms would give. This is deliberate: the
+    metal is a heavy scatterer and is normally among the best-ordered atoms in
+    the model, so its positional uncertainty is taken as negligible beside the
+    light donor's, and the single DPI stands for the donor. Do not "correct"
+    this to ``2 * dpi ** 2`` -- it would shrink every z-score by up to a factor
+    of sqrt(2) and change which contacts pass ZSCORE_OUTLIER_CUTOFF.
+    """
     if not (math.isfinite(dpi) and math.isfinite(mu) and math.isfinite(stdev)):
         return NAN
     denom = math.sqrt(dpi ** 2 + stdev ** 2)

@@ -185,8 +185,15 @@ Where a literature reference is available, Alchemy calculates:
 z = (d_observed - mu) / sqrt(DPI^2 + sigma_lit^2)
 ```
 
-Following the method used in the in-preparation Alchemy manuscript,
-reference-covered contacts with `|Zbond| >= 6` are geometry outliers.
+A bond length depends on two atomic positions, but a single DPI enters the
+denominator rather than the `sqrt(2) * DPI` an independent-error treatment of
+both atoms would give. This assumes the metal is well enough ordered that its
+positional uncertainty is negligible beside that of the lighter donor atom, so
+the DPI term stands for the donor alone. Using two atoms' worth of uncertainty
+would divide every z-score by up to `sqrt(2)` and reclassify borderline geometry
+outliers.
+
+Reference-covered contacts with `|Zbond| >= 6` are geometry outliers.
 First-sphere contacts admitted by a same-element fallback, or without complete
 DPI inputs, are still emitted with their measured geometry and NaN derived
 values. The `geometry_outlier` and `geometry_consistent` columns are nullable
