@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 
 
 REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "edstats")
@@ -11,14 +12,42 @@ DEFAULT_CONFIG_FILES = [
     os.path.expanduser("~/.alchemy/ccp4.json"),
 ]
 
-COMMON_CCP4_SETUP_CANDIDATES = [
-    "/opt/ccp4/bin/ccp4.setup-sh",
-    "/usr/local/ccp4/bin/ccp4.setup-sh",
-    "/opt/ccp4/ccp4.setup-sh",
-    "/usr/local/ccp4/ccp4.setup-sh",
-    os.path.expanduser("~/CCP4-9/CCP4/ccp4.setup-sh"),
-    os.path.expanduser("~/CCP4/ccp4.setup-sh"),
-]
+WINDOWS_CCP4_SETUP_NAMES = ("ccp4.setup.bat", "ccp4.setup.cmd")
+
+
+def _windows_ccp4_setup_candidates():
+    """Best-effort Windows install locations for the CCP4 batch launcher.
+
+    ``%CCP4%`` is checked first because the CCP4 installer sets it, which makes
+    it the only non-guessed root available. The remaining directories are the
+    usual installer defaults; auto-detection is a convenience, and
+    ``--configure-ccp4`` remains the reliable way to record the real path.
+    """
+    roots = []
+    ccp4_root = os.environ.get("CCP4")
+    if ccp4_root:
+        roots.append(ccp4_root)
+    system_drive = os.environ.get("SystemDrive", "C:")
+    for base in (system_drive + os.sep, os.environ.get("ProgramFiles", ""),
+                 os.path.expanduser("~")):
+        if not base:
+            continue
+        for version in ("CCP4-9", "CCP4-8", "CCP4"):
+            roots.append(os.path.join(base, version))
+    return [os.path.join(root, name)
+            for root in roots for name in WINDOWS_CCP4_SETUP_NAMES]
+
+
+COMMON_CCP4_SETUP_CANDIDATES = (
+    _windows_ccp4_setup_candidates() if sys.platform == "win32" else [
+        "/opt/ccp4/bin/ccp4.setup-sh",
+        "/usr/local/ccp4/bin/ccp4.setup-sh",
+        "/opt/ccp4/ccp4.setup-sh",
+        "/usr/local/ccp4/ccp4.setup-sh",
+        os.path.expanduser("~/CCP4-9/CCP4/ccp4.setup-sh"),
+        os.path.expanduser("~/CCP4/ccp4.setup-sh"),
+    ]
+)
 
 
 def load_ccp4_setup_config(config_files=None):

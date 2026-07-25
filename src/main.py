@@ -81,6 +81,10 @@ SYMMETRY_POLICY = (
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 ALCHEMY_VERSION = "0.1.0"
 
+# Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
+# is never mistaken for environment variables.
+ENV_SENTINEL = "__ALCHEMY_CCP4_ENV__"
+
 # Human-readable text for each EDSTATS-join reason code, reported alongside the
 # machine-readable code in the manifest's error column.
 IDENTIFICATION_REASON_MESSAGES = {
@@ -136,6 +140,60 @@ def _normalize_path_key(env):
     return env
 
 
+def _parse_windows_set_output(stdout):
+    """Return the ``set`` variables printed after ENV_SENTINEL.
+
+    The CCP4 batch launcher prints its own banner before the variables, and any
+    of those lines can contain "=". Everything before the sentinel is therefore
+    discarded rather than guessed at by prefix.
+    """
+    env = {}
+    seen_sentinel = False
+    for line in stdout.splitlines():
+        if not seen_sentinel:
+            # With `echo on` the sentinel command is echoed before its output;
+            # only the output line compares equal.
+            seen_sentinel = line.strip() == ENV_SENTINEL
+            continue
+        key, separator, value = line.partition("=")
+        if separator and key:
+            env[key] = value
+    return env, seen_sentinel
+
+
+def _resolve_env_windows(ccp4_setup):
+    """Capture the environment a Windows CCP4 batch launcher establishes."""
+    # Driving cmd.exe through a temporary script avoids its quoting rules,
+    # which differ from the ones subprocess applies when building a command
+    # line, and so would mis-handle an install path containing spaces.
+    handle, script_path = tempfile.mkstemp(prefix="alchemy-ccp4-", suffix=".cmd")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\r\n") as fh:
+            fh.write("@echo off\n"
+                     f'call "{ccp4_setup}"\n'
+                     f"echo {ENV_SENTINEL}\n"
+                     "set\n")
+        out = subprocess.run(["cmd", "/c", script_path],
+                             capture_output=True, text=True)
+    finally:
+        # A fixed name in %TEMP% left one file behind per run and let
+        # concurrent runs overwrite each other's script.
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
+
+    if out.returncode != 0:
+        raise SystemExit(
+            f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")
+    env, seen_sentinel = _parse_windows_set_output(out.stdout)
+    if not seen_sentinel:
+        raise SystemExit(
+            f"CCP4 setup {ccp4_setup} did not report its environment; "
+            f"expected `set` output after the marker.\n{out.stderr}")
+    return _normalize_path_key({**os.environ.copy(), **env})
+
+
 def resolve_env(ccp4_setup):
     """Return the environment dict to run CCP4 under.
 
@@ -149,19 +207,8 @@ def resolve_env(ccp4_setup):
     if not os.path.exists(ccp4_setup):
         raise SystemExit(f"CCP4 setup file not found: {ccp4_setup}")
 
-    if os.path.splitext(ccp4_setup)[1].lower() == ".bat":
-        tmp_cmd = os.path.join(os.environ.get("TEMP", os.getcwd()), "ccp4_env.cmd")
-        with open(tmp_cmd, "w", encoding="utf-8") as fh:
-            fh.write(f'@echo off\r\ncall "{ccp4_setup}"\r\nset\r\n')
-        out = subprocess.run(["cmd", "/c", tmp_cmd], capture_output=True, text=True)
-        if out.returncode != 0:
-            raise SystemExit(f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")
-        env = {}
-        for line in out.stdout.splitlines():
-            if "=" in line and not line.startswith("CMD") and not line.startswith("C:\\"):
-                k, v = line.split("=", 1)
-                env[k] = v
-        return _normalize_path_key({**os.environ.copy(), **env})
+    if os.path.splitext(ccp4_setup)[1].lower() in (".bat", ".cmd"):
+        return _resolve_env_windows(ccp4_setup)
 
     cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null 2>&1 && env -0"
     out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
