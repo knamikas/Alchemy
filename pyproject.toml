@@ -12,6 +12,12 @@ dependencies = [
     "gemmi>=0.7.0",
 ]
 
+[tool.setuptools.package-data]
+data = [
+    "*.txt",
+    "*.json",
+]
+
 [project.optional-dependencies]
 test = [
     "pytest>=7",
