@@ -53,8 +53,10 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
     symbol (RNA "U", nitric oxide "NO") and catches metal-ion CCD ids that
     don't themselves match an element string (e.g. "FE2").
 
-    Matching is done on the parsed residue-name token (fields[0]) against the
-    given sets, including CCD ids longer than four characters.
+    EDSTATS matching uses the legacy-PDB residue name. When the analysis PDB was
+    converted from mmCIF, Alchemy restores the original component identifier
+    before matching the cofactor catalog and writing the result. This supports
+    CCD identifiers that cannot fit in the three-character PDB residue field.
 
     Output is site-level: a multi-metal cofactor repeats its residue-level
     EDSTATS values once per selected metal site. Each row carries ``site`` and
@@ -109,13 +111,15 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                     raise ValueError(
                         f"EDSTATS returned model {row_model}, but Alchemy's "
                         f"model policy selected model {structure.model_analyzed}")
-            resname = fields[0]
+            coordinate_resname = fields[0]
             chain = fields[1] if len(fields) > 1 else ""
-            if chain in (".", "?"):
+            # EDSTATS writes "_" for a blank PDB chain identifier. The other
+            # two markers are the equivalent missing-value tokens in mmCIF.
+            if chain in (".", "?", "_"):
                 chain = ""
             resnum = fields[2] if len(fields) > 2 else ""
             matched_residues = structure.residues_for_author(
-                resname, chain, resnum)
+                coordinate_resname, chain, resnum)
             if not matched_residues:
                 mapping_status = "coordinate_residue_not_found"
             elif len(matched_residues) == 1:
@@ -123,9 +127,14 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             else:
                 mapping_status = "multiple_coordinate_residues"
 
-            is_cofactor = resname in cofactor_set
+            coordinate_name_is_cofactor = coordinate_resname in cofactor_set
+            matched_cofactor_names = []
             emitted_site = False
             for residue in matched_residues:
+                resname = residue.residue_name
+                is_cofactor = resname in cofactor_set
+                if is_cofactor:
+                    matched_cofactor_names.append(resname)
                 metal_sites = [atom for atom in residue.contact_atoms
                                if atom.element_known and
                                atom.element in metals_upper]
@@ -138,13 +147,15 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                     continue
                 for site in metal_sites:
                     emitted_site = True
+                    output_fields = list(fields)
+                    output_fields[0] = resname
                     rows.append({
                         "pdbID": pdbID,
                         "category": category,
                         "resname": resname,
                         "chain": chain,
                         "resnum": resnum,
-                        "fields": list(fields),
+                        "fields": output_fields,
                         "coordinate_mapping_status": mapping_status,
                         "selected_metal_site_status": "selected",
                         "site": site,
@@ -152,14 +163,21 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                         "residue_key": residue.key,
                     })
 
-            if is_cofactor and not emitted_site:
+            if ((coordinate_name_is_cofactor or matched_cofactor_names) and
+                    not emitted_site):
+                resname = (
+                    matched_cofactor_names[0]
+                    if matched_cofactor_names else coordinate_resname
+                )
+                output_fields = list(fields)
+                output_fields[0] = resname
                 rows.append({
                     "pdbID": pdbID,
                     "category": "cofactor",
                     "resname": resname,
                     "chain": chain,
                     "resnum": resnum,
-                    "fields": list(fields),
+                    "fields": output_fields,
                     "coordinate_mapping_status": mapping_status,
                     "selected_metal_site_status": "no_selected_metal",
                     "site": None,

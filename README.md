@@ -89,10 +89,17 @@ four-character PDB ID cannot be inferred from the filenames.
 ### 1. Input preparation — `src/main.py`
 
 The automatic PDB-REDO workflow analyzes only the final re-refined and rebuilt
-model. It uses `{id}_final.mtz` with `{id}_final.pdb` when the PDB compatibility
-export is available. Otherwise it converts `{id}_final.cif` to an analysis PDB
-with gemmi. Alternative coordinate/MTZ pairs can still be supplied through the
-manual-file options.
+model. It prefers `{id}_final.cif` as the authoritative coordinate source and
+converts it to an EDSTATS-compatible analysis PDB with gemmi. The
+`{id}_final.pdb` compatibility export is used only when mmCIF is unavailable.
+Alternative coordinate/MTZ pairs can still be supplied through the manual-file
+options; when both coordinate formats are supplied, mmCIF takes precedence.
+
+During mmCIF conversion, `.` and `?` occupancy values are written as blank PDB
+occupancies rather than being replaced by `1.00`. Alchemy also embeds a
+reversible mapping for component identifiers that exceed the three-character
+legacy PDB residue-name field. The original CCD identifier is restored after
+EDSTATS so cofactor catalog matching and output retain the mmCIF identity.
 
 Resolution limits come from PDB-REDO `data.json` when available, with an MTZ
 fallback through gemmi.
@@ -119,7 +126,8 @@ The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
 elements used to identify plain metal ions; atom or residue names are not used
 to infer an element. Metal-containing cofactors are matched against the Chemical
 Component Dictionary list maintained by
-`src/build_metallocofactor_catalog.py`.
+`src/build_metallocofactor_catalog.py`. EDSTATS' `_` marker is normalized to a
+blank chain identifier before coordinate matching.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 

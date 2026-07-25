@@ -39,13 +39,14 @@ import sys
 import tempfile
 import time
 from multiprocessing import Pool, cpu_count
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from density_analysis import run_density_analysis
 from metal_identification import metals, uncommonMetals, load_cofactor_ids, extract_metal_statistics
 from build_metallocofactor_catalog import refresh_cofactors_if_needed, active_cofactors_path
+from structure_analysis import RESNAME_REMARK_PREFIX
 from bond_analysis import (
     BOND_COLUMNS,
     NAN,
@@ -232,18 +233,191 @@ def _gunzip_to(src_gz, dst):
     return dst
 
 
-def _cif_to_pdb(cif_path, dst):
-    """Convert a (optionally gzipped) mmCIF coordinate file to PDB via gemmi."""
+def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
+    """Return raw mmCIF occupancy tokens keyed by ``_atom_site.id``.
+
+    Gemmi represents ``.`` and ``?`` occupancy as 1.0 in a Structure, so the
+    raw CIF loop must be read before conversion if missingness is to survive.
+    """
     import gemmi
+
+    document = gemmi.cif.read(cif_path)
+    atom_blocks = []
+    for block in document:
+        atom_ids = list(block.find_values("_atom_site.id"))
+        if atom_ids:
+            atom_blocks.append((block, atom_ids))
+    if len(atom_blocks) != 1:
+        raise ValueError(
+            "mmCIF conversion requires exactly one block with atom_site records")
+
+    block, atom_ids = atom_blocks[0]
+    occupancies = list(block.find_values("_atom_site.occupancy"))
+    if not occupancies:
+        occupancies = ["?"] * len(atom_ids)
+    elif len(occupancies) != len(atom_ids):
+        raise ValueError(
+            "mmCIF atom_site occupancy count does not match atom count")
+
+    by_serial: Dict[int, str] = {}
+    for atom_id, occupancy in zip(atom_ids, occupancies):
+        try:
+            serial = int(atom_id)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"mmCIF atom_site id is not an integer: {atom_id!r}") from exc
+        if serial in by_serial:
+            raise ValueError(f"duplicate mmCIF atom_site id: {serial}")
+        by_serial[serial] = occupancy
+    return by_serial
+
+
+def _residue_conversion_records(structure, converted_structure):
+    """Pair source mmCIF residue names with names written to legacy PDB."""
+    source_by_author = {}
+    source_order = []
+    for model_index, model in enumerate(structure):
+        for chain in model:
+            for residue in chain:
+                number = residue.seqid.num
+                if number is None:
+                    raise ValueError(
+                        f"mmCIF residue {residue.name!r} has no author number")
+                insertion = str(residue.seqid.icode)
+                if insertion in ("", " ", "\x00", ".", "?"):
+                    insertion = ""
+                key = (model_index, str(chain.name), f"{number}{insertion}")
+                source_order.append(key)
+                source_by_author.setdefault(key, []).append((
+                    str(residue.name),
+                    tuple((str(atom.name), str(atom.element.name))
+                          for atom in residue),
+                ))
+
+    records = []
+    converted_by_author = {}
+    converted_order = []
+    for model_index, model in enumerate(converted_structure):
+        for chain in model:
+            for residue in chain:
+                number = residue.seqid.num
+                if number is None:
+                    raise ValueError(
+                        f"converted residue {residue.name!r} has no author number")
+                insertion = str(residue.seqid.icode)
+                if insertion in ("", " ", "\x00", ".", "?"):
+                    insertion = ""
+                converted_chain = str(chain.name)
+                converted_resnum = f"{number}{insertion}"
+                key = (model_index, converted_chain, converted_resnum)
+                converted_order.append(key)
+                converted_by_author.setdefault(key, []).append((
+                    str(residue.name),
+                    tuple((str(atom.name), str(atom.element.name))
+                          for atom in residue),
+                ))
+
+    if converted_order != source_order:
+        raise ValueError("PDB conversion changed residue ordering")
+    if set(converted_by_author) != set(source_by_author):
+        raise ValueError("PDB conversion changed residue author identifiers")
+    for key, source_residues in source_by_author.items():
+        converted_residues = converted_by_author[key]
+        if len(converted_residues) != len(source_residues):
+            raise ValueError(
+                "PDB conversion changed duplicate residue multiplicity")
+        model_index, converted_chain, converted_resnum = key
+        for source, converted in zip(source_residues, converted_residues):
+            source_name, source_atoms = source
+            converted_name, converted_atoms = converted
+            if source_atoms != converted_atoms:
+                raise ValueError(
+                    "PDB conversion changed residue atom membership")
+            if converted_name != source_name:
+                records.append((
+                    model_index + 1,
+                    converted_chain,
+                    converted_resnum,
+                    converted_name,
+                    source_name,
+                ))
+    return records
+
+
+def _write_cif_conversion_provenance(
+        dst: str,
+        missing_occupancies: List[bool],
+        residue_records: List[Tuple[int, str, str, str, str]],
+        ) -> None:
+    """Blank unknown occupancies and embed reversible residue-name mappings."""
+    with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
+        lines = handle.readlines()
+
+    atom_line_indices = [
+        index for index, line in enumerate(lines)
+        if line[:6].strip().upper() in ("ATOM", "HETATM")
+    ]
+    if len(atom_line_indices) != len(missing_occupancies):
+        raise ValueError(
+            "PDB conversion output atom count does not match mmCIF input")
+    for line_index, missing in zip(atom_line_indices, missing_occupancies):
+        if not missing:
+            continue
+        line = lines[line_index]
+        newline = "\n" if line.endswith("\n") else ""
+        body = line[:-1] if newline else line
+        body = body.ljust(60)
+        lines[line_index] = body[:54] + "      " + body[60:] + newline
+
+    remarks = [
+        (
+            f"{RESNAME_REMARK_PREFIX} {model_index} "
+            f"{chain or '_'} {resnum} {converted_name} {source_name}\n"
+        )
+        for (model_index, chain, resnum, converted_name,
+             source_name) in residue_records
+    ]
+    with open(dst, "w", encoding="utf-8", newline="") as handle:
+        handle.writelines(remarks)
+        handle.writelines(lines)
+
+
+def _cif_to_pdb(cif_path, dst):
+    """Convert mmCIF to PDB without discarding occupancy or CCD provenance."""
+    import gemmi
+
     if not os.path.exists(cif_path):
         raise FileNotFoundError(cif_path)
+    occupancy_by_serial = _cif_occupancy_by_serial(cif_path)
     structure = gemmi.read_structure(cif_path)
+    structure_atoms = [
+        atom for model in structure for chain in model
+        for residue in chain for atom in residue
+    ]
+    if len(structure_atoms) != len(occupancy_by_serial):
+        raise ValueError(
+            "Gemmi structure atom count does not match mmCIF atom_site records")
+    missing_occupancies = []
+    for atom in structure_atoms:
+        serial = atom.serial
+        if serial is None or int(serial) not in occupancy_by_serial:
+            raise ValueError(
+                "Gemmi atom serial could not be matched to mmCIF atom_site id")
+        missing_occupancies.append(
+            occupancy_by_serial[int(serial)] in (".", "?"))
+
     structure.setup_entities()
     # EDSTATS consumes PDB coordinates, whose chain field is one character.
     # Shorten deterministically before writing, then analyze this exact PDB so
     # EDSTATS and Alchemy never join identifiers from different representations.
     structure.shorten_chain_names()
+    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     structure.write_pdb(dst)
+    converted_structure = gemmi.read_structure(dst)
+    residue_records = _residue_conversion_records(
+        structure, converted_structure)
+    _write_cif_conversion_provenance(
+        dst, missing_occupancies, residue_records)
     return dst
 
 
@@ -311,10 +485,10 @@ def _first_existing(*paths):
 def prepare_inputs(pdbID, entry_dir, work_dir):
     """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
 
-    Prefer the final PDB coordinates because EDSTATS consumes PDB directly.
-    When that compatibility export is unavailable, convert the authoritative
-    final mmCIF file in the work directory. Compressed mirrors are accepted for
-    either format.
+    Prefer the authoritative final mmCIF and convert it under Alchemy's
+    provenance-preserving policy for EDSTATS. Use the PDB compatibility export
+    only when mmCIF is unavailable. Compressed mirrors are accepted for either
+    format.
     """
     mtz = _first_existing(
         os.path.join(entry_dir, f"{pdbID}_final.mtz"),
@@ -327,25 +501,25 @@ def prepare_inputs(pdbID, entry_dir, work_dir):
         mtz = _gunzip_to(
             mtz, os.path.join(work_dir, f"{pdbID}_final.mtz"))
 
-    pdb = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
-        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
-    )
-    if pdb is not None:
-        if pdb.endswith(".gz"):
-            pdb = _gunzip_to(
-                pdb, os.path.join(work_dir, f"{pdbID}_final.pdb"))
-        return mtz, pdb
-
     cif = _first_existing(
         os.path.join(entry_dir, f"{pdbID}_final.cif"),
         os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
     )
-    if cif is None:
+    if cif is not None:
+        pdb = _cif_to_pdb(
+            cif, os.path.join(work_dir, f"{pdbID}_final_from_cif.pdb"))
+        return mtz, pdb
+
+    pdb = _first_existing(
+        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
+        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
+    )
+    if pdb is None:
         raise FileNotFoundError(
-            f"{pdbID}_final.pdb or {pdbID}_final.cif")
-    pdb = _cif_to_pdb(
-        cif, os.path.join(work_dir, f"{pdbID}_final_from_cif.pdb"))
+            f"{pdbID}_final.cif or {pdbID}_final.pdb")
+    if pdb.endswith(".gz"):
+        pdb = _gunzip_to(
+            pdb, os.path.join(work_dir, f"{pdbID}_final.pdb"))
     return mtz, pdb
 
 
@@ -376,10 +550,10 @@ def has_final_files(entry_dir, pdbID):
         os.path.join(entry_dir, f"{pdbID}_final.mtz.gz"),
     )
     coordinates = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
-        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
         os.path.join(entry_dir, f"{pdbID}_final.cif"),
         os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
+        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
+        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
     )
     return mtz is not None and coordinates is not None
 
@@ -433,8 +607,8 @@ def download_entry_to_cache(pdbID, cache_root):
         return try_fetch(name) or try_fetch(name + ".gz")
 
     fetch_variant(f"{pdbID}_final.mtz")
-    if not fetch_variant(f"{pdbID}_final.pdb"):
-        fetch_variant(f"{pdbID}_final.cif")
+    if not fetch_variant(f"{pdbID}_final.cif"):
+        fetch_variant(f"{pdbID}_final.pdb")
     if not os.path.exists(os.path.join(entry, "data.json")):
         try_fetch("data.json")
 
@@ -471,16 +645,16 @@ def resolve_manual_inputs(pdbID, pdb_file=None, mtz_file=None, cif_file=None, wo
     if not os.path.exists(mtz_file):
         raise FileNotFoundError(f"mtz file not found: {mtz_file}")
 
-    if pdb_file:
-        if not os.path.exists(pdb_file):
-            raise FileNotFoundError(f"pdb file not found: {pdb_file}")
-        return mtz_file, pdb_file
-
     if cif_file:
         if not os.path.exists(cif_file):
             raise FileNotFoundError(f"cif file not found: {cif_file}")
         target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdbID}.pdb")
         return mtz_file, _cif_to_pdb(cif_file, target_pdb)
+
+    if pdb_file:
+        if not os.path.exists(pdb_file):
+            raise FileNotFoundError(f"pdb file not found: {pdb_file}")
+        return mtz_file, pdb_file
 
     raise ValueError("manual mode requires --pdb-file or --cif-file")
 
@@ -532,7 +706,7 @@ def enumerate_entries(root, limit=None):
 def _coordinate_provenance(cfg, source_path):
     manual = cfg.get("manual_inputs")
     if manual:
-        converted = bool(manual.get("cif_file") and not manual.get("pdb_file"))
+        converted = bool(manual.get("cif_file"))
         return ("mmcif" if converted else "pdb", "pdb", converted)
     coordinate_name = source_path.lower()
     converted = coordinate_name.endswith((".cif", ".cif.gz"))
@@ -542,12 +716,12 @@ def _coordinate_provenance(cfg, source_path):
 def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
     manual = cfg.get("manual_inputs")
     if manual:
-        return manual.get("pdb_file") or manual.get("cif_file") or ""
+        return manual.get("cif_file") or manual.get("pdb_file") or ""
     return _first_existing(
-        os.path.join(entry, f"{pdb_id}_final.pdb"),
-        os.path.join(entry, f"{pdb_id}_final.pdb.gz"),
         os.path.join(entry, f"{pdb_id}_final.cif"),
         os.path.join(entry, f"{pdb_id}_final.cif.gz"),
+        os.path.join(entry, f"{pdb_id}_final.pdb"),
+        os.path.join(entry, f"{pdb_id}_final.pdb.gz"),
     ) or analysis_path
 
 
@@ -959,7 +1133,12 @@ def main(argv=None):
 
     manual_inputs = None
     if args.pdb_file or args.mtz_file or args.cif_file:
-        pdbID = args.id or infer_pdb_id_from_path(args.pdb_file) or infer_pdb_id_from_path(args.mtz_file) or infer_pdb_id_from_path(args.cif_file)
+        pdbID = (
+            args.id or
+            infer_pdb_id_from_path(args.cif_file) or
+            infer_pdb_id_from_path(args.pdb_file) or
+            infer_pdb_id_from_path(args.mtz_file)
+        )
         if not pdbID:
             print("Manual input mode requires --id or a file name that contains a 4-character PDB id.", flush=True)
             return 1

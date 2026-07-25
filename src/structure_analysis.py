@@ -25,6 +25,7 @@ import gemmi
 
 NAN = float("nan")
 DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
+RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
 
 
 def _altloc(value: str) -> str:
@@ -100,6 +101,7 @@ class AtomSite:
     chain_id: str
     residue_index: int
     residue_name: str
+    coordinate_residue_name: str
     residue_number: int
     insertion_code: str
     resnum: str
@@ -156,6 +158,7 @@ class ResidueSelection:
     chain_id: str
     residue_index: int
     residue_name: str
+    coordinate_residue_name: str
     residue_number: int
     insertion_code: str
     resnum: str
@@ -179,6 +182,10 @@ class ResidueSelection:
     @property
     def author_key(self) -> Tuple[str, str, str]:
         return self.residue_name, self.chain_id, self.resnum
+
+    @property
+    def coordinate_author_key(self) -> Tuple[str, str, str]:
+        return self.coordinate_residue_name, self.chain_id, self.resnum
 
     @property
     def elements(self) -> frozenset[str]:
@@ -410,6 +417,39 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
     return records, ""
 
 
+def _raw_pdb_residue_name_mapping(
+        path: str,
+        ) -> Dict[Tuple[int, str, str, str], str]:
+    """Read reversible mmCIF residue-name mappings embedded during conversion."""
+    mapping: Dict[Tuple[int, str, str, str], str] = {}
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            fields = line.split()
+            if " ".join(fields[:4]) != RESNAME_REMARK_PREFIX:
+                continue
+            if len(fields) != 9:
+                raise ValueError(
+                    f"malformed Alchemy residue-name mapping: {line.rstrip()}")
+            try:
+                model_index = int(fields[4]) - 1
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    f"invalid model in residue-name mapping: {fields[4]!r}"
+                ) from exc
+            if model_index < 0:
+                raise ValueError("residue-name mapping model must be positive")
+            chain_id = "" if fields[5] == "_" else fields[5]
+            resnum, coordinate_name, source_name = fields[6:9]
+            key = (model_index, coordinate_name, chain_id, resnum)
+            previous = mapping.get(key)
+            if previous is not None and previous != source_name:
+                raise ValueError(
+                    "conflicting Alchemy residue-name mappings for "
+                    f"{coordinate_name}/{chain_id}/{resnum}")
+            mapping[key] = source_name
+    return mapping
+
+
 def _gemmi_atom_identity(chain: gemmi.Chain, residue: gemmi.Residue,
                          atom: gemmi.Atom
                          ) -> Tuple[str, str, str, str, str, str]:
@@ -564,6 +604,7 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
         chain_id=first.chain_id,
         residue_index=first.residue_index,
         residue_name=first.residue_name,
+        coordinate_residue_name=first.coordinate_residue_name,
         residue_number=first.residue_number,
         insertion_code=first.insertion_code,
         resnum=first.resnum,
@@ -635,8 +676,10 @@ def load_structure(
 
     raw_models: List[List[RawOccupancy]] = []
     raw_error = ""
+    source_residue_names: Dict[Tuple[int, str, str, str], str] = {}
     if analysis_format == "pdb":
         raw_models, raw_error = _raw_pdb_occupancies(path)
+        source_residue_names = _raw_pdb_residue_name_mapping(path)
     raw_first = raw_models[0] if raw_models else []
     gemmi_atoms = [atom for chain in model for residue in chain for atom in residue]
     gemmi_atom_count = len(gemmi_atoms)
@@ -668,6 +711,11 @@ def load_structure(
             number = _residue_number(residue)
             insertion = _icode(residue.seqid.icode)
             resnum = f"{number}{insertion}"
+            coordinate_residue_name = str(residue.name)
+            source_residue_name = source_residue_names.get(
+                (0, coordinate_residue_name, str(chain.name), resnum),
+                coordinate_residue_name,
+            )
             for atom_index, atom in enumerate(residue):
                 raw = (raw_matches[gemmi_order]
                        if gemmi_order < len(raw_matches) else None)
@@ -687,7 +735,8 @@ def load_structure(
                     chain_index=chain_index,
                     chain_id=str(chain.name),
                     residue_index=residue_index,
-                    residue_name=str(residue.name),
+                    residue_name=source_residue_name,
+                    coordinate_residue_name=coordinate_residue_name,
                     residue_number=number,
                     insertion_code=insertion,
                     resnum=resnum,
@@ -776,6 +825,8 @@ def load_structure(
     by_author_lists: Dict[Tuple[str, str, str], List[ResidueSelection]] = defaultdict(list)
     for residue in residues:
         by_author_lists[residue.author_key].append(residue)
+        if residue.coordinate_author_key != residue.author_key:
+            by_author_lists[residue.coordinate_author_key].append(residue)
     residues_by_author = {key: tuple(value)
                           for key, value in by_author_lists.items()}
 

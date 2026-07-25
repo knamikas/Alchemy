@@ -72,7 +72,6 @@ CLUSTER = {
     'FES', 'FNE', 'FS0', 'FS2', 'FS3', 'FS4', 'FS5', 'FSF', 'FSO', 'FSX', 'HC0', 
     'HC1', 'ICE', 'ICG', 'ICH', 'ICS', 'ICZ', 'LPJ', 'MSK', 'NFE', 'NFS', 'NUI', 
     'Q46', 'RQM', 'S3F', 'S5Q', 'SF3', 'SF4', 'T2N', 'UFF', 'VQ8', 'VV2', 'WCC', 
-    
     'XCC', 'ZKP'
 
 }
