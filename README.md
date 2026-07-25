@@ -124,12 +124,15 @@ The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
 
 ### 3. Metal and cofactor identification — `src/metal_identification.py`
 
-`extract_metal_statistics()` parses the edstats table. Gemmi supplies the atom
-elements used to identify plain metal ions; atom or residue names are not used
-to infer an element. Metal-containing cofactors are matched against the Chemical
-Component Dictionary list maintained by
-`src/build_metallocofactor_catalog.py`. EDSTATS' `_` marker is normalized to a
-blank chain identifier before coordinate matching.
+`extract_metal_statistics()` parses the edstats table. Alchemy reads the
+deposited PDB element field directly; blank or invalid fields are marked unknown
+rather than inferred from atom names. During mmCIF conversion, the explicit
+`_atom_site.type_symbol` is written into that PDB field. Metal-containing
+cofactors are matched against the Chemical Component Dictionary list maintained
+by `src/build_metallocofactor_catalog.py`. A structure with unknown elements
+does not receive a DPI because its non-hydrogen atom count is indeterminate.
+EDSTATS' `_` marker is normalized to a blank chain identifier before coordinate
+matching.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 

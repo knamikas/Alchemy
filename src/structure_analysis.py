@@ -55,6 +55,21 @@ def _valid_occupancy(value: object) -> bool:
     return math.isfinite(number) and 0.0 <= number <= 1.0
 
 
+def _parse_pdb_element(value: str) -> Tuple[str, str]:
+    """Return the canonical deposited PDB element and its validation status."""
+    deposited = value.strip()
+    if not deposited:
+        return "", "missing"
+    try:
+        element = gemmi.Element(deposited)
+    except (RuntimeError, ValueError):
+        return "", "invalid"
+    canonical = str(element.name).upper()
+    if int(element.atomic_number) <= 0 or canonical in ("", "X"):
+        return "", "invalid"
+    return canonical, "valid"
+
+
 def _format_number(value: Optional[float]) -> str:
     if value is None or not math.isfinite(value):
         return "NA"
@@ -65,6 +80,8 @@ def _format_number(value: Optional[float]) -> str:
 class RawOccupancy:
     value: Optional[float]
     status: str
+    element: str = ""
+    element_status: str = "missing"
     atom_name: str = ""
     altloc: str = ""
     chain_id: str = ""
@@ -351,7 +368,7 @@ class StructureContext:
 
 
 def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
-    """Read PDB occupancy columns without losing blank/malformed provenance."""
+    """Read PDB occupancy and element fields without losing provenance."""
     records: List[List[RawOccupancy]] = [[]]
     model_index = 0
     saw_model = False
@@ -382,6 +399,7 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
                 chain_id = line[21:22].strip()
                 residue_number = line[22:26].strip()
                 insertion_code = _icode(line[26:27])
+                element, element_status = _parse_pdb_element(line[76:78])
                 text = line[54:60] if len(line) >= 55 else ""
                 stripped = text.strip()
                 if not stripped:
@@ -403,6 +421,8 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
                 records[model_index].append(RawOccupancy(
                     value=value,
                     status=status,
+                    element=element,
+                    element_status=element_status,
                     atom_name=atom_name,
                     altloc=altloc,
                     chain_id=chain_id,
@@ -513,6 +533,17 @@ def _occupancy_for_atom(atom: gemmi.Atom,
         return value, False, raw.status
     valid = _valid_occupancy(value)
     return value, valid, "valid" if valid else "invalid_value"
+
+
+def _element_for_atom(atom: gemmi.Atom, analysis_format: str,
+                      raw: Optional[RawOccupancy]) -> Tuple[str, bool]:
+    """Use deposited element provenance rather than a PDB atom-name guess."""
+    if analysis_format == "pdb":
+        if raw is not None and raw.element_status == "valid":
+            return raw.element, True
+        return "", False
+    element = str(atom.element.name).upper()
+    return element, element not in ("", "X")
 
 
 def _site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
@@ -726,8 +757,8 @@ def load_structure(
                     occupancy_status = "raw_mapping_failed"
                 source_order = (raw.source_order if raw is not None
                                 else len(raw_first) + gemmi_order)
-                element = str(atom.element.name).upper()
-                element_known = element not in ("", "X")
+                element, element_known = _element_for_atom(
+                    atom, analysis_format, raw)
                 all_sites.append(AtomSite(
                     pdb_id=pdb_id,
                     model_index=0,
@@ -753,8 +784,8 @@ def load_structure(
                     formal_charge=atom.charge,
                     x=float(atom.pos.x), y=float(atom.pos.y), z=float(atom.pos.z),
                     is_water=bool(residue.is_water()),
-                    is_hydrogen=(element in ("H", "D") or
-                                 bool(atom.element.is_hydrogen)),
+                    is_hydrogen=(
+                        element_known and element in ("H", "D")),
                     gemmi_atom=atom,
                 ))
                 gemmi_order += 1
@@ -871,7 +902,8 @@ def load_structure(
 
 def count_deposited_ni(context: StructureContext) -> float:
     """Occupancy-weighted non-H/D count in deposited first-model records."""
-    if context.occupancy_validation_failed:
+    if (context.occupancy_validation_failed or
+            context.unknown_element_atom_count):
         return NAN
     total = 0.0
     for atom in context.source_atoms:
