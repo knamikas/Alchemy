@@ -52,9 +52,25 @@ CACHE_DIR = _default_cache_dir()
 metals = common_metals + uncommonMetals
 
 
-def find_metal_match(string):
-    tokens = re.findall(r'[A-Z][a-z]?', string)  # split into element-symbol-like tokens
+def find_metal_match(formula):
+    """Return True when a CCD ``_chem_comp.formula`` string names a metal.
+
+    The tokenizer requires conventional element casing (``Mg``, not ``MG``),
+    which is what the formula field uses. It must not be applied to
+    ``_chem_comp_atom.type_symbol``, whose values are uppercase: ``FE`` would
+    split into ``F`` and ``E`` and match nothing, while ``KR`` would split into
+    ``K`` and ``R`` and match potassium. Compare those symbols whole instead --
+    each is already exactly one element -- as ``symbol_is_metal`` does.
+    """
+    if not formula:
+        return False
+    tokens = re.findall(r'[A-Z][a-z]?', formula)  # split into element-symbol-like tokens
     return any(t.upper() in metals for t in tokens)
+
+
+def symbol_is_metal(symbol):
+    """Return True when one complete element symbol names a metal, any case."""
+    return bool(symbol) and symbol.strip().upper() in metals
 
 
 def download_ccd(tmp_dir):
@@ -128,8 +144,11 @@ def build_metallocofactors_list(
                 print(f"  ...{i}/{total} components checked", flush=True)
             has_metal = False
             comp_id = block.find_value('_chem_comp.id')
-            formula = block.find_value('_chem_comp.formula')
-            atom_symbols = [s.upper() for s in block.find_values('_chem_comp_atom.type_symbol')]
+            # find_value returns None when the tag is absent entirely, and '?'
+            # when it is present but unknown. Both mean "no usable formula".
+            formula = block.find_value('_chem_comp.formula') or ''
+            atom_symbols = [s.strip().upper()
+                            for s in block.find_values('_chem_comp_atom.type_symbol')]
             is_single_metal_atom = len(atom_symbols) == 1 and atom_symbols[0] in metals
 
             
@@ -140,25 +159,25 @@ def build_metallocofactors_list(
                 counts["skipped_ions"] += 1
             elif comp_id == 'UNL':
                 pass  # generic "unknown ligand" marker, never include
-            elif formula == '?':
+            elif formula in ('', '?'):
                 counts["missing_formula"] += 1
                 if missing_cif is not None:
                     missing_cif.add_copied_block(block, pos=-1)
                 if missing_formulas_path:
                     with open(missing_formulas_path, 'a') as mf:
                         mf.write(f"{comp_id}\n")
-                for symbol in block.find_values('_chem_comp_atom.type_symbol'):
-                    if find_metal_match(symbol):
-                        has_metal = True
-                        counts["missing_formula_with_metal"] += 1
-                        break
+                if any(symbol_is_metal(symbol) for symbol in atom_symbols):
+                    has_metal = True
+                    counts["missing_formula_with_metal"] += 1
             else:
                 if find_metal_match(formula):
                     has_metal = True
                     counts["with_metal"] += 1
 
             if has_metal:
-                f_write.write(f"{comp_id}\t{formula}\n")
+                # '?' keeps the second field non-empty for components whose
+                # formula tag is unknown or absent; only the id is ever read.
+                f_write.write(f"{comp_id}\t{formula or '?'}\n")
 
     if missing_cif is not None and debug_dir is not None:
         missing_cif.write_file(os.path.join(debug_dir, "missingCIF.cif"))
