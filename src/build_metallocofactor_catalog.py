@@ -179,9 +179,22 @@ def _is_stale(meta_path, max_age_days):
         with open(meta_path) as f:
             meta = json.load(f)
         generated = datetime.fromisoformat(meta["generated"])
-    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        if generated.tzinfo is None:
+            return True
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return True
     return (datetime.now(timezone.utc) - generated) > timedelta(days=max_age_days)
+
+
+def _catalog_is_fresh(data_dir, max_age_days):
+    """Whether a catalog directory contains a usable, current file pair."""
+    return (
+        os.path.exists(os.path.join(data_dir, "metallocofactors_id.txt")) and
+        not _is_stale(
+            os.path.join(data_dir, "metallocofactors_id.meta.json"),
+            max_age_days,
+        )
+    )
 
 
 def _refresh_cofactors(data_dir):
@@ -229,14 +242,16 @@ def refresh_cofactors_if_needed(data_dir=None, cache_dir=None, max_age_days=30, 
     """
     data_dir = data_dir or DATA_DIR
     cache_dir = cache_dir or CACHE_DIR
-    os.makedirs(cache_dir, exist_ok=True)
 
     cache_list_path = os.path.join(cache_dir, "metallocofactors_id.txt")
-    cache_meta_path = os.path.join(cache_dir, "metallocofactors_id.meta.json")
 
-    if not force and os.path.exists(cache_list_path) and not _is_stale(cache_meta_path, max_age_days):
-        return
+    if not force:
+        if _catalog_is_fresh(cache_dir, max_age_days):
+            return
+        if _catalog_is_fresh(data_dir, max_age_days):
+            return
 
+    os.makedirs(cache_dir, exist_ok=True)
     try:
         _refresh_cofactors(cache_dir)
         print("Refreshed metallocofactors_id.txt in the local cache.", flush=True)
@@ -255,15 +270,20 @@ def refresh_cofactors_if_needed(data_dir=None, cache_dir=None, max_age_days=30, 
             raise RuntimeError(
                 f"No cofactor list available and refresh failed: {e}") from e
 
-def active_cofactors_path(data_dir=None, cache_dir=None):
-    """Return whichever metallocofactors_id.txt should be used right now:
-    the cached refresh if one exists, otherwise the tracked repo copy."""
+def active_cofactors_path(data_dir=None, cache_dir=None, max_age_days=30):
+    """Return the best available cached or bundled cofactor catalog."""
     data_dir = data_dir or DATA_DIR
     cache_dir = cache_dir or CACHE_DIR
     cache_path = os.path.join(cache_dir, "metallocofactors_id.txt")
+    data_path = os.path.join(data_dir, "metallocofactors_id.txt")
+
+    if _catalog_is_fresh(cache_dir, max_age_days):
+        return cache_path
+    if _catalog_is_fresh(data_dir, max_age_days):
+        return data_path
     if os.path.exists(cache_path):
         return cache_path
-    return os.path.join(data_dir, "metallocofactors_id.txt")
+    return data_path
 
 if __name__ == "__main__":
     import argparse

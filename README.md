@@ -226,11 +226,11 @@ and atom serial rather than parser traversal order.
 ## Cofactor reference maintenance — `src/build_metallocofactor_catalog.py`
 
 Before processing entries, the pipeline checks its metal-containing cofactor
-list. A current list in the user cache is reused; a missing or stale list is
-rebuilt from the wwPDB Chemical Component Dictionary. Refreshed files are stored
-under the user cache (normally `~/.cache/alchemy/`) so normal runs do not modify
-the repository. If refreshing fails, the pipeline falls back to an available
-cached or committed list.
+list. It prefers a current user-cached list, then the current bundled list, and
+rebuilds from the wwPDB Chemical Component Dictionary only when neither is
+current. Refreshed files are stored under the user cache (normally
+`~/.cache/alchemy/`) so normal runs do not modify the repository. If refreshing
+fails, the pipeline falls back to an available cached or committed list.
 
 ## Reference data
 
