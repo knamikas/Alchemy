@@ -1,14 +1,20 @@
 {
-  "catalog_schema_version": 1,
-  "builder_version": 0,
-  "generated": "2026-07-12T20:37:47.115559+00:00",
+  "catalog_schema_version": 2,
+  "builder_version": 2,
+  "generated": "2026-07-25T23:46:47.276660+00:00",
   "ccd_source": "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz",
-  "catalog_sha256": "fa3dacff454ad1b75e14762cd06c8c29a2908fb2f59986bcdd180856464e1856",
+  "ccd_sha256": "880b2a34534639c89f9081e3e096a08196f8b93af3eaeb0ce0fc9149558da2f1",
+  "ccd_compressed_sha256": "fc9b8f5aa60c8c22f9c707957fb4d8f98022af9ee7a07592ed87c15f044ed63d",
+  "ccd_etag": "\"e98fb045008f2465aab3a9608c456f4e-14\"",
+  "ccd_last_modified": "Sat, 18 Jul 2026 04:29:27 GMT",
+  "catalog_sha256": "5a3ae50078f1cd5e3742185b0d3140ee5947e659706f1539d9bee95bb132c2e8",
   "counts": {
-    "with_metal": 902,
-    "skipped_ions": 79,
+    "with_metal": 937,
+    "skipped_ions": 82,
     "missing_formula": 0,
     "missing_formula_with_metal": 0,
-    "catalog_entries": 902
+    "cluster_entries": 69,
+    "heme_entries": 88,
+    "catalog_entries": 937
   }
 }

@@ -28,6 +28,7 @@ import os
 import re
 
 from metal_elements import METAL_ELEMENTS
+from metal_identification import COFACTOR_CATALOG_PATH
 from structure_analysis import (
     count_deposited_ni,
     count_ni,
@@ -63,25 +64,35 @@ ZSCORE_OUTLIER_CUTOFF = 6.0
 
 NAN = float("nan")
 
-# Metallocofactor classifications, used only to tag each metal's environment in
-# parent_type. CLUSTER is checked before HEMES for codes present in both sets.
-CLUSTER = {
-    '0KA', '1CL', '35L', '6ML', '82N', '8JU', '8P8', '9S8', 'A1CBX', 'B51', 'BF8', 
-    'BJ8', 'CFM', 'CFN', 'CLF', 'CLP', 'CUV', 'CZL', 'D6N', 'ER2', 'F3S', 'F4S', 
-    'FES', 'FNE', 'FS0', 'FS2', 'FS3', 'FS4', 'FS5', 'FSF', 'FSO', 'FSX', 'HC0', 
-    'HC1', 'ICE', 'ICG', 'ICH', 'ICS', 'ICZ', 'LPJ', 'MSK', 'NFE', 'NFS', 'NUI', 
-    'Q46', 'RQM', 'S3F', 'S5Q', 'SF3', 'SF4', 'T2N', 'UFF', 'VQ8', 'VV2', 'WCC', 
-    'XCC', 'ZKP'
+def _load_cofactor_classes(path):
+    """Return ``(cluster_ids, heme_ids)`` from the bundled catalog.
 
-}
-HEMES = {
-    '1FH', '2FH', '4HE', '522', '6CO', '6CQ', '6HE', '7HE', '7OH', '83L', 
-    '89R', 'A1ADT', 'A1JN4', 'CCH', 'CLN', 'DDH', 'DHE', 'FDD', 'FDE', 'FEC', 
-    'FMI', 'HAS', 'HCO', 'HDD', 'HDE', 'HDM', 'HE6', 'HEA', 'HEB', 'HEC', 'HEM', 
-    'HEO', 'HEV', 'HFM', 'HIF', 'HKL', 'HME', 'HP5', 'ISW', 'MH0', 'MHM', 'MQP', 
-    'N7H', 'NTE', 'OBV', 'POR', 'SIK', 'SRM', 'UFE', 'VEA', 'VER', 'VOV', 'WC5', 
-    'WPC', 'WUF', 'WUP', 'WVP', 'WXP', 'WYP'
-}
+    Structural classes are derived from CCD formulas when the catalog is built
+    by ``tools/build_metallocofactor_catalog.py``, so they track the CCD rather
+    than drifting behind a list maintained by hand here. They tag each metal's
+    environment in ``parent_type``; CLUSTER takes precedence in
+    ``_parent_type`` for any component present in both.
+    """
+    cluster, heme = set(), set()
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 3 or not fields[0].strip():
+                continue
+            component_id = fields[0].strip()
+            structural_class = fields[2].strip()
+            if structural_class == "cluster":
+                cluster.add(component_id)
+            elif structural_class == "heme":
+                heme.add(component_id)
+    if not cluster or not heme:
+        raise ValueError(
+            f"{os.path.basename(path)} carries no structural classes; rebuild "
+            "it with tools/build_metallocofactor_catalog.py --reclassify")
+    return frozenset(cluster), frozenset(heme)
+
+
+CLUSTER, HEMES = _load_cofactor_classes(COFACTOR_CATALOG_PATH)
 
 # Fixed output schema; main.py imports this so the module and driver never
 # drift. Legacy "candidate" field names are retained for CSV compatibility,
