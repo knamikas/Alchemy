@@ -1250,6 +1250,33 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
                 "schema; choose a new --output-dir for this Gemmi migration "
                 "run.")
 
+def available_cpu_count():
+    """Return the number of CPUs this process is actually permitted to use.
+
+    ``multiprocessing.cpu_count()`` reports every logical CPU on the machine
+    and ignores CPU affinity, so inside a container or under a scheduler
+    allocation it can report far more than the job was granted -- defaulting a
+    batch run to dozens of workers on a handful of cores. The affinity-aware
+    interfaces are preferred where the platform provides them.
+    """
+    process_cpu_count = getattr(os, "process_cpu_count", None)  # Python 3.13+
+    if process_cpu_count is not None:
+        count = process_cpu_count()
+        if count:
+            return count
+    if hasattr(os, "sched_getaffinity"):  # Linux
+        try:
+            count = len(os.sched_getaffinity(0))
+        except OSError:
+            count = 0
+        if count:
+            return count
+    try:
+        return cpu_count()
+    except NotImplementedError:
+        return 1
+
+
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
@@ -1306,7 +1333,7 @@ def parse_args(argv=None):
     ap.add_argument("--max-pdbs", type=int, default=None,
                     help="debug cap: process only the first N entries")
     ap.add_argument("--workers", type=positive_int,
-                    default=max(1, cpu_count() - 2),
+                    default=max(1, available_cpu_count() - 2),
                     help="number of worker processes (minimum: 1)")
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
     ap.add_argument("--ccp4-setup", default=None,
