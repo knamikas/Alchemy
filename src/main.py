@@ -588,23 +588,27 @@ def prepare_inputs(pdbID, entry_dir, work_dir):
 
 
 def read_resolution(entry_dir, mtz_path, data_json_path=None):
-    """Return the overall diffraction-data ``(reslo, reshi)`` limits.
+    """Return the overall diffraction-data high-resolution limit.
 
     Prefer a supplied data.json (or PDB-REDO data.json) when available;
-    fall back to the MTZ via gemmi.
+    fall back to the MTZ via gemmi. Only the high-resolution limit is reported
+    because that is what the DPI metadata records; EDSTATS is given the map
+    columns' own range by ``read_map_column_resolution`` instead.
     """
     dj = data_json_path or os.path.join(entry_dir, "data.json")
     if os.path.exists(dj):
         try:
-            props = json.load(open(dj)).get("properties", {})
+            with open(dj) as handle:
+                props = json.load(handle).get("properties", {})
             lo, hi = props.get("DATARESL"), props.get("DATARESH")
+            # Both limits are still required before trusting data.json, so a
+            # half-populated record falls back to the MTZ as it always has.
             if lo and hi:
-                return float(lo), float(hi)
+                return float(hi)
         except (ValueError, KeyError, OSError):
             pass
     import gemmi
-    m = gemmi.read_mtz_file(mtz_path)
-    return m.resolution_low(), m.resolution_high()
+    return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
 def read_map_column_resolution(mtz_path):
@@ -1008,7 +1012,7 @@ def process(pdbID):
             )
             entry = os.path.dirname(pdb) or work_dir
             data_json = manual_inputs.get("data_json")
-            _data_reslo, data_reshi = read_resolution(
+            data_reshi = read_resolution(
                 entry, mtz, data_json_path=data_json)
         else:
             # Resolved before any scratch space is created, so a missing entry
@@ -1020,7 +1024,7 @@ def process(pdbID):
             work_dir = tempfile.mkdtemp(
                 prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
             mtz, pdb = prepare_inputs(pdbID, entry, work_dir)
-            _data_reslo, data_reshi = read_resolution(entry, mtz)
+            data_reshi = read_resolution(entry, mtz)
         map_reslo, map_reshi = read_map_column_resolution(mtz)
         source_pdb = pdb
         source_coordinate_path = _source_coordinate_path(
@@ -1157,8 +1161,16 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
     fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.",
                                     suffix=".tmp", dir=directory, text=True)
     try:
+        # os.fdopen takes ownership of the descriptor and closes it on exit, so
+        # it is closed here only if the wrapping itself failed. Closing it again
+        # afterwards could target a descriptor the runtime has since reused.
+        try:
+            staged = os.fdopen(fd, "w", newline="")
+        except BaseException:
+            os.close(fd)
+            raise
         destination_header = None
-        with os.fdopen(fd, "w", newline="") as dst:
+        with staged as dst:
             writer = csv.writer(dst)
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 with open(path, newline="") as src:
@@ -1194,10 +1206,6 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
             os.chmod(tmp_path, original_mode)
         os.replace(tmp_path, path)
     except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
         try:
             os.unlink(tmp_path)
         except OSError:

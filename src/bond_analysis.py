@@ -45,6 +45,9 @@ AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
       "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
       }
 
+# The only side-chain and solvent atoms that donate to a metal.
+DONOR_ELEMENTS = frozenset(("N", "O", "S"))
+
 # Broad candidate-search radius. This must not be treated as a bond cutoff.
 CUTOFF = 4.0
 SEARCH_EPSILON = 1e-6
@@ -467,11 +470,13 @@ def _collect_contacts(structure, search, metal, include_symmetry):
         neighbor = structure.atom_for_mark(mark)
         if neighbor is None:
             continue
-        residue = structure.residue_for_atom(neighbor)
-        if neighbor.element not in ("N", "O", "S"):
+        # Cheapest rejections first: the donor-element test discards most marks,
+        # so the residue lookup only runs for atoms that can still qualify.
+        if neighbor.element not in DONOR_ELEMENTS:
             continue
         if not (neighbor.occupancy_valid and neighbor.occupancy > 0.0):
             continue
+        residue = structure.residue_for_atom(neighbor)
         if not (residue.is_water or residue.residue_name in AA):
             continue
 
