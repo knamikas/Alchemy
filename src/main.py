@@ -486,11 +486,12 @@ def _cif_to_pdb(cif_path, dst):
 
 
 def _first_model_pdb(pdb_path, dst):
-    """Return a PDB containing only the deposited first coordinate model.
+    """Return a wrapper-free PDB containing the first coordinate model.
 
     The extraction is textual so atom records, occupancies, identifiers, and
     ordering remain exactly as deposited. Gemmi is used only to determine and
-    verify the model count.
+    verify the model count. Explicit MODEL/ENDMDL records are removed because
+    EDSTATS emits a synthetic separator residue for even a one-model wrapper.
     """
     import gemmi
 
@@ -498,8 +499,6 @@ def _first_model_pdb(pdb_path, dst):
     model_count = len(structure)
     if model_count == 0:
         raise ValueError("coordinate file contains no models")
-    if model_count == 1:
-        return pdb_path, model_count
 
     with open(pdb_path, encoding="utf-8", errors="replace", newline="") as fh:
         lines = fh.readlines()
@@ -507,22 +506,26 @@ def _first_model_pdb(pdb_path, dst):
         index for index, line in enumerate(lines)
         if line[:6].strip().upper() == "MODEL"
     ]
-    if len(model_starts) < 2:
+    if not model_starts:
+        if model_count == 1:
+            return pdb_path, model_count
         raise ValueError(
-            "Gemmi found multiple models but the PDB MODEL records could not "
-            "be isolated")
+            "Gemmi found multiple models but the PDB contains no MODEL records")
+    if len(model_starts) != model_count:
+        raise ValueError(
+            "Gemmi model count does not match the PDB MODEL records")
 
-    first_start, second_start = model_starts[:2]
+    first_start = model_starts[0]
+    next_start = model_starts[1] if len(model_starts) > 1 else len(lines)
     first_end = next(
-        (index for index in range(first_start, second_start)
+        (index for index in range(first_start + 1, next_start)
          if lines[index][:6].strip().upper() == "ENDMDL"),
         None,
     )
     if first_end is None:
-        first_block = lines[first_start:second_start]
-        first_block.append("ENDMDL\n")
+        raise ValueError("the first PDB MODEL record has no matching ENDMDL")
     else:
-        first_block = lines[first_start:first_end + 1]
+        first_block = lines[first_start + 1:first_end]
 
     # NUMMDL describes the source ensemble and would be false in this
     # first-model-only analysis file. Other crystallographic header records are
@@ -537,8 +540,12 @@ def _first_model_pdb(pdb_path, dst):
         fh.writelines(first_block)
         fh.write("END\n")
 
-    if len(gemmi.read_structure(dst)) != 1:
+    analysis_structure = gemmi.read_structure(dst)
+    if len(analysis_structure) != 1:
         raise ValueError("failed to create a first-model-only analysis PDB")
+    with open(dst, encoding="utf-8", errors="replace") as fh:
+        if any(line[:6].strip().upper() in ("MODEL", "ENDMDL") for line in fh):
+            raise ValueError("first-model analysis PDB still contains a model wrapper")
     return dst, model_count
 
 

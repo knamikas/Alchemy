@@ -51,6 +51,28 @@ EDSTATS_COLUMNS = (
 EDSTATS_NULL_VALUE = "n/a"
 
 
+def _is_edstats_separator(fields):
+    """Whether split fields are EDSTATS' synthetic model separator row.
+
+    For a MODEL/ENDMDL-wrapped XYZIN, EDSTATS 1.0.9 emits a logical row with
+    blank residue name, residue number, and chain-position fields. Whitespace
+    splitting collapses those blanks, producing 39 fields rather than the
+    42-column residue schema: ``_``, 36 ``n/a`` metrics, model, and row number.
+    Older captured output may contain only the ``_`` marker. Recognize both
+    forms semantically while leaving every other malformed row to validation.
+    """
+    if fields == ["_"]:
+        return True
+    metric_count = len(EDSTATS_METRIC_COLUMNS)
+    return (
+        len(fields) == metric_count + 3
+        and fields[0] == "_"
+        and all(value.lower() == EDSTATS_NULL_VALUE
+                for value in fields[1:metric_count + 1])
+        and all(value.isdigit() for value in fields[-2:])
+    )
+
+
 def _validated_edstats_header(fields):
     """Return column indices after validating the standard EDSTATS schema."""
     duplicates = sorted({
@@ -185,9 +207,7 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                 indices = _validated_edstats_header(header)
                 continue
 
-            # EDSTATS emits one short "_" separator row when XYZIN contains an
-            # explicit MODEL/ENDMDL wrapper.
-            if fields == ["_"]:
+            if _is_edstats_separator(fields):
                 continue
 
             if indices is None:  # defensive; header validation sets this

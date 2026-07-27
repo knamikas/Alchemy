@@ -149,9 +149,10 @@ Gemmi parses the same coordinate representation supplied to EDSTATS. For a
 multi-model structure, Alchemy analyzes the first model only for metal
 identification, DPI, and contact searching; model count and the selected-model
 policy are recorded with the results. Before map statistics are calculated,
-Alchemy writes a first-model-only PDB and supplies that exact coordinate file
-to both EDSTATS and Gemmi. Atoms and density statistics from different models
-are never combined.
+Alchemy writes a wrapper-free, first-model-only PDB and supplies that exact
+coordinate file to both EDSTATS and Gemmi. Removing explicit MODEL/ENDMDL
+records prevents EDSTATS from adding a synthetic separator residue. Atoms and
+density statistics from different models are never combined.
 
 Alternative conformations are selected coherently per residue. Blank-altloc
 atoms are shared, while the named conformer with the highest mean valid atomic
