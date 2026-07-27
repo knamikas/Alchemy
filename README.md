@@ -35,6 +35,11 @@ Results are written to:
   real-space statistics, DPI and validation provenance, and explicit-only
   versus image-inclusive contact summaries. A cofactor containing multiple
   selected metal sites repeats its residue-level EDSTATS values once per site.
+  These rows share a `density_observation_id`; `density_scope`,
+  `density_shared_site_count`, and `density_is_shared` make the repetition
+  explicit. Statistical analyses of density measurements should deduplicate on
+  `density_observation_id` rather than counting each metal-site row as an
+  independent density observation.
   Diagnostic rows for cofactors that cannot be matched to a coordinate site may
   have blank site-specific fields; `coordinate_mapping_status` and
   `selected_metal_site_status` distinguish failed joins from cofactors without

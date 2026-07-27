@@ -951,6 +951,11 @@ def _append_site_fields(rows, site_summaries, structure):
     """Extend each EDSTATS row with its per-site contact and provenance values."""
     for index, row in enumerate(rows):
         summary = dict(site_summaries.get(row.get("site_key"), {}))
+        for name in (
+            "density_observation_id", "density_scope",
+            "density_shared_site_count", "density_is_shared",
+        ):
+            summary[name] = row.get(name, "")
         summary["coordinate_mapping_status"] = row.get(
             "coordinate_mapping_status", "")
         summary["selected_metal_site_status"] = row.get(

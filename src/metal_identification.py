@@ -191,6 +191,26 @@ def _expected_edstats_residues(structure, metals_upper, cofactor_set):
     }
 
 
+def _density_observation_id(pdb_id, fields, indices):
+    """Return a stable identifier for one residue-level EDSTATS observation.
+
+    EDSTATS reports one density observation per coordinate residue. Alchemy can
+    expand that observation into several metal-site rows for a multi-metal
+    cofactor, so the identifier deliberately derives from the EDSTATS row and
+    not from an individual metal atom. ``NR`` disambiguates otherwise repeated
+    author residue identifiers within the selected model.
+    """
+    chain = fields[indices["CI"]] or "_"
+    return "/".join((
+        str(pdb_id).lower(),
+        f"model={fields[indices['MN']]}",
+        f"chain={chain}",
+        f"residue={fields[indices['RN']]}",
+        f"component={fields[indices['RT']]}",
+        f"edstats_row={fields[indices['NR']]}",
+    ))
+
+
 def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structure=None):
     """Parse an edstats stats.out file, returning (rows, header).
     `structure` is the shared first-model Gemmi context used by bond analysis.
@@ -209,9 +229,12 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
     CCD identifiers that cannot fit in the three-character PDB residue field.
 
     Output is site-level: a multi-metal cofactor repeats its residue-level
-    EDSTATS values once per selected metal site. Each row carries ``site`` and
-    ``site_key`` internally so downstream contact summaries cannot collide for
-    multiple metals or duplicate author residue identifiers.
+    EDSTATS values once per selected metal site. Repeated rows share a
+    ``density_observation_id`` and report their shared-site multiplicity so
+    downstream analyses can count the density observation only once. Each row
+    also carries ``site`` and ``site_key`` internally so downstream contact
+    summaries cannot collide for multiple metals or duplicate author residue
+    identifiers.
 
     A cofactor row that has no matching coordinate residue or no selected metal
     site is retained once with ``site=None``. Machine-readable row status fields
@@ -267,6 +290,8 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             coordinate_resname = fields[indices["RT"]]
             chain = fields[indices["CI"]]
             resnum = fields[indices["RN"]]
+            density_observation_id = _density_observation_id(
+                pdbID, fields, indices)
             observed_residues.add((coordinate_resname, chain, resnum))
             matched_residues = structure.residues_for_author(
                 coordinate_resname, chain, resnum)
@@ -279,7 +304,7 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
 
             coordinate_name_is_cofactor = coordinate_resname in cofactor_set
             matched_cofactor_names = []
-            emitted_site = False
+            selected_sites = []
             for residue in matched_residues:
                 resname = residue.residue_name
                 category, metal_sites = _classify_residue(
@@ -289,25 +314,35 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                 if not category:
                     continue
                 for site in metal_sites:
-                    emitted_site = True
-                    output_fields = list(fields)
-                    output_fields[0] = resname
-                    rows.append({
-                        "pdbID": pdbID,
-                        "category": category,
-                        "resname": resname,
-                        "chain": chain,
-                        "resnum": resnum,
-                        "fields": output_fields,
-                        "coordinate_mapping_status": mapping_status,
-                        "selected_metal_site_status": "selected",
-                        "site": site,
-                        "site_key": site.source_key,
-                        "residue_key": residue.key,
-                    })
+                    selected_sites.append((residue, resname, category, site))
+
+            density_shared_site_count = len(selected_sites)
+            density_is_shared = density_shared_site_count > 1
+            for residue, resname, category, site in selected_sites:
+                output_fields = list(fields)
+                output_fields[0] = resname
+                rows.append({
+                    "pdbID": pdbID,
+                    "category": category,
+                    "resname": resname,
+                    "chain": chain,
+                    "resnum": resnum,
+                    "fields": output_fields,
+                    "density_observation_id": density_observation_id,
+                    "density_scope": ("cofactor_residue"
+                                      if category == "cofactor"
+                                      else "metal_residue"),
+                    "density_shared_site_count": density_shared_site_count,
+                    "density_is_shared": density_is_shared,
+                    "coordinate_mapping_status": mapping_status,
+                    "selected_metal_site_status": "selected",
+                    "site": site,
+                    "site_key": site.source_key,
+                    "residue_key": residue.key,
+                })
 
             if ((coordinate_name_is_cofactor or matched_cofactor_names) and
-                    not emitted_site):
+                    not selected_sites):
                 resname = (
                     matched_cofactor_names[0]
                     if matched_cofactor_names else coordinate_resname
@@ -321,6 +356,10 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                     "chain": chain,
                     "resnum": resnum,
                     "fields": output_fields,
+                    "density_observation_id": density_observation_id,
+                    "density_scope": "cofactor_residue",
+                    "density_shared_site_count": 0,
+                    "density_is_shared": False,
                     "coordinate_mapping_status": mapping_status,
                     "selected_metal_site_status": "no_selected_metal",
                     "site": None,

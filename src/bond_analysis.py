@@ -137,6 +137,8 @@ STATS_EXTRA_COLUMNS = [
     "metal_occupancy_status",
     "metal_conformer_mean_occupancy", "metal_altloc_options",
     "alternative_conformers_present", "altloc_selection_fallback",
+    "density_observation_id", "density_scope", "density_shared_site_count",
+    "density_is_shared",
     "coordinate_mapping_status", "selected_metal_site_status",
     "dpi", "resolution", "occupancy_weighted_atom_count",
     "deposited_occupancy_weighted_atom_count", "dpi_atom_count_multiplier",
