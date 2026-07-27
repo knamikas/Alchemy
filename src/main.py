@@ -1111,8 +1111,15 @@ def process(pdbID):
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-def load_done(manifest_path):
-    """PDB IDs whose result is terminal in an existing manifest."""
+def load_done(manifest_path, bonds_required=False, bond_output_present=True):
+    """PDB IDs whose requested result is terminal in an existing manifest.
+
+    A blank ``n_bonds`` means bond analysis was disabled, while ``0`` means it
+    ran successfully and found no retained contacts. When bonds are requested,
+    a terminal density result with blank ``n_bonds`` still needs processing.
+    An absent bond CSV also makes bond results incomplete, including manifests
+    written by older versions that recorded disabled analysis as zero bonds.
+    """
     done = set()
     if os.path.exists(manifest_path):
         with open(manifest_path, newline="") as f:
@@ -1123,7 +1130,12 @@ def load_done(manifest_path):
                     retryable = row.get("retryable", "").strip().lower()
                     terminal_partial = (status == "partial" and
                                         retryable in ("false", "0", "no"))
-                    if status == "ok" or terminal_partial:
+                    bonds_complete = (
+                        not bonds_required or
+                        (bond_output_present and
+                         row.get("n_bonds", "").strip() != "")
+                    )
+                    if (status == "ok" or terminal_partial) and bonds_complete:
                         pdbID = row.get("pdbID", "").strip().lower()
                         if pdbID:
                             done.add(pdbID)
@@ -1433,8 +1445,11 @@ def _manifest_row(result, resume, bonds_enabled, prior_bond_counts):
     """Project one worker result onto the manifest schema."""
     row = {column: result.get(column, "") for column in MANIFEST_COLUMNS}
     n_bonds = result["n_bonds"]
-    if resume and not bonds_enabled:
-        n_bonds = prior_bond_counts.get(result["pdbID"].lower(), n_bonds)
+    if not bonds_enabled:
+        n_bonds = (
+            prior_bond_counts.get(result["pdbID"].lower(), "")
+            if resume else ""
+        )
     row.update(
         n_metals=result["n"], n_bonds=n_bonds,
         runtime_s=result["runtime"],
@@ -1558,7 +1573,11 @@ def main(argv=None):
         return 1
 
     if args.resume:
-        done = load_done(manifest_path)
+        done = load_done(
+            manifest_path,
+            bonds_required=args.bonds,
+            bond_output_present=os.path.isfile(bonds_path),
+        )
         ids = [i for i in ids if i not in done]
     if args.max_pdbs is not None:
         ids = ids[:args.max_pdbs]

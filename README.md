@@ -279,6 +279,11 @@ as part of a software release before an analysis run.
   directory.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
+- In the manifest, a blank `n_bonds` means bond analysis was not run; `0` means
+  it ran successfully but found no retained first-sphere contacts. Resume uses
+  this distinction to add bonds after an earlier `--no-bonds` run. When the
+  bond CSV is absent, bond-enabled resume also treats legacy zero counts as
+  incomplete.
 - Statistics and bond CSV files retain their column headers when a completed run
   finds no metals or no first-sphere contacts.
 - The statistics header is a fixed schema rather than a copy of whatever EDSTATS
@@ -287,7 +292,9 @@ as part of a software release before an analysis run.
 - Resume retries are staged separately. Existing rows are replaced only after a
   retry produces a terminal result and the retry batch completes; failed or
   interrupted retries leave the previous rows intact. `--resume --no-bonds`
-  preserves existing bond rows.
+  preserves existing bond rows and their manifest counts. Entries originating
+  from a bond-disabled run retain blank `n_bonds`, so a later bond-enabled
+  resume will process them.
 - A fresh `--no-bonds` run removes a pre-existing `metal_bonds_all.csv` before
   replacing the manifest and statistics, so bond rows from an older run cannot
   be mistaken for current output.
