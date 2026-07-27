@@ -139,10 +139,12 @@ does not receive a DPI because its non-hydrogen atom count is indeterminate.
 EDSTATS' missing-chain markers are normalized before coordinate matching. When
 EDSTATS omits its empty trailing chain field for a blank-chain residue, Alchemy
 restores that field before validating the standard 42-column schema. Other row
-width mismatches still fail. The table must contain finite numeric statistics
-or the documented `n/a` marker and a row for every selected metal or cofactor
-residue. Empty, malformed, incomplete, or wrong-model output fails the entry
-instead of being written to the aggregate CSV.
+width mismatches still fail. Decimal and hybrid-36 PDB residue numbers are
+decoded to the same canonical integer representation used by Gemmi before raw
+PDB atoms and EDSTATS rows are joined. The table must contain finite numeric
+statistics or the documented `n/a` marker and a row for every selected metal or
+cofactor residue. Empty, malformed, incomplete, or wrong-model output fails the
+entry instead of being written to the aggregate CSV.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 

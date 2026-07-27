@@ -32,11 +32,64 @@ RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
 # "no value here". Altloc labels, insertion codes, and main.py's mmCIF
 # conversion bookkeeping share this one definition.
 MISSING_VALUE_TOKENS = ("", " ", "\x00", ".", "?")
+PDB_HYBRID36_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def blank_if_missing(value: str) -> str:
     """Return ``value``, or blank when it is a missing-value marker."""
     return "" if value in MISSING_VALUE_TOKENS else str(value)
+
+
+def _decode_pdb_resseq(value: str) -> int:
+    """Decode a four-column decimal or hybrid-36 PDB resSeq value.
+
+    Gemmi exposes the decoded integer through ``Residue.seqid.num``. Raw PDB
+    and EDSTATS identifiers must use the same representation for stable joins.
+    Gemmi treats letter case equivalently for PDB resSeq fields, so normalize to
+    upper case before decoding the base-36 range.
+    """
+    text = str(value)
+    if len(text) > 4:
+        raise ValueError(f"PDB residue sequence field is wider than 4: {value!r}")
+    text = text.rjust(4)
+    first = text[0]
+    if first in (" ", "-") or first.isdigit():
+        try:
+            return int(text)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"invalid decimal PDB residue sequence: {value!r}") from exc
+
+    encoded = text.upper()
+    if any(character not in PDB_HYBRID36_DIGITS for character in encoded):
+        raise ValueError(f"invalid hybrid-36 PDB residue sequence: {value!r}")
+    decoded = 0
+    for character in encoded:
+        decoded = decoded * 36 + PDB_HYBRID36_DIGITS.index(character)
+    return decoded - 10 * 36 ** 3 + 10 ** 4
+
+
+def canonical_pdb_residue_id(value: str) -> str:
+    """Return a decimal residue identifier with any insertion code appended.
+
+    EDSTATS separates an insertion code with ``:``. Accept the equivalent
+    compact form as well, then decode the four-column PDB residue number using
+    the same integer representation Gemmi exposes.
+    """
+    text = str(value).strip()
+    insertion = ""
+    if ":" in text:
+        number_text, insertion = text.split(":", 1)
+    elif len(text) > 4:
+        number_text, insertion = text[:4], text[4:]
+    elif (text and text[-1].isalpha() and not text[0].isalpha()
+          and text[:-1]):
+        number_text, insertion = text[:-1], text[-1]
+    else:
+        number_text = text
+    if len(insertion) > 1:
+        raise ValueError(f"invalid PDB insertion code in residue id: {value!r}")
+    return f"{_decode_pdb_resseq(number_text)}{insertion}"
 
 
 def position_distance(a: Sequence[float], b: Sequence[float]) -> float:
@@ -385,7 +438,7 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
                 altloc = blank_if_missing(line[16:17])
                 residue_name = line[17:20].strip()
                 chain_id = line[21:22].strip()
-                residue_number = line[22:26].strip()
+                residue_number = str(_decode_pdb_resseq(line[22:26]))
                 insertion_code = blank_if_missing(line[26:27])
                 element, element_status = _parse_pdb_element(line[76:78])
                 text = line[54:60] if len(line) >= 55 else ""

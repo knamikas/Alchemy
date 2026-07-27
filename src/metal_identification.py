@@ -10,6 +10,8 @@
 import math
 import os
 
+from structure_analysis import canonical_pdb_residue_id
+
 
 COFACTOR_CATALOG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -253,6 +255,13 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                 raise ValueError(
                     f"EDSTATS returned model {row_model}, but Alchemy's "
                     f"model policy selected model {structure.model_analyzed}")
+            try:
+                fields[indices["RN"]] = canonical_pdb_residue_id(
+                    fields[indices["RN"]])
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid EDSTATS RN residue identifier on row "
+                    f"{line_number}: {fields[indices['RN']]!r}") from exc
 
             residue_row_count += 1
             coordinate_resname = fields[indices["RT"]]
