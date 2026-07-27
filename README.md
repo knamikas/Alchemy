@@ -136,12 +136,13 @@ rather than inferred from atom names. During mmCIF conversion, the explicit
 cofactors are matched against the Chemical Component Dictionary list maintained
 by `tools/build_metallocofactor_catalog.py`. A structure with unknown elements
 does not receive a DPI because its non-hydrogen atom count is indeterminate.
-EDSTATS' `_` marker is normalized to a blank chain identifier before coordinate
-matching. Its residue table must have the standard 42-column schema, consistent
-row widths, finite numeric statistics or the documented `n/a` marker, and a row
-for every selected metal or cofactor residue. Empty, malformed, incomplete, or
-wrong-model output fails the entry instead of being written to the aggregate
-CSV.
+EDSTATS' missing-chain markers are normalized before coordinate matching. When
+EDSTATS omits its empty trailing chain field for a blank-chain residue, Alchemy
+restores that field before validating the standard 42-column schema. Other row
+width mismatches still fail. The table must contain finite numeric statistics
+or the documented `n/a` marker and a row for every selected metal or cofactor
+residue. Empty, malformed, incomplete, or wrong-model output fails the entry
+instead of being written to the aggregate CSV.
 
 ### 4. Bond-distance analysis — `src/bond_analysis.py`
 

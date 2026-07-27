@@ -49,6 +49,7 @@ EDSTATS_COLUMNS = (
     "MN", "CP", "NR",
 )
 EDSTATS_NULL_VALUE = "n/a"
+EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
 
 
 def _is_edstats_separator(fields):
@@ -71,6 +72,39 @@ def _is_edstats_separator(fields):
                 for value in fields[1:metric_count + 1])
         and all(value.isdigit() for value in fields[-2:])
     )
+
+
+def _normalize_edstats_row(fields, header, indices):
+    """Restore and normalize EDSTATS' valid blank-chain representation.
+
+    EDSTATS writes ``_`` for a blank leading chain identifier (CI), but leaves
+    the trailing chain field (CP) empty. Whitespace splitting therefore removes
+    CP and produces 41 fields. Restore CP only for that unambiguous shape: CI is
+    missing, and the final two tokens are the integer MN and NR values. All
+    other short rows remain short and are rejected by normal row validation.
+    Both chain fields then use an empty string as their canonical missing value.
+    """
+    normalized = list(fields)
+    if (
+        len(normalized) == len(header) - 1
+        and normalized[indices["CI"]] in EDSTATS_MISSING_CHAIN_IDS
+        and indices["MN"] == len(normalized) - 2
+        and indices["CP"] == len(normalized) - 1
+    ):
+        try:
+            int(normalized[-2])
+            int(normalized[-1])
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            normalized.insert(indices["CP"], "")
+
+    if len(normalized) == len(header):
+        for name in ("CI", "CP"):
+            index = indices[name]
+            if normalized[index] in EDSTATS_MISSING_CHAIN_IDS:
+                normalized[index] = ""
+    return normalized
 
 
 def _validated_edstats_header(fields):
@@ -212,6 +246,7 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
 
             if indices is None:  # defensive; header validation sets this
                 raise ValueError("EDSTATS header was not validated")
+            fields = _normalize_edstats_row(fields, header, indices)
             row_model = _validate_edstats_row(
                 fields, header, indices, line_number)
             if row_model != structure.model_analyzed:
@@ -222,10 +257,6 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             residue_row_count += 1
             coordinate_resname = fields[indices["RT"]]
             chain = fields[indices["CI"]]
-            # EDSTATS writes "_" for a blank PDB chain identifier. The other
-            # two markers are the equivalent missing-value tokens in mmCIF.
-            if chain in (".", "?", "_"):
-                chain = ""
             resnum = fields[indices["RN"]]
             observed_residues.add((coordinate_resname, chain, resnum))
             matched_residues = structure.residues_for_author(
