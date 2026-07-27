@@ -237,7 +237,7 @@ and atom serial rather than parser traversal order.
 | `--workers <n>` | Set multiprocessing parallelism; must be at least 1. |
 | `--max-pdbs <n>` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
-| `--no-bonds` | Skip bond-distance analysis. |
+| `--no-bonds` | Skip bond-distance analysis. A fresh run removes any previous `metal_bonds_all.csv` in the output directory. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
 | `--ccp4-setup <path>` | Source and verify a CCP4 setup script for this run. |
 | `--configure-ccp4 <path>` | Save a CCP4 setup script path for later runs. |
@@ -288,6 +288,9 @@ as part of a software release before an analysis run.
   retry produces a terminal result and the retry batch completes; failed or
   interrupted retries leave the previous rows intact. `--resume --no-bonds`
   preserves existing bond rows.
+- A fresh `--no-bonds` run removes a pre-existing `metal_bonds_all.csv` before
+  replacing the manifest and statistics, so bond rows from an older run cannot
+  be mistaken for current output.
 - A failure in bond analysis does not discard real-space-statistics rows already
   calculated for that entry; the manifest records the entry as `partial` with
   the bond-stage error.

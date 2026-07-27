@@ -1257,6 +1257,20 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
                 "schema; choose a new --output-dir for this Gemmi migration "
                 "run.")
 
+
+def remove_stale_disabled_bond_output(path, resume, bonds_enabled):
+    """Remove a previous bond CSV before a fresh bond-disabled run.
+
+    A non-resume run replaces the manifest and statistics outputs, so retaining
+    an older bond file would falsely associate it with the new run. Resume mode
+    is different: completed entries and their existing bond rows are retained.
+    """
+    if resume or bonds_enabled or not os.path.lexists(path):
+        return False
+    os.unlink(path)
+    return True
+
+
 def available_cpu_count():
     """Return the number of CPUs this process is actually permitted to use.
 
@@ -1552,6 +1566,15 @@ def main(argv=None):
     if not ids:
         print("No entries to process.", flush=True)
         return 0
+
+    try:
+        removed_stale_bonds = remove_stale_disabled_bond_output(
+            bonds_path, resume=args.resume, bonds_enabled=args.bonds)
+    except OSError as exc:
+        print(f"Could not remove stale {bonds_path}: {exc}", flush=True)
+        return 1
+    if removed_stale_bonds:
+        print(f"Removed stale bond output: {bonds_path}", flush=True)
 
     # A Pool creates every worker up front, so asking for more than there are
     # entries just pays each one's startup for no work. Costly under the spawn
