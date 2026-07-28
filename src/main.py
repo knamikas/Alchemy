@@ -4,11 +4,12 @@
 For each PDB entry this validates/corrects its Fourier map coefficients with
 CCP4 `mtzfix`, computes 2mFo-DFc and mFo-DFc maps with `fft`, and runs
 `edstats`, then extracts per-atom real-space statistics for metal ions and
-metal-containing cofactors. Results are streamed to three CSVs under
+metal-containing cofactors. Results are streamed to four CSVs under
 --output-dir:
 
   metal_stats_all.csv  -- one row per selected metal site
-  metal_bonds_all.csv  -- one row per retained first-sphere contact
+  metal_bonds_all.csv  -- one row per inferred or declared contact
+  metal_candidates_all.csv -- one row per discovered or declared candidate
   manifest.csv         -- one row per entry with status and provenance
 
 Requirements
@@ -54,6 +55,7 @@ from metal_elements import METAL_ELEMENTS
 from structure_analysis import RESNAME_REMARK_PREFIX, blank_if_missing
 from bond_analysis import (
     BOND_COLUMNS,
+    CANDIDATE_COLUMNS,
     NAN,
     STATS_EXTRA_COLUMNS,
     load_structure,
@@ -97,7 +99,8 @@ IDENTIFICATION_REASON_MESSAGES = {
 }
 
 MANIFEST_COLUMNS = [
-    "pdbID", "status", "retryable", "n_metals", "n_bonds", "runtime_s",
+    "pdbID", "status", "retryable", "n_metals", "n_bonds", "n_candidates",
+    "runtime_s",
     "reason_codes", "warning_codes", "error", "alchemy_version", "alchemy_commit",
     "gemmi_version", "ccp4_version", "refinement_state",
     "source_coordinate_format", "analysis_coordinate_format",
@@ -885,7 +888,8 @@ def _initial_result(pdbID, cfg, manual_inputs):
     """
     return {"pdbID": pdbID, "status": "error", "n": 0,
             "runtime": 0.0, "error": "", "rows": [],
-            "bond_rows": [], "n_bonds": 0, "retryable": True,
+            "bond_rows": [], "candidate_rows": [],
+            "n_bonds": 0, "n_candidates": 0, "retryable": True,
             "reason_codes": [], "warning_codes": [],
             "alchemy_version": ALCHEMY_VERSION,
             "alchemy_commit": cfg["alchemy_commit"],
@@ -972,7 +976,7 @@ def _append_site_fields(rows, site_summaries, structure):
 
 
 def _finalize_result(result, identification_codes, bond_meta, structure,
-                     rows, bond_rows):
+                     rows, bond_rows, candidate_rows):
     """Merge the stage outcomes into the final status, codes, and counts."""
     result["reason_codes"] = list(dict.fromkeys(
         result["reason_codes"] + identification_codes +
@@ -996,7 +1000,10 @@ def _finalize_result(result, identification_codes, bond_meta, structure,
     # analysis still found and evaluated the deposited metal.
     result.update(status=status,
                   n=len(structure.metal_atoms(METALS_SET, canonical=True)),
-                  rows=rows, bond_rows=bond_rows, n_bonds=len(bond_rows))
+                  rows=rows, bond_rows=bond_rows,
+                  candidate_rows=candidate_rows,
+                  n_bonds=len(bond_rows),
+                  n_candidates=len(candidate_rows))
 
 
 def process(pdbID):
@@ -1077,6 +1084,7 @@ def process(pdbID):
         identification_reason_codes = _identification_reason_codes(rows)
 
         bond_rows = []
+        candidate_rows = []
         site_summaries = {}
         bond_meta = {"partial_reason_codes": [],
                      "warning_codes": list(structure.warning_codes),
@@ -1085,18 +1093,20 @@ def process(pdbID):
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
             try:
-                bond_rows, site_summaries, bond_meta = run_bond_analysis(
+                (bond_rows, candidate_rows, site_summaries,
+                 bond_meta) = run_bond_analysis(
                     pdbID, pdb, rows, header,
                     {"data_json": data_json if manual_inputs else os.path.join(entry, "data.json"),
                      "pdb_path": pdb, "mtz_path": mtz,
-                     "resolution": data_reshi}, structure=structure)
+                     "resolution": data_reshi}, structure=structure,
+                    connection_path=source_coordinate_path)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
                 result["reason_codes"] = ["bond_stage_failure"]
                 result["retryable"] = True
         _append_site_fields(rows, site_summaries, structure)
         _finalize_result(result, identification_reason_codes, bond_meta,
-                         structure, rows, bond_rows)
+                         structure, rows, bond_rows, candidate_rows)
     except FileNotFoundError as e:
         result.update(status="skip", retryable=True,
                       reason_codes=["missing_input"],
@@ -1116,14 +1126,15 @@ def process(pdbID):
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-def load_done(manifest_path, bonds_required=False, bond_output_present=True):
+def load_done(manifest_path, bonds_required=False, bond_output_present=True,
+              candidate_output_present=True):
     """PDB IDs whose requested result is terminal in an existing manifest.
 
-    A blank ``n_bonds`` means bond analysis was disabled, while ``0`` means it
-    ran successfully and found no retained contacts. When bonds are requested,
-    a terminal density result with blank ``n_bonds`` still needs processing.
-    An absent bond CSV also makes bond results incomplete, including manifests
-    written by older versions that recorded disabled analysis as zero bonds.
+    Blank ``n_bonds`` and ``n_candidates`` values mean bond analysis was
+    disabled, while ``0`` means it ran successfully and found no rows of that
+    type. When bonds are requested, a terminal density result with either blank
+    count still needs processing. Absent bond or candidate CSVs also make
+    bond-stage results incomplete.
     """
     done = set()
     if os.path.exists(manifest_path):
@@ -1137,8 +1148,9 @@ def load_done(manifest_path, bonds_required=False, bond_output_present=True):
                                         retryable in ("false", "0", "no"))
                     bonds_complete = (
                         not bonds_required or
-                        (bond_output_present and
-                         row.get("n_bonds", "").strip() != "")
+                        (bond_output_present and candidate_output_present and
+                         row.get("n_bonds", "").strip() != "" and
+                         row.get("n_candidates", "").strip() != "")
                     )
                     if (status == "ok" or terminal_partial) and bonds_complete:
                         pdbID = row.get("pdbID", "").strip().lower()
@@ -1255,7 +1267,7 @@ def _batch_exit_code(counts, retryable_partial_count):
 
 
 def validate_resume_schemas(manifest_path, stats_path, bonds_path,
-                            bonds_enabled=True):
+                            candidates_path, bonds_enabled=True):
     """Refuse to append migration rows beneath an incompatible old header.
 
     Whole headers are compared, including the EDSTATS block of
@@ -1265,7 +1277,8 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
     """
     checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
-        checks.append((bonds_path, BOND_COLUMNS))
+        checks.extend(((bonds_path, BOND_COLUMNS),
+                       (candidates_path, CANDIDATE_COLUMNS)))
     for path, expected in checks:
         header = _csv_header(path)
         if header is not None and header != expected:
@@ -1275,17 +1288,22 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
                 "run.")
 
 
-def remove_stale_disabled_bond_output(path, resume, bonds_enabled):
-    """Remove a previous bond CSV before a fresh bond-disabled run.
+def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
+    """Remove previous bond-stage CSVs before a fresh disabled run.
 
     A non-resume run replaces the manifest and statistics outputs, so retaining
-    an older bond file would falsely associate it with the new run. Resume mode
-    is different: completed entries and their existing bond rows are retained.
+    older bond-stage files would falsely associate them with the new run.
+    Resume mode is different: completed entries and their existing rows are
+    retained.
     """
-    if resume or bonds_enabled or not os.path.lexists(path):
-        return False
-    os.unlink(path)
-    return True
+    if resume or bonds_enabled:
+        return []
+    removed = []
+    for path in paths:
+        if os.path.lexists(path):
+            os.unlink(path)
+            removed.append(path)
+    return removed
 
 
 def available_cpu_count():
@@ -1446,17 +1464,24 @@ def _select_entry_ids(args, cache_root):
     return enumerate_entries(root, limit=limit), root, None
 
 
-def _manifest_row(result, resume, bonds_enabled, prior_bond_counts):
+def _manifest_row(result, resume, bonds_enabled, prior_bond_counts,
+                  prior_candidate_counts):
     """Project one worker result onto the manifest schema."""
     row = {column: result.get(column, "") for column in MANIFEST_COLUMNS}
     n_bonds = result["n_bonds"]
+    n_candidates = result["n_candidates"]
     if not bonds_enabled:
         n_bonds = (
             prior_bond_counts.get(result["pdbID"].lower(), "")
             if resume else ""
         )
+        n_candidates = (
+            prior_candidate_counts.get(result["pdbID"].lower(), "")
+            if resume else ""
+        )
     row.update(
         n_metals=result["n"], n_bonds=n_bonds,
+        n_candidates=n_candidates,
         runtime_s=result["runtime"],
         reason_codes="|".join(result.get("reason_codes", [])),
         warning_codes="|".join(result.get("warning_codes", [])),
@@ -1483,14 +1508,17 @@ class _ResumeStaging:
         """Replace the retried entries' rows in the real output files."""
         if not self.replacement_ids:
             return
-        manifest_path, stats_path, bonds_path = self.targets
-        staged_manifest, staged_stats, staged_bonds = self.staged
+        manifest_path, stats_path, bonds_path, candidates_path = self.targets
+        (staged_manifest, staged_stats, staged_bonds,
+         staged_candidates) = self.staged
         # Data files are committed before the manifest completion marker. If an
         # interruption occurs between replacements, the old manifest causes the
         # entry to be retried safely.
         _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
         if bonds_enabled:
             _merge_csv_replacements(bonds_path, staged_bonds,
+                                    self.replacement_ids)
+            _merge_csv_replacements(candidates_path, staged_candidates,
                                     self.replacement_ids)
         _merge_csv_replacements(manifest_path, staged_manifest,
                                 self.replacement_ids)
@@ -1501,26 +1529,32 @@ class _ResumeStaging:
 
 
 class _OutputWriters:
-    """The three streamed CSV outputs, with running row counts.
+    """The four streamed CSV outputs, with running row counts.
 
     Each stream is flushed after every entry so an interrupted batch run
     retains the results it already completed. Headers are written on creation.
     """
 
-    def __init__(self, manifest_fh, stats_fh, bonds_fh):
+    def __init__(self, manifest_fh, stats_fh, bonds_fh, candidates_fh):
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
         self._bonds_fh = bonds_fh
+        self._candidates_fh = candidates_fh
         self._manifest = csv.DictWriter(manifest_fh,
                                         fieldnames=MANIFEST_COLUMNS)
         self._stats = csv.writer(stats_fh)
         self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
+        self._candidates = (
+            csv.writer(candidates_fh) if candidates_fh is not None else None)
         self.n_rows = 0
         self.n_bonds = 0
+        self.n_candidates = 0
         self._manifest.writeheader()
         self._stats.writerow(STATS_COLUMNS)
         if self._bonds is not None:
             self._bonds.writerow(BOND_COLUMNS)
+        if self._candidates is not None:
+            self._candidates.writerow(CANDIDATE_COLUMNS)
 
     def write_stats_rows(self, rows):
         if not rows:
@@ -1539,6 +1573,17 @@ class _OutputWriters:
             self._bonds.writerow([bond[column] for column in BOND_COLUMNS])
             self.n_bonds += 1
         self._bonds_fh.flush()
+
+    def write_candidate_rows(self, candidate_rows):
+        if self._candidates is None or not candidate_rows:
+            return
+        _check_row_schema(candidate_rows[0], CANDIDATE_COLUMNS,
+                          "metal_candidates_all.csv")
+        for candidate in candidate_rows:
+            self._candidates.writerow(
+                [candidate[column] for column in CANDIDATE_COLUMNS])
+            self.n_candidates += 1
+        self._candidates_fh.flush()
 
     def write_manifest_row(self, row):
         self._manifest.writerow(row)
@@ -1563,10 +1608,13 @@ def main(argv=None):
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
     stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
     bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
+    candidates_path = os.path.join(
+        args.output_dir, "metal_candidates_all.csv")
     if args.resume:
         try:
-            validate_resume_schemas(manifest_path, stats_path, bonds_path,
-                                    bonds_enabled=args.bonds)
+            validate_resume_schemas(
+                manifest_path, stats_path, bonds_path, candidates_path,
+                bonds_enabled=args.bonds)
         except ValueError as exc:
             print(str(exc), flush=True)
             return 1
@@ -1582,6 +1630,7 @@ def main(argv=None):
             manifest_path,
             bonds_required=args.bonds,
             bond_output_present=os.path.isfile(bonds_path),
+            candidate_output_present=os.path.isfile(candidates_path),
         )
         ids = [i for i in ids if i not in done]
     if args.max_pdbs is not None:
@@ -1592,13 +1641,14 @@ def main(argv=None):
         return 0
 
     try:
-        removed_stale_bonds = remove_stale_disabled_bond_output(
-            bonds_path, resume=args.resume, bonds_enabled=args.bonds)
+        removed_stale_bond_outputs = remove_stale_disabled_bond_outputs(
+            (bonds_path, candidates_path), resume=args.resume,
+            bonds_enabled=args.bonds)
     except OSError as exc:
-        print(f"Could not remove stale {bonds_path}: {exc}", flush=True)
+        print(f"Could not remove stale bond-stage output: {exc}", flush=True)
         return 1
-    if removed_stale_bonds:
-        print(f"Removed stale bond output: {bonds_path}", flush=True)
+    for removed_path in removed_stale_bond_outputs:
+        print(f"Removed stale bond-stage output: {removed_path}", flush=True)
 
     # A Pool creates every worker up front, so asking for more than there are
     # entries just pays each one's startup for no work. Costly under the spawn
@@ -1621,10 +1671,16 @@ def main(argv=None):
         _manifest_values_by_id(manifest_path, "n_bonds")
         if args.resume and not args.bonds else {}
     )
-    output_paths = (manifest_path, stats_path, bonds_path)
+    prior_candidate_counts = (
+        _manifest_values_by_id(manifest_path, "n_candidates")
+        if args.resume and not args.bonds else {}
+    )
+    output_paths = (
+        manifest_path, stats_path, bonds_path, candidates_path)
     staging = (_ResumeStaging(args.output_dir, output_paths)
                if args.resume else None)
-    write_manifest_path, write_stats_path, write_bonds_path = (
+    (write_manifest_path, write_stats_path, write_bonds_path,
+     write_candidates_path) = (
         staging.staged if staging is not None else output_paths)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
@@ -1643,6 +1699,9 @@ def main(argv=None):
                 handles.enter_context(
                     open(write_bonds_path, "w", newline=""))
                 if args.bonds else None,
+                handles.enter_context(
+                    open(write_candidates_path, "w", newline=""))
+                if args.bonds else None,
             )
             with Pool(workers, initializer=_init_worker,
                       initargs=(cfg,)) as pool:
@@ -1651,10 +1710,12 @@ def main(argv=None):
                     if not args.resume or _resume_replacement_succeeded(r):
                         writers.write_stats_rows(r["rows"])
                         writers.write_bond_rows(r["bond_rows"])
+                        writers.write_candidate_rows(r["candidate_rows"])
                         # The manifest is the completion marker, so write it
                         # only after this entry's result rows have flushed.
                         writers.write_manifest_row(_manifest_row(
-                            r, args.resume, args.bonds, prior_bond_counts))
+                            r, args.resume, args.bonds, prior_bond_counts,
+                            prior_candidate_counts))
                         if staging is not None:
                             staging.replacement_ids.add(r["pdbID"].lower())
                     counts[r["status"]] = counts.get(r["status"], 0) + 1
@@ -1666,7 +1727,8 @@ def main(argv=None):
                               f"skip={counts['skip']} "
                               f"error={counts['error']} "
                               f"rows={writers.n_rows} "
-                              f"bonds={writers.n_bonds}", flush=True)
+                              f"bonds={writers.n_bonds} "
+                              f"candidates={writers.n_candidates}", flush=True)
             processing_completed = True
     finally:
         if staging is not None and not processing_completed:
@@ -1674,6 +1736,7 @@ def main(argv=None):
 
     n_rows = writers.n_rows if writers is not None else 0
     n_bonds = writers.n_bonds if writers is not None else 0
+    n_candidates = writers.n_candidates if writers is not None else 0
 
     if staging is not None:
         try:
@@ -1686,6 +1749,8 @@ def main(argv=None):
           f"{n_rows} metal/cofactor rows -> {stats_path}", flush=True)
     if args.bonds:
         print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
+        print(f"      {n_candidates} candidate rows -> {candidates_path}",
+              flush=True)
     exit_code = _batch_exit_code(counts, retryable_partial_count)
     if exit_code:
         print(
