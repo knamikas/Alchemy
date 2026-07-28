@@ -262,10 +262,15 @@ python tools/build_metallocofactor_catalog.py
 The isolated builder downloads the wwPDB Chemical Component Dictionary and
 replaces the bundled catalog and its metadata only after a successful build,
 using atomic replacement for each file. A local CCD snapshot can be supplied
-with `--ccd`. Use `--status` to report the generation time, schema and builder
-versions, entry count, checksum, and integrity of the currently bundled catalog
+with `--ccd`. Use `--status` to report the generation time, entry count,
+checksum, and integrity of the currently bundled catalog
 without downloading anything. Catalog changes should be reviewed and committed
 as part of a software release before an analysis run.
+
+Cluster and heme classes are derived from CCD atom connectivity, not formula
+stoichiometry. Clusters require a bridging sulfur or selenium, while hemes
+require an Fe-bound porphyrinoid core. Run a full rebuild whenever the component
+list or classification rules change.
 
 ## Reference data
 

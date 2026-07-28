@@ -79,7 +79,7 @@ SYMMETRY_POLICY = (
     "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
 )
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
-ALCHEMY_VERSION = "0.1.0"
+ALCHEMY_VERSION = "1.0.0"
 
 # Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
 # is never mistaken for environment variables.
@@ -1369,7 +1369,7 @@ def parse_args(argv=None):
     ap.add_argument("--pdb-redo-cache", default=os.path.join(REPO_DIR, "pdb-redo-cache"),
                     help="root of local cache for auto-downloaded PDB-REDO entries")
     ap.add_argument("--max-pdbs", type=int, default=None,
-                    help="debug cap: process only the first N entries")
+                    help="process only the first N entries")
     ap.add_argument("--workers", type=positive_int,
                     default=max(1, available_cpu_count() - 2),
                     help="number of worker processes (minimum: 1)")

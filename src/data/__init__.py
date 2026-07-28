@@ -1,1 +1,1 @@
-"""Bundled reference data required by Metal Alchemy."""
+"""Bundled reference data required by Alchemy."""

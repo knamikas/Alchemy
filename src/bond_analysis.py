@@ -70,7 +70,7 @@ NAN = float("nan")
 def _load_cofactor_classes(path):
     """Return ``(cluster_ids, heme_ids)`` from the bundled catalog.
 
-    Structural classes are derived from CCD formulas when the catalog is built
+    Structural classes are derived from CCD connectivity when the catalog is built
     by ``tools/build_metallocofactor_catalog.py``, so they track the CCD rather
     than drifting behind a list maintained by hand here. They tag each metal's
     environment in ``parent_type``; CLUSTER takes precedence in
@@ -91,7 +91,7 @@ def _load_cofactor_classes(path):
     if not cluster or not heme:
         raise ValueError(
             f"{os.path.basename(path)} carries no structural classes; rebuild "
-            "it with tools/build_metallocofactor_catalog.py --reclassify")
+            "it with tools/build_metallocofactor_catalog.py")
     return frozenset(cluster), frozenset(heme)
 
 

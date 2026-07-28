@@ -31,9 +31,6 @@ CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 DEFAULT_OUTPUT_DIR = SOURCE_DIR / "data"
 CATALOG_FILENAME = "metallocofactors_id.txt"
 METADATA_FILENAME = "metallocofactors_id.meta.json"
-# Schema 2 adds the structural-class column; schema 1 was id and formula only.
-CATALOG_SCHEMA_VERSION = 2
-BUILDER_VERSION = 2
 COMPONENT_ID_PATTERN = re.compile(r"[A-Z0-9]+")
 ELEMENT_PATTERN = re.compile(r"([A-Z][a-z]?)(\d*)")
 
@@ -48,11 +45,17 @@ ELEMENT_PATTERN = re.compile(r"([A-Z][a-z]?)(\d*)")
 CLASS_CLUSTER = "cluster"
 CLASS_HEME = "heme"
 
-# Metals that form polynuclear metal-sulfide clusters in biological cofactors.
+# Metals that form polynuclear metal-chalcogen clusters in biological cofactors.
 CLUSTER_METALS = ("FE", "NI", "MO", "V", "W")
-# Porphine (CCD "POR"), the unsubstituted macrocycle, is C20. Nothing smaller
-# can carry a tetrapyrrole ring.
-PORPHYRIN_MIN_CARBON = 20
+CLUSTER_CHALCOGENS = ("S", "SE")
+# The porphyrinoid core is a single biconnected conjugated system. Canonical
+# porphyrins have 20 carbon and four nitrogen atoms in a 24-atom component;
+# oxaporphyrins replace one carbon, while iron phthalocyanine is larger. Three
+# Fe-N bonds retain covalently modified porphyrins such as CCD ``WRK``.
+PORPHYRINOID_CORE_MIN_ATOMS = 24
+PORPHYRINOID_CORE_MIN_CARBON = 18
+PORPHYRINOID_CORE_MIN_NITROGEN = 4
+PORPHYRINOID_MIN_FE_N_BONDS = 3
 
 # Canonical cofactors named in the Alchemy manuscript Methods. Asserted present
 # after every build so a change to the rules above cannot silently drop a
@@ -77,27 +80,116 @@ def element_counts(formula):
     return counts
 
 
-def classify_component(formula):
-    """Return ``"cluster"``, ``"heme"``, or ``""`` for one CCD formula.
+def _component_graph(block):
+    """Return CCD atom elements and undirected bond adjacency for ``block``."""
+    elements = {
+        atom_id: symbol.strip().upper()
+        for atom_id, symbol in block.find([
+            "_chem_comp_atom.atom_id",
+            "_chem_comp_atom.type_symbol",
+        ])
+    }
+    adjacency = {atom_id: set() for atom_id in elements}
+    for atom_1, atom_2 in block.find([
+            "_chem_comp_bond.atom_id_1",
+            "_chem_comp_bond.atom_id_2",
+            ]):
+        if atom_1 not in elements or atom_2 not in elements:
+            continue
+        adjacency[atom_1].add(atom_2)
+        adjacency[atom_2].add(atom_1)
+    return elements, adjacency
 
-    A cluster is polynuclear metal-sulfide: two or more cluster-forming metals
-    together with bridging sulfur. The metals are counted collectively rather
-    than as iron alone because NiFe hydrogenase active sites (CCD ``NFE``,
-    ``FNE``) carry only one Fe, and nitrogenase FeMo/FeV cofactors mix metals.
 
-    A heme is a single Fe held in a tetrapyrrole macrocycle, approximated by
-    one Fe with at least four nitrogens and a porphine-sized carbon skeleton.
+def _biconnected_components(adjacency, allowed_atoms):
+    """Return vertex sets for biconnected components of an atom subgraph."""
+    allowed = set(allowed_atoms)
+    discovery, low, parent = {}, {}, {}
+    edge_stack = []
+    components = []
+    clock = 0
 
-    Cluster is tested first, matching the precedence the analysis has always
-    applied to components that satisfy both.
+    def visit(atom):
+        nonlocal clock
+        clock += 1
+        discovery[atom] = low[atom] = clock
+        for neighbor in sorted(adjacency.get(atom, ())):
+            if neighbor not in allowed:
+                continue
+            if neighbor not in discovery:
+                parent[neighbor] = atom
+                edge_stack.append((atom, neighbor))
+                visit(neighbor)
+                low[atom] = min(low[atom], low[neighbor])
+                if low[neighbor] >= discovery[atom]:
+                    component = set()
+                    while edge_stack:
+                        edge = edge_stack.pop()
+                        component.update(edge)
+                        if edge == (atom, neighbor):
+                            break
+                    if component:
+                        components.append(component)
+            elif (parent.get(atom) != neighbor and
+                  discovery[neighbor] < discovery[atom]):
+                low[atom] = min(low[atom], discovery[neighbor])
+                edge_stack.append((atom, neighbor))
+
+    for atom in sorted(allowed):
+        if atom not in discovery:
+            visit(atom)
+    return components
+
+
+def classify_component(block):
+    """Return ``"cluster"``, ``"heme"``, or ``""`` from CCD connectivity.
+
+    Formula stoichiometry cannot establish either architecture: sulfur may be
+    part of an unrelated substituent, and many siderophores and synthetic iron
+    chelates have Fe/N/C counts resembling a heme. A cluster therefore requires
+    a sulfur or selenium atom bonded to at least two cluster-forming metals. A
+    heme requires an Fe-bound porphyrinoid-sized biconnected C/N core.
+
+    Cluster is tested first, matching the precedence used by the analysis.
     """
-    counts = element_counts(formula)
-    if (sum(counts.get(metal, 0) for metal in CLUSTER_METALS) >= 2 and
-            counts.get("S", 0) >= 1):
-        return CLASS_CLUSTER
-    if (counts.get("FE", 0) == 1 and counts.get("N", 0) >= 4 and
-            counts.get("C", 0) >= PORPHYRIN_MIN_CARBON):
-        return CLASS_HEME
+    elements, adjacency = _component_graph(block)
+    cluster_metals = {
+        atom_id for atom_id, element in elements.items()
+        if element in CLUSTER_METALS
+    }
+    for atom_id, element in elements.items():
+        if element not in CLUSTER_CHALCOGENS:
+            continue
+        bonded_metals = cluster_metals.intersection(adjacency.get(atom_id, ()))
+        if len(bonded_metals) >= 2:
+            return CLASS_CLUSTER
+
+    iron_atoms = [atom_id for atom_id, element in elements.items()
+                  if element == "FE"]
+    if len(iron_atoms) != 1:
+        return ""
+    iron = iron_atoms[0]
+    nitrogen_donors = {
+        atom_id for atom_id in adjacency.get(iron, ())
+        if elements.get(atom_id) == "N"
+    }
+    if len(nitrogen_donors) < PORPHYRINOID_MIN_FE_N_BONDS:
+        return ""
+
+    ligand_heavy_atoms = {
+        atom_id for atom_id, element in elements.items()
+        if element != "H" and element not in METAL_ELEMENTS
+    }
+    for component in _biconnected_components(
+            adjacency, ligand_heavy_atoms):
+        carbon = sum(elements[atom_id] == "C" for atom_id in component)
+        nitrogen = sum(elements[atom_id] == "N" for atom_id in component)
+        donors = len(component.intersection(nitrogen_donors))
+        if (len(component) >= PORPHYRINOID_CORE_MIN_ATOMS and
+                carbon >= PORPHYRINOID_CORE_MIN_CARBON and
+                nitrogen >= PORPHYRINOID_CORE_MIN_NITROGEN and
+                donors >= PORPHYRINOID_MIN_FE_N_BONDS):
+            return CLASS_HEME
     return ""
 
 
@@ -212,14 +304,12 @@ def prepare_local_ccd(source_path, temp_dir):
     return source_path, provenance
 
 
-def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
+def build_metallocofactors_list(cif_path, output_path):
     """Build a deterministic catalog from a wwPDB CCD components file."""
     import gemmi
 
     print(f"Reading CCD from {cif_path}", flush=True)
     ccd = gemmi.cif.read_file(cif_path)
-    missing_components = gemmi.cif.Document() if debug_dir else None
-    missing_component_ids = []
     records = {}
     counts = {
         "with_metal": 0,
@@ -260,9 +350,6 @@ def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
             pass
         elif formula in ("", "?"):
             counts["missing_formula"] += 1
-            missing_component_ids.append(component_id)
-            if missing_components is not None:
-                missing_components.add_copied_block(block, pos=-1)
             if any(symbol_is_metal(symbol) for symbol in atom_symbols):
                 has_metal = True
                 counts["missing_formula_with_metal"] += 1
@@ -274,7 +361,7 @@ def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
             if component_id in records:
                 raise ValueError(
                     f"duplicate CCD component ID: {component_id}")
-            records[component_id] = (formula or "?", classify_component(formula))
+            records[component_id] = (formula or "?", classify_component(block))
 
     classes = {component_id: structural_class
                for component_id, (_, structural_class) in records.items()
@@ -290,18 +377,6 @@ def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
             formula, structural_class = records[component_id]
             handle.write(f"{component_id}\t{formula}\t{structural_class}\n")
 
-    if debug_dir:
-        os.makedirs(debug_dir, exist_ok=True)
-        missing_ids_path = os.path.join(debug_dir, "missing_formulas.txt")
-        with open(
-                missing_ids_path, "w", encoding="utf-8", newline=""
-                ) as handle:
-            for component_id in missing_component_ids:
-                handle.write(f"{component_id}\n")
-        if missing_components is not None:
-            missing_components.write_file(
-                os.path.join(debug_dir, "missingCIF.cif"))
-
     counts["catalog_entries"] = len(records)
     print(f"Catalog contains {len(records)} metallocofactors", flush=True)
     print(f"Skipped {counts['skipped_ions']} single-metal ions", flush=True)
@@ -310,7 +385,7 @@ def build_metallocofactors_list(cif_path, output_path, debug_dir=None):
     return counts
 
 
-def rebuild_catalog(output_dir, ccd_path=None, debug_dir=None):
+def rebuild_catalog(output_dir, ccd_path=None):
     """Explicitly rebuild the bundled catalog and provenance metadata."""
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -325,12 +400,9 @@ def rebuild_catalog(output_dir, ccd_path=None, debug_dir=None):
             prepared_ccd, ccd_provenance = download_ccd(temp_dir)
 
         temporary_catalog = os.path.join(temp_dir, CATALOG_FILENAME)
-        counts = build_metallocofactors_list(
-            prepared_ccd, temporary_catalog, debug_dir=debug_dir)
+        counts = build_metallocofactors_list(prepared_ccd, temporary_catalog)
         catalog_hash = _sha256(temporary_catalog)
         metadata = {
-            "catalog_schema_version": CATALOG_SCHEMA_VERSION,
-            "builder_version": BUILDER_VERSION,
             "generated": datetime.now(timezone.utc).isoformat(),
             "ccd_source": ccd_provenance["source"],
             "ccd_sha256": _sha256(prepared_ccd),
@@ -356,70 +428,8 @@ def rebuild_catalog(output_dir, ccd_path=None, debug_dir=None):
     return metadata
 
 
-def reclassify_catalog(output_dir):
-    """Re-derive structural classes from the bundled catalog's own formulas.
-
-    The classes depend only on formulas already in the catalog, so a change to
-    the rules can be applied without downloading the CCD again. The recorded
-    CCD provenance is untouched because the component data is unchanged.
-    """
-    output_dir = os.path.abspath(output_dir)
-    catalog_path = os.path.join(output_dir, CATALOG_FILENAME)
-    metadata_path = os.path.join(output_dir, METADATA_FILENAME)
-
-    records = {}
-    with open(catalog_path, encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            fields = line.rstrip("\n").split("\t")
-            component_id = fields[0].strip()
-            formula = fields[1] if len(fields) > 1 else "?"
-            records[component_id] = (formula, classify_component(formula))
-
-    classes = {component_id: structural_class
-               for component_id, (_, structural_class) in records.items()
-               if structural_class}
-    _verify_canonical_classes(classes)
-
-    with tempfile.TemporaryDirectory(dir=output_dir) as temp_dir:
-        temporary_catalog = os.path.join(temp_dir, CATALOG_FILENAME)
-        with open(temporary_catalog, "w", encoding="utf-8",
-                  newline="") as handle:
-            for component_id in sorted(records):
-                formula, structural_class = records[component_id]
-                handle.write(f"{component_id}\t{formula}\t{structural_class}\n")
-        catalog_hash = _sha256(temporary_catalog)
-
-        with open(metadata_path, encoding="utf-8") as handle:
-            metadata = json.load(handle)
-        metadata["catalog_schema_version"] = CATALOG_SCHEMA_VERSION
-        metadata["builder_version"] = BUILDER_VERSION
-        metadata["reclassified"] = datetime.now(timezone.utc).isoformat()
-        metadata["catalog_sha256"] = catalog_hash
-        metadata.setdefault("counts", {})
-        metadata["counts"]["cluster_entries"] = sum(
-            1 for value in classes.values() if value == CLASS_CLUSTER)
-        metadata["counts"]["heme_entries"] = sum(
-            1 for value in classes.values() if value == CLASS_HEME)
-
-        temporary_metadata = os.path.join(temp_dir, METADATA_FILENAME)
-        with open(temporary_metadata, "w", encoding="utf-8",
-                  newline="") as handle:
-            json.dump(metadata, handle, indent=2)
-            handle.write("\n")
-
-        os.replace(temporary_catalog, catalog_path)
-        os.replace(temporary_metadata, metadata_path)
-
-    print(f"Reclassified {len(records)} entries in {catalog_path}", flush=True)
-    print(f"  clusters: {metadata['counts']['cluster_entries']}, "
-          f"hemes: {metadata['counts']['heme_entries']}", flush=True)
-    return metadata
-
-
 def report_status(output_dir):
-    """Print the committed catalog's recorded version and integrity status."""
+    """Print the committed catalog's provenance and integrity status."""
     catalog_path = os.path.join(output_dir, CATALOG_FILENAME)
     metadata_path = os.path.join(output_dir, METADATA_FILENAME)
     with open(metadata_path, encoding="utf-8", errors="strict") as handle:
@@ -428,10 +438,6 @@ def report_status(output_dir):
     recorded_hash = metadata.get("catalog_sha256")
 
     print(f"Generated: {metadata.get('generated', 'unknown')}")
-    print(
-        "Catalog schema version: "
-        f"{metadata.get('catalog_schema_version', 'unknown')}")
-    print(f"Builder version: {metadata.get('builder_version', 'unknown')}")
     entry_count = metadata.get("counts", {}).get(
         "catalog_entries", "unknown")
     print(f"Entries: {entry_count}")
@@ -466,19 +472,9 @@ def parse_args(argv=None):
         help="directory receiving the catalog and metadata",
     )
     parser.add_argument(
-        "--debug-dir",
-        help="optional directory for missing-formula diagnostic files",
-    )
-    parser.add_argument(
         "--status",
         action="store_true",
         help="report bundled catalog metadata without rebuilding or networking",
-    )
-    parser.add_argument(
-        "--reclassify",
-        action="store_true",
-        help=("re-derive structural classes from the bundled catalog's "
-              "formulas without downloading the CCD"),
     )
     return parser.parse_args(argv)
 
@@ -487,13 +483,10 @@ def main(argv=None):
     args = parse_args(argv)
     if args.status:
         report_status(os.path.abspath(args.output_dir))
-    elif args.reclassify:
-        reclassify_catalog(args.output_dir)
     else:
         rebuild_catalog(
             args.output_dir,
             ccd_path=args.ccd,
-            debug_dir=args.debug_dir,
         )
     return 0
 
