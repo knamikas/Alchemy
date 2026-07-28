@@ -4,13 +4,18 @@
 For each PDB entry this validates/corrects its Fourier map coefficients with
 CCP4 `mtzfix`, computes 2mFo-DFc and mFo-DFc maps with `fft`, and runs
 `edstats`, then extracts per-atom real-space statistics for metal ions and
-metal-containing cofactors. Results are streamed to four CSVs under
+metal-containing cofactors. Core results are streamed to four CSVs under
 --output-dir:
 
   metal_stats_all.csv  -- one row per selected metal site
   metal_bonds_all.csv  -- one row per inferred or declared contact
   metal_candidates_all.csv -- one row per discovered or declared candidate
   manifest.csv         -- one row per entry with status and provenance
+
+An uncapped database run additionally streams compact confidence inputs and,
+after successful completion, writes final confidence scores plus a reusable
+database reference. Smaller runs use an installed frozen reference when one is
+available.
 
 Requirements
 ------------
@@ -69,10 +74,23 @@ from ccp4_setup import (
     load_ccp4_setup_config,
     save_ccp4_setup,
 )
+from confidence_score import (
+    ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
+    CONFIDENCE_INPUT_COLUMNS,
+    REFERENCE_METADATA_FILE,
+    finalize_database_confidence,
+    complete_confidence_site_count,
+    load_reference as load_confidence_reference,
+    prepare_result_confidence_inputs,
+    score_against_reference,
+    validate_scored_reference,
+)
 
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
+DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
+    REPO_DIR, "confidence_reference")
 METALS_SET = set(METAL_ELEMENTS)
 
 MODEL_POLICY = "first"
@@ -1267,7 +1285,8 @@ def _batch_exit_code(counts, retryable_partial_count):
 
 
 def validate_resume_schemas(manifest_path, stats_path, bonds_path,
-                            candidates_path, bonds_enabled=True):
+                            candidates_path, bonds_enabled=True,
+                            confidence_path=None, confidence_columns=None):
     """Refuse to append migration rows beneath an incompatible old header.
 
     Whole headers are compared, including the EDSTATS block of
@@ -1279,6 +1298,11 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
     if bonds_enabled:
         checks.extend(((bonds_path, BOND_COLUMNS),
                        (candidates_path, CANDIDATE_COLUMNS)))
+    if confidence_path is not None:
+        if confidence_columns is None:
+            raise ValueError(
+                "confidence columns are required with a confidence output")
+        checks.append((confidence_path, list(confidence_columns)))
     for path, expected in checks:
         header = _csv_header(path)
         if header is not None and header != expected:
@@ -1392,6 +1416,12 @@ def parse_args(argv=None):
                     default=max(1, available_cpu_count() - 2),
                     help="number of worker processes (minimum: 1)")
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
+    ap.add_argument(
+        "--confidence-reference-dir",
+        default=DEFAULT_CONFIDENCE_REFERENCE_DIR,
+        help=("frozen full-database confidence reference used for single, "
+              "ID-file, manual, and capped runs when available"),
+    )
     ap.add_argument("--ccp4-setup", default=None,
                     help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)")
     ap.add_argument("--configure-ccp4", default=None,
@@ -1504,13 +1534,13 @@ class _ResumeStaging:
                             for path in targets)
         self.replacement_ids = set()
 
-    def commit(self, bonds_enabled):
+    def commit(self, bonds_enabled, confidence_enabled=False):
         """Replace the retried entries' rows in the real output files."""
         if not self.replacement_ids:
             return
-        manifest_path, stats_path, bonds_path, candidates_path = self.targets
+        manifest_path, stats_path, bonds_path, candidates_path = self.targets[:4]
         (staged_manifest, staged_stats, staged_bonds,
-         staged_candidates) = self.staged
+         staged_candidates) = self.staged[:4]
         # Data files are committed before the manifest completion marker. If an
         # interruption occurs between replacements, the old manifest causes the
         # entry to be retried safely.
@@ -1520,6 +1550,9 @@ class _ResumeStaging:
                                     self.replacement_ids)
             _merge_csv_replacements(candidates_path, staged_candidates,
                                     self.replacement_ids)
+        if confidence_enabled:
+            _merge_csv_replacements(
+                self.targets[4], self.staged[4], self.replacement_ids)
         _merge_csv_replacements(manifest_path, staged_manifest,
                                 self.replacement_ids)
 
@@ -1529,32 +1562,45 @@ class _ResumeStaging:
 
 
 class _OutputWriters:
-    """The four streamed CSV outputs, with running row counts.
+    """The streamed CSV outputs, with running row counts.
 
     Each stream is flushed after every entry so an interrupted batch run
     retains the results it already completed. Headers are written on creation.
     """
 
-    def __init__(self, manifest_fh, stats_fh, bonds_fh, candidates_fh):
+    def __init__(self, manifest_fh, stats_fh, bonds_fh, candidates_fh,
+                 confidence_fh=None, confidence_columns=None):
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
         self._bonds_fh = bonds_fh
         self._candidates_fh = candidates_fh
+        self._confidence_fh = confidence_fh
         self._manifest = csv.DictWriter(manifest_fh,
                                         fieldnames=MANIFEST_COLUMNS)
         self._stats = csv.writer(stats_fh)
         self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
         self._candidates = (
             csv.writer(candidates_fh) if candidates_fh is not None else None)
+        if confidence_fh is not None and confidence_columns is None:
+            raise ValueError(
+                "confidence columns are required with a confidence output")
+        self._confidence = None
+        if confidence_fh is not None and confidence_columns is not None:
+            self._confidence = csv.DictWriter(
+                confidence_fh, fieldnames=confidence_columns)
+        self._confidence_columns = confidence_columns
         self.n_rows = 0
         self.n_bonds = 0
         self.n_candidates = 0
+        self.n_confidence = 0
         self._manifest.writeheader()
         self._stats.writerow(STATS_COLUMNS)
         if self._bonds is not None:
             self._bonds.writerow(BOND_COLUMNS)
         if self._candidates is not None:
             self._candidates.writerow(CANDIDATE_COLUMNS)
+        if self._confidence is not None:
+            self._confidence.writeheader()
 
     def write_stats_rows(self, rows):
         if not rows:
@@ -1589,6 +1635,19 @@ class _OutputWriters:
         self._manifest.writerow(row)
         self._manifest_fh.flush()
 
+    def write_confidence_rows(self, rows):
+        if self._confidence is None or not rows:
+            return
+        if self._confidence_columns is None or self._confidence_fh is None:
+            raise RuntimeError("confidence output is not fully configured")
+        expected = set(self._confidence_columns)
+        if rows[0].keys() != expected:
+            raise RuntimeError(
+                "confidence row does not match its output schema")
+        self._confidence.writerows(rows)
+        self.n_confidence += len(rows)
+        self._confidence_fh.flush()
+
 
 def main(argv=None):
     args = parse_args(argv)
@@ -1610,14 +1669,74 @@ def main(argv=None):
     bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
     candidates_path = os.path.join(
         args.output_dir, "metal_candidates_all.csv")
+    confidence_inputs_path = os.path.join(
+        args.output_dir, "confidence_inputs_all.csv")
+    confidence_scores_path = os.path.join(
+        args.output_dir, "confidence_scores_all.csv")
+    database_reference_dir = os.path.join(
+        args.output_dir, "confidence_reference")
+
+    manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
+    database_run = (
+        not args.id and not args.id_file and not manual_requested and
+        args.max_pdbs is None
+    )
+    confidence_mode = None
+    confidence_reference = None
+    confidence_stream_path = None
+    confidence_columns = None
+    if args.bonds and database_run:
+        confidence_mode = "database"
+        confidence_stream_path = confidence_inputs_path
+        confidence_columns = CONFIDENCE_INPUT_COLUMNS
+    elif args.bonds:
+        reference_metadata = os.path.join(
+            args.confidence_reference_dir, REFERENCE_METADATA_FILE)
+        if os.path.isfile(reference_metadata):
+            try:
+                confidence_reference = load_confidence_reference(
+                    args.confidence_reference_dir)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(f"Invalid confidence reference: {exc}", flush=True)
+                return 1
+            confidence_mode = "reference"
+            confidence_stream_path = confidence_scores_path
+            confidence_columns = (
+                *CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
+        else:
+            print(
+                "No frozen confidence reference found at "
+                f"{args.confidence_reference_dir}; confidence scoring disabled "
+                "for this non-database run.",
+                flush=True,
+            )
     if args.resume:
+        if (confidence_mode is not None and
+                (confidence_stream_path is None or
+                 not os.path.isfile(confidence_stream_path))):
+            print(
+                "Cannot resume confidence-aware output because "
+                f"{confidence_stream_path} is missing; use a fresh output "
+                "directory.",
+                flush=True,
+            )
+            return 1
         try:
             validate_resume_schemas(
                 manifest_path, stats_path, bonds_path, candidates_path,
-                bonds_enabled=args.bonds)
+                bonds_enabled=args.bonds,
+                confidence_path=confidence_stream_path,
+                confidence_columns=confidence_columns)
         except ValueError as exc:
             print(str(exc), flush=True)
             return 1
+        if confidence_mode == "reference":
+            try:
+                validate_scored_reference(
+                    confidence_stream_path, confidence_reference)
+            except (OSError, ValueError) as exc:
+                print(f"Cannot resume confidence output: {exc}", flush=True)
+                return 1
 
     try:
         ids, root, manual_inputs = _select_entry_ids(args, cache_root)
@@ -1637,6 +1756,27 @@ def main(argv=None):
         ids = ids[:args.max_pdbs]
 
     if not ids:
+        if (args.resume and confidence_mode == "database" and
+                os.path.isfile(confidence_inputs_path)):
+            try:
+                total, scored, cohort = finalize_database_confidence(
+                    confidence_inputs_path,
+                    confidence_scores_path,
+                    database_reference_dir,
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(f"Confidence finalization failed: {exc}",
+                      file=sys.stderr, flush=True)
+                return 1
+            print(
+                "No entries required retry; finalized "
+                f"{total} confidence rows ({scored} scored; database cohort "
+                f"{cohort}) -> {confidence_scores_path}",
+                flush=True,
+            )
+            print(f"Confidence reference -> {database_reference_dir}",
+                  flush=True)
+            return 0
         print("No entries to process.", flush=True)
         return 0
 
@@ -1649,6 +1789,29 @@ def main(argv=None):
         return 1
     for removed_path in removed_stale_bond_outputs:
         print(f"Removed stale bond-stage output: {removed_path}", flush=True)
+    if not args.resume:
+        # Reference metadata is its completion marker. Fresh runs must not leave
+        # incompatible confidence artifacts beside newly replaced core output.
+        if confidence_mode == "database":
+            stale_confidence_paths = (
+                confidence_scores_path,
+                os.path.join(database_reference_dir, REFERENCE_METADATA_FILE),
+            )
+        elif confidence_mode == "reference":
+            stale_confidence_paths = (confidence_inputs_path,)
+        else:
+            stale_confidence_paths = (
+                confidence_inputs_path,
+                confidence_scores_path,
+                os.path.join(database_reference_dir, REFERENCE_METADATA_FILE),
+            )
+        try:
+            for path in stale_confidence_paths:
+                if os.path.isfile(path):
+                    os.unlink(path)
+        except OSError as exc:
+            print(f"Could not clear stale confidence output: {exc}", flush=True)
+            return 1
 
     # A Pool creates every worker up front, so asking for more than there are
     # entries just pays each one's startup for no work. Costly under the spawn
@@ -1675,13 +1838,19 @@ def main(argv=None):
         _manifest_values_by_id(manifest_path, "n_candidates")
         if args.resume and not args.bonds else {}
     )
-    output_paths = (
-        manifest_path, stats_path, bonds_path, candidates_path)
+    output_paths = [manifest_path, stats_path, bonds_path, candidates_path]
+    if confidence_mode is not None:
+        if confidence_stream_path is None:
+            raise RuntimeError("confidence output path is not configured")
+        output_paths.append(confidence_stream_path)
+    output_paths = tuple(output_paths)
     staging = (_ResumeStaging(args.output_dir, output_paths)
                if args.resume else None)
+    write_paths = staging.staged if staging is not None else output_paths
     (write_manifest_path, write_stats_path, write_bonds_path,
-     write_candidates_path) = (
-        staging.staged if staging is not None else output_paths)
+     write_candidates_path) = write_paths[:4]
+    write_confidence_path = (
+        write_paths[4] if confidence_mode is not None else None)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     retryable_partial_count = 0
@@ -1702,6 +1871,10 @@ def main(argv=None):
                 handles.enter_context(
                     open(write_candidates_path, "w", newline=""))
                 if args.bonds else None,
+                handles.enter_context(
+                    open(write_confidence_path, "w", newline=""))
+                if write_confidence_path is not None else None,
+                confidence_columns,
             )
             with Pool(workers, initializer=_init_worker,
                       initargs=(cfg,)) as pool:
@@ -1711,6 +1884,16 @@ def main(argv=None):
                         writers.write_stats_rows(r["rows"])
                         writers.write_bond_rows(r["bond_rows"])
                         writers.write_candidate_rows(r["candidate_rows"])
+                        confidence_rows = []
+                        if confidence_mode is not None:
+                            confidence_rows = prepare_result_confidence_inputs(
+                                r["rows"], r["bond_rows"], STATS_COLUMNS)
+                            confidence_rows = complete_confidence_site_count(
+                                confidence_rows, r["pdbID"], r["n"])
+                            if confidence_mode == "reference":
+                                confidence_rows = score_against_reference(
+                                    confidence_rows, confidence_reference)
+                            writers.write_confidence_rows(confidence_rows)
                         # The manifest is the completion marker, so write it
                         # only after this entry's result rows have flushed.
                         writers.write_manifest_row(_manifest_row(
@@ -1728,7 +1911,8 @@ def main(argv=None):
                               f"error={counts['error']} "
                               f"rows={writers.n_rows} "
                               f"bonds={writers.n_bonds} "
-                              f"candidates={writers.n_candidates}", flush=True)
+                              f"candidates={writers.n_candidates} "
+                              f"confidence={writers.n_confidence}", flush=True)
             processing_completed = True
     finally:
         if staging is not None and not processing_completed:
@@ -1740,7 +1924,8 @@ def main(argv=None):
 
     if staging is not None:
         try:
-            staging.commit(args.bonds)
+            staging.commit(
+                args.bonds, confidence_enabled=confidence_mode is not None)
         finally:
             staging.discard()
 
@@ -1752,6 +1937,40 @@ def main(argv=None):
         print(f"      {n_candidates} candidate rows -> {candidates_path}",
               flush=True)
     exit_code = _batch_exit_code(counts, retryable_partial_count)
+    if confidence_mode == "database":
+        if exit_code == 0:
+            try:
+                total, scored, cohort = finalize_database_confidence(
+                    confidence_inputs_path,
+                    confidence_scores_path,
+                    database_reference_dir,
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                print(f"Confidence finalization failed: {exc}",
+                      file=sys.stderr, flush=True)
+                return 1
+            print(
+                f"      {total} confidence rows ({scored} scored; "
+                f"reference cohort {cohort}) -> {confidence_scores_path}",
+                flush=True,
+            )
+            print(f"      confidence reference -> {database_reference_dir}",
+                  flush=True)
+        else:
+            print(
+                "      confidence inputs were retained, but the database "
+                "reference was not finalized because the run is incomplete.",
+                flush=True,
+            )
+    elif confidence_mode == "reference":
+        if confidence_reference is None:
+            raise RuntimeError("confidence reference is not configured")
+        print(
+            f"      {writers.n_confidence} confidence rows compared with "
+            f"database cohort {confidence_reference.cohort_size} -> "
+            f"{confidence_scores_path}",
+            flush=True,
+        )
     if exit_code:
         print(
             "Alchemy completed with incomplete entries: "

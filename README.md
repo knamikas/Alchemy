@@ -54,6 +54,11 @@ Results are written to:
   cutoff, or missing an assignment reference, together with connection, cutoff,
   and reference provenance. These rows are retained for audit and are not all
   treated as bonds.
+- `output/confidence_inputs_all.csv` — compact site-level confidence evidence
+  streamed only during an uncapped full-database run. On successful completion
+  it is finalized into `confidence_scores_all.csv` and
+  `output/confidence_reference/`. Later small runs write confidence scores
+  directly when a compatible frozen database reference is installed.
 - `output/manifest.csv` — per-entry status and reason, runtime, input
   provenance, and relevant software and analysis-policy versions. Its
   `n_metals` value counts distinct selected coordinate-model sites, not
@@ -271,6 +276,66 @@ flag summarizes coordination-relevant cases: a non-typical atom satisfying the
 first-sphere distance rule, a declared donor-rule override, or a suspect
 multi-donor group. A distant non-typical atom found only by the broad 4 Å search
 does not by itself place the complete metal site under warning.
+
+### Database-referenced confidence scoring
+
+Confidence inputs are collected as part of an uncapped full-database run: no
+`--id`, `--id-file`, manual coordinate arguments, or `--max-pdbs`. As each
+worker result reaches the driver, Alchemy combines its already in-memory density
+and assigned-bond evidence and streams one compact row per selected metal site
+to `confidence_inputs_all.csv`. It never rereads the complete statistics and
+bond tables to reconstruct those inputs.
+
+The compact row records the magnitude of metal-site `ZDm` as `rszd_magnitude`,
+the largest absolute Zbond among assigned contacts, the responsible contact,
+and geometry coverage. Geometry coverage is the number of assigned contacts
+with an exact reference distance divided by the total number of assigned
+contacts, matching the manuscript definition of `QG`. The finite-Zbond count is
+recorded separately so missing DPI cannot be mistaken for usable geometry
+evidence. Rejected broad-search candidates do not enter the denominator.
+Missing density, absent bonds, partial coverage, diagnostic EDSTATS rows, and
+shared-cofactor density provenance remain explicit. The streamed file retains
+exactly one row per manifest-counted selected metal; a site with no recoverable
+density or bond identity is represented by an unresolved, unscorable placeholder
+rather than silently disappearing from the cohort denominator.
+
+Only after the database run completes without operationally incomplete entries
+does Alchemy finalize confidence. It scans the compact input—not the raw
+analysis outputs—to write `confidence_scores_all.csv` and a reusable
+`confidence_reference/` directory containing policy metadata and the empirical
+score distribution. An interrupted run retains its compact inputs for
+`--resume` but does not publish a completed reference.
+
+The provisional June 2026 fixed score transforms absolute RSZD and maximum
+absolute Zbond through piecewise-linear severity anchors and calculates:
+
+```text
+confidence = 100 * (1 - 0.50*SR - 0.35*QG*SG
+                       - 0.15*QG*sqrt(SR*SG))
+```
+
+Alchemy also reports an average-rank percentile relative to the scorable full
+database cohort, its size, and a policy identifier. The fixed-formula score and
+database percentile are visibly distinct. A deterministic
+`confidence_reference_id` identifies the exact frozen policy and score
+distribution and prevents resumed output from mixing database snapshots.
+`context_warning` is carried into the result as an interpretive annotation and
+does not subtract points.
+
+For later single-entry, ID-file, manual, or capped runs, place the published
+database reference files in the repository's `confidence_reference/` directory,
+or select another copy with `--confidence-reference-dir`. Alchemy loads that
+reference once, derives each new site's compact inputs while its normal result
+is still in memory, and writes `confidence_scores_all.csv` directly. These runs
+are compared with the frozen database and never generate percentiles from their
+own small cohort. If no compatible reference is installed, the ordinary
+Alchemy outputs are still produced and confidence scoring is explicitly
+disabled.
+
+`src/confidence_score.py` retains `finalize` and `score` subcommands for recovery
+and reproducibility using already compact confidence-input CSVs; neither command
+reconstructs inputs by rescanning `metal_stats_all.csv` or
+`metal_bonds_all.csv`.
 
 The DPI is calculated from PDB-REDO reflection and R-free metadata, the
 asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen and
