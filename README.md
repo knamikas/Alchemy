@@ -439,6 +439,12 @@ list or classification rules change.
   entry is a terminal `partial` with `mtzfix_validation_failure`; coordinate-
   based bond analysis still runs, while its metal sites remain explicitly
   unscorable by confidence because RSZD is unavailable.
+- After canonical model and conformer selection, structures with no recognized
+  metal atoms finish with `n_metals=0` without running `mtzfix`, either FFT, or
+  `edstats`. These stages cannot produce metal-site output for such entries.
+  Progress and completion summaries report these successful negative results as
+  `no_metals`; this is an informational subset of `ok`, whereas `skip` remains
+  reserved for entries that could not be processed operationally.
 - The command exits nonzero when any entry ends as `error`, `skip`, or a
   retryable `partial`. Completed `ok` and terminal `partial` results exit
   successfully.

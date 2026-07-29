@@ -907,7 +907,8 @@ def _initial_result(pdbID, cfg, manual_inputs):
     return {"pdbID": pdbID, "status": "error", "n": 0,
             "runtime": 0.0, "error": "", "rows": [],
             "bond_rows": [], "candidate_rows": [],
-            "n_bonds": 0, "n_candidates": 0, "retryable": True,
+            "n_bonds": 0, "n_candidates": 0, "no_metals": False,
+            "retryable": True,
             "reason_codes": [], "warning_codes": [],
             "confidence_inputs_missing_reason": "",
             "alchemy_version": ALCHEMY_VERSION,
@@ -1090,6 +1091,22 @@ def process(pdbID):
             multi_model_structure=structure.multi_model_structure,
             warning_codes=list(structure.warning_codes),
         )
+        if not structure.metal_atoms(METALS_SET, canonical=True):
+            # Density and contact analysis cannot produce metal-site output for
+            # this structure. Avoid two FFT maps and EDSTATS when there is no
+            # canonical metal site to assess.
+            result.update(
+                status="ok",
+                retryable=False,
+                n=0,
+                rows=[],
+                bond_rows=[],
+                candidate_rows=[],
+                n_bonds=0,
+                n_candidates=0,
+                no_metals=True,
+            )
+            return result
         try:
             res = run_density_analysis(
                 pdbID, mtz, pdb, work_dir, map_reslo, map_reshi,
@@ -1869,6 +1886,7 @@ def main(argv=None):
         write_paths[4] if confidence_mode is not None else None)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
+    no_metal_count = 0
     retryable_partial_count = 0
     processing_completed = False
     writers = None
@@ -1919,6 +1937,8 @@ def main(argv=None):
                         if staging is not None:
                             staging.replacement_ids.add(r["pdbID"].lower())
                     counts[r["status"]] = counts.get(r["status"], 0) + 1
+                    if r.get("no_metals", False):
+                        no_metal_count += 1
                     if r["status"] == "partial" and r.get("retryable", False):
                         retryable_partial_count += 1
                     if k % 200 == 0 or k == len(ids):
@@ -1926,6 +1946,7 @@ def main(argv=None):
                               f"partial={counts['partial']} "
                               f"skip={counts['skip']} "
                               f"error={counts['error']} "
+                              f"no_metals={no_metal_count} "
                               f"rows={writers.n_rows} "
                               f"bonds={writers.n_bonds} "
                               f"candidates={writers.n_candidates} "
@@ -1947,7 +1968,8 @@ def main(argv=None):
             staging.discard()
 
     print(f"Done. ok={counts['ok']} partial={counts['partial']} "
-          f"skip={counts['skip']} error={counts['error']}; "
+          f"skip={counts['skip']} error={counts['error']} "
+          f"no_metals={no_metal_count}; "
           f"{n_rows} metal/cofactor rows -> {stats_path}", flush=True)
     if args.bonds:
         print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
