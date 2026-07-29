@@ -1,2 +1,6 @@
 # Alchemy runtime results
 /output/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

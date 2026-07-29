@@ -916,11 +916,17 @@ def _initial_result(pdbID, cfg, manual_inputs):
 
     Every manifest column is present from the outset so a failure at any stage
     still yields a complete row.
+
+    ``n_bonds`` and ``n_candidates`` start blank rather than zero. Zero is a
+    measured result meaning the bond stage ran and found nothing, so an entry
+    that fails before that stage must not claim it: a later ``--resume`` reads
+    a non-blank count as proof the stage completed and would skip the entry
+    permanently.
     """
     return {"pdbID": pdbID, "status": "error", "n": 0,
             "runtime": 0.0, "error": "", "rows": [],
             "bond_rows": [], "candidate_rows": [],
-            "n_bonds": 0, "n_candidates": 0, "no_metals": False,
+            "n_bonds": "", "n_candidates": "", "no_metals": False,
             "timings": {},
             "density_map_scope_used": "",
             "density_full_map_bytes": 0,
