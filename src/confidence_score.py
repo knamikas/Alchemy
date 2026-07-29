@@ -104,7 +104,7 @@ def _required_columns(fieldnames, required, label):
 
 
 def _site_key(row):
-    return tuple(row[column].strip() for column in SITE_KEY_COLUMNS)
+    return tuple(str(row[column]).strip() for column in SITE_KEY_COLUMNS)
 
 
 def _finite_float(value):
