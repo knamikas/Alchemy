@@ -68,13 +68,14 @@ Results are written to:
   each invocation. It records the command, configuration, software and system
   provenance, worker limits, output and confidence summaries, grouped reasons
   and warnings, slowest entries, every per-entry outcome, and timings for input
-  preparation, `mtzfix`, both FFT calculations, `edstats`, statistics
-  extraction, bond analysis, and cleanup. Resume runs create another log rather
-  than replacing the original run record.
+  preparation, `mtzfix`, both FFT calculations, model-envelope cropping,
+  `edstats`, statistics extraction, bond analysis, and cleanup. It also records
+  the full-map and EDSTATS-map sizes for each density-scored entry. Resume runs
+  create another log rather than replacing the original run record.
 
 ## Dependencies
 
-- **CCP4** with `mtzfix`, `fft`, and `edstats` on `PATH`. Pass
+- **CCP4** with `mtzfix`, `fft`, `mapmask`, and `edstats` on `PATH`. Pass
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
   `--configure-ccp4`.
 - **Python package:** `gemmi>=0.7.0`, as declared in `pyproject.toml`.
@@ -144,10 +145,19 @@ are the columns used to calculate its two maps.
    passes, MTZFIX intentionally writes no replacement and the original MTZ is
    used.
 2. CCP4 `fft` with `FWT/PHWT` from that validated MTZ to produce a 2mFo-DFc map.
-3. CCP4 `fft` with `DELFWT/PHDELWT` from that validated MTZ to produce an
-   mFo-DFc difference map.
-4. CCP4 `edstats` to produce per-residue real-space statistics and an RSZD
-   coordinate file.
+3. By default, CCP4 `mapmask` limits that full FFT map to the complete deposited
+   coordinate-model envelope plus a 10 Angstrom border. The same crop is then
+   applied to the mFo-DFc difference map calculated from `DELFWT/PHDELWT`.
+   This retains every modeled atom while avoiding EDSTATS work over distant
+   empty unit-cell volume. If the envelope would not be smaller, Alchemy uses
+   the original full maps automatically. It also uses full maps when a
+   translated model would produce a grid extent known to be incompatible with
+   EDSTATS coordinate lookup.
+4. CCP4 `edstats` uses the resulting map pair to produce per-residue real-space
+   statistics and an RSZD coordinate file.
+
+Use `--density-map-scope full` to select the legacy behavior in which EDSTATS
+receives both complete unit-cell maps without model-envelope cropping.
 
 The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
 
@@ -369,6 +379,7 @@ and atom serial rather than parser traversal order.
 | `--pdb-redo-root <path>` | Set the local mirror root. |
 | `--pdb-redo-cache <path>` | Set the cache for downloaded entries. |
 | `--output-dir <path>` | Set the result directory. |
+| `--density-map-scope {model-envelope,full}` | Set the map extent passed to EDSTATS. The default model envelope retains every coordinate plus a 10 Angstrom border; `full` selects the legacy complete-map path. |
 | `--workers <n>` | Override multiprocessing parallelism; must be at least 1. By default, Alchemy uses the lower CPU or available-memory limit, budgeting 1.25 GiB per worker. |
 | `--max-pdbs <n>` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
@@ -417,6 +428,10 @@ list or classification rules change.
   and removed after their rows are extracted unless `--keep-intermediates` is
   supplied. Cleanup never targets a pre-existing `<output-dir>/<pdb-id>`
   directory.
+- Model-envelope mode still calculates each complete FFT map before cropping,
+  so map values come from the same Fourier calculation as legacy full-map mode.
+  Full temporary maps are deleted as soon as they are no longer needed unless
+  `--keep-intermediates` is supplied.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis

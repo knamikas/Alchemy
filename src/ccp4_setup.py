@@ -5,7 +5,7 @@ import shutil
 import sys
 
 
-REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "edstats")
+REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "mapmask", "edstats")
 
 DEFAULT_CONFIG_FILES = [
     os.path.expanduser("~/.config/alchemy/ccp4.json"),

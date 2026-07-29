@@ -19,8 +19,8 @@ available.
 
 Requirements
 ------------
-* CCP4 `mtzfix`, `fft`, and `edstats` on PATH -- either already sourced, or via
-  --ccp4-setup pointing at a CCP4 setup script
+* CCP4 `mtzfix`, `fft`, `mapmask`, and `edstats` on PATH -- either already
+  sourced, or via --ccp4-setup pointing at a CCP4 setup script
   (e.g. <CCP4>/bin/ccp4.setup-sh).
 * Run under a Python environment with gemmi>=0.7.0.
 
@@ -53,7 +53,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from density_analysis import MtzfixValidationError, run_density_analysis
+from density_analysis import (
+    DENSITY_MAP_SCOPES,
+    MODEL_ENVELOPE_BORDER_ANGSTROM,
+    MtzfixValidationError,
+    run_density_analysis,
+)
 from metal_identification import (
     EDSTATS_COLUMNS,
     extract_metal_statistics,
@@ -913,6 +918,9 @@ def _initial_result(pdbID, cfg, manual_inputs):
             "bond_rows": [], "candidate_rows": [],
             "n_bonds": 0, "n_candidates": 0, "no_metals": False,
             "timings": {},
+            "density_map_scope_used": "",
+            "density_full_map_bytes": 0,
+            "density_edstats_map_bytes": 0,
             "retryable": True,
             "reason_codes": [], "warning_codes": [],
             "confidence_inputs_missing_reason": "",
@@ -1118,7 +1126,8 @@ def process(pdbID):
         try:
             res = run_density_analysis(
                 pdbID, mtz, pdb, work_dir, map_reslo, map_reshi,
-                env=cfg["env"])
+                env=cfg["env"], map_scope=cfg["density_map_scope"],
+                keep_full_maps=cfg["keep"])
         except MtzfixValidationError as exc:
             # The input is readable, but MTZFIX could not make its Fourier
             # coefficients internally consistent. Do not use those maps or
@@ -1134,6 +1143,11 @@ def process(pdbID):
             result["timings"].update(exc.timings)
         else:
             result["timings"].update(res.get("timings", {}))
+            result.update(
+                density_map_scope_used=res["density_map_scope_used"],
+                density_full_map_bytes=res["full_map_bytes"],
+                density_edstats_map_bytes=res["edstats_map_bytes"],
+            )
             statistics_started = time.monotonic()
             rows, header = extract_metal_statistics(
                 pdbID, res["stats_out"], METALS_SET, cfg["cofactors"],
@@ -1538,6 +1552,14 @@ def parse_args(argv=None):
     )
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
     ap.add_argument(
+        "--density-map-scope", choices=DENSITY_MAP_SCOPES,
+        default="model-envelope",
+        help=("map extent supplied to EDSTATS; model-envelope retains every "
+              f"coordinate plus a {MODEL_ENVELOPE_BORDER_ANGSTROM} Angstrom "
+              "border and falls back to full when cropping would be unsafe or "
+              "larger"),
+    )
+    ap.add_argument(
         "--confidence-reference-dir",
         default=DEFAULT_CONFIDENCE_REFERENCE_DIR,
         help=("frozen full-database confidence reference used for single, "
@@ -1800,6 +1822,12 @@ class _RunLog:
             "reason_codes": list(result.get("reason_codes", [])),
             "warning_codes": list(result.get("warning_codes", [])),
             "error": str(result.get("error", "")),
+            "density_map_scope_used": result.get(
+                "density_map_scope_used", ""),
+            "density_full_map_bytes": result.get(
+                "density_full_map_bytes", 0),
+            "density_edstats_map_bytes": result.get(
+                "density_edstats_map_bytes", 0),
         })
 
     @staticmethod
@@ -1867,6 +1895,9 @@ class _RunLog:
             entry["retryable"] for entry in self.entries)
         no_metal_count = sum(
             entry["no_metals"] for entry in self.entries)
+        map_scope_counts = Counter(
+            entry["density_map_scope_used"] for entry in self.entries
+            if entry["density_map_scope_used"])
         total_entry_s = sum(
             entry["runtime_s"] for entry in self.entries)
         throughput = (
@@ -1884,6 +1915,7 @@ class _RunLog:
             f"Throughput: {throughput:.2f} entries/minute",
             f"Reason codes: {self._counter_text(reason_counts)}",
             f"Warning codes: {self._counter_text(warning_counts)}",
+            f"Density map scopes used: {self._counter_text(map_scope_counts)}",
         ])
         for name, value in sorted(self.summary.items()):
             lines.append(f"{name}: {self._clean(value)}")
@@ -1963,6 +1995,9 @@ class _RunLog:
                 f"runtime_s={entry['runtime_s']:.2f} | "
                 f"metals={entry['n_metals']} | bonds={entry['n_bonds']} | "
                 f"candidates={entry['n_candidates']} | timings={timing_text} | "
+                f"density_map_scope={entry['density_map_scope_used'] or '-'} | "
+                f"full_map_bytes={entry['density_full_map_bytes']} | "
+                f"edstats_map_bytes={entry['density_edstats_map_bytes']} | "
                 f"reasons={'|'.join(entry['reason_codes']) or '-'} | "
                 f"warnings={'|'.join(entry['warning_codes']) or '-'} | "
                 f"error={self._clean(entry['error']) or '-'}")
@@ -2210,6 +2245,7 @@ def _run(args, run_log):
            "cache_root": cache_root, "env": env,
            "output_dir": args.output_dir, "cofactors": cofactors,
            "keep": args.keep_intermediates, "bonds": args.bonds,
+           "density_map_scope": args.density_map_scope,
            "allow_download": bool(args.id or args.id_file),
            "manual_inputs": manual_inputs,
            "alchemy_commit": _alchemy_commit(),
