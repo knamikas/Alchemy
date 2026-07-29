@@ -14,6 +14,7 @@
 import os
 import subprocess
 import shutil
+import time
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,6 +22,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class MtzfixValidationError(RuntimeError):
     """MTZFIX could not make map coefficients pass its consistency checks."""
+
+    def __init__(self, message, timings=None):
+        super().__init__(message)
+        self.timings = dict(timings or {})
 
 
 def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None):
@@ -51,16 +56,22 @@ def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=N
     rszd = os.path.join(out_dir, f"{pdbID}_rszd.pdb")
     qq_out = os.path.join(out_dir, f"{pdbID}_qq.out")
 
-    def _run(cmd, stdin, logname):
+    timings = {}
+
+    def _run(cmd, stdin, logname, timing_name):
         log_path = os.path.join(out_dir, logname)
         resolved = shutil.which(cmd[0], path=(env or {}).get("PATH"))
         if resolved is None:
             raise RuntimeError(
                 f"required CCP4 program {cmd[0]!r} was not found on PATH")
         cmd = [resolved, *cmd[1:]]
-        with open(log_path, "w") as log:
-            proc = subprocess.run(cmd, input=stdin, text=True, stdout=log,
-                                  stderr=subprocess.PIPE, env=env)
+        started = time.monotonic()
+        try:
+            with open(log_path, "w") as log:
+                proc = subprocess.run(cmd, input=stdin, text=True, stdout=log,
+                                      stderr=subprocess.PIPE, env=env)
+        finally:
+            timings[timing_name] = round(time.monotonic() - started, 3)
         if proc.returncode != 0:
             detail = (proc.stderr or "").strip()[:500]
             detail_suffix = f": {detail}" if detail else ""
@@ -74,7 +85,7 @@ def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=N
                 if "FAILED a test on re-take" in mtzfix_log_text:
                     raise MtzfixValidationError(
                         f"MTZFIX consistency re-test failed for {pdbID}"
-                        f"{detail_suffix}")
+                        f"{detail_suffix}", timings=timings)
             raise RuntimeError(
                 f"{cmd[0]} failed for {pdbID} (rc={proc.returncode}): "
                 f"see {log_path}{detail_suffix}")
@@ -88,7 +99,7 @@ def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=N
                 f"MTZFIX output path would overwrite its input: {mtz_path}")
         os.remove(fixed_mtz)
     _run(["mtzfix", "HKLIN", mtz_path, "HKLOUT", fixed_mtz],
-         None, os.path.basename(mtzfix_log))
+         None, os.path.basename(mtzfix_log), "mtzfix_s")
 
     if os.path.exists(fixed_mtz):
         if not os.path.isfile(fixed_mtz) or os.path.getsize(fixed_mtz) == 0:
@@ -102,21 +113,24 @@ def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=N
 
     # 2mFo-DFc observed map
     _run(["fft", "HKLIN", map_mtz, "MAPOUT", fo_map],
-         "labi F1=FWT PHI=PHWT\nGRID SAMP=5\n", f"{pdbID}_fft_fo.log")
+         "labi F1=FWT PHI=PHWT\nGRID SAMP=5\n", f"{pdbID}_fft_fo.log",
+         "fft_2fofc_s")
     # mFo-DFc difference map
     _run(["fft", "HKLIN", map_mtz, "MAPOUT", df_map],
-         "labi F1=DELFWT PHI=PHDELWT\nGRID SAMP=5\n", f"{pdbID}_fft_df.log")
+         "labi F1=DELFWT PHI=PHDELWT\nGRID SAMP=5\n", f"{pdbID}_fft_df.log",
+         "fft_fofc_s")
     # real-space statistics (RSZD/RSR per atom/residue)
     _run(["edstats", "XYZIN", pdb_path, "MAPIN1", fo_map, "MAPIN2", df_map,
           "XYZOUT", rszd, "OUT", stats_out, "QQDOUT", qq_out],
-         f"reslo={reslo},reshi={reshi}\n", f"{pdbID}_edstats.log")
+         f"reslo={reslo},reshi={reshi}\n", f"{pdbID}_edstats.log",
+         "edstats_s")
 
     if not os.path.exists(stats_out):
         raise RuntimeError(f"edstats produced no stats file for {pdbID}")
     return {"stats_out": stats_out, "rszd": rszd,
             "fo_map": fo_map, "df_map": df_map,
             "mtz_for_maps": map_mtz, "mtzfix_log": mtzfix_log,
-            "mtzfix_applied": mtzfix_applied}
+            "mtzfix_applied": mtzfix_applied, "timings": timings}
 
 
 if __name__ == "__main__":

@@ -32,12 +32,15 @@ Examples
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
 """
 import argparse
+from collections import Counter
 import contextlib
 import csv
+from datetime import datetime, timezone
 import gzip
 import json
 import math
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -909,6 +912,7 @@ def _initial_result(pdbID, cfg, manual_inputs):
             "runtime": 0.0, "error": "", "rows": [],
             "bond_rows": [], "candidate_rows": [],
             "n_bonds": 0, "n_candidates": 0, "no_metals": False,
+            "timings": {},
             "retryable": True,
             "reason_codes": [], "warning_codes": [],
             "confidence_inputs_missing_reason": "",
@@ -1085,6 +1089,8 @@ def process(pdbID):
         )
         structure = load_structure(
             pdbID, pdb, source_model_count=input_model_count)
+        result["timings"]["input_structure_s"] = round(
+            time.monotonic() - t0, 3)
         result.update(
             analysis_coordinate_format=structure.analysis_coordinate_format,
             input_model_count=structure.input_model_count,
@@ -1108,6 +1114,7 @@ def process(pdbID):
                 no_metals=True,
             )
             return result
+        density_started = time.monotonic()
         try:
             res = run_density_analysis(
                 pdbID, mtz, pdb, work_dir, map_reslo, map_reshi,
@@ -1124,13 +1131,21 @@ def process(pdbID):
                 confidence_inputs_missing_reason=(
                     "mtzfix_validation_failure"),
             )
+            result["timings"].update(exc.timings)
         else:
+            result["timings"].update(res.get("timings", {}))
+            statistics_started = time.monotonic()
             rows, header = extract_metal_statistics(
                 pdbID, res["stats_out"], METALS_SET, cfg["cofactors"],
                 structure=structure)
+            result["timings"]["statistics_extraction_s"] = round(
+                time.monotonic() - statistics_started, 3)
             # Reaching this point means the entry's core inputs and density
             # stage succeeded. Later deterministic limitations remain terminal.
             result["retryable"] = False
+        finally:
+            result["timings"]["density_total_s"] = round(
+                time.monotonic() - density_started, 3)
 
         identification_reason_codes = _identification_reason_codes(rows)
 
@@ -1143,6 +1158,7 @@ def process(pdbID):
 
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
+            bond_started = time.monotonic()
             try:
                 (bond_rows, candidate_rows, site_summaries,
                  bond_meta) = run_bond_analysis(
@@ -1156,6 +1172,9 @@ def process(pdbID):
                 result["reason_codes"] = list(dict.fromkeys(
                     result["reason_codes"] + ["bond_stage_failure"]))
                 result["retryable"] = True
+            finally:
+                result["timings"]["bond_analysis_s"] = round(
+                    time.monotonic() - bond_started, 3)
         _append_site_fields(rows, site_summaries, structure)
         _finalize_result(result, identification_reason_codes, bond_meta,
                          structure, rows, bond_rows, candidate_rows)
@@ -1168,10 +1187,13 @@ def process(pdbID):
                       reason_codes=["unexpected_processing_error"],
                       error=f"{type(e).__name__}: {e}"[:300])
     finally:
-        result["runtime"] = round(time.monotonic() - t0, 2)
         if (not cfg["keep"] and work_dir is not None and
                 os.path.isdir(work_dir)):
+            cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
+            result["timings"]["cleanup_s"] = round(
+                time.monotonic() - cleanup_started, 3)
+        result["runtime"] = round(time.monotonic() - t0, 2)
     return result
 
 
@@ -1748,13 +1770,236 @@ class _OutputWriters:
         self._confidence_fh.flush()
 
 
-def main(argv=None):
-    args = parse_args(argv)
+class _RunLog:
+    """Collect compact run diagnostics and write one human-readable log."""
+
+    def __init__(self, args, command):
+        self.args = args
+        self.command = command
+        self.started_at = datetime.now(timezone.utc)
+        self.started_monotonic = time.monotonic()
+        self.details = {
+            "initial_available_memory_bytes": available_memory_bytes(),
+        }
+        self.summary = {}
+        self.entries = []
+        self.driver_error = ""
+
+    def record_entry(self, result):
+        """Retain diagnostic fields without keeping large result-row payloads."""
+        self.entries.append({
+            "pdbID": result.get("pdbID", ""),
+            "status": result.get("status", "unknown"),
+            "retryable": bool(result.get("retryable", False)),
+            "no_metals": bool(result.get("no_metals", False)),
+            "n_metals": result.get("n", 0),
+            "n_bonds": result.get("n_bonds", 0),
+            "n_candidates": result.get("n_candidates", 0),
+            "runtime_s": float(result.get("runtime", 0.0)),
+            "timings": dict(result.get("timings", {})),
+            "reason_codes": list(result.get("reason_codes", [])),
+            "warning_codes": list(result.get("warning_codes", [])),
+            "error": str(result.get("error", "")),
+        })
+
+    @staticmethod
+    def _clean(value):
+        if value is None:
+            return "none"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value).replace("\r", " ").replace("\n", " ")
+
+    @staticmethod
+    def _counter_text(counter):
+        if not counter:
+            return "none"
+        return ", ".join(
+            f"{name}={count}" for name, count in
+            sorted(counter.items(), key=lambda item: (-item[1], item[0])))
+
+    def _render(self, exit_code, finished_at, elapsed_s):
+        lines = [
+            "Alchemy detailed run log",
+            "========================",
+            f"Started (UTC): {self.started_at.isoformat()}",
+            f"Finished (UTC): {finished_at.isoformat()}",
+            f"Wall time: {elapsed_s:.3f} s",
+            f"Exit code: {exit_code}",
+            f"Command: {self.command}",
+            "",
+            "System",
+            "------",
+            f"Platform: {platform.platform()}",
+            f"Python: {platform.python_version()}",
+            f"Available CPUs at startup: {available_cpu_count()}",
+        ]
+        initial_memory = self.details.get("initial_available_memory_bytes")
+        if initial_memory is None:
+            lines.append("Available memory at startup: unknown")
+        else:
+            lines.append(
+                "Available memory at startup: "
+                f"{initial_memory / (1024 ** 3):.2f} GiB")
+        final_memory = available_memory_bytes()
+        lines.append(
+            "Available memory at finish: " +
+            (f"{final_memory / (1024 ** 3):.2f} GiB"
+             if final_memory is not None else "unknown"))
+
+        lines.extend(["", "Configuration", "-------------"])
+        for name, value in sorted(vars(self.args).items()):
+            lines.append(f"{name}: {self._clean(value)}")
+        for name, value in sorted(self.details.items()):
+            if name == "initial_available_memory_bytes":
+                continue
+            lines.append(f"{name}: {self._clean(value)}")
+
+        status_counts = Counter(
+            entry["status"] for entry in self.entries)
+        reason_counts = Counter(
+            reason for entry in self.entries
+            for reason in entry["reason_codes"])
+        warning_counts = Counter(
+            warning for entry in self.entries
+            for warning in entry["warning_codes"])
+        retryable_count = sum(
+            entry["retryable"] for entry in self.entries)
+        no_metal_count = sum(
+            entry["no_metals"] for entry in self.entries)
+        total_entry_s = sum(
+            entry["runtime_s"] for entry in self.entries)
+        throughput = (
+            len(self.entries) * 60.0 / elapsed_s if elapsed_s > 0 else 0.0)
+
+        lines.extend([
+            "",
+            "Summary",
+            "-------",
+            f"Entries returned: {len(self.entries)}",
+            f"Status counts: {self._counter_text(status_counts)}",
+            f"Retryable entries: {retryable_count}",
+            f"Metal-free entries: {no_metal_count}",
+            f"Summed entry runtime: {total_entry_s:.3f} s",
+            f"Throughput: {throughput:.2f} entries/minute",
+            f"Reason codes: {self._counter_text(reason_counts)}",
+            f"Warning codes: {self._counter_text(warning_counts)}",
+        ])
+        for name, value in sorted(self.summary.items()):
+            lines.append(f"{name}: {self._clean(value)}")
+        if self.driver_error:
+            lines.append(f"Driver error: {self._clean(self.driver_error)}")
+
+        stage_values = {}
+        for entry in self.entries:
+            for name, value in entry["timings"].items():
+                try:
+                    stage_values.setdefault(name, []).append(float(value))
+                except (TypeError, ValueError):
+                    continue
+        lines.extend(["", "Stage timing", "------------"])
+        if not stage_values:
+            lines.append("No completed stage timings were recorded.")
+        else:
+            lines.append(
+                "Totals sum per-entry measurements; density_total_s contains "
+                "its subprocess stages, and parallel totals are not wall time.")
+            lines.append(
+                "stage | entries | total_s | mean_s | max_s | max_entry")
+            for name in sorted(stage_values):
+                values = stage_values[name]
+                stage_entries = [
+                    entry for entry in self.entries
+                    if name in entry["timings"]]
+                max_entry = max(
+                    stage_entries,
+                    key=lambda entry: float(entry["timings"][name]))
+                lines.append(
+                    f"{name} | {len(values)} | {sum(values):.3f} | "
+                    f"{sum(values) / len(values):.3f} | {max(values):.3f} | "
+                    f"{max_entry['pdbID']}")
+
+        incomplete_entries = [
+            entry for entry in self.entries if entry["status"] != "ok"]
+        lines.extend(["", "Incomplete entries", "------------------"])
+        if not incomplete_entries:
+            lines.append("None.")
+        else:
+            lines.append("pdbID | status | retryable | reasons | error")
+            for entry in incomplete_entries:
+                lines.append(
+                    f"{entry['pdbID']} | {entry['status']} | "
+                    f"{self._clean(entry['retryable'])} | "
+                    f"{'|'.join(entry['reason_codes']) or '-'} | "
+                    f"{self._clean(entry['error']) or '-'}")
+
+        lines.extend(["", "Slowest entries", "---------------"])
+        if not self.entries:
+            lines.append("No entries were processed.")
+        else:
+            lines.append(
+                "pdbID | status | runtime_s | metals | bonds | candidates | "
+                "reasons")
+            for entry in sorted(
+                    self.entries, key=lambda item: item["runtime_s"],
+                    reverse=True)[:20]:
+                lines.append(
+                    f"{entry['pdbID']} | {entry['status']} | "
+                    f"{entry['runtime_s']:.2f} | {entry['n_metals']} | "
+                    f"{entry['n_bonds']} | {entry['n_candidates']} | "
+                    f"{'|'.join(entry['reason_codes']) or '-'}")
+
+        lines.extend(["", "Per-entry results", "-----------------"])
+        if not self.entries:
+            lines.append("No entries were processed.")
+        for entry in self.entries:
+            timing_text = ",".join(
+                f"{name}={float(value):.3f}"
+                for name, value in sorted(entry["timings"].items())) or "-"
+            lines.append(
+                f"{entry['pdbID']} | status={entry['status']} | "
+                f"retryable={self._clean(entry['retryable'])} | "
+                f"no_metals={self._clean(entry['no_metals'])} | "
+                f"runtime_s={entry['runtime_s']:.2f} | "
+                f"metals={entry['n_metals']} | bonds={entry['n_bonds']} | "
+                f"candidates={entry['n_candidates']} | timings={timing_text} | "
+                f"reasons={'|'.join(entry['reason_codes']) or '-'} | "
+                f"warnings={'|'.join(entry['warning_codes']) or '-'} | "
+                f"error={self._clean(entry['error']) or '-'}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def write(self, exit_code):
+        """Atomically write the final timestamped log and return its path."""
+        os.makedirs(self.args.output_dir, exist_ok=True)
+        finished_at = datetime.now(timezone.utc)
+        elapsed_s = time.monotonic() - self.started_monotonic
+        timestamp = self.started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+        path = os.path.join(
+            self.args.output_dir, f"alchemy_run_{timestamp}.log")
+        handle, temporary_path = tempfile.mkstemp(
+            prefix=".alchemy-run-log-", dir=self.args.output_dir, text=True)
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:
+                log.write(self._render(exit_code, finished_at, elapsed_s))
+            os.replace(temporary_path, path)
+        except BaseException:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+            raise
+        return path
+
+
+def _run(args, run_log):
 
     try:
         cofactors = load_cofactor_ids()
     except (OSError, UnicodeError, ValueError) as exc:
-        print(f"Invalid bundled metallocofactor catalog: {exc}", flush=True)
+        message = f"Invalid bundled metallocofactor catalog: {exc}"
+        run_log.driver_error = message
+        print(message, flush=True)
         return 1
 
     env, _ = resolve_ccp4_environment(args)
@@ -1780,6 +2025,11 @@ def main(argv=None):
         not args.id and not args.id_file and not manual_requested and
         args.max_pdbs is None
     )
+    run_log.details["run_mode"] = (
+        "manual" if manual_requested else
+        "single" if args.id else
+        "id_file" if args.id_file else
+        "database" if database_run else "capped_database")
     confidence_mode = None
     confidence_reference = None
     confidence_stream_path = None
@@ -1796,7 +2046,9 @@ def main(argv=None):
                 confidence_reference = load_confidence_reference(
                     args.confidence_reference_dir)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
-                print(f"Invalid confidence reference: {exc}", flush=True)
+                message = f"Invalid confidence reference: {exc}"
+                run_log.driver_error = message
+                print(message, flush=True)
                 return 1
             confidence_mode = "reference"
             confidence_stream_path = confidence_scores_path
@@ -1813,12 +2065,12 @@ def main(argv=None):
         if (confidence_mode is not None and
                 (confidence_stream_path is None or
                  not os.path.isfile(confidence_stream_path))):
-            print(
+            message = (
                 "Cannot resume confidence-aware output because "
                 f"{confidence_stream_path} is missing; use a fresh output "
-                "directory.",
-                flush=True,
-            )
+                "directory.")
+            run_log.driver_error = message
+            print(message, flush=True)
             return 1
         try:
             validate_resume_schemas(
@@ -1827,6 +2079,7 @@ def main(argv=None):
                 confidence_path=confidence_stream_path,
                 confidence_columns=confidence_columns)
         except ValueError as exc:
+            run_log.driver_error = str(exc)
             print(str(exc), flush=True)
             return 1
         if confidence_mode == "reference":
@@ -1834,14 +2087,20 @@ def main(argv=None):
                 validate_scored_reference(
                     confidence_stream_path, confidence_reference)
             except (OSError, ValueError) as exc:
-                print(f"Cannot resume confidence output: {exc}", flush=True)
+                message = f"Cannot resume confidence output: {exc}"
+                run_log.driver_error = message
+                print(message, flush=True)
                 return 1
 
     try:
         ids, root, manual_inputs = _select_entry_ids(args, cache_root)
     except _DriverError as exc:
+        run_log.driver_error = str(exc)
         print(str(exc), flush=True)
         return 1
+
+    run_log.details["entries_selected_before_resume"] = len(ids)
+    run_log.details["resolved_input_root"] = root
 
     if args.resume:
         done = load_done(
@@ -1853,6 +2112,7 @@ def main(argv=None):
         ids = [i for i in ids if i not in done]
     if args.max_pdbs is not None:
         ids = ids[:args.max_pdbs]
+    run_log.details["entries_scheduled"] = len(ids)
 
     if not ids:
         if (args.resume and confidence_mode == "database" and
@@ -1864,8 +2124,9 @@ def main(argv=None):
                     database_reference_dir,
                 )
             except (OSError, ValueError, json.JSONDecodeError) as exc:
-                print(f"Confidence finalization failed: {exc}",
-                      file=sys.stderr, flush=True)
+                message = f"Confidence finalization failed: {exc}"
+                run_log.driver_error = message
+                print(message, file=sys.stderr, flush=True)
                 return 1
             print(
                 "No entries required retry; finalized "
@@ -1884,7 +2145,9 @@ def main(argv=None):
             (bonds_path, candidates_path), resume=args.resume,
             bonds_enabled=args.bonds)
     except OSError as exc:
-        print(f"Could not remove stale bond-stage output: {exc}", flush=True)
+        message = f"Could not remove stale bond-stage output: {exc}"
+        run_log.driver_error = message
+        print(message, flush=True)
         return 1
     for removed_path in removed_stale_bond_outputs:
         print(f"Removed stale bond-stage output: {removed_path}", flush=True)
@@ -1909,30 +2172,39 @@ def main(argv=None):
                 if os.path.isfile(path):
                     os.unlink(path)
         except OSError as exc:
-            print(f"Could not clear stale confidence output: {exc}", flush=True)
+            message = f"Could not clear stale confidence output: {exc}"
+            run_log.driver_error = message
+            print(message, flush=True)
             return 1
 
     # A Pool creates every worker up front, so asking for more than there are
     # entries just pays each one's startup for no work. Costly under the spawn
     # start method, where each worker re-imports gemmi into its own interpreter.
-    worker_note = ""
     if args.workers is None:
         cpu_limit, memory_limit = automatic_worker_limits()
         automatic_limit = cpu_limit
         if memory_limit is not None:
             automatic_limit = min(automatic_limit, memory_limit)
-            worker_note = (
-                f" (automatic limits: cpu={cpu_limit}, "
-                f"memory={memory_limit})")
-        else:
-            worker_note = (
-                f" (automatic cpu limit={cpu_limit}; memory unavailable)")
-        requested_workers = automatic_limit
+        workers = min(automatic_limit, len(ids))
+        run_log.details["worker_selection"] = "automatic"
+        run_log.details["CPU worker limit"] = cpu_limit
+        run_log.details["Memory worker limit"] = (
+            memory_limit if memory_limit is not None else "unavailable")
+        run_log.details["Selected workers"] = workers
+        print("Automatic worker selection:", flush=True)
+        print(f"  CPU worker limit: {cpu_limit}", flush=True)
+        print(
+            "  Memory worker limit: "
+            f"{memory_limit if memory_limit is not None else 'unavailable'}",
+            flush=True,
+        )
+        print(f"  Selected workers: {workers}", flush=True)
     else:
-        requested_workers = args.workers
-    workers = min(requested_workers, len(ids))
+        workers = min(args.workers, len(ids))
+        run_log.details["worker_selection"] = "explicit"
+        run_log.details["Selected workers"] = workers
     print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
-          f"with {workers} worker(s){worker_note} ...", flush=True)
+          f"with {workers} worker(s) ...", flush=True)
 
     cfg = {"root": root, "mirror_root": args.pdb_redo_root,
            "cache_root": cache_root, "env": env,
@@ -1943,6 +2215,12 @@ def main(argv=None):
            "alchemy_commit": _alchemy_commit(),
            "gemmi_version": _gemmi_version(),
            "ccp4_version": _ccp4_version(env)}
+    run_log.details.update(
+        alchemy_version=ALCHEMY_VERSION,
+        gemmi_version=cfg["gemmi_version"],
+        ccp4_version=cfg["ccp4_version"],
+        confidence_mode=confidence_mode or "disabled",
+    )
 
     prior_bond_counts = (
         _manifest_values_by_id(manifest_path, "n_bonds")
@@ -1995,6 +2273,7 @@ def main(argv=None):
                       initargs=(cfg,)) as pool:
                 for k, r in enumerate(
                         pool.imap_unordered(process, ids, chunksize=1), 1):
+                    run_log.record_entry(r)
                     if not args.resume or _resume_replacement_succeeded(r):
                         writers.write_stats_rows(r["rows"])
                         writers.write_bond_rows(r["bond_rows"])
@@ -2040,6 +2319,17 @@ def main(argv=None):
     n_rows = writers.n_rows if writers is not None else 0
     n_bonds = writers.n_bonds if writers is not None else 0
     n_candidates = writers.n_candidates if writers is not None else 0
+    run_log.summary.update(
+        metal_rows_written=n_rows,
+        bond_rows_written=n_bonds,
+        candidate_rows_written=n_candidates,
+        confidence_rows_written=(
+            writers.n_confidence if writers is not None else 0),
+        manifest_path=manifest_path,
+        metal_stats_path=stats_path,
+        metal_bonds_path=bonds_path if args.bonds else "disabled",
+        metal_candidates_path=(candidates_path if args.bonds else "disabled"),
+    )
 
     if staging is not None:
         try:
@@ -2066,9 +2356,18 @@ def main(argv=None):
                     database_reference_dir,
                 )
             except (OSError, ValueError, json.JSONDecodeError) as exc:
-                print(f"Confidence finalization failed: {exc}",
-                      file=sys.stderr, flush=True)
+                message = f"Confidence finalization failed: {exc}"
+                run_log.driver_error = message
+                print(message, file=sys.stderr, flush=True)
                 return 1
+            run_log.summary.update(
+                confidence_status="finalized",
+                confidence_rows=total,
+                confidence_scored_rows=scored,
+                confidence_reference_cohort=cohort,
+                confidence_scores_path=confidence_scores_path,
+                confidence_reference_path=database_reference_dir,
+            )
             print(
                 f"      {total} confidence rows ({scored} scored; "
                 f"reference cohort {cohort}) -> {confidence_scores_path}",
@@ -2077,6 +2376,8 @@ def main(argv=None):
             print(f"      confidence reference -> {database_reference_dir}",
                   flush=True)
         else:
+            run_log.summary["confidence_status"] = (
+                "not_finalized_incomplete_run")
             print(
                 "      confidence inputs were retained, but the database "
                 "reference was not finalized because the run is incomplete.",
@@ -2091,6 +2392,11 @@ def main(argv=None):
             f"{confidence_scores_path}",
             flush=True,
         )
+        run_log.summary.update(
+            confidence_status="scored_against_reference",
+            confidence_reference_cohort=confidence_reference.cohort_size,
+            confidence_scores_path=confidence_scores_path,
+        )
     if exit_code:
         print(
             "Alchemy completed with incomplete entries: "
@@ -2100,6 +2406,30 @@ def main(argv=None):
             flush=True,
         )
     return exit_code
+
+
+def main(argv=None):
+    """Parse arguments, execute the driver, and always emit a run log."""
+    raw_args = None if argv is None else list(argv)
+    args = parse_args(raw_args)
+    command_parts = (
+        list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args])
+    run_log = _RunLog(args, shlex.join(command_parts))
+    exit_code = 1
+    try:
+        exit_code = _run(args, run_log)
+        return exit_code
+    except BaseException as exc:
+        run_log.driver_error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        try:
+            log_path = run_log.write(exit_code)
+        except OSError as exc:
+            print(f"Could not write detailed run log: {exc}",
+                  file=sys.stderr, flush=True)
+        else:
+            print(f"Detailed run log -> {log_path}", flush=True)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,13 @@ Results are written to:
   `n_metals` value counts distinct selected coordinate-model sites, not
   diagnostic or repeated EDSTATS rows; `n_bonds` and `n_candidates` distinguish
   assigned-output size from candidate-evidence size.
+- `output/alchemy_run_<UTC timestamp>.log` — one detailed, immutable log for
+  each invocation. It records the command, configuration, software and system
+  provenance, worker limits, output and confidence summaries, grouped reasons
+  and warnings, slowest entries, every per-entry outcome, and timings for input
+  preparation, `mtzfix`, both FFT calculations, `edstats`, statistics
+  extraction, bond analysis, and cleanup. Resume runs create another log rather
+  than replacing the original run record.
 
 ## Dependencies
 
