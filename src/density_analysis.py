@@ -19,6 +19,10 @@ import shutil
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+class MtzfixValidationError(RuntimeError):
+    """MTZFIX could not make map coefficients pass its consistency checks."""
+
+
 def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None):
     """Validate the MTZ, compute maps with `fft`, then run `edstats`.
 
@@ -60,6 +64,17 @@ def run_density_analysis(pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=N
         if proc.returncode != 0:
             detail = (proc.stderr or "").strip()[:500]
             detail_suffix = f": {detail}" if detail else ""
+            if os.path.basename(cmd[0]).lower() == "mtzfix":
+                try:
+                    with open(log_path, encoding="utf-8",
+                              errors="replace") as handle:
+                        mtzfix_log_text = handle.read()
+                except OSError:
+                    mtzfix_log_text = ""
+                if "FAILED a test on re-take" in mtzfix_log_text:
+                    raise MtzfixValidationError(
+                        f"MTZFIX consistency re-test failed for {pdbID}"
+                        f"{detail_suffix}")
             raise RuntimeError(
                 f"{cmd[0]} failed for {pdbID} (rc={proc.returncode}): "
                 f"see {log_path}{detail_suffix}")

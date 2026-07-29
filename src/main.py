@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from density_analysis import run_density_analysis
+from density_analysis import MtzfixValidationError, run_density_analysis
 from metal_identification import (
     EDSTATS_COLUMNS,
     extract_metal_statistics,
@@ -909,6 +909,7 @@ def _initial_result(pdbID, cfg, manual_inputs):
             "bond_rows": [], "candidate_rows": [],
             "n_bonds": 0, "n_candidates": 0, "retryable": True,
             "reason_codes": [], "warning_codes": [],
+            "confidence_inputs_missing_reason": "",
             "alchemy_version": ALCHEMY_VERSION,
             "alchemy_commit": cfg["alchemy_commit"],
             "gemmi_version": cfg["gemmi_version"],
@@ -1080,8 +1081,6 @@ def process(pdbID):
             source_coordinate_path=source_coordinate_path,
             analysis_coordinate_path=pdb,
         )
-        res = run_density_analysis(
-            pdbID, mtz, pdb, work_dir, map_reslo, map_reshi, env=cfg["env"])
         structure = load_structure(
             pdbID, pdb, source_model_count=input_model_count)
         result.update(
@@ -1091,13 +1090,29 @@ def process(pdbID):
             multi_model_structure=structure.multi_model_structure,
             warning_codes=list(structure.warning_codes),
         )
-
-        rows, header = extract_metal_statistics(pdbID, res["stats_out"],
-                                    METALS_SET, cfg["cofactors"], structure=structure)
-        # Reaching this point means the entry's core inputs and density stage
-        # succeeded. Any limitations discovered below are terminal unless a
-        # later stage explicitly identifies a transient failure.
-        result["retryable"] = False
+        try:
+            res = run_density_analysis(
+                pdbID, mtz, pdb, work_dir, map_reslo, map_reshi,
+                env=cfg["env"])
+        except MtzfixValidationError as exc:
+            # The input is readable, but MTZFIX could not make its Fourier
+            # coefficients internally consistent. Do not use those maps or
+            # retry forever. Geometry remains independently assessable.
+            rows, header = [], []
+            result.update(
+                retryable=False,
+                reason_codes=["mtzfix_validation_failure"],
+                error=f"density unavailable: {exc}"[:300],
+                confidence_inputs_missing_reason=(
+                    "mtzfix_validation_failure"),
+            )
+        else:
+            rows, header = extract_metal_statistics(
+                pdbID, res["stats_out"], METALS_SET, cfg["cofactors"],
+                structure=structure)
+            # Reaching this point means the entry's core inputs and density
+            # stage succeeded. Later deterministic limitations remain terminal.
+            result["retryable"] = False
 
         identification_reason_codes = _identification_reason_codes(rows)
 
@@ -1120,7 +1135,8 @@ def process(pdbID):
                     connection_path=source_coordinate_path)
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
-                result["reason_codes"] = ["bond_stage_failure"]
+                result["reason_codes"] = list(dict.fromkeys(
+                    result["reason_codes"] + ["bond_stage_failure"]))
                 result["retryable"] = True
         _append_site_fields(rows, site_summaries, structure)
         _finalize_result(result, identification_reason_codes, bond_meta,
@@ -1889,7 +1905,8 @@ def main(argv=None):
                             confidence_rows = prepare_result_confidence_inputs(
                                 r["rows"], r["bond_rows"], STATS_COLUMNS)
                             confidence_rows = complete_confidence_site_count(
-                                confidence_rows, r["pdbID"], r["n"])
+                                confidence_rows, r["pdbID"], r["n"],
+                                r.get("confidence_inputs_missing_reason", ""))
                             if confidence_mode == "reference":
                                 confidence_rows = score_against_reference(
                                     confidence_rows, confidence_reference)

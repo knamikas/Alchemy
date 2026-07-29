@@ -304,12 +304,21 @@ def prepare_result_confidence_inputs(stats_rows, bond_rows, stats_columns):
     return prepare_confidence_inputs(flattened, bond_rows)
 
 
-def complete_confidence_site_count(rows, pdb_id, selected_site_count):
+def complete_confidence_site_count(rows, pdb_id, selected_site_count,
+                                   missing_reason=""):
     """Retain unresolved placeholders so no manifest-counted site disappears."""
     if len(rows) > selected_site_count:
         raise ValueError(
             f"confidence inputs exceed selected metal count for {pdb_id}")
-    completed = list(rows)
+    completed = [dict(row) for row in rows]
+    if missing_reason:
+        for row in completed:
+            reasons = [reason for reason in row.get(
+                "confidence_inputs_missing_reasons", "").split("|") if reason]
+            if missing_reason not in reasons:
+                reasons.append(missing_reason)
+            row["confidence_inputs_status"] = "unscorable"
+            row["confidence_inputs_missing_reasons"] = "|".join(reasons)
     for index in range(len(rows), selected_site_count):
         values: Dict[str, Any] = {
             column: "" for column in CONFIDENCE_INPUT_COLUMNS
@@ -323,7 +332,8 @@ def complete_confidence_site_count(rows, pdb_id, selected_site_count):
             "confidence_inputs_status": "unscorable",
             "confidence_inputs_missing_reasons": (
                 "rszd_unavailable|site_identity_unavailable|"
-                "site_evidence_unavailable"),
+                "site_evidence_unavailable" +
+                (f"|{missing_reason}" if missing_reason else "")),
         })
         completed.append(values)
     return completed

@@ -434,6 +434,11 @@ list or classification rules change.
 - A failure in bond analysis does not discard real-space-statistics rows already
   calculated for that entry; the manifest records the entry as `partial` with
   the bond-stage error.
+- If `mtzfix` cannot make an MTZ's Fourier coefficients pass its consistency
+  re-test, Alchemy does not use the rejected maps or retry indefinitely. The
+  entry is a terminal `partial` with `mtzfix_validation_failure`; coordinate-
+  based bond analysis still runs, while its metal sites remain explicitly
+  unscorable by confidence because RSZD is unavailable.
 - The command exits nonzero when any entry ends as `error`, `skip`, or a
   retryable `partial`. Completed `ok` and terminal `partial` results exit
   successfully.
