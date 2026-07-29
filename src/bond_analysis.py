@@ -782,6 +782,30 @@ def _unique_atoms_by_serial(atoms):
             if len(matches) == 1}
 
 
+def _selected_conformer_atom(structure, atom):
+    """Return the selected-conformer record for ``atom``'s chemical site.
+
+    A declaration names one deposited atom record, which may belong to an
+    alternate conformer that per-residue selection did not choose. Contacts are
+    measured on the selected conformer only, so re-point the declaration onto
+    the same-named atom of that conformer rather than admitting a second record
+    for a chemical site the proximity search already reports. Returns ``None``
+    when the selected conformer has no atom of that name and element, because
+    the declared contact then has no counterpart in the analyzed model.
+    """
+    if atom is None:
+        return None
+    selected = structure.atom_for_indices(
+        atom.chain_index, atom.residue_index, atom.atom_index)
+    if selected is not None:
+        return selected
+    for candidate in structure.residue_for_atom(atom).contact_atoms:
+        if (candidate.atom_name == atom.atom_name and
+                candidate.element == atom.element):
+            return candidate
+    return None
+
+
 def _declared_candidate_geometry(structure, metal, neighbor, connection):
     """Return contact geometry for a resolved declared connection."""
     import gemmi
@@ -833,44 +857,82 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
 def _collect_declared_candidates(structure, connection_path, metals):
     """Resolve source ``struct_conn``/``LINK`` claims to analysis atoms.
 
-    Source and analysis atom serials are preserved by Alchemy's mmCIF-to-PDB
-    conversion, so serial mapping avoids ambiguity introduced by shortened
-    chain names and legacy PDB residue-name limits.
+    Partners are resolved by matching the source model's atom serial against
+    the analysis model's, which avoids the ambiguity that shortened chain names
+    and legacy PDB residue-name limits introduce into identifier matching.
+
+    That join holds only when the two representations share a serial space.
+    A source PDB is extracted textually, so its serials survive unchanged, but
+    Alchemy's mmCIF-to-PDB conversion does not preserve them: Gemmi's PDB writer
+    emits a TER record after each polymer, every TER consumes a serial number,
+    and analysis serials therefore run one ahead of the source
+    ``_atom_site.id`` for each preceding TER. For mmCIF-sourced entries a
+    partner past the first TER resolves to a neighbouring atom instead of the
+    declared one, or -- when the shifted serial lands on a non-metal -- leaves
+    the connection to be discarded by the selected-metal test below without
+    recording an issue. Resolving each partner by author identity instead
+    (chain, sequence id, insertion code, component, atom name, altloc), or
+    carrying a conversion-time serial map, would remove that dependency.
+
+    A declaration names one deposited record, so either partner may be an
+    alternate conformer that per-residue selection did not choose. Both are
+    re-pointed onto their residue's selected conformer before use, so a
+    declaration cannot introduce a second record for a chemical site the
+    proximity search already reports and cannot inflate a coordination number
+    with a conformer that is absent from the analyzed model.
     """
     import gemmi
 
     if not connection_path:
-        return [], []
+        return [], [], []
     source = _connection_source(connection_path)
     try:
         declared_structure = gemmi.read_structure(connection_path)
     except Exception as exc:
         return [], [
-            f"{source} parse failed: {type(exc).__name__}: {exc}"]
+            f"{source} parse failed: {type(exc).__name__}: {exc}"], []
     if len(declared_structure) == 0:
-        return [], [f"{source} contains no coordinate model"]
+        return [], [f"{source} contains no coordinate model"], []
 
     source_model = declared_structure[0]
     analysis_by_serial = _unique_atoms_by_serial(structure.source_atoms)
     selected_metal_keys = {metal.source_key for metal in metals}
     candidates = []
     issues = []
+    warnings = []
     for index, connection in enumerate(declared_structure.connections, start=1):
         connection_id = str(connection.name).strip() or f"{source}_{index}"
         try:
             source_atoms = []
+            deselected_partner = False
+            substituted_partner = False
             for address in (connection.partner1, connection.partner2):
                 cra = source_model.find_cra(address, ignore_segment=True)
                 source_atom = getattr(cra, "atom", None)
                 serial = getattr(source_atom, "serial", None)
-                source_atoms.append(
-                    analysis_by_serial.get(int(serial))
-                    if serial is not None else None)
+                declared_atom = (analysis_by_serial.get(int(serial))
+                                 if serial is not None else None)
+                selected_atom = _selected_conformer_atom(
+                    structure, declared_atom)
+                if declared_atom is not None:
+                    if selected_atom is None:
+                        deselected_partner = True
+                    elif selected_atom is not declared_atom:
+                        substituted_partner = True
+                source_atoms.append(selected_atom)
         except Exception as exc:
             issues.append(
                 f"{source} {connection_id} resolution failed: "
                 f"{type(exc).__name__}")
             continue
+
+        if deselected_partner:
+            issues.append(
+                f"{source} {connection_id} partner names a conformer whose "
+                f"selected alternative has no matching atom")
+            continue
+        if substituted_partner:
+            warnings.append("declared_connection_conformer_substituted")
 
         first, second = source_atoms
         first_is_metal = (
@@ -921,7 +983,7 @@ def _collect_declared_candidates(structure, connection_path, metals):
             "candidate_sources": {source},
             "declared_connections": [record],
         })
-    return candidates, issues
+    return candidates, issues, warnings
 
 
 def _candidate_identity(candidate):
@@ -1577,12 +1639,14 @@ def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
     if not metals_in_model:
         return [], [], {}, metadata
 
-    declared_candidates, declared_issues = _collect_declared_candidates(
+    (declared_candidates, declared_issues,
+     declared_warnings) = _collect_declared_candidates(
         structure, connection_path or pdb_path, metals_in_model)
     if declared_issues:
         metadata["partial_reason_codes"].append(
             "declared_connection_resolution_incomplete")
         metadata["messages"].extend(declared_issues)
+    metadata["warning_codes"].extend(declared_warnings)
     declared_by_metal = {}
     for candidate in declared_candidates:
         declared_by_metal.setdefault(
