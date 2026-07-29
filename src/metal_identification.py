@@ -79,17 +79,23 @@ def _is_edstats_separator(fields):
 def _normalize_edstats_row(fields, header, indices):
     """Restore and normalize EDSTATS' valid blank-chain representation.
 
-    EDSTATS writes ``_`` for a blank leading chain identifier (CI), but leaves
-    the trailing chain field (CP) empty. Whitespace splitting therefore removes
-    CP and produces 41 fields. Restore CP only for that unambiguous shape: CI is
-    missing, and the final two tokens are the integer MN and NR values. All
-    other short rows remain short and are rejected by normal row validation.
-    Both chain fields then use an empty string as their canonical missing value.
+    EDSTATS leaves the trailing chain field (CP) empty for a blank-chain
+    residue, so whitespace splitting removes it and produces 41 fields. CP is
+    the only field EDSTATS can legitimately omit, so restore it for that
+    unambiguous shape: the row is exactly one field short, and its final two
+    tokens are the integer MN and NR values. All other short rows remain short
+    and are rejected by normal row validation.
+
+    The leading CI field cannot gate this restoration. CI is EDSTATS' own group
+    label rather than the deposited chain identifier -- ordered waters are
+    reported as chain ``0`` whatever their actual chain, while CP carries the
+    real one. A blank-chain entry therefore yields CI ``0`` for every water and
+    CI ``_`` for every other residue, with CP omitted from both. Both chain
+    fields then use an empty string as their canonical missing value.
     """
     normalized = list(fields)
     if (
         len(normalized) == len(header) - 1
-        and normalized[indices["CI"]] in EDSTATS_MISSING_CHAIN_IDS
         and indices["MN"] == len(normalized) - 2
         and indices["CP"] == len(normalized) - 1
     ):
