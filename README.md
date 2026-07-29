@@ -64,13 +64,14 @@ Results are written to:
   `n_metals` value counts distinct selected coordinate-model sites, not
   diagnostic or repeated EDSTATS rows; `n_bonds` and `n_candidates` distinguish
   assigned-output size from candidate-evidence size.
-- `output/alchemy_run_<UTC timestamp>.log` — one detailed, immutable log for
-  each invocation. It records the command, configuration, software and system
-  provenance, worker limits, output and confidence summaries, grouped reasons
-  and warnings, slowest entries, every per-entry outcome, and timings for input
-  preparation, `mtzfix`, both FFT calculations, model-envelope cropping,
-  `edstats`, statistics extraction, bond analysis, and cleanup. It also records
-  the full-map and EDSTATS-map sizes for each density-scored entry. Resume runs
+- `output/alchemy_run_YYYYMMDD.log` — one detailed, immutable log for each
+  invocation. Additional runs on the same UTC date receive a numeric suffix.
+  The log records the command, configuration, software and system provenance,
+  worker limits, output and confidence summaries, grouped reasons and warnings,
+  slowest entries, every per-entry outcome, and timings for input preparation,
+  `mtzfix`, both FFT calculations, model-envelope cropping, `edstats`,
+  statistics extraction, bond analysis, and cleanup. It also records the
+  full-map and EDSTATS-map sizes for each density-scored entry. Resume runs
   create another log rather than replacing the original run record.
 
 ## Dependencies
@@ -424,6 +425,10 @@ list or classification rules change.
 
 ## Operational notes
 
+- Interactive runs redraw a single progress line after every completed
+  structure. While waiting on a slow structure, the elapsed time refreshes
+  approximately once per second. Redirected output is limited to one progress
+  line every 30 seconds to avoid producing oversized logs.
 - Per-entry maps and logs are written to uniquely created working directories
   and removed after their rows are extracted unless `--keep-intermediates` is
   supplied. Cleanup never targets a pre-existing `<output-dir>/<pdb-id>`

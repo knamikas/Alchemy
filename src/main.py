@@ -48,7 +48,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from multiprocessing import Pool, cpu_count
+from multiprocessing import (
+    Pool,
+    TimeoutError as MultiprocessingTimeoutError,
+    cpu_count,
+)
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -1792,6 +1796,63 @@ class _OutputWriters:
         self._confidence_fh.flush()
 
 
+class _ProgressReporter:
+    """Render a throttled parent-process heartbeat without worker overhead."""
+
+    TERMINAL_INTERVAL_S = 1.0
+    REDIRECTED_INTERVAL_S = 30.0
+
+    def __init__(self, total, stream=None, clock=None):
+        self.total = total
+        self.stream = stream if stream is not None else sys.stdout
+        self.clock = clock if clock is not None else time.monotonic
+        self.started = self.clock()
+        self.last_rendered = float("-inf")
+        self.last_width = 0
+        self.terminal = bool(self.stream.isatty())
+        self.line_open = False
+
+    @staticmethod
+    def _elapsed_text(elapsed_s):
+        elapsed = max(0, int(elapsed_s))
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def render(self, completed, counts, no_metal_count, force=False,
+               final=False):
+        now = self.clock()
+        interval = (self.TERMINAL_INTERVAL_S if self.terminal else
+                    self.REDIRECTED_INTERVAL_S)
+        if not force and now - self.last_rendered < interval:
+            return
+        percent = 100.0 * completed / self.total if self.total else 100.0
+        line = (
+            f"[{completed}/{self.total} {percent:5.1f}%] "
+            f"elapsed={self._elapsed_text(now - self.started)} | "
+            f"ok={counts['ok']} partial={counts['partial']} "
+            f"skip={counts['skip']} error={counts['error']} | "
+            f"no_metals={no_metal_count}"
+        )
+        if self.terminal:
+            padded = line.ljust(self.last_width)
+            print(f"\r{padded}", end="\n" if final else "",
+                  file=self.stream, flush=True)
+            self.last_width = len(line)
+            self.line_open = not final
+        else:
+            print(line, file=self.stream, flush=True)
+        self.last_rendered = now
+
+    def close(self):
+        """Finish an in-place terminal line after success or an exception."""
+        if self.terminal and self.line_open:
+            print(file=self.stream, flush=True)
+            self.line_open = False
+
+
 class _RunLog:
     """Collect compact run diagnostics and write one human-readable log."""
 
@@ -2009,9 +2070,14 @@ class _RunLog:
         os.makedirs(self.args.output_dir, exist_ok=True)
         finished_at = datetime.now(timezone.utc)
         elapsed_s = time.monotonic() - self.started_monotonic
-        timestamp = self.started_at.strftime("%Y%m%dT%H%M%S.%fZ")
-        path = os.path.join(
-            self.args.output_dir, f"alchemy_run_{timestamp}.log")
+        run_date = self.started_at.strftime("%Y%m%d")
+        log_stem = f"alchemy_run_{run_date}"
+        path = os.path.join(self.args.output_dir, f"{log_stem}.log")
+        suffix = 2
+        while os.path.lexists(path):
+            path = os.path.join(
+                self.args.output_dir, f"{log_stem}_{suffix}.log")
+            suffix += 1
         handle, temporary_path = tempfile.mkstemp(
             prefix=".alchemy-run-log-", dir=self.args.output_dir, text=True)
         try:
@@ -2285,6 +2351,7 @@ def _run(args, run_log):
     retryable_partial_count = 0
     processing_completed = False
     writers = None
+    progress = _ProgressReporter(len(ids))
     try:
         # ExitStack closes whichever handles were opened, so a failure partway
         # through opening them cannot leak the earlier ones.
@@ -2307,8 +2374,17 @@ def _run(args, run_log):
             )
             with Pool(workers, initializer=_init_worker,
                       initargs=(cfg,)) as pool:
-                for k, r in enumerate(
-                        pool.imap_unordered(process, ids, chunksize=1), 1):
+                results = pool.imap_unordered(process, ids, chunksize=1)
+                completed = 0
+                progress.render(
+                    completed, counts, no_metal_count, force=True)
+                while completed < len(ids):
+                    try:
+                        r = results.next(timeout=1.0)
+                    except MultiprocessingTimeoutError:
+                        progress.render(completed, counts, no_metal_count)
+                        continue
+                    completed += 1
                     run_log.record_entry(r)
                     if not args.resume or _resume_replacement_succeeded(r):
                         writers.write_stats_rows(r["rows"])
@@ -2337,18 +2413,13 @@ def _run(args, run_log):
                         no_metal_count += 1
                     if r["status"] == "partial" and r.get("retryable", False):
                         retryable_partial_count += 1
-                    if k % 200 == 0 or k == len(ids):
-                        print(f"[{k}/{len(ids)}] ok={counts['ok']} "
-                              f"partial={counts['partial']} "
-                              f"skip={counts['skip']} "
-                              f"error={counts['error']} "
-                              f"no_metals={no_metal_count} "
-                              f"rows={writers.n_rows} "
-                              f"bonds={writers.n_bonds} "
-                              f"candidates={writers.n_candidates} "
-                              f"confidence={writers.n_confidence}", flush=True)
+                    finished = completed == len(ids)
+                    progress.render(
+                        completed, counts, no_metal_count,
+                        force=progress.terminal or finished, final=finished)
             processing_completed = True
     finally:
+        progress.close()
         if staging is not None and not processing_completed:
             staging.discard()
 
