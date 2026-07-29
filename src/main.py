@@ -100,6 +100,7 @@ SYMMETRY_POLICY = (
 )
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 ALCHEMY_VERSION = "1.0.0"
+AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
 
 # Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
 # is never mistaken for environment variables.
@@ -1390,6 +1391,69 @@ def available_cpu_count():
         return 1
 
 
+def available_memory_bytes():
+    """Return currently available physical memory, or ``None`` if unknown.
+
+    Available memory is used instead of total RAM so an automatic batch run
+    does not compete with memory already committed to other applications. Keep
+    this dependency-free because worker selection happens before the analysis
+    environment is initialized.
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/meminfo", encoding="ascii") as handle:
+                for line in handle:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            pass
+
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(
+                    ctypes.byref(status)):
+                return int(status.ullAvailPhys)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    if hasattr(os, "sysconf"):
+        try:
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            available_pages = os.sysconf("SC_AVPHYS_PAGES")
+            if page_size > 0 and available_pages > 0:
+                return int(page_size * available_pages)
+        except (OSError, TypeError, ValueError):
+            pass
+    return None
+
+
+def automatic_worker_limits():
+    """Return the CPU and optional memory limits for automatic parallelism."""
+    cpu_limit = max(1, available_cpu_count() - 2)
+    available_memory = available_memory_bytes()
+    memory_limit = None
+    if available_memory is not None:
+        memory_limit = max(1, available_memory // AUTO_WORKER_MEMORY_BYTES)
+    return cpu_limit, memory_limit
+
+
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
@@ -1445,9 +1509,11 @@ def parse_args(argv=None):
                     help="root of local cache for auto-downloaded PDB-REDO entries")
     ap.add_argument("--max-pdbs", type=int, default=None,
                     help="process only the first N entries")
-    ap.add_argument("--workers", type=positive_int,
-                    default=max(1, available_cpu_count() - 2),
-                    help="number of worker processes (minimum: 1)")
+    ap.add_argument(
+        "--workers", type=positive_int, default=None,
+        help=("number of worker processes (minimum: 1); by default Alchemy "
+              "uses the lower CPU or available-memory limit"),
+    )
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
     ap.add_argument(
         "--confidence-reference-dir",
@@ -1849,9 +1915,24 @@ def main(argv=None):
     # A Pool creates every worker up front, so asking for more than there are
     # entries just pays each one's startup for no work. Costly under the spawn
     # start method, where each worker re-imports gemmi into its own interpreter.
-    workers = min(args.workers, len(ids))
+    worker_note = ""
+    if args.workers is None:
+        cpu_limit, memory_limit = automatic_worker_limits()
+        automatic_limit = cpu_limit
+        if memory_limit is not None:
+            automatic_limit = min(automatic_limit, memory_limit)
+            worker_note = (
+                f" (automatic limits: cpu={cpu_limit}, "
+                f"memory={memory_limit})")
+        else:
+            worker_note = (
+                f" (automatic cpu limit={cpu_limit}; memory unavailable)")
+        requested_workers = automatic_limit
+    else:
+        requested_workers = args.workers
+    workers = min(requested_workers, len(ids))
     print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
-          f"with {workers} worker(s) ...", flush=True)
+          f"with {workers} worker(s){worker_note} ...", flush=True)
 
     cfg = {"root": root, "mirror_root": args.pdb_redo_root,
            "cache_root": cache_root, "env": env,

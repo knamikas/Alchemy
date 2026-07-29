@@ -362,7 +362,7 @@ and atom serial rather than parser traversal order.
 | `--pdb-redo-root <path>` | Set the local mirror root. |
 | `--pdb-redo-cache <path>` | Set the cache for downloaded entries. |
 | `--output-dir <path>` | Set the result directory. |
-| `--workers <n>` | Set multiprocessing parallelism; must be at least 1. |
+| `--workers <n>` | Override multiprocessing parallelism; must be at least 1. By default, Alchemy uses the lower CPU or available-memory limit, budgeting 1.25 GiB per worker. |
 | `--max-pdbs <n>` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
 | `--no-bonds` | Skip bond-distance analysis. A fresh run removes previous `metal_bonds_all.csv` and `metal_candidates_all.csv` files in the output directory. |
