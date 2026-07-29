@@ -32,6 +32,7 @@ import re
 from metal_elements import METAL_ELEMENTS
 from metal_identification import COFACTOR_CATALOG_PATH
 from structure_analysis import (
+    blank_if_missing,
     count_deposited_ni,
     count_ni,
     load_structure,
@@ -773,13 +774,61 @@ def _enum_name(value):
     return str(getattr(value, "name", value)).lower()
 
 
-def _unique_atoms_by_serial(atoms):
-    grouped = {}
-    for atom in atoms:
-        if atom.serial is not None:
-            grouped.setdefault(int(atom.serial), []).append(atom)
-    return {serial: matches[0] for serial, matches in grouped.items()
-            if len(matches) == 1}
+def _analysis_chain_names(connection_path):
+    """Map source chain names onto the analysis model's chain names.
+
+    A legacy PDB chain field holds one character, so Alchemy's mmCIF-to-PDB
+    conversion runs ``setup_entities`` and then ``shorten_chain_names`` before
+    writing the coordinates that are analyzed. Replaying both calls on a
+    separate copy recovers that renaming instead of assuming it is the
+    identity. Neither call reorders or renames chains on its own, so the copy's
+    chains stay aligned with the source's. A source PDB is extracted textually
+    and keeps its chain names, so its mapping is empty.
+    """
+    import gemmi
+
+    if _connection_source(connection_path) != "struct_conn":
+        return {}
+    copy = gemmi.read_structure(connection_path)
+    if len(copy) == 0:
+        return {}
+    source_names = [str(chain.name) for chain in copy[0]]
+    copy.setup_entities()
+    copy.shorten_chain_names()
+    return {source: str(chain.name)
+            for source, chain in zip(source_names, copy[0])
+            if source != str(chain.name)}
+
+
+def _analysis_atom_for_partner(structure, cra, chain_names):
+    """Resolve one declared partner to an analysis atom by author identity.
+
+    The declaration's author identifiers survive conversion: only chain names
+    are shortened, which ``chain_names`` reverses, and a component identifier
+    too long for the legacy residue field is indexed under both its source and
+    its converted name. Returns ``None`` when the identity matches no residue,
+    matches more than one, or names an atom the analyzed model does not hold.
+    """
+    chain = getattr(cra, "chain", None)
+    residue = getattr(cra, "residue", None)
+    atom = getattr(cra, "atom", None)
+    if chain is None or residue is None or atom is None:
+        return None
+
+    chain_id = chain_names.get(str(chain.name), str(chain.name))
+    resnum = f"{residue.seqid.num}{blank_if_missing(residue.seqid.icode)}"
+    matches = structure.residues_for_author(
+        str(residue.name), chain_id, resnum)
+    if len(matches) != 1:
+        return None
+
+    atom_name = str(atom.name).strip()
+    altloc = blank_if_missing(atom.altloc)
+    named = [site for site in matches[0].source_atoms
+             if site.atom_name == atom_name]
+    if altloc:
+        named = [site for site in named if site.altloc == altloc]
+    return named[0] if named else None
 
 
 def _selected_conformer_atom(structure, atom):
@@ -857,22 +906,17 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
 def _collect_declared_candidates(structure, connection_path, metals):
     """Resolve source ``struct_conn``/``LINK`` claims to analysis atoms.
 
-    Partners are resolved by matching the source model's atom serial against
-    the analysis model's, which avoids the ambiguity that shortened chain names
-    and legacy PDB residue-name limits introduce into identifier matching.
-
-    That join holds only when the two representations share a serial space.
-    A source PDB is extracted textually, so its serials survive unchanged, but
-    Alchemy's mmCIF-to-PDB conversion does not preserve them: Gemmi's PDB writer
-    emits a TER record after each polymer, every TER consumes a serial number,
-    and analysis serials therefore run one ahead of the source
-    ``_atom_site.id`` for each preceding TER. For mmCIF-sourced entries a
-    partner past the first TER resolves to a neighbouring atom instead of the
-    declared one, or -- when the shifted serial lands on a non-metal -- leaves
-    the connection to be discarded by the selected-metal test below without
-    recording an issue. Resolving each partner by author identity instead
-    (chain, sequence id, insertion code, component, atom name, altloc), or
-    carrying a conversion-time serial map, would remove that dependency.
+    Partners are resolved by author identity -- chain, sequence number,
+    insertion code, component, atom name, and altloc -- against the analysis
+    model. Atom serials cannot carry this join: Gemmi's PDB writer emits a TER
+    record after each polymer and every TER consumes a serial number, so the
+    serials of an mmCIF-converted model run ahead of the source
+    ``_atom_site.id`` by one for each preceding TER, and a partner past the
+    first TER would resolve to a neighbouring atom. Author identifiers survive
+    conversion intact; the two identifier ambiguities it does introduce are
+    both reversible, chain shortening through ``_analysis_chain_names`` and a
+    component identifier too long for the legacy residue field through the
+    conversion provenance the analysis structure already restores.
 
     A declaration names one deposited record, so either partner may be an
     alternate conformer that per-residue selection did not choose. Both are
@@ -895,7 +939,7 @@ def _collect_declared_candidates(structure, connection_path, metals):
         return [], [f"{source} contains no coordinate model"], []
 
     source_model = declared_structure[0]
-    analysis_by_serial = _unique_atoms_by_serial(structure.source_atoms)
+    chain_names = _analysis_chain_names(connection_path)
     selected_metal_keys = {metal.source_key for metal in metals}
     candidates = []
     issues = []
@@ -908,10 +952,8 @@ def _collect_declared_candidates(structure, connection_path, metals):
             substituted_partner = False
             for address in (connection.partner1, connection.partner2):
                 cra = source_model.find_cra(address, ignore_segment=True)
-                source_atom = getattr(cra, "atom", None)
-                serial = getattr(source_atom, "serial", None)
-                declared_atom = (analysis_by_serial.get(int(serial))
-                                 if serial is not None else None)
+                declared_atom = _analysis_atom_for_partner(
+                    structure, cra, chain_names)
                 selected_atom = _selected_conformer_atom(
                     structure, declared_atom)
                 if declared_atom is not None:
