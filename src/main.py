@@ -47,6 +47,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from multiprocessing import (
     Pool,
@@ -117,6 +118,11 @@ AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
 # Seconds of no completed entry, after a worker died without naming the entry
 # it held, before the remaining outstanding entries are failed retryably.
 WORKER_STALL_GRACE_S = 600.0
+# Seconds to let a worker pool shut down cleanly before its children are killed
+# outright. Every result has already been collected by then and the workers are
+# idle, so a healthy pool finishes this in milliseconds and never approaches the
+# deadline; it exists only to bound the hang described in ``_shutdown_pool``.
+WORKER_SHUTDOWN_GRACE_S = 5.0
 
 # Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
 # is never mistaken for environment variables.
@@ -1008,6 +1014,51 @@ def _dead_worker_pids(pool, known_pids):
     known_pids.clear()
     known_pids.update(current)
     return dead
+
+
+def _shutdown_pool(pool):
+    """Close a worker pool without letting a dead worker hang the driver.
+
+    A pool worker waiting for its next task blocks inside the task queue's
+    ``get()`` while holding that queue's lock. A process killed there -- by the
+    out-of-memory killer, or by a crash in a compiled extension -- never
+    releases it, and ``Pool.terminate`` in turn blocks acquiring the same lock.
+    Shutdown then hangs *after* every result has already been collected and
+    written, so the batch is complete but the run log, confidence finalization
+    and exit code never happen.
+
+    Run the clean shutdown on a side thread and give it a deadline. If it does
+    not return, cancel the finalizer that would repeat the same wait at
+    interpreter exit and kill the remaining children directly. The thread is a
+    daemon, so an abandoned one cannot keep the process alive.
+
+    Returns ``True`` when shutdown had to be forced.
+    """
+    children = [process for process in getattr(pool, "_pool", ()) or ()
+                if getattr(process, "pid", None)]
+    closer = threading.Thread(target=pool.terminate, daemon=True)
+    closer.start()
+    closer.join(WORKER_SHUTDOWN_GRACE_S)
+    if not closer.is_alive():
+        return False
+
+    finalizer = getattr(pool, "_terminate", None)
+    if finalizer is not None:
+        try:
+            finalizer.cancel()
+        except Exception:  # noqa: BLE001 - best effort, shutdown must proceed
+            pass
+    for process in children:
+        try:
+            # Process.kill is SIGKILL on POSIX and TerminateProcess on Windows,
+            # where signal.SIGKILL does not exist.
+            process.kill()
+        except (OSError, ValueError, AttributeError):  # already reaped
+            pass
+    # The lock belongs to a process that is already gone, so killing the
+    # remaining children cannot release it and the thread will not return.
+    # Abandon it: a daemon thread does not keep the interpreter alive.
+    return True
 
 
 def _worker_death_result(pdbID, cfg, pid):
@@ -2458,10 +2509,15 @@ def _run(args, run_log):
             assignments: Dict[int, str] = {}
             worker_pids: set = set()
             lost_ids: set = set()
+            completed_ids: set = set()
             unattributed_deaths = 0
             last_progress = time.monotonic()
-            with Pool(workers, initializer=_init_worker,
-                      initargs=(cfg, inflight)) as pool:
+            # Not a ``with`` block: ``Pool.__exit__`` calls the same
+            # ``terminate`` that a killed idle worker can wedge forever, so
+            # shutdown is bounded explicitly in the ``finally`` below.
+            pool = Pool(workers, initializer=_init_worker,
+                        initargs=(cfg, inflight))
+            try:
                 results = pool.imap_unordered(process, ids, chunksize=1)
                 completed = 0
                 progress.render(
@@ -2491,8 +2547,13 @@ def _run(args, run_log):
                                 and remaining <= unattributed_deaths):
                             # Every entry still outstanding can only be held by
                             # a process that died before naming its entry.
+                            # Entries that already returned a result are not
+                            # outstanding: blaming one of those would write a
+                            # second, failed row for an entry that succeeded and
+                            # leave the entry that actually died unreported.
                             for stuck_id in ids:
-                                if stuck_id in lost_ids:
+                                if (stuck_id in lost_ids
+                                        or stuck_id in completed_ids):
                                     continue
                                 lost_ids.add(stuck_id)
                                 batch.append(_worker_death_result(
@@ -2512,6 +2573,7 @@ def _run(args, run_log):
                             # this one is dropped rather than written twice.
                             continue
                         completed += 1
+                        completed_ids.add(r["pdbID"])
                         run_log.record_entry(r)
                         if (not args.resume
                                 or _resume_replacement_succeeded(r)):
@@ -2553,6 +2615,12 @@ def _run(args, run_log):
                             completed, counts, no_metal_count,
                             force=progress.terminal or finished,
                             final=finished)
+            finally:
+                if _shutdown_pool(pool):
+                    run_log.summary["worker_pool_forced_shutdown"] = True
+                    print("Warning: a worker pool shutdown had to be forced "
+                          "after a worker died holding the task-queue lock; "
+                          "results above are complete.", flush=True)
             processing_completed = True
     finally:
         progress.close()

@@ -622,14 +622,43 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script,
 
 
 # --------------------------------------------------------------------------- #
-# Known limitation: the silent-death fallback must select an outstanding id
+# An idle worker's death must not wedge pool shutdown
 # --------------------------------------------------------------------------- #
 @_POSIX_KILL
-@pytest.mark.xfail(strict=True, reason=(
-    "src/main.py ~2494 chooses the first id not already in lost_ids when an "
-    "unattributed worker death stalls the pool; it does not exclude ids whose "
-    "real results were already written, so it can duplicate a completed entry "
-    "and omit the entry that actually died"))
+def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
+    """The driver still exits when a worker is killed while awaiting a task.
+
+    A worker waiting for its next task blocks inside the pool task queue's
+    ``get()`` holding that queue's lock, so a process killed there never
+    releases it and ``Pool.terminate`` blocks acquiring the same lock. The
+    failure is invisible in the results: every entry is analysed and every row
+    written, and only then does teardown hang, so the run produces no run log
+    and no exit code.
+
+    ``aaaa`` finishes quickly and is killed 0.3 s later, by which time it is
+    idle and holding the lock; ``bbbb`` is still working, so the driver has not
+    reached teardown yet. Reaching the assertions at all is the regression
+    signal -- before the shutdown deadline existed, this run never returned.
+    """
+    script = {
+        "aaaa": {"runtime": 0.05, "die_after": 0.3},
+        "bbbb": {"runtime": 1.5},
+    }
+    exit_code, output_dir, elapsed = _run_driver(tmp_path, script, workers=2)
+
+    assert elapsed < _DRIVER_HARD_TIMEOUT_S
+    by_id = {row["pdbID"]: row for row in _read_manifest(output_dir)}
+    assert set(by_id) == set(script)
+    # The work itself completed: the kill lands after both entries are done.
+    assert by_id["aaaa"]["status"] == "ok"
+    assert by_id["bbbb"]["status"] == "ok"
+    assert exit_code == 0
+
+
+# --------------------------------------------------------------------------- #
+# The silent-death fallback must select an outstanding id
+# --------------------------------------------------------------------------- #
+@_POSIX_KILL
 def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     """A silent fourth-task death must not be blamed on a completed first task.
 
@@ -637,6 +666,11 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     during ``dddd`` before announcing it.  At fallback time exactly one id is
     outstanding, so the manifest has an unambiguous desired result: three
     successes and one retryable death row for ``dddd``, each appearing once.
+
+    Regression: the fallback used to pick the first id not already declared
+    lost, without excluding ids whose real results had already been written, so
+    it blamed ``aaaa`` -- writing a second, failed row for an entry that
+    succeeded -- and never reported ``dddd`` at all.
     """
     script = {
         "aaaa": {"runtime": 0.02},

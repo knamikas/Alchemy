@@ -36,8 +36,6 @@ exercise them most directly.  The watchdog-attribution pin lives in
   unwritable output handling are incorrect;
 * non-positive ``--max-pdbs``, ``--no-bonds`` help and CCP4 config precedence
   violate their CLI contracts;
-* an idle worker killed while holding CPython's Pool queue lock can deadlock
-  shutdown (documented skip);
 * a degenerate 1-cubic-Angstrom unit cell is accepted for DPI.
 """
 
@@ -236,33 +234,10 @@ def test_sigterm_to_the_driver_reaps_its_workers():
     """
 
 
-# --------------------------------------------------------------------------- #
-# Killing an idle Pool worker can deadlock Pool shutdown (not automatable)
-# --------------------------------------------------------------------------- #
-@pytest.mark.skip(reason=(
-    "destructively reproducing this CPython multiprocessing deadlock can leave "
-    "pytest itself blocked in Pool._terminate_pool; keep the manual process-"
-    "level recipe in the docstring instead"))
-def test_killing_an_idle_pool_worker_does_not_deadlock_driver_shutdown():
-    """An idle-worker death must not prevent an otherwise complete run exiting.
-
-    Manual reproduction on POSIX:
-
-    1. Start a batch with at least two workers and enough unevenly sized entries
-       that one worker becomes idle while another is still processing.
-    2. Identify the idle child and send it ``SIGKILL`` while it is blocked in
-       the Pool task queue's ``inqueue.get()``.
-    3. Let the remaining entries finish.  The current driver writes a complete
-       manifest but can then remain inside the ``with Pool(...)`` teardown:
-       the killed child held ``SimpleQueue._rlock``, so CPython's
-       ``Pool._terminate_pool`` waits forever trying to drain that queue.
-    4. Expected: worker supervision and teardown are designed so the driver
-       exits with a run log and status code even when an idle worker disappears.
-
-    This is deliberately not approximated inside pytest.  A timeout around the
-    driver would detect the hang but would not make it safe to tear down the
-    wedged Pool, and a failed test could strand descendants on the test host.
-    """
+# Killing an idle Pool worker used to deadlock Pool shutdown. Fixed: the driver
+# no longer relies on ``Pool.__exit__``, bounding teardown and force-killing any
+# survivor. Covered by
+# tests/test_worker_recovery.py::test_idle_worker_death_does_not_wedge_pool_shutdown
 
 
 # --------------------------------------------------------------------------- #
