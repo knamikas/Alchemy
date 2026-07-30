@@ -523,16 +523,21 @@ def _score_prepared_row(row, reference):
     rszd = _finite_float(row.get("rszd_magnitude", ""))
     zbond = _finite_float(row.get("max_abs_zbond", ""))
     coverage = _finite_float(row.get("geometry_coverage", ""))
-    if not math.isfinite(coverage):
-        coverage = 0.0
-    result = score_site(rszd, zbond, coverage)
+    # A blank, non-numeric or out-of-range coverage is damaged input, not
+    # evidence that geometry is irrelevant. Coercing it to zero removed the two
+    # geometry terms from the score, so a corrupt cell scored *higher* than the
+    # same site with real geometry evidence. Missing data must not move the
+    # score in either direction: the site is reported unscorable instead.
+    coverage_valid = math.isfinite(coverage) and 0.0 <= coverage <= 1.0
+    result = score_site(rszd, zbond, coverage) if coverage_valid else None
     output = dict(row)
     if result is None:
         output.update({column: "" for column in ANALYSIS_COLUMNS})
         output.update({
             "confidence_scoring_status": "unscorable",
             "confidence_scoring_reason": (
-                "rszd_unavailable" if not math.isfinite(rszd)
+                "geometry_coverage_invalid" if not coverage_valid
+                else "rszd_unavailable" if not math.isfinite(rszd)
                 else "zbond_unavailable_with_nonzero_coverage"),
             "confidence_reference_id": reference.reference_id,
             "confidence_cohort_size": reference.cohort_size,

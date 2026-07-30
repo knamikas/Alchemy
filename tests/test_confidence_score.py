@@ -854,10 +854,16 @@ def test_scoring_status_distinguishes_density_only_from_partial_geometry(
     assert scored[3]["confidence_percentile"] == ""
 
 
-def test_blank_coverage_is_scored_as_no_geometry(tmp_path):
-    """A genuinely absent QG contributes no geometry evidence or deduction."""
+def test_an_explicit_zero_coverage_is_scored_as_no_geometry(tmp_path):
+    """A measured QG of zero is evidence, and contributes no geometry terms.
+
+    This is the legitimate density-only case: the site really was assessed and
+    really has no reference-covered contact. It is distinguished from a *blank*
+    cell, which is damaged input -- see
+    :func:`test_missing_or_corrupt_geometry_coverage_is_unscorable`.
+    """
     reference = _frozen_reference(tmp_path)
-    row = _input_row(geometry_coverage="", max_abs_zbond="12")
+    row = _input_row(geometry_coverage="0", max_abs_zbond="12")
     scored, = cs.score_against_reference([row], reference)
     assert scored["confidence_scoring_status"] == "density_only"
     assert scored["confidence_scoring_reason"] == "no_usable_geometry"
@@ -865,13 +871,20 @@ def test_blank_coverage_is_scored_as_no_geometry(tmp_path):
     assert float(scored["confidence_score"]) == pytest.approx(87.5, abs=1e-6)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "defect 9: malformed/non-finite geometry coverage is currently coerced "
-    "to zero and receives an inflated density-only score"))
-def test_corrupt_geometry_coverage_is_unscorable(tmp_path):
-    """Corrupt QG is invalid input, not evidence that geometry is irrelevant."""
+def test_missing_or_corrupt_geometry_coverage_is_unscorable(tmp_path):
+    """Damaged QG is invalid input, not evidence that geometry is irrelevant.
+
+    Regression: a non-finite coverage was coerced to zero, which removed both
+    geometry terms from the formula, so a corrupt cell scored *higher* than the
+    same site with real geometry evidence. Missing data must not move the score
+    in either direction; the site is reported unscorable instead.
+
+    A value outside [0, 1] is damaged too: ``score_site`` clamps it, which is
+    the same silent repair by another route.
+    """
     reference = _frozen_reference(tmp_path)
-    for coverage in ("n/a", "nan", "inf", "-inf", "corrupt"):
+    for coverage in ("", "   ", "n/a", "nan", "inf", "-inf", "corrupt",
+                     "1.5", "-0.2"):
         row = _input_row(geometry_coverage=coverage, max_abs_zbond="12")
         scored, = cs.score_against_reference([row], reference)
 
