@@ -24,13 +24,11 @@ Three properties keep this module honest:
   exhausting memory are recorded as ``skip`` with the manual reproduction in the
   docstring, rather than as a fragile automated approximation.
 
-The six open findings are pinned across this module and the module that can
+The five open findings are pinned across this module and the module that can
 exercise them most directly.  Corrupt confidence coverage is pinned in
 ``test_confidence_score.py``.  This module owns the remaining findings:
-
-* explicit CCP4 selection, SIGTERM cleanup, leaked scratch directories and
-  unwritable output handling are incorrect;
-* a degenerate 1-cubic-Angstrom unit cell is accepted for DPI.
+explicit CCP4 selection, SIGTERM cleanup, leaked scratch directories and
+unwritable output handling are all incorrect.
 """
 
 from __future__ import annotations
@@ -39,17 +37,14 @@ import argparse
 import contextlib
 import csv
 import io
-import math
 import os
 import sys
 
 import pytest
 
-import bond_analysis as ba
 import ccp4_setup
 import main
 from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
-from helpers import StructureBuilder
 
 
 # --------------------------------------------------------------------------- #
@@ -324,28 +319,5 @@ def test_unwritable_output_dir_fails_with_a_clean_message(
 # tests/test_cli_and_config.py.
 
 
-# --------------------------------------------------------------------------- #
-# A degenerate default unit cell is accepted for DPI
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/bond_analysis.py ~292 accepts every finite positive cell volume; "
-    "Gemmi's placeholder CRYST1 cell is 1 x 1 x 1 Angstrom in P 1, so a "
-    "structure without meaningful crystallographic metadata supplies a bogus "
-    "1 A^3 ASU volume instead of missing_or_invalid_asu_volume"))
-def test_placeholder_one_angstrom_cell_is_not_used_for_dpi(tmp_path):
-    """Gemmi's degenerate default cell is missing metadata, not a real ASU.
-
-    A one-cubic-Angstrom cell cannot contain even one atom.  Accepting it makes
-    the DPI calculation succeed with a physically impossible volume, which is
-    worse than returning NaN and the existing
-    ``missing_or_invalid_asu_volume`` reason code.
-    """
-    builder = StructureBuilder(
-        cell=(1.0, 1.0, 1.0, 90.0, 90.0, 90.0), spacegroup="P 1")
-    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    pdb_path = builder.write_pdb(tmp_path / "placeholder-cell.pdb")
-
-    volume = ba._asu_volume(str(tmp_path / "absent.mtz"), pdb_path)
-
-    assert math.isnan(volume), (
-        f"a placeholder 1 A^3 cell was accepted as ASU volume {volume!r}")
+# The placeholder 1 x 1 x 1 unit cell is now rejected for DPI; the
+# regression test lives in tests/test_bond_geometry.py.

@@ -1022,6 +1022,55 @@ def test_asu_volume_is_the_cell_volume_over_the_operation_count(
     assert volume == pytest.approx(1.0e6 / operations)
 
 
+def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path):
+    """Gemmi's degenerate default cell is missing metadata, not a real ASU.
+
+    A coordinate file with no usable CRYST1 record parses to Gemmi's
+    placeholder 1 x 1 x 1 cell in P 1. That is smaller than a single
+    non-hydrogen atom, so it cannot be an asymmetric unit.
+
+    Regression: ``_asu_volume`` accepted any finite positive volume, so the
+    placeholder yielded va = 1 A^3 and the DPI calculation succeeded on a
+    physically impossible number -- producing a confident z-score for every
+    contact in the entry instead of reporting the metadata as missing.
+    """
+    builder = StructureBuilder(cell=(1.0, 1.0, 1.0, 90.0, 90.0, 90.0),
+                               spacegroup="P 1")
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    path = builder.write_pdb(tmp_path / "placeholder-cell.pdb")
+
+    volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    assert math.isnan(volume), (
+        f"a placeholder 1 A^3 cell was accepted as ASU volume {volume!r}")
+
+    # The user-visible consequence: no DPI, and a reason code saying why.
+    data_json = helpers.write_data_json(tmp_path / "data.json")
+    context = load_structure("test", path)
+    dpi, _, reason = ba._calculate_dpi_details(
+        context, helpers.dpi_inputs(pdb_path=path, data_json=data_json))
+
+    assert math.isnan(dpi)
+    assert reason == "missing_or_invalid_asu_volume"
+
+
+def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path):
+    """The placeholder guard must not reject small but genuine unit cells.
+
+    ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default, so
+    an unusually small real cell still yields a volume and a DPI. Pinning this
+    keeps the guard from being widened into a physical-plausibility threshold
+    that nobody derived.
+    """
+    builder = StructureBuilder(cell=(10.0, 10.0, 10.0, 90.0, 90.0, 90.0),
+                               spacegroup="P 1")
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    path = builder.write_pdb(tmp_path / "small-cell.pdb")
+
+    volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+
+    assert volume == pytest.approx(1000.0)
+
+
 def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(tmp_path):
     """The reflection file wins, because it is the cell the data were scaled on.
 

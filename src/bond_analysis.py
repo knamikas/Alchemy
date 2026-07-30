@@ -289,6 +289,23 @@ for (_, donor, metal_element), (target, _) in LIT.items():
 # --------------------------------------------------------------------------- #
 # DPI
 # --------------------------------------------------------------------------- #
+def _is_placeholder_cell(cell) -> bool:
+    """Whether ``cell`` is Gemmi's stand-in for a file with no CRYST1 record.
+
+    ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default,
+    which is what a coordinate file carrying no usable cell parses to. That
+    volume is smaller than a single non-hydrogen atom, so accepting it would
+    hand the DPI calculation a physically impossible asymmetric unit and give
+    every contact in the entry a confident-looking z-score derived from it.
+    Reporting the metadata as missing is the honest outcome.
+
+    Deliberately narrow: a small but genuine cell is still a crystal, and
+    widening this into a plausibility threshold would mean inventing a cutoff
+    nobody derived.
+    """
+    return not cell.is_crystal()
+
+
 def _asu_volume(mtz_path, pdb_path):
     """Asymmetric-unit volume (A^3) = unit-cell volume / number of symmetry ops.
 
@@ -303,14 +320,16 @@ def _asu_volume(mtz_path, pdb_path):
         cell, sg = mtz.cell, mtz.spacegroup
     except Exception:
         cell = sg = None
-    if cell is None or sg is None or cell.volume <= 0:
+    if (cell is None or sg is None or cell.volume <= 0
+            or _is_placeholder_cell(cell)):
         try:
             st = gemmi.read_structure(pdb_path)
             cell = st.cell
             sg = gemmi.find_spacegroup_by_name(st.spacegroup_hm)
         except Exception:
             return NAN
-    if cell is None or sg is None or cell.volume <= 0:
+    if (cell is None or sg is None or cell.volume <= 0
+            or _is_placeholder_cell(cell)):
         return NAN
     nops = len(list(sg.operations()))
     return cell.volume / nops if nops > 0 else NAN
