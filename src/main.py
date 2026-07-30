@@ -50,6 +50,7 @@ import tempfile
 import time
 from multiprocessing import (
     Pool,
+    SimpleQueue,
     TimeoutError as MultiprocessingTimeoutError,
     cpu_count,
 )
@@ -113,6 +114,9 @@ SYMMETRY_POLICY = (
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 ALCHEMY_VERSION = "1.0.0"
 AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
+# Seconds of no completed entry, after a worker died without naming the entry
+# it held, before the remaining outstanding entries are failed retryably.
+WORKER_STALL_GRACE_S = 600.0
 
 # Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
 # is never mistaken for environment variables.
@@ -153,6 +157,7 @@ STATS_COLUMNS = (
 
 # config dict shared with worker processes (set once per worker by _init_worker)
 _CFG: Optional[Dict[str, Any]] = None
+_INFLIGHT: Optional[Any] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -906,9 +911,32 @@ def _ccp4_version(env):
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-def _init_worker(cfg: Dict[str, Any]) -> None:
-    global _CFG
+def _init_worker(cfg: Dict[str, Any], inflight=None) -> None:
+    global _CFG, _INFLIGHT
     _CFG = cfg
+    _INFLIGHT = inflight
+
+
+def _announce_inflight(state: str, pdbID: str) -> None:
+    """Tell the driver which entry this worker process currently holds.
+
+    A worker killed by the OOM killer or felled by a segfault in a compiled
+    extension runs no further Python, so it cannot report its own death and the
+    pool never delivers a result for the task it was running. These
+    notifications are the only record of which entry a process held, letting the
+    driver attribute a dead process to that entry and fail it retryably instead
+    of waiting for a result that can never arrive.
+
+    ``SimpleQueue.put`` writes to the pipe synchronously, so a notification sent
+    before the work begins is already readable by the driver when the process is
+    killed mid-entry.
+    """
+    if _INFLIGHT is None:
+        return
+    try:
+        _INFLIGHT.put((state, os.getpid(), pdbID))
+    except Exception:  # noqa: BLE001 - bookkeeping must never fail an entry
+        pass
 
 
 def _initial_result(pdbID, cfg, manual_inputs):
@@ -947,6 +975,52 @@ def _initial_result(pdbID, cfg, manual_inputs):
             "model_analyzed": "", "multi_model_structure": "",
             "altloc_policy": ALTLOC_POLICY,
             "symmetry_contact_policy": SYMMETRY_POLICY}
+
+
+def _drain_inflight(inflight, assignments):
+    """Apply pending worker notifications to the pid -> entry assignment map."""
+    while True:
+        try:
+            if inflight.empty():
+                return
+            state, pid, pdbID = inflight.get()
+        except (OSError, EOFError):  # pragma: no cover - pipe torn down
+            return
+        if state == "start":
+            assignments[pid] = pdbID
+        else:
+            assignments.pop(pid, None)
+
+
+def _dead_worker_pids(pool, known_pids):
+    """Return worker pids that have disappeared since the last check.
+
+    ``Pool`` silently replaces a worker that died, so a pid leaving the pool's
+    roster is the only signal that its task will never produce a result.
+    """
+    current = {
+        process.pid for process in getattr(pool, "_pool", ()) or ()
+        if process.pid is not None
+    }
+    if not current:
+        return set()
+    dead = known_pids - current
+    known_pids.clear()
+    known_pids.update(current)
+    return dead
+
+
+def _worker_death_result(pdbID, cfg, pid):
+    """Synthesize the retryable result a killed worker could not return."""
+    result = _initial_result(pdbID, cfg, cfg.get("manual_inputs"))
+    result.update(
+        status="error",
+        retryable=True,
+        reason_codes=["worker_process_died"],
+        error=(f"worker process {pid} terminated without returning a result "
+               f"(out-of-memory kill or crash); {pdbID} was not analyzed"),
+    )
+    return result
 
 
 def _resolve_entry_dir(pdbID, cfg):
@@ -1061,6 +1135,7 @@ def process(pdbID):
     manual_inputs = cfg.get("manual_inputs")
     data_json = None
     result = _initial_result(pdbID, cfg, manual_inputs)
+    _announce_inflight("start", pdbID)
     try:
         if manual_inputs:
             work_dir = tempfile.mkdtemp(
@@ -1218,6 +1293,7 @@ def process(pdbID):
             result["timings"]["cleanup_s"] = round(
                 time.monotonic() - cleanup_started, 3)
         result["runtime"] = round(time.monotonic() - t0, 2)
+        _announce_inflight("end", pdbID)
     return result
 
 
@@ -2378,51 +2454,105 @@ def _run(args, run_log):
                 if write_confidence_path is not None else None,
                 confidence_columns,
             )
+            inflight = SimpleQueue()
+            assignments: Dict[int, str] = {}
+            worker_pids: set = set()
+            lost_ids: set = set()
+            unattributed_deaths = 0
+            last_progress = time.monotonic()
             with Pool(workers, initializer=_init_worker,
-                      initargs=(cfg,)) as pool:
+                      initargs=(cfg, inflight)) as pool:
                 results = pool.imap_unordered(process, ids, chunksize=1)
                 completed = 0
                 progress.render(
                     completed, counts, no_metal_count, force=True)
                 while completed < len(ids):
+                    batch = []
                     try:
-                        r = results.next(timeout=1.0)
+                        batch.append(results.next(timeout=1.0))
                     except MultiprocessingTimeoutError:
-                        progress.render(completed, counts, no_metal_count)
-                        continue
-                    completed += 1
-                    run_log.record_entry(r)
-                    if not args.resume or _resume_replacement_succeeded(r):
-                        writers.write_stats_rows(r["rows"])
-                        writers.write_bond_rows(r["bond_rows"])
-                        writers.write_candidate_rows(r["candidate_rows"])
-                        confidence_rows = []
-                        if confidence_mode is not None:
-                            confidence_rows = prepare_result_confidence_inputs(
-                                r["rows"], r["bond_rows"], STATS_COLUMNS)
-                            confidence_rows = complete_confidence_site_count(
-                                confidence_rows, r["pdbID"], r["n"],
-                                r.get("confidence_inputs_missing_reason", ""))
-                            if confidence_mode == "reference":
-                                confidence_rows = score_against_reference(
-                                    confidence_rows, confidence_reference)
-                            writers.write_confidence_rows(confidence_rows)
-                        # The manifest is the completion marker, so write it
-                        # only after this entry's result rows have flushed.
-                        writers.write_manifest_row(_manifest_row(
-                            r, args.resume, args.bonds, prior_bond_counts,
-                            prior_candidate_counts))
-                        if staging is not None:
-                            staging.replacement_ids.add(r["pdbID"].lower())
-                    counts[r["status"]] = counts.get(r["status"], 0) + 1
-                    if r.get("no_metals", False):
-                        no_metal_count += 1
-                    if r["status"] == "partial" and r.get("retryable", False):
-                        retryable_partial_count += 1
-                    finished = completed == len(ids)
-                    progress.render(
-                        completed, counts, no_metal_count,
-                        force=progress.terminal or finished, final=finished)
+                        pass
+                    # A killed worker never delivers a result, so its entry is
+                    # recovered from the pool roster rather than waited on.
+                    _drain_inflight(inflight, assignments)
+                    for dead_pid in _dead_worker_pids(pool, worker_pids):
+                        dead_id = assignments.pop(dead_pid, None)
+                        if dead_id is None:
+                            unattributed_deaths += 1
+                        elif dead_id not in lost_ids:
+                            lost_ids.add(dead_id)
+                            batch.append(_worker_death_result(
+                                dead_id, cfg, dead_pid))
+                    if not batch:
+                        stalled = time.monotonic() - last_progress
+                        remaining = len(ids) - completed
+                        if (unattributed_deaths
+                                and stalled > WORKER_STALL_GRACE_S
+                                and remaining <= unattributed_deaths):
+                            # Every entry still outstanding can only be held by
+                            # a process that died before naming its entry.
+                            for stuck_id in ids:
+                                if stuck_id in lost_ids:
+                                    continue
+                                lost_ids.add(stuck_id)
+                                batch.append(_worker_death_result(
+                                    stuck_id, cfg, 0))
+                                if len(batch) >= remaining:
+                                    break
+                        else:
+                            progress.render(
+                                completed, counts, no_metal_count)
+                            continue
+                    last_progress = time.monotonic()
+                    for r in batch:
+                        if (r["pdbID"] in lost_ids and r.get("reason_codes")
+                                != ["worker_process_died"]):
+                            # A real result arrived for an entry already
+                            # declared lost. The synthesized row stands, so
+                            # this one is dropped rather than written twice.
+                            continue
+                        completed += 1
+                        run_log.record_entry(r)
+                        if (not args.resume
+                                or _resume_replacement_succeeded(r)):
+                            writers.write_stats_rows(r["rows"])
+                            writers.write_bond_rows(r["bond_rows"])
+                            writers.write_candidate_rows(r["candidate_rows"])
+                            confidence_rows = []
+                            if confidence_mode is not None:
+                                confidence_rows = (
+                                    prepare_result_confidence_inputs(
+                                        r["rows"], r["bond_rows"],
+                                        STATS_COLUMNS))
+                                confidence_rows = (
+                                    complete_confidence_site_count(
+                                        confidence_rows, r["pdbID"], r["n"],
+                                        r.get(
+                                            "confidence_inputs_missing_reason",
+                                            "")))
+                                if confidence_mode == "reference":
+                                    confidence_rows = score_against_reference(
+                                        confidence_rows, confidence_reference)
+                                writers.write_confidence_rows(confidence_rows)
+                            # The manifest is the completion marker, so write
+                            # it only after this entry's rows have flushed.
+                            writers.write_manifest_row(_manifest_row(
+                                r, args.resume, args.bonds, prior_bond_counts,
+                                prior_candidate_counts))
+                            if staging is not None:
+                                staging.replacement_ids.add(
+                                    r["pdbID"].lower())
+                        counts[r["status"]] = counts.get(r["status"], 0) + 1
+                        if r.get("no_metals", False):
+                            no_metal_count += 1
+                        if (r["status"] == "partial"
+                                and r.get("retryable", False)):
+                            retryable_partial_count += 1
+                        finished = completed == len(ids)
+                        progress.render(
+                            completed, counts, no_metal_count,
+                            force=progress.terminal or finished,
+                            final=finished)
             processing_completed = True
     finally:
         progress.close()
