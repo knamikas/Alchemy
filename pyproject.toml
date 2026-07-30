@@ -7,7 +7,7 @@ name = "alchemy"
 version = "1.0.0"
 description = "PDB-wide crystallographic validation of modeled metal sites"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     "gemmi>=0.7.0",
     "numpy>=1.17",

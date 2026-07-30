@@ -10,7 +10,7 @@ python3 -m pip install -e '.[test]'
 python3 -m pytest
 ```
 
-Alchemy supports Python 3.8 and newer and requires gemmi 0.7 or newer.
+Alchemy supports Python 3.11 and newer and requires gemmi 0.7 or newer.
 
 ## Common commands
 
