@@ -1680,8 +1680,8 @@ def parse_args(argv=None):
                     help="root of the PDB-REDO mirror")
     ap.add_argument("--pdb-redo-cache", default=os.path.join(REPO_DIR, "pdb-redo-cache"),
                     help="root of local cache for auto-downloaded PDB-REDO entries")
-    ap.add_argument("--max-pdbs", type=int, default=None,
-                    help="process only the first N entries")
+    ap.add_argument("--max-pdbs", type=positive_int, default=None,
+                    help="process only the first N entries (minimum: 1)")
     ap.add_argument(
         "--workers", type=positive_int, default=None,
         help=("number of worker processes (minimum: 1); by default Alchemy "
@@ -1710,8 +1710,14 @@ def parse_args(argv=None):
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
                     help="skip terminal ok/partial results; retry retryable incomplete ids")
+    # ArgumentDefaultsHelpFormatter appends the default of ``bonds``, not of
+    # the flag, so an unqualified help string renders "(default: True)" -- the
+    # negation of what --no-bonds does. Naming %(default)s explicitly suppresses
+    # that append and lets the value be labelled with the setting it belongs to.
     ap.add_argument("--no-bonds", dest="bonds", action="store_false",
-                    help="skip the metal-ligand bond-distance stage (edstats stats only)")
+                    help="skip the metal-ligand bond-distance stage (edstats "
+                         "stats only); bond analysis is enabled by default "
+                         "(bonds=%(default)s)")
     ap.set_defaults(bonds=True)
     
     args = ap.parse_args(argv)

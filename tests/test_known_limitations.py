@@ -24,14 +24,12 @@ Three properties keep this module honest:
   exhausting memory are recorded as ``skip`` with the manual reproduction in the
   docstring, rather than as a fragile automated approximation.
 
-The nine open findings are pinned across this module and the module that can
+The six open findings are pinned across this module and the module that can
 exercise them most directly.  Corrupt confidence coverage is pinned in
 ``test_confidence_score.py``.  This module owns the remaining findings:
 
 * explicit CCP4 selection, SIGTERM cleanup, leaked scratch directories and
   unwritable output handling are incorrect;
-* non-positive ``--max-pdbs``, ``--no-bonds`` help and CCP4 config precedence
-  violate their CLI contracts;
 * a degenerate 1-cubic-Angstrom unit cell is accepted for DPI.
 """
 
@@ -44,18 +42,14 @@ import io
 import math
 import os
 import sys
-import types
 
-import gemmi
 import pytest
 
 import bond_analysis as ba
 import ccp4_setup
-import helpers
 import main
 from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
-from helpers import AtomSpec, EDSTATS_HEADER, StructureBuilder
-from structure_analysis import load_structure
+from helpers import StructureBuilder
 
 
 # --------------------------------------------------------------------------- #
@@ -157,20 +151,6 @@ def _id_file(tmp_path, pdb_ids):
     path = tmp_path / "ids.txt"
     path.write_text(" ".join(pdb_ids) + "\n", encoding="utf-8")
     return str(path)
-
-
-def _option_help(option: str) -> str:
-    """The rendered ``--help`` paragraph for one option."""
-    captured = io.StringIO()
-    with contextlib.suppress(SystemExit):
-        with contextlib.redirect_stdout(captured):
-            main.parse_args(["--help"])
-    text = captured.getvalue()
-    # The option name also appears in the usage banner; the description block is
-    # the last occurrence.
-    start = text.rindex(option)
-    end = text.find("\n  --", start)
-    return text[start:end if end != -1 else len(text)]
 
 
 # --------------------------------------------------------------------------- #
@@ -339,141 +319,9 @@ def test_unwritable_output_dir_fails_with_a_clean_message(
     assert "Traceback (most recent call last)" not in message, message
 
 
-# --------------------------------------------------------------------------- #
-# 7. --help describes --no-bonds as defaulting to True
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/main.py ~1662: --no-bonds is a store_false into dest='bonds' with "
-    "set_defaults(bonds=True) at ~1664, and the parser is built with "
-    "ArgumentDefaultsHelpFormatter at ~1621, so argparse appends the default of "
-    "`bonds` to the help of `--no-bonds` and prints '(default: True)' -- the "
-    "exact negation of what passing the flag does")
-)
-def test_help_does_not_claim_that_no_bonds_defaults_to_true():
-    """``--help`` must not tell the user that ``--no-bonds`` defaults to True.
-
-    Bond analysis is on by default and ``--no-bonds`` turns it off. The rendered
-    help says the opposite, which a user can only read as "bonds are already
-    skipped by default". Whatever the fix -- a per-option formatter, an explicit
-    ``help=`` suffix, or splitting the flag pair -- the rendered paragraph must
-    not carry a bare ``(default: True)``.
-    """
-    paragraph = _option_help("--no-bonds")
-    assert "skip the metal-ligand bond-distance stage" in paragraph
-    assert "(default: True)" not in paragraph, paragraph
-
-
-# --------------------------------------------------------------------------- #
-# 8. --max-pdbs accepts 0 and negative caps
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/main.py ~1632 declares --max-pdbs as a plain `type=int` with no "
-    "validation, unlike --workers which uses positive_int, so 0 and negative "
-    "caps are accepted")
-)
-@pytest.mark.parametrize("value", ["0", "-5"])
-def test_max_pdbs_rejects_non_positive_caps(value):
-    """``--max-pdbs`` is documented as "process only the first N entries".
-
-    Zero and negative values have no meaning under that description.
-    ``--workers`` already rejects them through ``positive_int``; ``--max-pdbs``
-    should be validated the same way instead of silently accepting a cap that
-    cannot express a positive number of entries.
-
-    The rejection has to be *about* ``--max-pdbs``: a bare
-    ``pytest.raises(SystemExit)`` would also be satisfied by an exit provoked by
-    something else in the argument list, and this xfail is strict, so that would
-    read as "someone fixed --max-pdbs" when nobody had.
-    """
-    stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr):
-        with pytest.raises(SystemExit) as excinfo:
-            main.parse_args(["--id", "109m", "--max-pdbs", value])
-
-    # ``argparse.error`` exits 2 with the diagnostic on stderr and nothing but
-    # the code on the exception (``str(SystemExit(2)) == "2"``, which is why
-    # ``pytest.raises(match=...)`` cannot be used here); an explicit
-    # ``raise SystemExit(message)`` carries it the other way round. Accept both.
-    assert excinfo.value.code not in (0, None)
-    message = f"{stderr.getvalue()}\n{excinfo.value}"
-    assert "max-pdbs" in message, (
-        f"--max-pdbs {value} was rejected, but not by name:\n" + message)
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "src/main.py ~2297 applies the cap as `ids = ids[:args.max_pdbs]`, so a "
-    "negative cap is a Python slice from the end: --max-pdbs -3 over three ids "
-    "quietly schedules nothing at all instead of being rejected")
-)
-def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end(
-        tmp_path, stub_ccp4_path):
-    """A negative cap must not quietly discard the tail of the id list.
-
-    ``ids[:args.max_pdbs]`` with a negative cap trims from the *end*, so
-    ``--max-pdbs -3`` over three ids yields an empty list and the driver reports
-    "No entries to process" and exits 0 -- a run that silently did nothing while
-    looking like a success. The user asked for a cap and got a truncation from
-    the wrong end.
-
-    The driver is offline here (the mirror root points at a directory that does
-    not exist), so a bare ``exit_code != 0`` would be satisfied by any unrelated
-    failure -- a mirror lookup, a download -- and this xfail is strict: that
-    would turn the suite red announcing a fix to ``--max-pdbs`` that nobody
-    made. The check is therefore that the run is rejected *by name*.
-    """
-    output_dir = tmp_path / "output"
-    exit_code, text = _run_driver(
-        ["--id-file", _id_file(tmp_path, ["109m", "1cll", "100d"]),
-         "--max-pdbs", "-3", "--output-dir", str(output_dir),
-         *_isolated_paths(tmp_path)])
-
-    assert "max-pdbs" in text, (
-        "a negative --max-pdbs must be refused with a message naming the "
-        f"option; the run said:\n{text}")
-    assert exit_code != 0, (
-        "a negative --max-pdbs silently produced a successful empty run:\n"
-        + text)
-    assert "No entries to process" not in text, (
-        "the negative cap trimmed the id list from the end instead of being "
-        f"rejected:\n{text}")
-
-
-# --------------------------------------------------------------------------- #
-# 9. The CCP4 config loader is last-wins, the writer targets the first file
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/ccp4_setup.py ~66: load_ccp4_setup_config merges with "
-    "config.update(data) over the whole list, so the LAST readable file wins, "
-    "while save_ccp4_setup writes only config_files[0] (~74); with the "
-    "three-entry list "
-    "from main.default_ccp4_config_files a saved setup path is shadowed by any "
-    "later file")
-)
-def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
-    """``--configure-ccp4`` must actually take effect on the next run.
-
-    ``save_ccp4_setup`` writes the user-level file (``config_files[0]``), but
-    ``load_ccp4_setup_config`` merges every file in order and lets the last one
-    win -- and ``main.default_ccp4_config_files`` puts the in-repo
-    ``.alchemy/ccp4.json`` last. A user who runs ``--configure-ccp4`` is told
-    "saved CCP4 setup path to ~/.config/alchemy/ccp4.json" and then keeps
-    getting the stale path from the repository file, with no diagnostic.
-
-    Save and load must agree on which file is authoritative.
-    """
-    primary = tmp_path / "user" / "ccp4.json"
-    shadowing = tmp_path / "repo" / "ccp4.json"
-    shadowing.parent.mkdir(parents=True)
-    shadowing.write_text('{"ccp4_setup": "/stale/repo/ccp4.setup-sh"}\n',
-                         encoding="utf-8")
-    config_files = [str(primary), str(shadowing)]
-
-    chosen = "/the/path/the/user/configured/ccp4.setup-sh"
-    written = ccp4_setup.save_ccp4_setup(chosen, config_files=config_files)
-    assert written == [str(primary)]
-
-    loaded = ccp4_setup.load_ccp4_setup_config(config_files=config_files)
-    assert loaded.get("ccp4_setup") == chosen
+# --no-bonds help text, non-positive --max-pdbs and CCP4 config precedence
+# were all fixed; their regression tests live in
+# tests/test_cli_and_config.py.
 
 
 # --------------------------------------------------------------------------- #

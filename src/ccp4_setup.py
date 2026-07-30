@@ -51,6 +51,13 @@ COMMON_CCP4_SETUP_CANDIDATES = (
 
 
 def load_ccp4_setup_config(config_files=None):
+    """Merge the CCP4 configuration files, earliest file winning.
+
+    The order must match ``save_ccp4_setup``, which writes only to
+    ``config_files[0]``. Merging with the last file winning meant a path stored
+    by ``--configure-ccp4`` was shadowed by any later file that also carried
+    one, so configuration appeared to succeed and was then silently ignored.
+    """
     config_files = config_files or DEFAULT_CONFIG_FILES
     config = {}
     for config_file in config_files:
@@ -63,7 +70,8 @@ def load_ccp4_setup_config(config_files=None):
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
-                config.update(data)
+                for key, value in data.items():
+                    config.setdefault(key, value)
         except (OSError, json.JSONDecodeError):
             continue
     return config
