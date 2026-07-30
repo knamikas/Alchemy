@@ -13,8 +13,27 @@ dependencies = [
     "numpy>=1.17",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+
 [tool.setuptools.package-data]
 data = [
     "*.txt",
     "*.json",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "ccp4: requires the CCP4 binaries (mtzfix, fft, mapmask, edstats) on PATH",
+    "entry_data: requires the checksum-pinned PDB-REDO integration entries",
+    "network: may contact pdb-redo.eu for a live check or missing entry data",
+    "slow: end-to-end pipeline run; skip with --skip-slow or deselect with -m 'not slow'",
+]
+filterwarnings = [
+    "error::pytest.PytestUnknownMarkWarning",
 ]

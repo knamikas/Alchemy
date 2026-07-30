@@ -16,13 +16,13 @@ manually supplied coordinate and MTZ files.
 ## Quick start
 
 ```bash
-# Smoke test: 109m = myoglobin, expect an FE row
-conda run -n metal python src/main.py --id 109m \
+# Smoke test: 9myr has two Cys3-His zinc sites
+conda run -n metal python src/main.py --id 9myr \
     --ccp4-setup <path/to/ccp4.setup-sh>
 
-# Additional examples: 300d has six metals; 100d is a no-metal DNA control
-conda run -n metal python src/main.py --id 300d --ccp4-setup <…>
-conda run -n metal python src/main.py --id 100d --ccp4-setup <…>
+# Additional examples: 6nlr is a multi-element stress case; 9nxl is metal-free
+conda run -n metal python src/main.py --id 6nlr --ccp4-setup <…>
+conda run -n metal python src/main.py --id 9nxl --ccp4-setup <…>
 
 # Run IDs from a comma-, whitespace-, or newline-separated file
 conda run -n metal python src/main.py \
