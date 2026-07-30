@@ -24,14 +24,11 @@ Three properties keep this module honest:
   exhausting memory are recorded as ``skip`` with the manual reproduction in the
   docstring, rather than as a fragile automated approximation.
 
-The fourteen open findings are pinned across this module and the module that can
-exercise them most directly.  The watchdog-attribution pin lives in
-``test_worker_recovery.py`` and corrupt confidence coverage is pinned in
+The ten open findings are pinned across this module and the module that can
+exercise them most directly.  Corrupt confidence coverage is pinned in
 ``test_confidence_score.py``.  This module owns the remaining findings:
 
-* declarations with two unresolved partners disappear without an audit trace;
-* declared non-protein donors disappear, and strict-NCS declarations are
-  mislabelled;
+* declared non-protein donors disappear;
 * explicit CCP4 selection, SIGTERM cleanup, leaked scratch directories and
   unwritable output handling are incorrect;
 * non-positive ``--max-pdbs``, ``--no-bonds`` help and CCP4 config precedence
@@ -240,111 +237,10 @@ def test_sigterm_to_the_driver_reaps_its_workers():
 # tests/test_worker_recovery.py::test_idle_worker_death_does_not_wedge_pool_shutdown
 
 
-# --------------------------------------------------------------------------- #
-# 3. Declared contacts on strict-NCS images are mislabelled
-# --------------------------------------------------------------------------- #
-def _structure_with_one_ncs_operation(tmp_path):
-    """A Zn and a water whose +10 Angstrom NCS image sits 2.09 A from the Zn.
-
-    The water is 7.91 Angstrom away inside the asymmetric unit, so the only
-    contact-range approach to the metal is through strict-NCS operation ``1``.
-    """
-    builder = StructureBuilder()
-    metal = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    water = builder.add_water(101, (-7.91, 0.0, 0.0), chain="W")
-    structure = builder.to_gemmi()
-    transform = gemmi.Transform()
-    transform.mat.fromlist([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-    transform.vec.fromlist([10.0, 0.0, 0.0])
-    structure.ncs.append(gemmi.NcsOp(transform, "1", False))
-    path = str(tmp_path / "ncs.pdb")
-    structure.write_pdb(path)
-    return path, metal, water
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "src/bond_analysis.py ~871 and ~896: both return branches of "
-    "_declared_candidate_geometry hardcode strict_ncs_contact False and an "
-    "empty strict_ncs_operation_id, so a declared contact reached through a "
-    "strict-NCS image is reported as an ordinary crystallographic contact"))
-def test_declared_contact_through_an_ncs_image_is_labelled_strict_ncs(tmp_path):
-    """A declared contact must get the same provenance as an inferred one.
-
-    ``StructureContext.image_provenance`` is the single source of truth for
-    whether a Gemmi image is crystallographic, strict-NCS or both, and the
-    proximity search already uses it. The declared-connection path computes its
-    own answer and never reports strict NCS, so the same physical contact is
-    labelled ``crystallographic`` when it is declared and ``strict_ncs`` when it
-    is inferred. Downstream that changes ``contact_scope`` and the per-site
-    ``coordination_depends_on_strict_ncs`` summary.
-
-    The connection is built in-process rather than round-tripped through a file
-    because Gemmi normalises ``Connection.asu`` back to ``Same`` on write, which
-    would never reach the symmetry branch.
-    """
-    path, _, _ = _structure_with_one_ncs_operation(tmp_path)
-    context = load_structure("test", path)
-    assert context.strict_ncs_operation_ids == ("1",)
-
-    metal = context.metal_atoms(["ZN"])[0]
-    neighbor = next(atom for atom in context.contact_atoms
-                    if atom.atom_name == "O")
-    connection = types.SimpleNamespace(asu=gemmi.Asu.Any)
-
-    geometry = ba._declared_candidate_geometry(
-        context, metal, neighbor, connection)
-
-    # The proximity path's verdict for the very same image is the oracle.
-    crystallographic, strict_ncs, ncs_id, scope = context.image_provenance(
-        geometry["symmetry_image_index"], tuple(geometry["translation"]))
-    assert (strict_ncs, ncs_id, scope) == (True, "1", "strict_ncs")
-
-    assert geometry["strict_ncs_contact"] == strict_ncs
-    assert geometry["strict_ncs_operation_id"] == ncs_id
-    assert geometry["crystallographic_contact"] == crystallographic
-    assert geometry["contact_scope"] == scope
-
-
-# --------------------------------------------------------------------------- #
-# Declaration whose two partners are both unresolved is dropped silently
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/bond_analysis.py ~984 tests metal membership before unresolved "
-    "partners; when both source identities are absent from the analysis model, "
-    "neither looks like a selected metal and the declaration is silently "
-    "continued without a row, reason code or message"))
-def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
-        tmp_path):
-    """Failure to map either declared partner must make the result incomplete."""
-    source_builder = StructureBuilder()
-    donor = source_builder.add_amino_acid(
-        "HIS", 10, chain="A", positions={"NE2": (2.03, 0.0, 0.0)})
-    metal = source_builder.add_metal(
-        "ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    source_builder.add_connection(
-        metal.ref("ZN"), donor.ref("NE2"), name="unmapped",
-        reported_distance=2.03)
-    source = source_builder.write_cif(tmp_path / "source.cif")
-
-    # Bond analysis still has a selected metal site, but neither source author
-    # identity exists in this deliberately unrelated analysis model.
-    analysis_builder = StructureBuilder()
-    analysis_builder.add_metal(
-        "ZN", 99, chain="Z", pos=(20.0, 20.0, 20.0))
-    analysis = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
-    context = load_structure("test", analysis)
-    rows, candidates, _, metadata = ba.run_bond_analysis(
-        "test", analysis, [], list(EDSTATS_HEADER), helpers.dpi_inputs(),
-        structure=context, connection_path=source)
-
-    trace = (
-        "declared_connection_resolution_incomplete"
-        in metadata["partial_reason_codes"]
-        or any("unmapped" in message for message in metadata["messages"])
-    )
-    assert trace, (
-        "the declaration produced no audit trace when both partners were "
-        f"unresolved (rows={rows!r}, candidates={candidates!r})")
+# Declared contacts on strict-NCS images used to be mislabelled
+# crystallographic, and a declaration with two unresolved partners used to
+# vanish silently. Both fixed; the regression tests moved to
+# tests/test_declared_connections.py.
 
 
 # --------------------------------------------------------------------------- #

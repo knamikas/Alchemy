@@ -886,18 +886,28 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
         nearest, cell.fractionalize(neighbor.pos))
     transformed = cell.orthogonalize(transformed_fractional)
     translation = tuple(int(value) for value in nearest.pbc_shift)
-    crystallographic = not nearest.same_asu()
+    image_index = int(nearest.sym_idx)
+    # Classified exactly as the proximity path does. ``same_asu()`` alone
+    # cannot tell the two apart: after ``setup_cell_images`` the image list
+    # holds the strict-NCS transforms as well, so an NCS image is "not the same
+    # ASU" and would otherwise be reported as crystallographic with no NCS
+    # operation identifier.
+    (
+        crystallographic_contact,
+        strict_ncs_contact,
+        strict_ncs_operation_id,
+        contact_scope,
+    ) = structure.image_provenance(image_index, translation)
     return {
         "distance_raw": float(nearest.dist()),
         "transformed_position": (
             float(transformed.x), float(transformed.y), float(transformed.z)),
-        "symmetry_contact": crystallographic,
-        "crystallographic_contact": crystallographic,
-        "strict_ncs_contact": False,
-        "strict_ncs_operation_id": "",
-        "contact_scope": (
-            "crystallographic" if crystallographic else "explicit"),
-        "symmetry_image_index": int(nearest.sym_idx),
+        "symmetry_contact": crystallographic_contact or strict_ncs_contact,
+        "crystallographic_contact": crystallographic_contact,
+        "strict_ncs_contact": strict_ncs_contact,
+        "strict_ncs_operation_id": strict_ncs_operation_id,
+        "contact_scope": contact_scope,
+        "symmetry_image_index": image_index,
         "symmetry_operation": nearest.symmetry_code(),
         "translation": translation,
     }
@@ -981,7 +991,21 @@ def _collect_declared_candidates(structure, connection_path, metals):
             first is not None and first.source_key in selected_metal_keys)
         second_is_metal = (
             second is not None and second.source_key in selected_metal_keys)
+        if first is None and second is None:
+            # Nothing resolved, so whether this named a metal is unknowable.
+            # Dropping it silently would let an entry whose identifiers Alchemy
+            # cannot map report complete success with no declared contacts and
+            # no audit trail.
+            issues.append(
+                f"{source} {connection_id} neither partner resolved")
+            continue
         if not (first_is_metal or second_is_metal):
+            if first is None or second is None:
+                # One side is missing and the other is not a selected metal, so
+                # this is probably a link Alchemy does not model (a disulfide,
+                # a covalent modification). Recorded, but not treated as an
+                # incomplete metal result.
+                warnings.append("declared_connection_partner_unresolved")
             continue
         if first is None or second is None:
             issues.append(f"{source} {connection_id} partner unresolved")

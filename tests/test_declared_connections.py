@@ -1104,3 +1104,105 @@ def test_a_file_without_declarations_produces_no_declared_rows(tmp_path):
     assert row["coordination_source"] == "proximity_rule"
     assert result.metadata["partial_reason_codes"] == [
         "missing_dpi_metadata_source"]
+
+
+# --------------------------------------------------------------------------- #
+# Regressions: provenance and audit trail of resolved/unresolved declarations
+# --------------------------------------------------------------------------- #
+def _structure_with_one_ncs_operation(tmp_path):
+    """A Zn and a water whose +10 Angstrom NCS image sits 2.09 A from the Zn.
+
+    The water is 7.91 Angstrom away inside the asymmetric unit, so the only
+    contact-range approach to the metal is through strict-NCS operation ``1``.
+    """
+    builder = StructureBuilder()
+    metal = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    water = builder.add_water(101, (-7.91, 0.0, 0.0), chain="W")
+    structure = builder.to_gemmi()
+    transform = gemmi.Transform()
+    transform.mat.fromlist([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    transform.vec.fromlist([10.0, 0.0, 0.0])
+    structure.ncs.append(gemmi.NcsOp(transform, "1", False))
+    path = str(tmp_path / "ncs.pdb")
+    structure.write_pdb(path)
+    return path, metal, water
+
+
+def test_declared_contact_through_an_ncs_image_is_labelled_strict_ncs(tmp_path):
+    """A declared contact must get the same provenance as an inferred one.
+
+    ``StructureContext.image_provenance`` is the single source of truth for
+    whether a Gemmi image is crystallographic, strict-NCS or both, and the
+    proximity search already uses it.
+
+    Regression: the declared path computed its own answer from ``same_asu()``
+    and never reported strict NCS, so the same physical contact was labelled
+    ``crystallographic`` when declared and ``strict_ncs`` when inferred --
+    changing ``contact_scope`` and the per-site
+    ``coordination_depends_on_strict_ncs`` summary.
+
+    The connection is built in-process rather than round-tripped through a file
+    because Gemmi normalises ``Connection.asu`` back to ``Same`` on write, which
+    would never reach the symmetry branch.
+    """
+    path, _, _ = _structure_with_one_ncs_operation(tmp_path)
+    context = load_structure("test", path)
+    assert context.strict_ncs_operation_ids == ("1",)
+
+    metal = context.metal_atoms(["ZN"])[0]
+    neighbor = next(atom for atom in context.contact_atoms
+                    if atom.atom_name == "O")
+    connection = SimpleNamespace(asu=gemmi.Asu.Any)
+
+    geometry = bond_analysis._declared_candidate_geometry(
+        context, metal, neighbor, connection)
+
+    # The proximity path's verdict for the very same image is the oracle.
+    crystallographic, strict_ncs, ncs_id, scope = context.image_provenance(
+        geometry["symmetry_image_index"], tuple(geometry["translation"]))
+    assert (strict_ncs, ncs_id, scope) == (True, "1", "strict_ncs")
+
+    assert geometry["strict_ncs_contact"] == strict_ncs
+    assert geometry["strict_ncs_operation_id"] == ncs_id
+    assert geometry["crystallographic_contact"] == crystallographic
+    assert geometry["contact_scope"] == scope
+
+
+def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
+        tmp_path):
+    """Failure to map either declared partner must make the result incomplete.
+
+    Regression: metal membership was tested before unresolved partners, so when
+    neither source identity existed in the analysis model neither looked like a
+    selected metal and the declaration was dropped with no row, reason code or
+    message -- an entry whose identifiers Alchemy cannot map reported complete
+    success with no declared contacts at all.
+    """
+    source_builder = StructureBuilder()
+    donor = source_builder.add_amino_acid(
+        "HIS", 10, chain="A", positions={"NE2": (2.03, 0.0, 0.0)})
+    metal = source_builder.add_metal(
+        "ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    source_builder.add_connection(
+        metal.ref("ZN"), donor.ref("NE2"), name="unmapped",
+        reported_distance=2.03)
+    source = source_builder.write_cif(tmp_path / "source.cif")
+
+    # Bond analysis still has a selected metal site, but neither source author
+    # identity exists in this deliberately unrelated analysis model.
+    analysis_builder = StructureBuilder()
+    analysis_builder.add_metal("ZN", 99, chain="Z", pos=(20.0, 20.0, 20.0))
+    analysis = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
+    context = load_structure("test", analysis)
+    rows, candidates, _, metadata = bond_analysis.run_bond_analysis(
+        "test", analysis, [], list(helpers.EDSTATS_HEADER),
+        helpers.dpi_inputs(), structure=context, connection_path=source)
+
+    trace = (
+        "declared_connection_resolution_incomplete"
+        in metadata["partial_reason_codes"]
+        or any("unmapped" in message for message in metadata["messages"])
+    )
+    assert trace, (
+        "the declaration produced no audit trace when both partners were "
+        f"unresolved (rows={rows!r}, candidates={candidates!r})")
