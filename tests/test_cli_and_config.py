@@ -8,8 +8,12 @@ failures here are raised by ``argparse`` before any capability is probed.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
+import os
+import shutil
+import sys
 
 import pytest
 
@@ -153,3 +157,75 @@ def test_later_config_files_still_supply_keys_the_primary_omits(tmp_path):
 
     assert loaded["ccp4_setup"] == "/user/ccp4.setup-sh"
     assert loaded["other_key"] == "kept"
+
+
+# --------------------------------------------------------------------------- #
+# An explicit --ccp4-setup must beat whatever the shell already has
+# --------------------------------------------------------------------------- #
+def _stub_ccp4_dir(root, marker):
+    """A directory holding the four CCP4 tool names, each echoing ``marker``."""
+    bindir = root / f"ccp4-{marker}"
+    bindir.mkdir(parents=True)
+    for tool in ccp4_setup.REQUIRED_CCP4_TOOLS:
+        script = bindir / tool
+        script.write_text(f"#!/bin/sh\necho {marker}\n", encoding="utf-8")
+        script.chmod(0o755)
+        if sys.platform == "win32":  # pragma: no cover - POSIX dev host
+            (bindir / f"{tool}.bat").write_text(
+                f"@echo off\r\necho {marker}\r\n", encoding="utf-8")
+    return bindir
+
+
+def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
+        monkeypatch, tmp_path):
+    """A typo'd ``--ccp4-setup`` must fail, not fall through to ``PATH``.
+
+    Regression: ``resolve_ccp4_environment`` returned as soon as
+    ``ccp4_tools_available`` was true, before it ever looked at
+    ``args.ccp4_setup``. A nonexistent path therefore exited 0 and the run
+    proceeded against the ambient environment, so a typo was indistinguishable
+    from success.
+    """
+    on_path = _stub_ccp4_dir(tmp_path, "ambient")
+    monkeypatch.setenv("PATH", str(on_path))
+    assert ccp4_setup.ccp4_tools_available(os.environ), (
+        "the stub must satisfy the PATH probe, or this test proves nothing")
+
+    args = argparse.Namespace(configure_ccp4=None,
+                              ccp4_setup="/nonexistent/ccp4.setup-sh")
+    with pytest.raises(SystemExit, match="not found"):
+        main.resolve_ccp4_environment(args)
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="writes a POSIX sh setup script")
+def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
+        monkeypatch, tmp_path):
+    """The requested installation is used, not the one the shell had sourced.
+
+    This is the reason the option exists: a user passes ``--ccp4-setup``
+    precisely because the wrong CCP4 is already on ``PATH``. Honouring ``PATH``
+    first ran the wrong binaries *and* recorded their version as the run's
+    provenance, so the output looked internally consistent while describing an
+    installation the user had tried to replace.
+    """
+    ambient = _stub_ccp4_dir(tmp_path, "ambient")
+    requested = _stub_ccp4_dir(tmp_path, "requested")
+    # The stub goes first but the system directories stay: sourcing the setup
+    # script runs through ``bash``, which must still be resolvable.
+    monkeypatch.setenv("PATH", f"{ambient}{os.pathsep}{os.defpath}")
+    assert ccp4_setup.ccp4_tools_available(os.environ), (
+        "the ambient stub must satisfy the PATH probe, or the override this "
+        "test checks would never have been bypassed in the first place")
+
+    setup = tmp_path / "ccp4.setup-sh"
+    setup.write_text(f'export PATH="{requested}:$PATH"\n', encoding="utf-8")
+
+    args = argparse.Namespace(configure_ccp4=None, ccp4_setup=str(setup))
+    env, used = main.resolve_ccp4_environment(args)
+
+    assert used == str(setup)
+    resolved = shutil.which("edstats", path=env.get("PATH"))
+    assert resolved is not None
+    assert str(requested) in resolved, (
+        f"the ambient PATH installation won over the requested one: {resolved}")

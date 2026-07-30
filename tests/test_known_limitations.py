@@ -24,16 +24,15 @@ Three properties keep this module honest:
   exhausting memory are recorded as ``skip`` with the manual reproduction in the
   docstring, rather than as a fragile automated approximation.
 
-The five open findings are pinned across this module and the module that can
+The four open findings are pinned across this module and the module that can
 exercise them most directly.  Corrupt confidence coverage is pinned in
 ``test_confidence_score.py``.  This module owns the remaining findings:
-explicit CCP4 selection, SIGTERM cleanup, leaked scratch directories and
-unwritable output handling are all incorrect.
+SIGTERM cleanup, leaked scratch directories and unwritable output handling
+are all incorrect.
 """
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import csv
 import io
@@ -148,29 +147,8 @@ def _id_file(tmp_path, pdb_ids):
     return str(path)
 
 
-# --------------------------------------------------------------------------- #
-# 1. --ccp4-setup is ignored when CCP4 is already on PATH
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/main.py ~305: resolve_ccp4_environment returns as soon as "
-    "ccp4_tools_available(os.environ) is true, before it ever consults "
-    "args.ccp4_setup, so an explicit override -- even a nonexistent path -- is "
-    "silently discarded"))
-def test_explicit_ccp4_setup_is_honoured_even_when_ccp4_is_on_path(
-        stub_ccp4_path):
-    """An explicit ``--ccp4-setup`` must not be silently ignored.
-
-    A user who passes ``--ccp4-setup`` is overriding whatever is on ``PATH``,
-    usually because the shell has the wrong CCP4 version sourced. Pointing the
-    option at a path that does not exist has to be an error: the run otherwise
-    proceeds against the very environment the user was trying to replace, and
-    reports nothing.
-    """
-    args = argparse.Namespace(configure_ccp4=None,
-                              ccp4_setup="/nonexistent/ccp4.setup-sh")
-    with pytest.raises(SystemExit, match="not found"):
-        main.resolve_ccp4_environment(args)
-
+# --ccp4-setup is now honoured ahead of the ambient PATH; the regression
+# tests live in tests/test_cli_and_config.py.
 
 # --------------------------------------------------------------------------- #
 # 2. SIGTERM orphans workers (not automatable)

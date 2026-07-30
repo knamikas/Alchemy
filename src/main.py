@@ -308,15 +308,29 @@ def resolve_ccp4_environment(args):
         return None, None
 
     environment = os.environ.copy()
+
+    # An explicit --ccp4-setup is checked before the ambient environment, not
+    # after. A user passing it is overriding whatever the shell already has --
+    # typically because the wrong CCP4 version is sourced -- so honouring PATH
+    # first would silently run against the very installation they were
+    # replacing, and record that installation's version as the run's
+    # provenance. A path that does not exist is an error for the same reason:
+    # falling through would make a typo indistinguishable from success.
+    if args.ccp4_setup:
+        setup_path = os.path.abspath(os.path.expanduser(args.ccp4_setup))
+        if not os.path.exists(setup_path):
+            raise SystemExit(f"CCP4 setup file not found: {args.ccp4_setup}")
+        env = resolve_env(setup_path)
+        try:
+            verify_ccp4(env)
+        except SystemExit as exc:
+            raise SystemExit(
+                f"Ran {setup_path}, but CCP4 tools are still not available. "
+                f"{exc}") from None
+        return env, setup_path
+
     if ccp4_tools_available(environment):
         return environment, None
-
-    if args.ccp4_setup:
-        if not os.path.exists(args.ccp4_setup):
-            raise SystemExit(f"CCP4 setup file not found: {args.ccp4_setup}")
-        env = resolve_env(args.ccp4_setup)
-        verify_ccp4(env)
-        return env, args.ccp4_setup
 
     ccp4_setup = find_ccp4_setup(
         explicit_setup=None,
