@@ -611,11 +611,17 @@ def _annotate_donor_policy(structure, candidates):
         allowed, rule = _inferred_donor_rule(
             structure, candidate["neighbor"])
         declared = bool(candidate.get("declared_connections"))
+        # A declaration overrides the donor-atom rule only inside a residue
+        # class Alchemy can assess. Claiming the override for a donor whose
+        # class has no reference at all would label a row as a declared bond
+        # that never becomes one.
+        supported = candidate.get("donor_class_supported", True)
         candidate.update(
             inferred_donor_allowed=allowed,
             inferred_donor_rule=rule,
             donor_rule_override=(
-                "declared_connection" if declared and not allowed else ""),
+                "declared_connection"
+                if declared and not allowed and supported else ""),
         )
 
 
@@ -1015,9 +1021,25 @@ def _collect_declared_candidates(structure, connection_path, metals):
         metal, neighbor = ((first, second) if first_is_metal
                            else (second, first))
         residue = structure.residue_for_atom(neighbor)
-        if (neighbor.element not in DONOR_ELEMENTS or
-                not (residue.is_water or residue.residue_name in AA)):
+        if neighbor.element not in DONOR_ELEMENTS:
+            # Not a donor-like atom at all, so there is no coordination
+            # evidence to retain. Recorded rather than dropped in silence.
+            warnings.append("declared_donor_element_unsupported")
             continue
+        # Nucleic acids, modified residues and organic ligands are genuine
+        # metal donors, but no bundled literature reference covers them, so
+        # their geometry can never be z-scored. Retain them as candidate
+        # evidence carrying the measured distance and the declaration's own
+        # provenance: dropping them is indistinguishable from a metal with no
+        # coordination at all, which is how a fully coordinated nucleic-acid
+        # site came to report no contacts. They are deliberately not promoted
+        # to bond rows -- that would raise coordination counts and enlarge the
+        # confidence geometry-coverage denominator on the strength of a contact
+        # nothing can assess.
+        donor_class_supported = bool(
+            residue.is_water or residue.residue_name in AA)
+        if not donor_class_supported:
+            warnings.append("declared_donor_outside_supported_classes")
         try:
             geometry = _declared_candidate_geometry(
                 structure, metal, neighbor, connection)
@@ -1048,6 +1070,7 @@ def _collect_declared_candidates(structure, connection_path, metals):
             **geometry,
             "candidate_sources": {source},
             "declared_connections": [record],
+            "donor_class_supported": donor_class_supported,
         })
     return candidates, issues, warnings
 
@@ -1091,7 +1114,10 @@ def _current_contacts_from_candidates(candidates, metal):
     declared_not_inferred = [
         candidate for candidate in candidates
         if candidate["declared_connections"] and
-        not candidate["inferred_contact_eligible"]
+        not candidate["inferred_contact_eligible"] and
+        # A donor class with no literature reference stays candidate evidence:
+        # it is reported with its measured distance but never scored.
+        candidate.get("donor_class_supported", True)
     ]
     return (_deduplicate_special_position_contacts(
                 eligible + declared_not_inferred),

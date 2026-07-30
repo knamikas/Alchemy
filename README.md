@@ -229,6 +229,36 @@ This includes internal peptide N, ASN/GLN amide N, TRP pyrrole N, and ARG
 guanidinium N. A declaration can still establish such an atom as a declared
 bond; `donor_rule_override=declared_connection` makes that exception explicit.
 
+### Reference coverage of the donor table
+
+Inferring a contact and scoring one are separate questions. The donor table
+above governs inference; scoring additionally requires a literature reference
+distance in `src/data/metal_distances_info.txt`, and that reference does not
+cover every donor Alchemy will infer:
+
+- **ASN, GLN, LYS and MET have no reference entry.** Harding (2006) tabulates
+  water `O`, ASP/GLU carboxylate `O`, backbone carbonyl `O`, HIS `N` and CYS
+  `S` only. Contacts to these four side chains are therefore discovered,
+  reported and measured, but never receive a Zbond: they carry the
+  same-element fallback and NaN derived values. This is a limitation of the
+  bundled reference data, not of the geometry.
+- **SER, THR and TYR values are approximations** derived from statements in
+  Harding (2006) rather than from its tables, so their `sigma_lit` is not an
+  empirical spread. Treat z-scores for these three donors as indicative.
+- **Nucleic acids, modified residues and other ligands have no reference at
+  all.** A metal coordinated by, say, a DNA phosphate oxygen is real
+  coordination, but no bundled distance can assess it.
+
+A declared contact to a donor class with no reference is retained in
+`metal_candidates_all.csv` with its measured distance and full connection
+provenance, and the entry records
+`declared_donor_outside_supported_classes`. It is deliberately **not** promoted
+to a bond row: doing so would raise the site's coordination count and enlarge
+the confidence geometry-coverage (`QG`) denominator on the strength of a
+contact that nothing in the reference data can evaluate. The distinction that
+matters for a consumer is that "no reference for this donor class" and "this
+metal has no coordination" are now different, visibly, in the output.
+
 Alchemy separately parses `_struct_conn` records from the authoritative source
 mmCIF and `LINK` records from a source PDB. A declared metal–donor contact is
 merged with a matching proximity candidate when present and added independently
@@ -421,7 +451,12 @@ list or classification rules change.
 - `src/data/metallocofactors_id.meta.json` — generation metadata for the
   committed cofactor list.
 - `src/data/metal_distances_info.txt` — reference metal-ligand distances and
-  standard deviations.
+  standard deviations, keyed by donor residue, donor element and metal. Values
+  are from Harding (2006), [Acta Cryst. D62,
+  678-682](https://doi.org/10.1107/S0907444906014594), except NI, which is from
+  Zheng et al. (2008), and SER/THR/TYR, which are approximated from statements
+  in Harding (2006) rather than tabulated. See "Reference coverage of the donor
+  table" for which donors this file does and does not cover.
 
 ## Operational notes
 

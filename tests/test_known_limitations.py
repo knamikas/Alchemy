@@ -24,11 +24,10 @@ Three properties keep this module honest:
   exhausting memory are recorded as ``skip`` with the manual reproduction in the
   docstring, rather than as a fragile automated approximation.
 
-The ten open findings are pinned across this module and the module that can
+The nine open findings are pinned across this module and the module that can
 exercise them most directly.  Corrupt confidence coverage is pinned in
 ``test_confidence_score.py``.  This module owns the remaining findings:
 
-* declared non-protein donors disappear;
 * explicit CCP4 selection, SIGTERM cleanup, leaked scratch directories and
   unwritable output handling are incorrect;
 * non-positive ``--max-pdbs``, ``--no-bonds`` help and CCP4 config precedence
@@ -243,57 +242,10 @@ def test_sigterm_to_the_driver_reaps_its_workers():
 # tests/test_declared_connections.py.
 
 
-# --------------------------------------------------------------------------- #
-# Declared donors outside the 20 amino acids + water are dropped silently
-# --------------------------------------------------------------------------- #
-@pytest.mark.xfail(strict=True, reason=(
-    "src/bond_analysis.py ~995: a declared partner whose residue is neither "
-    "water nor one of the 20 standard amino acids hits a bare `continue`, so "
-    "the depositor's own bond produces no bond row, no candidate row and no "
-    "reason code or coordination evidence"))
-def test_declared_donor_outside_the_standard_residues_leaves_a_trace(tmp_path):
-    """A dropped declaration must still be accounted for somewhere.
-
-    Nucleic acids, modified residues and organic ligands are legitimate metal
-    donors and the depositor declared this one explicitly with its own distance.
-    Alchemy may well decide not to score such a contact -- there is no
-    literature reference distance for it -- but dropping it without a bond row,
-    a candidate row or a reason code is indistinguishable from "this metal has
-    no coordination at all".
-
-    The assertion is deliberately permissive about *how* the contact is
-    accounted for, so any of the plausible fixes turns it green.
-    """
-    builder = StructureBuilder()
-    metal = builder.add_metal("MN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    nucleotide = builder.add_hetero_residue("DG", 10, [
-        AtomSpec("P", "P", (2.20, 1.20, 0.0)),
-        AtomSpec("OP1", "O", (2.15, 0.0, 0.0)),
-        AtomSpec("OP2", "O", (3.30, 2.00, 0.0)),
-    ], chain="C")
-    builder.add_connection(metal.ref("MN"), nucleotide.ref("OP1"),
-                           name="metalc1", reported_distance=2.15)
-    path = builder.write_cif(tmp_path / "nucleotide.cif")
-
-    context = load_structure("test", path)
-    rows, candidates, _, metadata = ba.run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(),
-        structure=context, connection_path=path)
-
-    declared_codes = {
-        code for code in (
-            *metadata["warning_codes"], *metadata["partial_reason_codes"])
-        if "declared" in code or "connection" in code
-    }
-    declared_message = any(
-        "metalc1" in message or "declared" in message.lower()
-        for message in metadata["messages"])
-    accounted_for = (
-        bool(rows) or bool(candidates) or bool(declared_codes)
-        or declared_message)
-    assert accounted_for, (
-        "the declared MN-OP1 connection produced no bond row, no candidate row "
-        "and no declaration-specific audit trace")
+# Declared donors outside the 20 amino acids + water used to disappear
+# entirely. Fixed: they are retained as candidate evidence with their
+# measured distance and declaration provenance, but are never scored. See
+# tests/test_declared_connections.py::test_declared_donor_outside_the_standard_residues_is_kept_as_evidence
 
 
 # --------------------------------------------------------------------------- #

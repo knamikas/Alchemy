@@ -1206,3 +1206,56 @@ def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
     assert trace, (
         "the declaration produced no audit trace when both partners were "
         f"unresolved (rows={rows!r}, candidates={candidates!r})")
+
+
+def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(
+        tmp_path):
+    """An unscoreable declared donor stays visible instead of disappearing.
+
+    Nucleic acids, modified residues and organic ligands are real metal donors
+    and the depositor declared this one with its own distance, but no bundled
+    literature reference covers them, so the contact can never be z-scored.
+
+    Regression: the declaration used to hit a bare ``continue``, producing no
+    bond row, no candidate row and no reason code -- indistinguishable from a
+    metal with no coordination at all, which is why 300d's six Mn ions reported
+    zero coordination evidence.
+
+    The contract is deliberately asymmetric: the contact is *reported* with its
+    measured distance and provenance, but is *not* promoted to a bond, because
+    doing so would raise coordination counts and enlarge the confidence
+    geometry-coverage denominator on evidence nothing can assess.
+    """
+    builder = StructureBuilder()
+    metal = builder.add_metal("MN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    nucleotide = builder.add_hetero_residue("DG", 10, [
+        AtomSpec("P", "P", (2.20, 1.20, 0.0)),
+        AtomSpec("OP1", "O", (2.15, 0.0, 0.0)),
+        AtomSpec("OP2", "O", (3.30, 2.00, 0.0)),
+    ], chain="C")
+    builder.add_connection(metal.ref("MN"), nucleotide.ref("OP1"),
+                           name="metalc1", reported_distance=2.15)
+    path = builder.write_cif(tmp_path / "nucleotide.cif")
+
+    context = load_structure("test", path)
+    rows, candidates, _, metadata = bond_analysis.run_bond_analysis(
+        "test", path, [], list(helpers.EDSTATS_HEADER), helpers.dpi_inputs(),
+        structure=context, connection_path=path)
+
+    # Not scored: no bond row, so no coordination count or QG denominator moves.
+    assert rows == []
+
+    declared = [row for row in candidates
+                if row["neighbor_atom"] == "OP1"]
+    assert len(declared) == 1, candidates
+    row = declared[0]
+    assert row["neighbor_resname"] == "DG"
+    assert row["declared_connection"] is True
+    assert row["connection_id"] == "metalc1"
+    assert float(row["candidate_distance"]) == pytest.approx(2.15, abs=5e-3)
+    assert row["inferred_donor_allowed"] is False
+    # The declaration cannot override a donor rule for a class that has no
+    # reference at all, so it must not be labelled as having done so.
+    assert row["donor_rule_override"] == ""
+    assert ("declared_donor_outside_supported_classes"
+            in metadata["warning_codes"])
