@@ -1439,3 +1439,126 @@ class TestFirstModelPdb:
                                          str(tmp_path / "first.pdb"))
         assert count == 2
         assert len(gemmi.read_structure(str(source))) == count
+
+
+# --------------------------------------------------------------------------- #
+# Cleaning up after a run that did not finish
+# --------------------------------------------------------------------------- #
+class TestLeakedWorkDirectorySweep:
+    """``_sweep_leaked_work_dirs`` clears scratch a dead run left behind."""
+
+    def test_removes_per_entry_and_staging_directories(self, tmp_path):
+        """Both scratch shapes are swept, with their contents.
+
+        Regression: a per-entry ``.alchemy-<id>-XXXX`` directory is deleted
+        only on the normal completion path, so an interrupted run left one
+        behind holding that entry's maps -- tens of megabytes each -- and
+        nothing, including ``--resume``, ever removed them.
+        """
+        entry = tmp_path / ".alchemy-109m-abcd"
+        entry.mkdir()
+        (entry / "2mFo-DFc.map").write_text("stale", encoding="utf-8")
+        staging = tmp_path / ".alchemy-resume-wxyz"
+        staging.mkdir()
+        (staging / "manifest.csv").write_text("stale", encoding="utf-8")
+
+        removed = main._sweep_leaked_work_dirs(str(tmp_path))
+
+        assert removed == 2
+        assert sorted(os.listdir(tmp_path)) == []
+
+    def test_leaves_real_output_alone(self, tmp_path):
+        """Only the dotted scratch prefixes are swept, never results.
+
+        The sweep runs at startup against a directory that normally holds the
+        four result CSVs and every previous run log, so a prefix match that was
+        even slightly too broad would delete a completed run's output.
+        """
+        (tmp_path / "manifest.csv").write_text("keep", encoding="utf-8")
+        (tmp_path / "alchemy_run_20260101.log").write_text(
+            "keep", encoding="utf-8")
+        (tmp_path / "109m").mkdir()          # a user directory named for an id
+        (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
+
+        assert main._sweep_leaked_work_dirs(str(tmp_path)) == 0
+        assert sorted(os.listdir(tmp_path)) == [
+            ".alchemyrc", "109m", "alchemy_run_20260101.log", "manifest.csv"]
+
+    def test_missing_directory_is_not_an_error(self, tmp_path):
+        """A sweep of a directory that does not exist yet is a no-op."""
+        assert main._sweep_leaked_work_dirs(str(tmp_path / "absent")) == 0
+
+
+# --------------------------------------------------------------------------- #
+# An unusable --output-dir is a user error, not a crash
+# --------------------------------------------------------------------------- #
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
+def test_unwritable_output_dir_exits_cleanly_naming_the_path(
+        tmp_path, monkeypatch, capsys):
+    """A read-only destination exits like every other unusable input.
+
+    Regression: ``os.makedirs(args.output_dir, exist_ok=True)`` was unguarded,
+    so a read-only mount or someone else's directory escaped ``main()`` as a
+    raw ``PermissionError`` traceback -- which reads as an Alchemy bug rather
+    than a path the user can fix.
+
+    CCP4 resolution is stubbed out because it runs before the directory is
+    created; without that the test would fail for an unrelated reason on a
+    machine with no CCP4 installed.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+
+    monkeypatch.setattr(main, "resolve_ccp4_environment",
+                        lambda args: (dict(os.environ), None))
+    parent = tmp_path / "readonly"
+    parent.mkdir()
+    parent.chmod(0o500)
+    output_dir = parent / "output"
+    id_file = tmp_path / "ids.txt"
+    id_file.write_text("109m\n", encoding="utf-8")
+
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            main.main(["--id-file", str(id_file),
+                       "--output-dir", str(output_dir),
+                       "--pdb-redo-root", str(tmp_path / "absent-mirror"),
+                       "--pdb-redo-cache", str(tmp_path / "cache")])
+    finally:
+        parent.chmod(0o700)
+
+    assert excinfo.value.code not in (0, None)
+    message = f"{excinfo.value}\n{capsys.readouterr().err}"
+    assert str(output_dir) in message, message
+    assert "Traceback" not in message
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses a POSIX-only stub env")
+def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
+    """The sweep is wired into the driver, not merely available to it.
+
+    Exercises ``main.main`` rather than ``_sweep_leaked_work_dirs`` directly:
+    the defect was that nothing ever *called* a sweep, so a test of the helper
+    alone would stay green with the call site deleted.
+
+    The run itself fails -- there is no mirror and no network -- which is the
+    point: sweeping happens at startup, so even a run that goes on to fail must
+    leave the directory clean.
+    """
+    monkeypatch.setattr(main, "resolve_ccp4_environment",
+                        lambda args: (dict(os.environ), None))
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    leaked = output_dir / ".alchemy-109m-leaked"
+    leaked.mkdir()
+    (leaked / "2mFo-DFc.map").write_text("stale map bytes", encoding="utf-8")
+    id_file = tmp_path / "ids.txt"
+    id_file.write_text("109m\n", encoding="utf-8")
+
+    main.main(["--id-file", str(id_file), "--output-dir", str(output_dir),
+               "--pdb-redo-root", str(tmp_path / "absent-mirror"),
+               "--pdb-redo-cache", str(tmp_path / "cache")])
+
+    leftovers = sorted(name for name in os.listdir(output_dir)
+                       if name.startswith(".alchemy-"))
+    assert leftovers == [], f"the run left scratch behind: {leftovers}"

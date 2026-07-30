@@ -32,6 +32,7 @@ import os
 import pickle
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -901,3 +902,100 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
     # And it still drives the code that consumes it in the worker.
     assert (main._initial_result("1abc", restored, restored["manual_inputs"])
             == main._initial_result("1abc", cfg, cfg["manual_inputs"]))
+
+
+# --------------------------------------------------------------------------- #
+# SIGTERM to the driver must stop its workers, not orphan them
+# --------------------------------------------------------------------------- #
+def _never_finishing_process(pdbID):
+    """A per-entry stub that outlives the signal, so workers are busy.
+
+    Module level, not a closure: ``Pool`` pickles the task callable even under
+    ``fork``, and a locally defined function fails with "Can't pickle local
+    object" before any worker starts.
+    """
+    time.sleep(30)
+    return main._initial_result(pdbID, main._CFG, None)
+
+
+def _sigterm_driver_child(argv, ready, channel):
+    """Run the real ``main.main`` with a slow stub so SIGTERM lands mid-run."""
+    if hasattr(os, "setsid"):
+        os.setsid()
+
+    main.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+    main.process = _never_finishing_process
+    ready.set()
+    try:
+        channel.put(("exit_code", main.main(list(argv))))
+    except BaseException as exc:  # noqa: BLE001 - reported to the parent
+        channel.put(("crash", f"{type(exc).__name__}: {exc}"))
+
+
+@_POSIX_KILL
+def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
+    """SIGTERM must unwind through cleanup instead of killing the driver dead.
+
+    Regression: SIGTERM's default disposition terminated the driver outright,
+    so no ``finally`` ran. The pool was never shut down, its children were
+    reparented to init and kept running -- still driving CCP4 subprocesses --
+    and no run log was written, leaving nothing to explain the stop.
+
+    The driver is signalled directly rather than through its process group, so
+    the workers only stop if the driver itself stops them.
+    """
+    output_dir = tmp_path / "out"
+    id_file = tmp_path / "ids.txt"
+    id_file.write_text(" ".join(f"e{i:03d}" for i in range(8)), encoding="utf-8")
+    argv = ["--id-file", str(id_file), "--workers", "4",
+            "--output-dir", str(output_dir),
+            "--pdb-redo-root", str(tmp_path / "absent-mirror"),
+            "--pdb-redo-cache", str(tmp_path / "cache")]
+
+    ctx = multiprocessing.get_context("fork")
+    ready, channel = ctx.Event(), ctx.Queue()
+    child = ctx.Process(target=_sigterm_driver_child,
+                        args=(argv, ready, channel))
+    child.start()
+    try:
+        assert ready.wait(30), "the driver process never started"
+        # Process.pid is None until start() has run; pinning it here documents
+        # that precondition and keeps the signalling below unambiguous.
+        driver_pid = child.pid
+        assert driver_pid is not None
+        workers = []
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and len(workers) < 4:
+            time.sleep(0.2)
+            workers = _child_pids(driver_pid)
+        assert workers, "no pool workers appeared to be signalled"
+
+        os.kill(driver_pid, signal.SIGTERM)
+        child.join(60)
+        assert not child.is_alive(), (
+            "the driver did not exit within 60s of SIGTERM")
+
+        kind, payload = channel.get(timeout=10)
+        assert kind == "exit_code", payload
+        assert payload != 0, "an interrupted run must not report success"
+
+        time.sleep(1.0)
+        alive = [pid for pid in workers if _process_exists(pid)]
+        assert alive == [], f"workers outlived the driver: {alive}"
+        logs = [name for name in os.listdir(output_dir)
+                if name.endswith(".log")]
+        assert logs, "no run log was written for the interrupted run"
+    finally:
+        _terminate_driver_tree(child, ready)
+        channel.close()
+
+
+def _child_pids(pid):
+    """Direct children of ``pid`` (POSIX only, used to find pool workers)."""
+    result = subprocess.run(["pgrep", "-P", str(pid)],
+                            capture_output=True, text=True)
+    return [int(line) for line in result.stdout.split()]
+
+
+def _process_exists(pid):
+    return os.path.exists(f"/proc/{pid}")

@@ -44,6 +44,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1028,6 +1029,60 @@ def _dead_worker_pids(pool, known_pids):
     known_pids.clear()
     known_pids.update(current)
     return dead
+
+
+def _install_termination_handler():
+    """Route SIGTERM through the same unwind path as Ctrl-C.
+
+    SIGTERM's default disposition kills the process immediately: no ``finally``
+    runs, so the worker pool is never shut down and its children -- which are
+    daemonic but not yet signalled -- are reparented to init and keep working,
+    driving CCP4 subprocesses and holding their scratch directories open.
+    Raising ``KeyboardInterrupt`` instead makes a scheduler stop or a plain
+    ``kill`` unwind exactly like an interactive interrupt, so the pool is
+    terminated and the run log is still written.
+
+    Returns the previous handler, or ``None`` where SIGTERM cannot be trapped
+    (a non-main thread, or a platform without it).
+    """
+    def _raise_interrupt(signum, frame):  # noqa: ARG001 - signal API
+        raise KeyboardInterrupt
+
+    try:
+        return signal.signal(signal.SIGTERM, _raise_interrupt)
+    except (AttributeError, OSError, ValueError):  # pragma: no cover
+        return None
+
+
+def _sweep_leaked_work_dirs(output_dir):
+    """Remove per-entry scratch directories a previous run left behind.
+
+    Each entry works inside ``<output-dir>/.alchemy-<id>-XXXX`` and deletes it
+    once its rows are extracted, but a run that is interrupted -- Ctrl-C,
+    SIGTERM, an out-of-memory kill -- never reaches that cleanup, and the
+    directory survives holding that entry's maps. Nothing removed them, so they
+    accumulated over every interrupted attempt.
+
+    Sweeping at startup is safe because the directories belong to a run that is
+    no longer executing: a second Alchemy process sharing one ``--output-dir``
+    would already be overwriting the first one's manifest and CSVs.
+
+    Returns the number of directories removed.
+    """
+    removed = 0
+    try:
+        names = os.listdir(output_dir)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith((".alchemy-", ".alchemy-resume-")):
+            continue
+        path = os.path.join(output_dir, name)
+        if not os.path.isdir(path) or os.path.islink(path):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += not os.path.exists(path)
+    return removed
 
 
 def _shutdown_pool(pool):
@@ -2259,7 +2314,16 @@ def _run(args, run_log):
     env, _ = resolve_ccp4_environment(args)
     if env is None:
         return 0
-    os.makedirs(args.output_dir, exist_ok=True)
+    try:
+        os.makedirs(args.output_dir, exist_ok=True)
+    except OSError as exc:
+        # A read-only mount or someone else's directory is a fixable user
+        # mistake, so it exits the way every other unusable input does rather
+        # than as a traceback that reads like an Alchemy bug.
+        raise SystemExit(
+            f"Cannot use --output-dir {args.output_dir}: {exc.strerror or exc}"
+        ) from None
+    _sweep_leaked_work_dirs(args.output_dir)
 
     cache_root = args.pdb_redo_cache
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
@@ -2747,13 +2811,27 @@ def main(argv=None):
         list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args])
     run_log = _RunLog(args, shlex.join(command_parts))
     exit_code = 1
+    previous_term = _install_termination_handler()
     try:
         exit_code = _run(args, run_log)
+        return exit_code
+    except KeyboardInterrupt:
+        # Ctrl-C or SIGTERM. The pool has already been shut down by _run's
+        # own finally, so this only decides how the driver reports it: a
+        # conventional interrupt status and one line, rather than a traceback
+        # that looks like a crash.
+        run_log.driver_error = "interrupted before completion"
+        print("\nInterrupted: workers stopped; rows already flushed are kept "
+              "and --resume will continue.", file=sys.stderr, flush=True)
+        exit_code = 130
         return exit_code
     except BaseException as exc:
         run_log.driver_error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        if previous_term is not None:
+            with contextlib.suppress(AttributeError, OSError, ValueError):
+                signal.signal(signal.SIGTERM, previous_term)
         try:
             log_path = run_log.write(exit_code)
         except OSError as exc:
