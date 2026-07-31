@@ -387,11 +387,12 @@ distribution and prevents resumed output from mixing database snapshots.
 `context_warning` is carried into the result as an interpretive annotation and
 does not subtract points.
 
-For later single-entry, ID-file, manual, or capped runs, place the published
-database reference files in the repository's `confidence_reference/` directory,
-or select another copy with `--confidence-reference-dir`. Alchemy loads that
-reference once, derives each new site's compact inputs while its normal result
-is still in memory, and writes `confidence_scores_all.csv` directly. These runs
+For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
+the reference produced under the current output directory's
+`confidence_reference/`, then in the repository's `confidence_reference/`.
+`--confidence-reference-dir` selects an explicit copy instead. Alchemy loads
+that reference once, derives each new site's compact inputs while its normal
+result is still in memory, and writes `confidence_scores_all.csv` directly. These runs
 are compared with the frozen database and never generate percentiles from their
 own small cohort. If no compatible reference is installed, the ordinary
 Alchemy outputs are still produced and confidence scoring is explicitly
@@ -431,6 +432,7 @@ and atom serial rather than parser traversal order.
 | `--workers <n>` | Override multiprocessing parallelism; must be at least 1. By default, Alchemy uses the lower CPU or available-memory limit, budgeting 1.25 GiB per worker. |
 | `--max-pdbs <n>` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
+| `--retry-partials` | With `--resume`, retry all `partial` entries recorded in the manifest. Successful `ok` entries remain skipped; `--id` or `--id-file` may restrict the retry set. |
 | `--no-bonds` | Skip bond-distance analysis. A fresh run removes previous `metal_bonds_all.csv` and `metal_candidates_all.csv` files in the output directory. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
 | `--ccp4-setup <path>` | Source and verify a CCP4 setup script for this run. |
@@ -507,6 +509,15 @@ list or classification rules change.
   preserves existing bond and candidate rows and their manifest counts. Entries
   originating from a bond-disabled run retain blank `n_bonds` and
   `n_candidates`, so a later bond-enabled resume will process them.
+- `--resume --retry-partials` reprocesses non-retryable `partial` entries from
+  the manifest after a processing improvement while continuing to protect
+  `ok` entries. Optional `--id` or `--id-file` selectors restrict that set. Errors,
+  skips, and retryable partials already follow ordinary resume behavior. The
+  same staged replacement rules apply, so an interrupted or retryably failed
+  attempt does not discard the previous terminal result. When a frozen
+  reference scores a targeted resume inside an existing database output,
+  `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
+  together so their per-entry evidence cannot diverge.
 - A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
   `metal_candidates_all.csv` files before replacing the manifest and
   statistics, so old bond-stage rows cannot be mistaken for current output.

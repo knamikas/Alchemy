@@ -262,6 +262,23 @@ class TestLoadDone:
         ])
         assert _manifest_ids(path) == {"1cll"}
 
+    def test_explicit_terminal_retry_unprotects_only_selected_partials(
+            self, tmp_path):
+        """Forced resume never turns an explicitly selected ``ok`` into work."""
+        path = _write_manifest(tmp_path / "manifest.csv", [
+            {"pdbID": "1ok1", "status": "ok", "retryable": "False",
+             "n_bonds": "1", "n_candidates": "1"},
+            {"pdbID": "1par", "status": "partial", "retryable": "False",
+             "n_bonds": "1", "n_candidates": "1"},
+            {"pdbID": "2par", "status": "partial", "retryable": "False",
+             "n_bonds": "1", "n_candidates": "1"},
+            {"pdbID": "1err", "status": "error", "retryable": "True",
+             "n_bonds": "", "n_candidates": ""},
+        ])
+
+        assert _manifest_ids(
+            path, retry_partial_ids={"1OK1", "1PAR"}) == {"1ok1", "2par"}
+
     def test_missing_manifest_is_an_empty_done_set(self, tmp_path):
         """A first run has no manifest; resume must not crash on that."""
         assert _manifest_ids(tmp_path / "absent.csv") == set()
@@ -814,6 +831,38 @@ class TestResumeStaging:
         assert values == {"109m": "new", "1cll": (
             "old-1cll-confidence_inputs_all.csv")}
 
+    def test_commit_replaces_every_enabled_confidence_output(self, tmp_path):
+        """Scored and input confidence rows participate in one staged commit."""
+        targets = list(self._outputs(tmp_path, confidence=True))
+        scores = tmp_path / "confidence_scores_all.csv"
+        with open(scores, "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerows([
+                ["pdbID", "value"],
+                ["109m", "old-109m-scores"],
+                ["1cll", "old-1cll-scores"],
+            ])
+        targets.append(str(scores))
+        staging = main._ResumeStaging(str(tmp_path), tuple(targets))
+        try:
+            self._stage(staging, {
+                index: [["109m", f"new-{index}"]]
+                for index in range(len(targets))
+            })
+            staging.replacement_ids.add("109m")
+            staging.commit(bonds_enabled=True, confidence_enabled=True)
+        finally:
+            staging.discard()
+
+        for index in (4, 5):
+            values = {row[0]: row[1]
+                      for row in _read_csv(targets[index])[1:]}
+            expected_old = (
+                "old-1cll-confidence_inputs_all.csv"
+                if index == 4 else "old-1cll-scores")
+            assert values == {
+                "109m": f"new-{index}", "1cll": expected_old}
+
     def test_discard_leaves_previous_rows_intact(self, tmp_path):
         """An interrupted retry batch must not damage the existing outputs."""
         targets = self._outputs(tmp_path)
@@ -1032,6 +1081,34 @@ class TestOutputWriters:
         assert rows[0] == columns
         assert writers.n_confidence == 2
         assert len(rows) == 3
+
+    def test_scored_confidence_stream_projects_synchronized_inputs(
+            self, tmp_path):
+        """A targeted scored resume updates its reusable input rows as well."""
+        scored_columns = [
+            *main.CONFIDENCE_INPUT_COLUMNS,
+            *main.CONFIDENCE_ANALYSIS_COLUMNS,
+        ]
+        handles = self._handles(tmp_path, confidence=True)
+        inputs_handle = open(tmp_path / "confidence_inputs.csv", "w",
+                             newline="")
+        try:
+            writers = main._OutputWriters(
+                *handles[:4], confidence_fh=handles[4],
+                confidence_columns=scored_columns,
+                confidence_inputs_fh=inputs_handle)
+            row = {column: f"value-{column}" for column in scored_columns}
+            writers.write_confidence_rows([row])
+        finally:
+            self._close(handles)
+            inputs_handle.close()
+
+        scored = _read_csv(tmp_path / "confidence.csv")
+        inputs = _read_csv(tmp_path / "confidence_inputs.csv")
+        assert scored[0] == scored_columns
+        assert inputs[0] == list(main.CONFIDENCE_INPUT_COLUMNS)
+        assert inputs[1] == [
+            row[column] for column in main.CONFIDENCE_INPUT_COLUMNS]
 
     def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path):
         """A drifted confidence row must not be written under the old header."""

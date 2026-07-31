@@ -108,6 +108,69 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
 
 
 # --------------------------------------------------------------------------- #
+# Terminal-partial retries must be resume-safe
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("arguments,fragment", [
+    (["--id", "109m", "--retry-partials"], "requires --resume"),
+    (["--id", "109m", "--pdb-file", "109m.pdb", "--mtz-file", "109m.mtz",
+      "--resume", "--retry-partials"], "manual structure inputs"),
+])
+def test_retry_partials_rejects_unsafe_invocations(arguments, fragment):
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        with pytest.raises(SystemExit) as excinfo:
+            main.parse_args(arguments)
+    assert excinfo.value.code == 2
+    assert fragment in stderr.getvalue()
+
+
+@pytest.mark.parametrize("selector", [
+    [],
+    ["--id", "109m"],
+    ["--id-file", "ids.txt"],
+])
+def test_retry_partials_accepts_optional_resume_selectors(selector):
+    args = main.parse_args([*selector, "--resume", "--retry-partials"])
+    assert args.resume is True
+    assert args.retry_partials is True
+
+
+# --------------------------------------------------------------------------- #
+# Confidence references are discovered beside the current output
+# --------------------------------------------------------------------------- #
+def test_confidence_reference_is_discovered_in_output_before_repo_default(
+        tmp_path, monkeypatch):
+    output_dir = tmp_path / "output"
+    output_reference = output_dir / "confidence_reference"
+    output_reference.mkdir(parents=True)
+    (output_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
+    repository_reference = tmp_path / "repository-reference"
+    repository_reference.mkdir()
+    (repository_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
+    monkeypatch.setattr(
+        main, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference))
+
+    selected, searched = main.resolve_confidence_reference_dir(str(output_dir))
+
+    assert selected == str(output_reference)
+    assert searched == (str(output_reference), str(repository_reference))
+
+
+def test_explicit_confidence_reference_is_authoritative(tmp_path):
+    output_dir = tmp_path / "output"
+    automatic_reference = output_dir / "confidence_reference"
+    automatic_reference.mkdir(parents=True)
+    (automatic_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
+    explicit_reference = tmp_path / "explicit-reference"
+
+    selected, searched = main.resolve_confidence_reference_dir(
+        str(output_dir), str(explicit_reference))
+
+    assert selected is None
+    assert searched == (str(explicit_reference),)
+
+
+# --------------------------------------------------------------------------- #
 # Saving and loading the CCP4 setup path must agree on precedence
 # --------------------------------------------------------------------------- #
 def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
@@ -224,6 +287,7 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     args = argparse.Namespace(configure_ccp4=None, ccp4_setup=str(setup))
     env, used = main.resolve_ccp4_environment(args)
 
+    assert env is not None
     assert used == str(setup)
     resolved = shutil.which("edstats", path=env.get("PATH"))
     assert resolved is not None

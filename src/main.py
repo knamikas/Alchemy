@@ -1614,15 +1614,21 @@ def process(pdbID):
 # Driver
 # --------------------------------------------------------------------------- #
 def load_done(manifest_path, bonds_required=False, bond_output_present=True,
-              candidate_output_present=True):
+              candidate_output_present=True, retry_partial_ids=()):
     """PDB IDs whose requested result is terminal in an existing manifest.
 
     Blank ``n_bonds`` and ``n_candidates`` values mean bond analysis was
     disabled, while ``0`` means it ran successfully and found no rows of that
     type. When bonds are requested, a terminal density result with either blank
     count still needs processing. Absent bond or candidate CSVs also make
-    bond-stage results incomplete.
+    bond-stage results incomplete. IDs in ``retry_partial_ids`` are removed
+    from the done set only when their row is a non-retryable ``partial``;
+    successful ``ok`` rows remain protected from accidental reprocessing.
     """
+    retry_partial_ids = {
+        str(pdb_id).strip().lower() for pdb_id in retry_partial_ids
+        if str(pdb_id).strip()
+    }
     done = set()
     if os.path.exists(manifest_path):
         with open(manifest_path, newline="") as f:
@@ -1633,17 +1639,36 @@ def load_done(manifest_path, bonds_required=False, bond_output_present=True,
                     retryable = row.get("retryable", "").strip().lower()
                     terminal_partial = (status == "partial" and
                                         retryable in ("false", "0", "no"))
+                    pdbID = row.get("pdbID", "").strip().lower()
                     bonds_complete = (
                         not bonds_required or
                         (bond_output_present and candidate_output_present and
                          row.get("n_bonds", "").strip() != "" and
                          row.get("n_candidates", "").strip() != "")
                     )
-                    if (status == "ok" or terminal_partial) and bonds_complete:
-                        pdbID = row.get("pdbID", "").strip().lower()
-                        if pdbID:
-                            done.add(pdbID)
+                    protected_terminal = (
+                        status == "ok" or
+                        (terminal_partial and pdbID not in retry_partial_ids)
+                    )
+                    if protected_terminal and bonds_complete and pdbID:
+                        done.add(pdbID)
     return done
+
+
+def resolve_confidence_reference_dir(output_dir, configured_dir=None):
+    """Find a frozen confidence reference, honoring an explicit override."""
+    if configured_dir is not None:
+        candidates = (configured_dir,)
+    else:
+        candidates = (
+            os.path.join(output_dir, "confidence_reference"),
+            DEFAULT_CONFIDENCE_REFERENCE_DIR,
+        )
+    for candidate in candidates:
+        metadata_path = os.path.join(candidate, REFERENCE_METADATA_FILE)
+        if os.path.isfile(metadata_path):
+            return candidate, candidates
+    return None, candidates
 
 
 def _resume_replacement_succeeded(result):
@@ -1960,9 +1985,10 @@ def parse_args(argv=None):
     )
     ap.add_argument(
         "--confidence-reference-dir",
-        default=DEFAULT_CONFIDENCE_REFERENCE_DIR,
-        help=("frozen full-database confidence reference used for single, "
-              "ID-file, manual, and capped runs when available"),
+        default=None,
+        help=("explicit frozen full-database confidence reference for single, "
+              "ID-file, manual, and capped runs; otherwise Alchemy searches "
+              "the output directory and repository default"),
     )
     ap.add_argument("--ccp4-setup", default=None,
                     help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)")
@@ -1972,6 +1998,12 @@ def parse_args(argv=None):
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
                     help="skip terminal ok/partial results; retry retryable incomplete ids")
+    ap.add_argument(
+        "--retry-partials", action="store_true",
+        help=("with --resume, reprocess non-retryable partial entries from "
+              "the manifest while still skipping successful entries; --id "
+              "or --id-file may restrict the retry set"),
+    )
     # ArgumentDefaultsHelpFormatter appends the default of ``bonds``, not of
     # the flag, so an unqualified help string renders "(default: True)" -- the
     # negation of what --no-bonds does. Naming %(default)s explicitly suppresses
@@ -1985,6 +2017,10 @@ def parse_args(argv=None):
     args = ap.parse_args(argv)
     if args.id and args.id_file:
         raise SystemExit("use either --id or --id-file, not both")
+    if args.retry_partials and not args.resume:
+        ap.error("--retry-partials requires --resume")
+    if args.retry_partials and (args.pdb_file or args.mtz_file or args.cif_file):
+        ap.error("--retry-partials cannot be used with manual structure inputs")
     return args
 
 
@@ -2099,8 +2135,9 @@ class _ResumeStaging:
             _merge_csv_replacements(candidates_path, staged_candidates,
                                     self.replacement_ids)
         if confidence_enabled:
-            _merge_csv_replacements(
-                self.targets[4], self.staged[4], self.replacement_ids)
+            for target, staged in zip(self.targets[4:], self.staged[4:]):
+                _merge_csv_replacements(
+                    target, staged, self.replacement_ids)
         _merge_csv_replacements(manifest_path, staged_manifest,
                                 self.replacement_ids)
 
@@ -2117,12 +2154,14 @@ class _OutputWriters:
     """
 
     def __init__(self, manifest_fh, stats_fh, bonds_fh, candidates_fh,
-                 confidence_fh=None, confidence_columns=None):
+                 confidence_fh=None, confidence_columns=None,
+                 confidence_inputs_fh=None):
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
         self._bonds_fh = bonds_fh
         self._candidates_fh = candidates_fh
         self._confidence_fh = confidence_fh
+        self._confidence_inputs_fh = confidence_inputs_fh
         self._manifest = csv.DictWriter(manifest_fh,
                                         fieldnames=MANIFEST_COLUMNS)
         self._stats = csv.writer(stats_fh)
@@ -2133,9 +2172,16 @@ class _OutputWriters:
             raise ValueError(
                 "confidence columns are required with a confidence output")
         self._confidence = None
+        self._confidence_inputs = None
         if confidence_fh is not None and confidence_columns is not None:
             self._confidence = csv.DictWriter(
                 confidence_fh, fieldnames=confidence_columns)
+        if confidence_inputs_fh is not None:
+            if confidence_fh is None:
+                raise ValueError(
+                    "confidence inputs synchronization requires scored output")
+            self._confidence_inputs = csv.DictWriter(
+                confidence_inputs_fh, fieldnames=CONFIDENCE_INPUT_COLUMNS)
         self._confidence_columns = confidence_columns
         self.n_rows = 0
         self.n_bonds = 0
@@ -2149,6 +2195,8 @@ class _OutputWriters:
             self._candidates.writerow(CANDIDATE_COLUMNS)
         if self._confidence is not None:
             self._confidence.writeheader()
+        if self._confidence_inputs is not None:
+            self._confidence_inputs.writeheader()
 
     def write_stats_rows(self, rows):
         if not rows:
@@ -2193,8 +2241,14 @@ class _OutputWriters:
             raise RuntimeError(
                 "confidence row does not match its output schema")
         self._confidence.writerows(rows)
+        if self._confidence_inputs is not None:
+            self._confidence_inputs.writerows({
+                column: row[column] for column in CONFIDENCE_INPUT_COLUMNS
+            } for row in rows)
         self.n_confidence += len(rows)
         self._confidence_fh.flush()
+        if self._confidence_inputs_fh is not None:
+            self._confidence_inputs_fh.flush()
 
 
 class _ProgressReporter:
@@ -2545,30 +2599,35 @@ def _run(args, run_log):
     confidence_reference = None
     confidence_stream_path = None
     confidence_columns = None
+    synchronize_confidence_inputs = False
     if args.bonds and database_run:
         confidence_mode = "database"
         confidence_stream_path = confidence_inputs_path
         confidence_columns = CONFIDENCE_INPUT_COLUMNS
     elif args.bonds:
-        reference_metadata = os.path.join(
-            args.confidence_reference_dir, REFERENCE_METADATA_FILE)
-        if os.path.isfile(reference_metadata):
+        confidence_reference_dir, searched_reference_dirs = (
+            resolve_confidence_reference_dir(
+                args.output_dir, args.confidence_reference_dir)
+        )
+        if confidence_reference_dir is not None:
             try:
                 confidence_reference = load_confidence_reference(
-                    args.confidence_reference_dir)
+                    confidence_reference_dir)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 message = f"Invalid confidence reference: {exc}"
                 run_log.driver_error = message
                 print(message, flush=True)
                 return 1
+            run_log.details["confidence_reference_dir"] = (
+                confidence_reference_dir)
             confidence_mode = "reference"
             confidence_stream_path = confidence_scores_path
             confidence_columns = (
                 *CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
         else:
             print(
-                "No frozen confidence reference found at "
-                f"{args.confidence_reference_dir}; confidence scoring disabled "
+                "No frozen confidence reference found in "
+                f"{', '.join(searched_reference_dirs)}; confidence scoring disabled "
                 "for this non-database run.",
                 flush=True,
             )
@@ -2589,6 +2648,16 @@ def _run(args, run_log):
                 bonds_enabled=args.bonds,
                 confidence_path=confidence_stream_path,
                 confidence_columns=confidence_columns)
+            synchronize_confidence_inputs = (
+                confidence_mode == "reference" and
+                os.path.isfile(confidence_inputs_path)
+            )
+            if synchronize_confidence_inputs:
+                validate_resume_schemas(
+                    manifest_path, stats_path, bonds_path, candidates_path,
+                    bonds_enabled=args.bonds,
+                    confidence_path=confidence_inputs_path,
+                    confidence_columns=CONFIDENCE_INPUT_COLUMNS)
         except ValueError as exc:
             run_log.driver_error = str(exc)
             print(str(exc), flush=True)
@@ -2614,12 +2683,24 @@ def _run(args, run_log):
     run_log.details["resolved_input_root"] = root
 
     if args.resume:
-        done = load_done(
-            manifest_path,
-            bonds_required=args.bonds,
-            bond_output_present=os.path.isfile(bonds_path),
-            candidate_output_present=os.path.isfile(candidates_path),
-        )
+        done_kwargs = {
+            "bonds_required": args.bonds,
+            "bond_output_present": os.path.isfile(bonds_path),
+            "candidate_output_present": os.path.isfile(candidates_path),
+        }
+        normally_done = load_done(manifest_path, **done_kwargs)
+        if args.retry_partials:
+            done = load_done(
+                manifest_path, retry_partial_ids=ids, **done_kwargs)
+            reselected = normally_done - done
+            run_log.details["terminal_partials_reselected"] = len(reselected)
+            print(
+                f"Selected {len(reselected)} terminal partial "
+                f"entr{'y' if len(reselected) == 1 else 'ies'} for retry.",
+                flush=True,
+            )
+        else:
+            done = normally_done
         ids = [i for i in ids if i not in done]
     if args.max_pdbs is not None:
         ids = ids[:args.max_pdbs]
@@ -2747,6 +2828,8 @@ def _run(args, run_log):
         if confidence_stream_path is None:
             raise RuntimeError("confidence output path is not configured")
         output_paths.append(confidence_stream_path)
+    if synchronize_confidence_inputs:
+        output_paths.append(confidence_inputs_path)
     output_paths = tuple(output_paths)
     staging = (_ResumeStaging(args.output_dir, output_paths)
                if args.resume else None)
@@ -2755,6 +2838,8 @@ def _run(args, run_log):
      write_candidates_path) = write_paths[:4]
     write_confidence_path = (
         write_paths[4] if confidence_mode is not None else None)
+    write_confidence_inputs_path = (
+        write_paths[5] if synchronize_confidence_inputs else None)
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     no_metal_count = 0
@@ -2781,6 +2866,9 @@ def _run(args, run_log):
                     open(write_confidence_path, "w", newline=""))
                 if write_confidence_path is not None else None,
                 confidence_columns,
+                handles.enter_context(
+                    open(write_confidence_inputs_path, "w", newline=""))
+                if write_confidence_inputs_path is not None else None,
             )
             inflight = SimpleQueue()
             assignments: Dict[int, str] = {}
