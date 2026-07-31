@@ -846,6 +846,23 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
+def read_pdb_redo_is_twin(data_json_path):
+    """Return only an explicit boolean PDB-REDO ``properties.ISTWIN`` value.
+
+    Missing, malformed, and string-valued metadata are deliberately false: the
+    twin coefficient fallback is a guarded processing path, not something to
+    infer from a filename or from an MTZFIX failure alone.
+    """
+    if not data_json_path:
+        return False
+    try:
+        with open(data_json_path) as handle:
+            value = json.load(handle).get("properties", {}).get("ISTWIN")
+    except (AttributeError, OSError, ValueError):
+        return False
+    return value is True
+
+
 def read_map_column_resolution(mtz_path):
     """Return the common finite resolution range of both EDSTATS maps.
 
@@ -1450,6 +1467,9 @@ def process(pdbID):
                 prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
             mtz, pdb = prepare_inputs(pdbID, entry, work_dir)
             data_reshi = read_resolution(entry, mtz)
+        density_data_json = (
+            data_json if manual_inputs else os.path.join(entry, "data.json"))
+        pdb_redo_is_twin = read_pdb_redo_is_twin(density_data_json)
         map_reslo, map_reshi = read_map_column_resolution(mtz)
         source_pdb = pdb
         source_coordinate_path = _source_coordinate_path(
@@ -1500,7 +1520,8 @@ def process(pdbID):
             res = run_density_analysis(
                 pdbID, mtz, pdb, work_dir, map_reslo, map_reshi,
                 env=cfg["env"], map_scope=cfg["density_map_scope"],
-                keep_full_maps=cfg["keep"])
+                keep_full_maps=cfg["keep"],
+                pdb_redo_is_twin=pdb_redo_is_twin)
         except MtzfixValidationError as exc:
             # The input is readable, but MTZFIX could not make its Fourier
             # coefficients internally consistent. Do not use those maps or
@@ -1521,6 +1542,10 @@ def process(pdbID):
                 density_full_map_bytes=res["full_map_bytes"],
                 density_edstats_map_bytes=res["edstats_map_bytes"],
             )
+            if res.get("twin_coefficient_normalization_applied"):
+                result["warning_codes"] = list(dict.fromkeys(
+                    result["warning_codes"] +
+                    ["twin_refmac_coefficients_normalized"]))
             statistics_started = time.monotonic()
             rows, header = extract_metal_statistics(
                 pdbID, res["stats_out"], METALS_SET, cfg["cofactors"],

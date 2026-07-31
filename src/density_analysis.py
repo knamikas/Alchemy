@@ -19,10 +19,25 @@ import shutil
 import struct
 import time
 
+import gemmi
+import numpy as np
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 DENSITY_MAP_SCOPES = ("model-envelope", "full")
+REFMAC_TWIN_COLUMNS = {
+    "FP": "F",
+    "SIGFP": "Q",
+    "FC_ALL": "F",
+    "PHIC_ALL": "P",
+    "FWT": "F",
+    "PHWT": "P",
+    "DELFWT": "F",
+    "PHDELWT": "P",
+    "FOM": "W",
+}
+REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
 
 
 class MtzfixValidationError(RuntimeError):
@@ -33,9 +48,173 @@ class MtzfixValidationError(RuntimeError):
         self.timings = dict(timings or {})
 
 
+def _complex_coefficients(amplitudes, phases):
+    """Return complex Fourier coefficients for amplitudes and degree phases."""
+    return amplitudes * np.exp(1j * np.deg2rad(phases))
+
+
+def _amplitudes_and_phases(coefficients):
+    """Return non-negative amplitudes and degree phases for complex values."""
+    amplitudes = np.abs(coefficients)
+    phases = np.rad2deg(np.angle(coefficients))
+    phases[amplitudes == 0.0] = 0.0
+    return amplitudes, phases
+
+
+def _coefficient_residual_ratio(observed, expected, *scale_terms):
+    """Largest scale-relative complex residual, with a 1-electron floor.
+
+    ``scale_terms`` matter when ``observed`` is itself the small difference of
+    two large coefficients. MTZ stores amplitudes and phases as float32, so the
+    attainable precision of that subtraction is set by the original terms,
+    not by the size of their nearly cancelled result.
+    """
+    scale = np.maximum.reduce((
+        np.abs(observed), np.abs(expected), np.ones(observed.shape),
+        *(np.abs(term) for term in scale_terms)))
+    return float(np.max(np.abs(observed - expected) / scale))
+
+
+def normalize_refmac_twin_coefficients(mtz_path, output_path):
+    """Write a guarded Refmac-to-EDSTATS coefficient conversion.
+
+    REFMAC writes both acentric and centric map coefficients using
+    ``FWT = 2mFo-DFc`` and ``DELFWT = mFo-DFc``. EDSTATS instead requires the
+    literature convention: ``2mFo-DFc`` and ``2(mFo-DFc)`` for acentric
+    reflections, but ``mFo`` and ``mFo-DFc`` for centric reflections. Complex
+    subtraction from ``FC_ALL`` performs that normalization without
+    reconstructing m or Fo -- an operation that is not valid under the ordinary
+    untwinned identities used by MTZFIX's consistency re-test.
+
+    This function accepts only recognizable Refmac output whose raw composite
+    coefficients satisfy ``FWT - FC_ALL = 2*DELFWT`` reflection by reflection.
+    It never modifies ``mtz_path`` and validates the written file before
+    returning conversion provenance.
+    """
+    mtz_path = os.fspath(mtz_path)
+    output_path = os.fspath(output_path)
+    if os.path.realpath(mtz_path) == os.path.realpath(output_path):
+        raise ValueError("twin coefficient output would overwrite its input")
+
+    mtz = gemmi.read_mtz_file(mtz_path)
+    if "refmac" not in (mtz.title or "").lower():
+        raise ValueError("MTZ title does not identify Refmac output")
+    if mtz.spacegroup is None:
+        raise ValueError("MTZ has no space group for centric-reflection testing")
+
+    columns = {}
+    for label, expected_type in REFMAC_TWIN_COLUMNS.items():
+        matches = [column for column in mtz.columns if column.label == label]
+        if len(matches) != 1:
+            raise ValueError(
+                f"MTZ must contain exactly one {label} column; found "
+                f"{len(matches)}")
+        column = matches[0]
+        if column.type != expected_type:
+            raise ValueError(
+                f"MTZ column {label} has type {column.type}, expected "
+                f"{expected_type}")
+        columns[label] = column
+
+    coefficient_dataset_ids = {
+        columns[label].dataset_id for label in (
+            "FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
+    }
+    if len(coefficient_dataset_ids) != 1:
+        raise ValueError("Refmac map coefficients belong to different datasets")
+
+    source = {
+        label: np.asarray(columns[label].array, dtype=np.float64)
+        for label in (
+            "FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
+    }
+    map_finite = np.ones(mtz.nreflections, dtype=bool)
+    for label in ("FWT", "PHWT", "DELFWT", "PHDELWT"):
+        map_finite &= np.isfinite(source[label])
+    model_finite = np.isfinite(source["FC_ALL"]) & np.isfinite(
+        source["PHIC_ALL"])
+    if np.any(map_finite & ~model_finite):
+        raise ValueError(
+            "finite Refmac map coefficients have missing FC_ALL values")
+    usable = map_finite & model_finite
+    usable_count = int(np.count_nonzero(usable))
+    if usable_count == 0:
+        raise ValueError("Refmac map coefficients have no common finite values")
+
+    observed = _complex_coefficients(
+        source["FWT"][usable], source["PHWT"][usable])
+    calculated = _complex_coefficients(
+        source["FC_ALL"][usable], source["PHIC_ALL"][usable])
+    difference = _complex_coefficients(
+        source["DELFWT"][usable], source["PHDELWT"][usable])
+    raw_identity_residual = _coefficient_residual_ratio(
+        observed - calculated, 2.0 * difference, observed, calculated)
+    if raw_identity_residual > REFMAC_TWIN_IDENTITY_TOLERANCE:
+        raise ValueError(
+            "Refmac coefficients do not satisfy the guarded raw identity "
+            f"(maximum relative residual {raw_identity_residual:.6g})")
+
+    centric = np.asarray(
+        mtz.spacegroup.operations().centric_flag_array(
+            mtz.make_miller_array()), dtype=bool)[usable]
+    normalized_observed = observed.copy()
+    normalized_observed[centric] = (
+        observed[centric] + calculated[centric]) / 2.0
+    normalized_difference = normalized_observed - calculated
+    fwt, phwt = _amplitudes_and_phases(normalized_observed)
+    delfwt, phdelwt = _amplitudes_and_phases(normalized_difference)
+
+    output_data = np.array(mtz.array, copy=True)
+    for label, values in (
+            ("FWT", fwt), ("PHWT", phwt),
+            ("DELFWT", delfwt), ("PHDELWT", phdelwt)):
+        output_data[usable, columns[label].idx] = values
+    mtz.set_data(output_data)
+    mtz.history = [
+        *mtz.history,
+        "Alchemy: normalized twin Refmac map coefficients for EDSTATS",
+    ]
+    mtz.write_to_file(output_path)
+
+    # Re-open the output and verify the semantic identity EDSTATS relies on:
+    # its observed map minus its difference map must be the calculated map.
+    written = gemmi.read_mtz_file(output_path)
+    written_values = {
+        label: np.asarray(written.column_with_label(label).array,
+                          dtype=np.float64)[usable]
+        for label in (
+            "FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
+    }
+    written_observed = _complex_coefficients(
+        written_values["FWT"], written_values["PHWT"])
+    written_calculated = _complex_coefficients(
+        written_values["FC_ALL"], written_values["PHIC_ALL"])
+    written_difference = _complex_coefficients(
+        written_values["DELFWT"], written_values["PHDELWT"])
+    output_identity_residual = _coefficient_residual_ratio(
+        written_observed - written_difference, written_calculated,
+        written_observed, written_difference)
+    if output_identity_residual > REFMAC_TWIN_IDENTITY_TOLERANCE:
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+        raise ValueError(
+            "written EDSTATS coefficients failed their identity check "
+            f"(maximum relative residual {output_identity_residual:.6g})")
+
+    return {
+        "usable_reflections": usable_count,
+        "centric_reflections": int(np.count_nonzero(centric)),
+        "raw_identity_max_relative_residual": raw_identity_residual,
+        "output_identity_max_relative_residual": output_identity_residual,
+    }
+
+
 def run_density_analysis(
         pdbID, mtz_path, pdb_path, out_dir, reslo, reshi, env=None,
-        map_scope="model-envelope", keep_full_maps=False):
+        map_scope="model-envelope", keep_full_maps=False,
+        pdb_redo_is_twin=False):
     """Validate the MTZ, compute maps with `fft`, then run `edstats`.
 
     Parameters
@@ -48,6 +227,7 @@ def run_density_analysis(
     env : dict | None      -- process environment (CCP4 on PATH) for subprocesses
     map_scope : str        -- ``model-envelope`` (default) or legacy ``full``
     keep_full_maps : bool  -- retain pre-crop maps with other intermediates
+    pdb_redo_is_twin : bool -- exact PDB-REDO ``properties.ISTWIN`` value
 
     MTZFIX creates HKLOUT only when it has corrections to write. If the input
     already passes its checks, no corrected file is produced and the original
@@ -68,6 +248,8 @@ def run_density_analysis(
     stats_out = os.path.join(out_dir, f"{pdbID}_stats.out")
     rszd = os.path.join(out_dir, f"{pdbID}_rszd.pdb")
     qq_out = os.path.join(out_dir, f"{pdbID}_qq.out")
+    twin_normalized_mtz = os.path.join(
+        out_dir, f"{pdbID}_twin_edstats.mtz")
 
     timings = {}
 
@@ -111,10 +293,31 @@ def run_density_analysis(
             raise RuntimeError(
                 f"MTZFIX output path would overwrite its input: {mtz_path}")
         os.remove(fixed_mtz)
-    _run(["mtzfix", "HKLIN", mtz_path, "HKLOUT", fixed_mtz],
-         None, os.path.basename(mtzfix_log), "mtzfix_s")
+    twin_normalization = None
+    try:
+        _run(["mtzfix", "HKLIN", mtz_path, "HKLOUT", fixed_mtz],
+             None, os.path.basename(mtzfix_log), "mtzfix_s")
+    except MtzfixValidationError as exc:
+        if pdb_redo_is_twin is not True:
+            raise
+        started = time.monotonic()
+        try:
+            twin_normalization = normalize_refmac_twin_coefficients(
+                mtz_path, twin_normalized_mtz)
+        except (OSError, RuntimeError, ValueError) as normalization_error:
+            timings["twin_coefficient_normalization_s"] = round(
+                time.monotonic() - started, 3)
+            raise MtzfixValidationError(
+                f"{exc}; guarded twin coefficient normalization was refused: "
+                f"{normalization_error}", timings=timings) from normalization_error
+        else:
+            timings["twin_coefficient_normalization_s"] = round(
+                time.monotonic() - started, 3)
 
-    if os.path.exists(fixed_mtz):
+    if twin_normalization is not None:
+        map_mtz = twin_normalized_mtz
+        mtzfix_applied = False
+    elif os.path.exists(fixed_mtz):
         if not os.path.isfile(fixed_mtz) or os.path.getsize(fixed_mtz) == 0:
             raise RuntimeError(
                 f"mtzfix produced an invalid corrected MTZ for {pdbID}")
@@ -255,6 +458,9 @@ def run_density_analysis(
             "fo_map": fo_map, "df_map": df_map,
             "mtz_for_maps": map_mtz, "mtzfix_log": mtzfix_log,
             "mtzfix_applied": mtzfix_applied, "timings": timings,
+            "twin_coefficient_normalization_applied": (
+                twin_normalization is not None),
+            "twin_coefficient_normalization": twin_normalization,
             "density_map_scope_requested": map_scope,
             "density_map_scope_used": map_scope_used,
             "full_map_bytes": full_map_bytes,

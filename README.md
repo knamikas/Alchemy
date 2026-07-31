@@ -154,7 +154,14 @@ are the columns used to calculate its two maps.
 1. CCP4 `mtzfix` to check and, when needed, correct the Fourier map
    coefficients, including their centric and acentric consistency. If the input
    passes, MTZFIX intentionally writes no replacement and the original MTZ is
-   used.
+   used. If its consistency re-test fails for an entry whose PDB-REDO
+   `data.json` explicitly has `properties.ISTWIN=true`, Alchemy can instead
+   normalize recognizable Refmac composite coefficients on a temporary MTZ.
+   This guarded path requires Refmac provenance, the complete expected column
+   schema, and reflection-by-reflection agreement with Refmac's raw coefficient
+   identity; its output is independently checked against the convention
+   EDSTATS consumes. The source MTZ is never modified. Successful use is
+   recorded as the `twin_refmac_coefficients_normalized` warning.
 2. CCP4 `fft` with `FWT/PHWT` from that validated MTZ to produce a 2mFo-DFc map.
 3. By default, CCP4 `mapmask` limits that full FFT map to the complete deposited
    coordinate-model envelope plus a 10 Angstrom border. The same crop is then
@@ -507,10 +514,13 @@ list or classification rules change.
   calculated for that entry; the manifest records the entry as `partial` with
   the bond-stage error.
 - If `mtzfix` cannot make an MTZ's Fourier coefficients pass its consistency
-  re-test, Alchemy does not use the rejected maps or retry indefinitely. The
-  entry is a terminal `partial` with `mtzfix_validation_failure`; coordinate-
-  based bond analysis still runs, while its metal sites remain explicitly
-  unscorable by confidence because RSZD is unavailable.
+  re-test, Alchemy does not use the rejected maps or retry indefinitely. An
+  explicitly twin-refined PDB-REDO entry is eligible for the guarded Refmac
+  coefficient normalization described above. Every other entry, and any twin
+  entry that fails a provenance, schema, or coefficient-identity check, is a
+  terminal `partial` with `mtzfix_validation_failure`; coordinate-based bond
+  analysis still runs, while its metal sites remain explicitly unscorable by
+  confidence because RSZD is unavailable.
 - After canonical model and conformer selection, structures with no recognized
   metal atoms finish with `n_metals=0` without running `mtzfix`, either FFT, or
   `edstats`. These stages cannot produce metal-site output for such entries.
