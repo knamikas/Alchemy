@@ -72,7 +72,11 @@ from metal_identification import (
     load_cofactor_ids,
 )
 from metal_elements import METAL_ELEMENTS
-from structure_analysis import RESNAME_REMARK_PREFIX, blank_if_missing
+from structure_analysis import (
+    RESIDUE_REMARK_PREFIX,
+    RESNAME_REMARK_PREFIX,
+    blank_if_missing,
+)
 from bond_analysis import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
@@ -416,7 +420,7 @@ def _residue_index_by_author(structure, label):
     by_author = {}
     order = []
     for model_index, model in enumerate(structure):
-        for chain in model:
+        for source_chain_index, chain in enumerate(model):
             for residue in chain:
                 number = residue.seqid.num
                 if number is None:
@@ -468,12 +472,155 @@ def _residue_conversion_records(structure, converted_structure):
     return records
 
 
+# The traditional PDB chain field is one column wide.  These are the portable
+# identifiers accepted by both Gemmi and the CCP4 tools used by Alchemy.
+LEGACY_PDB_CHAIN_IDS = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+LEGACY_PDB_MAX_RESIDUE_NUMBER = 9999
+
+
+def _source_residue_records(structure):
+    """Snapshot source-mmCIF residue identities before legacy conversion."""
+    import gemmi
+
+    records = []
+    for model_index, model in enumerate(structure, start=1):
+        for source_chain_index, chain in enumerate(model):
+            polymer_indices_by_subchain = {}
+            for residue_index, residue in enumerate(chain):
+                if residue.entity_type == gemmi.EntityType.Polymer:
+                    polymer_indices_by_subchain.setdefault(
+                        str(residue.subchain), []).append(residue_index)
+            for residue_index, residue in enumerate(chain):
+                number = residue.seqid.num
+                if number is None:
+                    raise ValueError(
+                        f"mmCIF residue {residue.name!r} has no author number")
+                polymer_indices = polymer_indices_by_subchain.get(
+                    str(residue.subchain), [])
+                if not polymer_indices:
+                    polymer_position = "-"
+                else:
+                    is_first = residue_index == polymer_indices[0]
+                    is_last = residue_index == polymer_indices[-1]
+                    polymer_position = (
+                        "NC" if is_first and is_last else
+                        ("N" if is_first else ("C" if is_last else "M")))
+                records.append((
+                    model_index,
+                    str(chain.name),
+                    int(number),
+                    blank_if_missing(str(residue.seqid.icode)),
+                    str(residue.name),
+                    tuple((str(atom.name), str(atom.element.name))
+                          for atom in residue),
+                    source_chain_index,
+                    residue_index,
+                    polymer_position,
+                ))
+    return records
+
+
+def _legacy_identifiers_need_packing(structure):
+    """Whether Gemmi could not shorten every chain to a portable PDB id."""
+    return any(
+        bool(str(chain.name)) and str(chain.name) not in LEGACY_PDB_CHAIN_IDS
+        for model in structure for chain in model
+    )
+
+
+def _pack_legacy_pdb_residue_ids(structure):
+    """Assign a unique, one-character PDB identity to every residue.
+
+    Multiple source chains may occupy one synthetic chain because EDSTATS only
+    needs an unambiguous residue key, not polymer connectivity.  Whole source
+    chains stay together, TER records preserve their boundaries, and sequence
+    numbers never exceed the portable four-column decimal PDB range.
+    """
+    import gemmi
+
+    for model in structure:
+        chain_slot = 0
+        next_residue_number = 1
+        for chain in model:
+            residue_count = len(chain)
+            if residue_count > LEGACY_PDB_MAX_RESIDUE_NUMBER:
+                raise ValueError(
+                    "one mmCIF chain contains more residues than a portable "
+                    "PDB chain can represent")
+            if (next_residue_number + residue_count - 1 >
+                    LEGACY_PDB_MAX_RESIDUE_NUMBER):
+                chain_slot += 1
+                next_residue_number = 1
+            if chain_slot >= len(LEGACY_PDB_CHAIN_IDS):
+                raise ValueError(
+                    "mmCIF model contains more residues than the portable "
+                    "PDB surrogate namespace can represent")
+            chain.name = LEGACY_PDB_CHAIN_IDS[chain_slot]
+            for residue in chain:
+                residue.seqid = gemmi.SeqId(next_residue_number, " ")
+                next_residue_number += 1
+
+
+def _residue_identity_records(source_records, converted_structure):
+    """Map packed PDB residue identities back to source-mmCIF identities."""
+    converted_records = []
+    for model_index, model in enumerate(converted_structure, start=1):
+        for chain in model:
+            for residue in chain:
+                number = residue.seqid.num
+                if number is None:
+                    raise ValueError(
+                        f"converted residue {residue.name!r} has no number")
+                converted_records.append((
+                    model_index,
+                    str(chain.name),
+                    f"{number}{blank_if_missing(str(residue.seqid.icode))}",
+                    str(residue.name),
+                    tuple((str(atom.name), str(atom.element.name))
+                          for atom in residue),
+                ))
+    if len(source_records) != len(converted_records):
+        raise ValueError("PDB conversion changed residue count")
+
+    records = []
+    for source, converted in zip(source_records, converted_records):
+        (source_model, source_chain, source_number, source_insertion,
+         source_name, source_atoms, source_chain_index,
+         source_residue_index, source_polymer_position) = source
+        (converted_model, converted_chain, converted_resnum,
+         converted_name, converted_atoms) = converted
+        if source_model != converted_model:
+            raise ValueError("PDB conversion changed residue model ordering")
+        if source_atoms != converted_atoms:
+            raise ValueError("PDB conversion changed residue atom membership")
+        source_resnum = f"{source_number}{source_insertion}"
+        if ((source_chain, source_resnum, source_name) ==
+                (converted_chain, converted_resnum, converted_name)):
+            continue
+        records.append((
+            converted_model,
+            converted_chain,
+            converted_resnum,
+            converted_name,
+            source_chain,
+            source_number,
+            source_insertion,
+            source_name,
+            source_chain_index,
+            source_residue_index,
+            source_polymer_position,
+        ))
+    return records
+
+
 def _write_cif_conversion_provenance(
         dst: str,
         missing_occupancies: List[bool],
         residue_records: List[Tuple[int, str, str, str, str]],
+        identity_records=None,
         ) -> None:
-    """Blank unknown occupancies and embed reversible residue-name mappings."""
+    """Blank unknown occupancies and embed reversible residue mappings."""
     with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
         lines = handle.readlines()
 
@@ -501,6 +648,20 @@ def _write_cif_conversion_provenance(
         for (model_index, chain, resnum, converted_name,
              source_name) in residue_records
     ]
+    remarks.extend(
+        (
+            f"{RESIDUE_REMARK_PREFIX} {model_index} "
+            f"{converted_chain or '_'} {converted_resnum} {converted_name} "
+            f"{source_chain or '_'} {source_number} "
+            f"{source_insertion or '_'} {source_name} "
+            f"{source_chain_index} {source_residue_index} "
+            f"{source_polymer_position}\n"
+        )
+        for (model_index, converted_chain, converted_resnum, converted_name,
+             source_chain, source_number, source_insertion,
+             source_name, source_chain_index, source_residue_index,
+             source_polymer_position) in (identity_records or ())
+    )
     with open(dst, "w", encoding="utf-8", newline="") as handle:
         handle.writelines(remarks)
         handle.writelines(lines)
@@ -531,17 +692,24 @@ def _cif_to_pdb(cif_path, dst):
             occupancy_by_serial[int(serial)] in (".", "?"))
 
     structure.setup_entities()
+    source_residues = _source_residue_records(structure)
     # EDSTATS consumes PDB coordinates, whose chain field is one character.
     # Shorten deterministically before writing, then analyze this exact PDB so
     # EDSTATS and Alchemy never join identifiers from different representations.
     structure.shorten_chain_names()
+    identifiers_packed = _legacy_identifiers_need_packing(structure)
+    if identifiers_packed:
+        _pack_legacy_pdb_residue_ids(structure)
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     structure.write_pdb(dst)
     converted_structure = gemmi.read_structure(dst)
     residue_records = _residue_conversion_records(
         structure, converted_structure)
+    identity_records = (
+        _residue_identity_records(source_residues, converted_structure)
+        if identifiers_packed else [])
     _write_cif_conversion_provenance(
-        dst, missing_occupancies, residue_records)
+        dst, missing_occupancies, residue_records, identity_records)
     return dst
 
 

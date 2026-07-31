@@ -26,6 +26,7 @@ import gemmi
 NAN = float("nan")
 DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
 RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
+RESIDUE_REMARK_PREFIX = "REMARK 950 ALCHEMY RESIDUE"
 
 
 # Blank PDB columns, Gemmi's NUL altloc, and the two mmCIF null tokens all mean
@@ -200,6 +201,18 @@ class AtomSite:
     is_water: bool
     is_hydrogen: bool
     gemmi_atom: gemmi.Atom = field(repr=False, compare=False)
+    # The Gemmi atom belongs to the legacy-PDB identity EDSTATS sees.  Usually
+    # that identity is also the source author identity.  Very large mmCIF
+    # structures need a packed one-character namespace, in which case these
+    # fields retain the coordinate-side half of the reversible mapping while
+    # ``chain_id``/``resnum`` above remain the source identity reported in CSVs.
+    coordinate_chain_id: str = ""
+    coordinate_residue_number: Optional[int] = None
+    coordinate_insertion_code: str = ""
+    coordinate_resnum: str = ""
+    source_polymer_position: str = ""
+    source_chain_index: Optional[int] = None
+    source_residue_index: Optional[int] = None
 
     @property
     def pos(self) -> gemmi.Position:
@@ -212,6 +225,16 @@ class AtomSite:
     @property
     def residue_key(self) -> Tuple[int, int, int]:
         return self.model_index, self.chain_index, self.residue_index
+
+    @property
+    def output_chain_index(self) -> int:
+        return (self.chain_index if self.source_chain_index is None
+                else self.source_chain_index)
+
+    @property
+    def output_residue_index(self) -> int:
+        return (self.residue_index if self.source_residue_index is None
+                else self.source_residue_index)
 
     @property
     def source_key(self) -> Tuple[int, int, int, int]:
@@ -251,6 +274,13 @@ class ResidueSelection:
     selected_over_blank_duplicate_count: int
     malformed_duplicate_atom_name_count: int
     chemical_atom_site_count: int
+    coordinate_chain_id: str = ""
+    coordinate_residue_number: Optional[int] = None
+    coordinate_insertion_code: str = ""
+    coordinate_resnum: str = ""
+    source_polymer_position: str = ""
+    source_chain_index: Optional[int] = None
+    source_residue_index: Optional[int] = None
 
     @property
     def key(self) -> Tuple[int, int, int]:
@@ -262,7 +292,11 @@ class ResidueSelection:
 
     @property
     def coordinate_author_key(self) -> Tuple[str, str, str]:
-        return self.coordinate_residue_name, self.chain_id, self.resnum
+        return (
+            self.coordinate_residue_name,
+            self.coordinate_chain_id or self.chain_id,
+            self.coordinate_resnum or self.resnum,
+        )
 
     @property
     def elements(self) -> frozenset[str]:
@@ -310,6 +344,12 @@ class StructureContext:
     _residue_by_key: Mapping[Tuple[int, int, int], ResidueSelection] = field(
         repr=False, default_factory=dict)
     _residues_by_author: Mapping[
+        Tuple[str, str, str], Tuple[ResidueSelection, ...]
+    ] = field(repr=False, default_factory=dict)
+    _residues_by_source_author: Mapping[
+        Tuple[str, str, str], Tuple[ResidueSelection, ...]
+    ] = field(repr=False, default_factory=dict)
+    _residues_by_coordinate_author: Mapping[
         Tuple[str, str, str], Tuple[ResidueSelection, ...]
     ] = field(repr=False, default_factory=dict)
 
@@ -379,6 +419,18 @@ class StructureContext:
     def residues_for_author(self, residue_name: str, chain_id: str,
                             resnum: str) -> Tuple[ResidueSelection, ...]:
         return self._residues_by_author.get(
+            (str(residue_name), str(chain_id), str(resnum)), ())
+
+    def residues_for_source_author(self, residue_name: str, chain_id: str,
+                                   resnum: str
+                                   ) -> Tuple[ResidueSelection, ...]:
+        return self._residues_by_source_author.get(
+            (str(residue_name), str(chain_id), str(resnum)), ())
+
+    def residues_for_coordinate_author(self, residue_name: str, chain_id: str,
+                                       resnum: str
+                                       ) -> Tuple[ResidueSelection, ...]:
+        return self._residues_by_coordinate_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ())
 
     def metal_atoms(self, elements: Iterable[str],
@@ -478,36 +530,96 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
     return records, ""
 
 
-def _raw_pdb_residue_name_mapping(
+@dataclass(frozen=True)
+class SourceResidueIdentity:
+    """Source-mmCIF identity for one residue in an analysis PDB."""
+
+    residue_name: str
+    chain_id: str
+    residue_number: Optional[int] = None
+    insertion_code: str = ""
+    polymer_position: str = ""
+    chain_index: Optional[int] = None
+    residue_index: Optional[int] = None
+
+
+def _raw_pdb_residue_mapping(
         path: str,
-        ) -> Dict[Tuple[int, str, str, str], str]:
-    """Read reversible mmCIF residue-name mappings embedded during conversion."""
-    mapping: Dict[Tuple[int, str, str, str], str] = {}
+        ) -> Dict[Tuple[int, str, str, str], SourceResidueIdentity]:
+    """Read reversible mmCIF residue mappings embedded during conversion.
+
+    ``RESNAME`` is the original, name-only format.  ``RESIDUE`` is emitted for
+    a structure whose residues had to be packed into a PDB-safe namespace and
+    restores the source component, chain, sequence number and insertion code.
+    """
+    mapping: Dict[
+        Tuple[int, str, str, str], SourceResidueIdentity
+    ] = {}
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             fields = line.split()
-            if " ".join(fields[:4]) != RESNAME_REMARK_PREFIX:
+            prefix = " ".join(fields[:4])
+            if prefix not in (RESNAME_REMARK_PREFIX, RESIDUE_REMARK_PREFIX):
                 continue
-            if len(fields) != 9:
+            expected_fields = 9 if prefix == RESNAME_REMARK_PREFIX else 15
+            if len(fields) != expected_fields:
                 raise ValueError(
-                    f"malformed Alchemy residue-name mapping: {line.rstrip()}")
+                    f"malformed Alchemy residue mapping: {line.rstrip()}")
             try:
                 model_index = int(fields[4]) - 1
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError(
-                    f"invalid model in residue-name mapping: {fields[4]!r}"
+                    f"invalid model in residue mapping: {fields[4]!r}"
                 ) from exc
             if model_index < 0:
-                raise ValueError("residue-name mapping model must be positive")
-            chain_id = "" if fields[5] == "_" else fields[5]
-            resnum, coordinate_name, source_name = fields[6:9]
-            key = (model_index, coordinate_name, chain_id, resnum)
+                raise ValueError("residue mapping model must be positive")
+            coordinate_chain = "" if fields[5] == "_" else fields[5]
+            coordinate_resnum, coordinate_name = fields[6:8]
+            key = (
+                model_index,
+                coordinate_name,
+                coordinate_chain,
+                coordinate_resnum,
+            )
+            if prefix == RESNAME_REMARK_PREFIX:
+                source = SourceResidueIdentity(
+                    residue_name=fields[8],
+                    chain_id=coordinate_chain,
+                )
+            else:
+                source_chain = "" if fields[8] == "_" else fields[8]
+                try:
+                    source_number = int(fields[9])
+                    source_chain_index = int(fields[12])
+                    source_residue_index = int(fields[13])
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(
+                        "invalid source numeric field in residue mapping: "
+                        f"{line.rstrip()}") from exc
+                source = SourceResidueIdentity(
+                    residue_name=fields[11],
+                    chain_id=source_chain,
+                    residue_number=source_number,
+                    insertion_code=("" if fields[10] == "_" else fields[10]),
+                    chain_index=source_chain_index,
+                    residue_index=source_residue_index,
+                    polymer_position=fields[14],
+                )
             previous = mapping.get(key)
-            if previous is not None and previous != source_name:
-                raise ValueError(
-                    "conflicting Alchemy residue-name mappings for "
-                    f"{coordinate_name}/{chain_id}/{resnum}")
-            mapping[key] = source_name
+            # A full RESIDUE record deliberately supersedes a preceding legacy
+            # RESNAME record for the same coordinate residue.
+            if previous is not None:
+                compatible_legacy_upgrade = (
+                    prefix == RESIDUE_REMARK_PREFIX
+                    and previous.residue_number is None
+                    and previous.residue_name == source.residue_name
+                )
+                if previous != source and not compatible_legacy_upgrade:
+                    raise ValueError(
+                        "conflicting Alchemy residue mappings for "
+                        f"{coordinate_name}/{coordinate_chain}/"
+                        f"{coordinate_resnum}")
+            mapping[key] = source
     return mapping
 
 
@@ -686,6 +798,13 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
         selected_over_blank_duplicate_count=selected_over_blank,
         malformed_duplicate_atom_name_count=malformed_duplicates,
         chemical_atom_site_count=chemical_sites,
+        coordinate_chain_id=first.coordinate_chain_id,
+        coordinate_residue_number=first.coordinate_residue_number,
+        coordinate_insertion_code=first.coordinate_insertion_code,
+        coordinate_resnum=first.coordinate_resnum,
+        source_polymer_position=first.source_polymer_position,
+        source_chain_index=first.source_chain_index,
+        source_residue_index=first.source_residue_index,
     )
 
 
@@ -742,10 +861,15 @@ def load_structure(
 
     raw_models: List[List[RawOccupancy]] = []
     raw_error = ""
-    source_residue_names: Dict[Tuple[int, str, str, str], str] = {}
+    source_residue_identities: Dict[
+        Tuple[int, str, str, str], SourceResidueIdentity
+    ] = {}
     if analysis_format == "pdb":
         raw_models, raw_error = _raw_pdb_occupancies(path)
-        source_residue_names = _raw_pdb_residue_name_mapping(path)
+        source_residue_identities = _raw_pdb_residue_mapping(path)
+    legacy_identifiers_packed = any(
+        identity.residue_number is not None
+        for identity in source_residue_identities.values())
     raw_first = raw_models[0] if raw_models else []
     gemmi_atoms = [atom for chain in model for residue in chain for atom in residue]
     gemmi_atom_count = len(gemmi_atoms)
@@ -774,14 +898,30 @@ def load_structure(
     gemmi_order = 0
     for chain_index, chain in enumerate(model):
         for residue_index, residue in enumerate(chain):
-            number = _residue_number(residue)
-            insertion = blank_if_missing(residue.seqid.icode)
-            resnum = f"{number}{insertion}"
+            coordinate_number = _residue_number(residue)
+            coordinate_insertion = blank_if_missing(residue.seqid.icode)
+            coordinate_resnum = (
+                f"{coordinate_number}{coordinate_insertion}")
             coordinate_residue_name = str(residue.name)
-            source_residue_name = source_residue_names.get(
-                (0, coordinate_residue_name, str(chain.name), resnum),
-                coordinate_residue_name,
+            coordinate_chain_id = str(chain.name)
+            source_identity = source_residue_identities.get(
+                (0, coordinate_residue_name, coordinate_chain_id,
+                 coordinate_resnum),
+                SourceResidueIdentity(
+                    residue_name=coordinate_residue_name,
+                    chain_id=coordinate_chain_id,
+                    residue_number=coordinate_number,
+                    insertion_code=coordinate_insertion,
+                ),
             )
+            source_number = (
+                coordinate_number if source_identity.residue_number is None
+                else source_identity.residue_number)
+            source_insertion = (
+                coordinate_insertion
+                if source_identity.residue_number is None
+                else source_identity.insertion_code)
+            source_resnum = f"{source_number}{source_insertion}"
             for atom_index, atom in enumerate(residue):
                 raw = (raw_matches[gemmi_order]
                        if gemmi_order < len(raw_matches) else None)
@@ -799,13 +939,13 @@ def load_structure(
                     model_index=0,
                     model_id=model_id,
                     chain_index=chain_index,
-                    chain_id=str(chain.name),
+                    chain_id=source_identity.chain_id,
                     residue_index=residue_index,
-                    residue_name=source_residue_name,
+                    residue_name=source_identity.residue_name,
                     coordinate_residue_name=coordinate_residue_name,
-                    residue_number=number,
-                    insertion_code=insertion,
-                    resnum=resnum,
+                    residue_number=source_number,
+                    insertion_code=source_insertion,
+                    resnum=source_resnum,
                     atom_index=atom_index,
                     source_order=source_order,
                     atom_name=str(atom.name).strip(),
@@ -821,6 +961,13 @@ def load_structure(
                     is_hydrogen=(
                         element_known and element in ("H", "D")),
                     gemmi_atom=atom,
+                    coordinate_chain_id=coordinate_chain_id,
+                    coordinate_residue_number=coordinate_number,
+                    coordinate_insertion_code=coordinate_insertion,
+                    coordinate_resnum=coordinate_resnum,
+                    source_polymer_position=source_identity.polymer_position,
+                    source_chain_index=source_identity.chain_index,
+                    source_residue_index=source_identity.residue_index,
                 ))
                 gemmi_order += 1
 
@@ -883,17 +1030,34 @@ def load_structure(
         warnings.append("zero_occupancy_atoms")
     if mapping_failed:
         warnings.append("raw_occupancy_mapping_failed")
+    if legacy_identifiers_packed:
+        warnings.append("legacy_pdb_identifiers_packed")
 
     atom_by_indices = {(atom.chain_index, atom.residue_index, atom.atom_index): atom
                        for atom in contact_atoms}
     residue_by_key = {residue.key: residue for residue in residues}
-    by_author_lists: Dict[Tuple[str, str, str], List[ResidueSelection]] = defaultdict(list)
+    by_author_lists: Dict[
+        Tuple[str, str, str], List[ResidueSelection]
+    ] = defaultdict(list)
+    by_source_author_lists: Dict[
+        Tuple[str, str, str], List[ResidueSelection]
+    ] = defaultdict(list)
+    by_coordinate_author_lists: Dict[
+        Tuple[str, str, str], List[ResidueSelection]
+    ] = defaultdict(list)
     for residue in residues:
+        by_source_author_lists[residue.author_key].append(residue)
+        by_coordinate_author_lists[residue.coordinate_author_key].append(
+            residue)
         by_author_lists[residue.author_key].append(residue)
         if residue.coordinate_author_key != residue.author_key:
             by_author_lists[residue.coordinate_author_key].append(residue)
     residues_by_author = {key: tuple(value)
                           for key, value in by_author_lists.items()}
+    residues_by_source_author = {
+        key: tuple(value) for key, value in by_source_author_lists.items()}
+    residues_by_coordinate_author = {
+        key: tuple(value) for key, value in by_coordinate_author_lists.items()}
 
     occupancy_failed = bool(missing_count or invalid_count or mapping_failed)
     return StructureContext(
@@ -931,6 +1095,8 @@ def load_structure(
         _atom_by_indices=atom_by_indices,
         _residue_by_key=residue_by_key,
         _residues_by_author=residues_by_author,
+        _residues_by_source_author=residues_by_source_author,
+        _residues_by_coordinate_author=residues_by_coordinate_author,
     )
 
 

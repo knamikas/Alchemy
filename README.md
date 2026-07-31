@@ -132,6 +132,16 @@ reversible mapping for component identifiers that exceed the three-character
 legacy PDB residue-name field. The original CCD identifier is restored after
 EDSTATS so cofactor catalog matching and output retain the mmCIF identity.
 
+If a model has more chains than the one-character PDB namespace can represent,
+Alchemy packs its residues into synthetic one-character chains with unique
+four-column sequence numbers. ``REMARK 950 ALCHEMY RESIDUE`` records preserve
+the original component, chain, sequence number, insertion code, source traversal
+indices, and polymer-terminal position. EDSTATS and Gemmi analyze the same
+packed coordinates, then statistics, contacts, declarations, and CSV identifiers
+are mapped back to the source mmCIF identities. Conversion validates the atom
+and residue membership before analysis, so an oversized structure cannot
+silently lose sites at the legacy-PDB boundary.
+
 The overall diffraction resolution comes from PDB-REDO `data.json` when
 available, with an MTZ fallback through gemmi. EDSTATS instead receives the
 common finite resolution range of `FWT`, `PHWT`, `DELFWT`, and `PHDELWT`, which

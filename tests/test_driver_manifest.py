@@ -16,13 +16,16 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+from types import SimpleNamespace
 from typing import List
 
 import gemmi
 import pytest
 
 import helpers
+import bond_analysis
 import main
+import metal_identification
 import structure_analysis
 
 
@@ -1194,6 +1197,78 @@ class TestCifToPdb:
         assert by_atom["C"].occupancy_valid is False
         assert by_atom["N"].occupancy == pytest.approx(1.0)
         assert by_atom["ZN"].occupancy == pytest.approx(0.75)
+
+    def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(
+            self, tmp_path):
+        """Every source site survives when one-character chain ids run out."""
+        source_chains = [f"C{index:02d}" for index in range(62)]
+        source_chains.insert(20, "A")
+        cif = _write_cif(tmp_path / "many-chains.cif", [
+            _cif_atom(
+                index + 1, "ZN", "ZN", "ZN", chain, index + 1, ".",
+                (float(index), 0.0, 0.0), "1.00", 1, chain,
+                group="HETATM",
+            )
+            for index, chain in enumerate(source_chains)
+        ])
+
+        out = main._cif_to_pdb(cif, str(tmp_path / "many-chains.pdb"))
+        atom_lines = _pdb_atom_lines(out)
+        assert len(atom_lines) == 63
+        assert {line[21:22] for line in atom_lines} == {"A"}
+        with open(out) as handle:
+            identity_remarks = [
+                line for line in handle
+                if line.startswith(main.RESIDUE_REMARK_PREFIX)
+            ]
+        assert len(identity_remarks) == 63
+
+        context = structure_analysis.load_structure("test", out)
+        metals = context.metal_atoms({"ZN"}, canonical=True)
+        assert len(metals) == 63
+        assert {metal.chain_id for metal in metals} == set(source_chains)
+        assert {metal.coordinate_chain_id for metal in metals} == {"A"}
+        assert {metal.coordinate_resnum for metal in metals} == {
+            str(index) for index in range(1, 64)}
+        assert {metal.chain_index for metal in metals} == {0}
+        assert [metal.output_chain_index for metal in metals] == list(range(63))
+        assert {metal.output_residue_index for metal in metals} == {0}
+        assert context.raw_occupancy_mapping_failed is False
+        assert "legacy_pdb_identifiers_packed" in context.warning_codes
+        # A source key can coincide with a different residue's packed key.
+        # The explicit indexes keep those two namespaces unambiguous.
+        assert len(context.residues_for_author("ZN", "A", "1")) == 2
+        (source_a,) = context.residues_for_source_author("ZN", "A", "1")
+        (coordinate_a1,) = context.residues_for_coordinate_author(
+            "ZN", "A", "1")
+        assert source_a.chain_id == "A"
+        assert coordinate_a1.chain_id == source_chains[0]
+
+        # EDSTATS sees the packed identities, while aggregate rows restore the
+        # original mmCIF author identifiers.
+        stats_path = helpers.write_edstats_for_structure(
+            tmp_path / "stats.out", context, metrics={"ZDm": 2.0})
+        rows, _ = metal_identification.extract_metal_statistics(
+            "test", stats_path, {"ZN"}, set(), structure=context)
+        assert len(rows) == 63
+        assert {row["chain"] for row in rows} == set(source_chains)
+        assert {row["fields"][1] for row in rows} == set(source_chains)
+        assert {row["resnum"] for row in rows} == {"1"}
+
+        # Source struct_conn partners resolve directly through the same
+        # provenance, without trying to reproduce the packed numbering.
+        source = gemmi.read_structure(cif)
+        source_chain = next(
+            chain for chain in source[0] if chain.name == "A")
+        source_residue = source_chain[0]
+        source_atom = source_residue[0]
+        cra = SimpleNamespace(
+            chain=source_chain, residue=source_residue, atom=source_atom)
+        resolved = bond_analysis._analysis_atom_for_partner(
+            context, cra, {})
+        assert resolved is not None
+        assert resolved.chain_id == "A"
+        assert resolved.resnum == "1"
 
     def test_missing_input_file_raises_file_not_found(self, tmp_path):
         """A vanished mirror file must not be reported as a conversion bug."""

@@ -584,6 +584,10 @@ def _polymer_terminal_position(structure, atom):
     """Return ``(is_n_terminal, is_c_terminal)`` for a polymer residue."""
     import gemmi
 
+    selected = structure.residue_for_atom(atom)
+    if selected.source_polymer_position:
+        position = selected.source_polymer_position
+        return "N" in position, "C" in position
     try:
         chain = structure.model[atom.chain_index]
         residue = chain[atom.residue_index]
@@ -802,13 +806,12 @@ def _enum_name(value):
 def _analysis_chain_names(connection_path):
     """Map source chain names onto the analysis model's chain names.
 
-    A legacy PDB chain field holds one character, so Alchemy's mmCIF-to-PDB
-    conversion runs ``setup_entities`` and then ``shorten_chain_names`` before
-    writing the coordinates that are analyzed. Replaying both calls on a
-    separate copy recovers that renaming instead of assuming it is the
-    identity. Neither call reorders or renames chains on its own, so the copy's
-    chains stay aligned with the source's. A source PDB is extracted textually
-    and keeps its chain names, so its mapping is empty.
+    For ordinary structures, replaying Gemmi's ``setup_entities`` and
+    ``shorten_chain_names`` calls recovers the conversion mapping instead of
+    assuming it is the identity. Oversized structures use residue-level
+    provenance and resolve source identities before this fallback is reached.
+    A source PDB is extracted textually and keeps its chain names, so its
+    mapping is empty.
     """
     import gemmi
 
@@ -840,10 +843,26 @@ def _analysis_atom_for_partner(structure, cra, chain_names):
     if chain is None or residue is None or atom is None:
         return None
 
-    chain_id = chain_names.get(str(chain.name), str(chain.name))
+    source_chain_id = str(chain.name)
     resnum = f"{residue.seqid.num}{blank_if_missing(residue.seqid.icode)}"
-    matches = structure.residues_for_author(
-        str(residue.name), chain_id, resnum)
+    source_lookup = (
+        structure.residues_for_source_author
+        if hasattr(type(structure), "residues_for_source_author")
+        else structure.residues_for_author)
+    matches = source_lookup(
+        str(residue.name), source_chain_id, resnum)
+    if len(matches) != 1:
+        # Older analysis PDBs retain only Gemmi's chain-name shortening.  New
+        # packed PDBs embed full residue provenance, so the source lookup above
+        # succeeds without guessing how sequence numbers were remapped.
+        chain_id = chain_names.get(source_chain_id, source_chain_id)
+        if chain_id != source_chain_id:
+            # The combined legacy index restores >3-character residue names
+            # while using Gemmi's shortened chain name.  Packed structures do
+            # not need this fallback because their full source identity is
+            # indexed above.
+            matches = structure.residues_for_author(
+                str(residue.name), chain_id, resnum)
     if len(matches) != 1:
         return None
 
@@ -947,11 +966,10 @@ def _collect_declared_candidates(structure, connection_path, metals):
     record after each polymer and every TER consumes a serial number, so the
     serials of an mmCIF-converted model run ahead of the source
     ``_atom_site.id`` by one for each preceding TER, and a partner past the
-    first TER would resolve to a neighbouring atom. Author identifiers survive
-    conversion intact; the two identifier ambiguities it does introduce are
-    both reversible, chain shortening through ``_analysis_chain_names`` and a
-    component identifier too long for the legacy residue field through the
-    conversion provenance the analysis structure already restores.
+    first TER would resolve to a neighbouring atom. Conversion provenance
+    restores source residue identities when the legacy PDB representation
+    shortens a chain, truncates a component name, or packs an oversized model
+    into synthetic chain and residue identifiers.
 
     A declaration names one deposited record, so either partner may be an
     alternate conformer that per-residue selection did not choose. Both are
@@ -1506,8 +1524,8 @@ def stats_extra_values(structure, metal=None, summary=None):
         "model_id": structure.analyzed_model_id,
         "multi_model_structure": structure.multi_model_structure,
         "metal_model_index": metal.model_index if metal else "",
-        "metal_chain_index": metal.chain_index if metal else "",
-        "metal_residue_index": metal.residue_index if metal else "",
+        "metal_chain_index": metal.output_chain_index if metal else "",
+        "metal_residue_index": metal.output_residue_index if metal else "",
         "metal_atom_index": metal.atom_index if metal else "",
         "metal_resname": metal.residue_name if metal else "",
         "metal_chain": metal.chain_id if metal else "",
@@ -1590,8 +1608,8 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "bonded_to": _bonded_to(neighbor.is_water),
         "model_id": structure.analyzed_model_id,
         "metal_model_index": metal.model_index,
-        "metal_chain_index": metal.chain_index,
-        "metal_residue_index": metal.residue_index,
+        "metal_chain_index": metal.output_chain_index,
+        "metal_residue_index": metal.output_residue_index,
         "metal_atom_index": metal.atom_index,
         "metal_atom": metal.atom_name,
         "metal_icode": metal.insertion_code,
@@ -1608,8 +1626,8 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "neighbor_resnum": neighbor.resnum,
         "neighbor_icode": neighbor.insertion_code,
         "neighbor_model_index": neighbor.model_index,
-        "neighbor_chain_index": neighbor.chain_index,
-        "neighbor_residue_index": neighbor.residue_index,
+        "neighbor_chain_index": neighbor.output_chain_index,
+        "neighbor_residue_index": neighbor.output_residue_index,
         "neighbor_atom_index": neighbor.atom_index,
         "neighbor_altloc": neighbor.altloc,
         "neighbor_occupancy": neighbor.occupancy,
@@ -1691,8 +1709,8 @@ def _candidate_row(pdb_id, structure, metal, candidate):
         "metal_occupancy": metal.occupancy,
         "model_id": structure.analyzed_model_id,
         "metal_model_index": metal.model_index,
-        "metal_chain_index": metal.chain_index,
-        "metal_residue_index": metal.residue_index,
+        "metal_chain_index": metal.output_chain_index,
+        "metal_residue_index": metal.output_residue_index,
         "metal_atom_index": metal.atom_index,
         "neighbor_resname": neighbor.residue_name,
         "neighbor_chain": neighbor.chain_id,
@@ -1704,8 +1722,8 @@ def _candidate_row(pdb_id, structure, metal, candidate):
         "neighbor_occupancy": neighbor.occupancy,
         "neighbor_class": "water" if neighbor.is_water else "amino_acid",
         "neighbor_model_index": neighbor.model_index,
-        "neighbor_chain_index": neighbor.chain_index,
-        "neighbor_residue_index": neighbor.residue_index,
+        "neighbor_chain_index": neighbor.output_chain_index,
+        "neighbor_residue_index": neighbor.output_residue_index,
         "neighbor_atom_index": neighbor.atom_index,
         "contact_scope": candidate["contact_scope"],
         "symmetry_contact": candidate["symmetry_contact"],

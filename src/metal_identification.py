@@ -296,10 +296,11 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             coordinate_resname = fields[indices["RT"]]
             chain = fields[indices["CI"]]
             resnum = fields[indices["RN"]]
-            density_observation_id = _density_observation_id(
-                pdbID, fields, indices)
             observed_residues.add((coordinate_resname, chain, resnum))
-            matched_residues = structure.residues_for_author(
+            coordinate_lookup = getattr(
+                structure, "residues_for_coordinate_author",
+                structure.residues_for_author)
+            matched_residues = coordinate_lookup(
                 coordinate_resname, chain, resnum)
             if not matched_residues:
                 mapping_status = "coordinate_residue_not_found"
@@ -326,13 +327,20 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
             density_is_shared = density_shared_site_count > 1
             for residue, resname, category, site in selected_sites:
                 output_fields = list(fields)
-                output_fields[0] = resname
+                output_fields[indices["RT"]] = resname
+                if mapping_status == "matched":
+                    output_fields[indices["CI"]] = residue.chain_id
+                    output_fields[indices["RN"]] = residue.resnum
+                density_observation_id = _density_observation_id(
+                    pdbID, output_fields, indices)
+                output_chain = output_fields[indices["CI"]]
+                output_resnum = output_fields[indices["RN"]]
                 rows.append({
                     "pdbID": pdbID,
                     "category": category,
                     "resname": resname,
-                    "chain": chain,
-                    "resnum": resnum,
+                    "chain": output_chain,
+                    "resnum": output_resnum,
                     "fields": output_fields,
                     "density_observation_id": density_observation_id,
                     "density_scope": ("cofactor_residue"
@@ -354,13 +362,23 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structu
                     if matched_cofactor_names else coordinate_resname
                 )
                 output_fields = list(fields)
-                output_fields[0] = resname
+                output_fields[indices["RT"]] = resname
+                matched_residue = (
+                    matched_residues[0]
+                    if len(matched_residues) == 1 else None)
+                if matched_residue is not None:
+                    output_fields[indices["CI"]] = matched_residue.chain_id
+                    output_fields[indices["RN"]] = matched_residue.resnum
+                output_chain = output_fields[indices["CI"]]
+                output_resnum = output_fields[indices["RN"]]
+                density_observation_id = _density_observation_id(
+                    pdbID, output_fields, indices)
                 rows.append({
                     "pdbID": pdbID,
                     "category": "cofactor",
                     "resname": resname,
-                    "chain": chain,
-                    "resnum": resnum,
+                    "chain": output_chain,
+                    "resnum": output_resnum,
                     "fields": output_fields,
                     "density_observation_id": density_observation_id,
                     "density_scope": "cofactor_residue",
