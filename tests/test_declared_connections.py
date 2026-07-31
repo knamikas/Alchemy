@@ -82,6 +82,19 @@ def write_source_and_analysis(builder: StructureBuilder, directory,
     raise ValueError(f"unknown source format {fmt!r}")
 
 
+def blank_struct_conn_atom_names(path: str, *partners: int) -> None:
+    """Remove selected partner atom names from every source declaration."""
+    document = gemmi.cif.read(path)
+    block = document.sole_block()
+    for partner in partners:
+        column = block.find_values(
+            f"_struct_conn.ptnr{partner}_label_atom_id")
+        assert len(column) > 0
+        for index in range(len(column)):
+            column[index] = "?"
+    document.write_file(path)
+
+
 def analyze(analysis_pdb: str, connection_path: Optional[str] = None,
             dpi_inputs=None, pdb_id: str = "test") -> Analysis:
     """Run the real bond analysis over an already-written analysis PDB."""
@@ -683,6 +696,43 @@ def test_declaration_is_dropped_when_the_selected_conformer_lacks_the_atom(
 # --------------------------------------------------------------------------- #
 # Resolution failures that must be reported rather than swallowed
 # --------------------------------------------------------------------------- #
+def test_broken_amino_acid_connection_is_outside_metal_analysis(tmp_path):
+    """An unresolved amino-acid link is neither a partial nor a warning."""
+    builder = StructureBuilder()
+    asparagine = builder.add_amino_acid("ASN", 1, chain="A")
+    serine = builder.add_amino_acid("SER", 2, chain="A")
+    builder.add_connection(
+        asparagine.ref("ND2"), serine.ref("OG"),
+        name="broken-aa", type="covale")
+    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    blank_struct_conn_atom_names(source, 1, 2)
+
+    result = analyze(analysis_pdb, connection_path=source)
+
+    assert "declared_connection_resolution_incomplete" not in (
+        result.metadata["partial_reason_codes"])
+    assert "declared_connection_partner_unresolved" not in (
+        result.metadata["warning_codes"])
+    assert result.metadata["messages"] == []
+
+
+def test_broken_connection_that_names_a_metal_is_partial(tmp_path):
+    """A missing donor name remains material when the other partner is Zn."""
+    builder, histidine, zinc = zinc_histidine_site()
+    builder.add_connection(
+        zinc.ref("ZN"), histidine.ref("NE2"),
+        name="broken-metal", type="covale")
+    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    blank_struct_conn_atom_names(source, 2)
+
+    result = analyze(analysis_pdb, connection_path=source)
+
+    assert "declared_connection_resolution_incomplete" in (
+        result.metadata["partial_reason_codes"])
+    assert any("broken-metal" in message and "unresolved" in message
+               for message in result.metadata["messages"])
+
+
 def test_partner_absent_from_the_analyzed_model_is_reported(tmp_path):
     """A declaration Alchemy cannot bind marks the entry partially resolved.
 

@@ -899,6 +899,28 @@ def _selected_conformer_atom(structure, atom):
     return None
 
 
+def _declared_partner_is_metal(address, cra):
+    """Whether a source connection partner unambiguously names a metal.
+
+    Prefer the element of the atom resolved in the source model.  A malformed
+    declaration may omit that atom or name a record no longer present, so fall
+    back only to unambiguous component/atom identifiers such as ``ZN``.  Do not
+    guess elements from prefixes (for example ``CA`` is commonly a protein
+    alpha carbon): an indeterminate non-metal declaration is outside Alchemy's
+    coordination-analysis scope.
+    """
+    source_atom = getattr(cra, "atom", None)
+    if source_atom is not None:
+        element = str(getattr(source_atom.element, "name", "")).upper()
+        if element in METAL_ELEMENTS:
+            return True
+
+    residue_id = getattr(address, "res_id", None)
+    residue_name = str(getattr(residue_id, "name", "")).strip().upper()
+    atom_name = str(getattr(address, "atom_name", "")).strip().upper()
+    return residue_name in METAL_ELEMENTS or atom_name in METAL_ELEMENTS
+
+
 def _declared_candidate_geometry(structure, metal, neighbor, connection):
     """Return contact geometry for a resolved declared connection."""
     import gemmi
@@ -999,12 +1021,22 @@ def _collect_declared_candidates(structure, connection_path, metals):
     warnings = []
     for index, connection in enumerate(declared_structure.connections, start=1):
         connection_id = str(connection.name).strip() or f"{source}_{index}"
+        addresses = (connection.partner1, connection.partner2)
+        declared_metal_partner = any(
+            _declared_partner_is_metal(address, None)
+            for address in addresses)
         try:
+            source_cras = [
+                source_model.find_cra(address, ignore_segment=True)
+                for address in addresses
+            ]
+            declared_metal_partner = declared_metal_partner or any(
+                _declared_partner_is_metal(address, cra)
+                for address, cra in zip(addresses, source_cras))
             source_atoms = []
             deselected_partner = False
             substituted_partner = False
-            for address in (connection.partner1, connection.partner2):
-                cra = source_model.find_cra(address, ignore_segment=True)
+            for cra in source_cras:
                 declared_atom = _analysis_atom_for_partner(
                     structure, cra, chain_names)
                 selected_atom = _selected_conformer_atom(
@@ -1016,39 +1048,35 @@ def _collect_declared_candidates(structure, connection_path, metals):
                         substituted_partner = True
                 source_atoms.append(selected_atom)
         except Exception as exc:
-            issues.append(
-                f"{source} {connection_id} resolution failed: "
-                f"{type(exc).__name__}")
+            if declared_metal_partner:
+                issues.append(
+                    f"{source} {connection_id} resolution failed: "
+                    f"{type(exc).__name__}")
             continue
 
         if deselected_partner:
-            issues.append(
-                f"{source} {connection_id} partner names a conformer whose "
-                f"selected alternative has no matching atom")
+            if declared_metal_partner:
+                issues.append(
+                    f"{source} {connection_id} partner names a conformer whose "
+                    f"selected alternative has no matching atom")
             continue
-        if substituted_partner:
-            warnings.append("declared_connection_conformer_substituted")
-
         first, second = source_atoms
         first_is_metal = (
             first is not None and first.source_key in selected_metal_keys)
         second_is_metal = (
             second is not None and second.source_key in selected_metal_keys)
+        connection_involves_metal = (
+            declared_metal_partner or first_is_metal or second_is_metal)
+        if substituted_partner and connection_involves_metal:
+            warnings.append("declared_connection_conformer_substituted")
         if first is None and second is None:
-            # Nothing resolved, so whether this named a metal is unknowable.
-            # Dropping it silently would let an entry whose identifiers Alchemy
-            # cannot map report complete success with no declared contacts and
-            # no audit trail.
-            issues.append(
-                f"{source} {connection_id} neither partner resolved")
+            if connection_involves_metal:
+                issues.append(
+                    f"{source} {connection_id} neither partner resolved")
             continue
         if not (first_is_metal or second_is_metal):
-            if first is None or second is None:
-                # One side is missing and the other is not a selected metal, so
-                # this is probably a link Alchemy does not model (a disulfide,
-                # a covalent modification). Recorded, but not treated as an
-                # incomplete metal result.
-                warnings.append("declared_connection_partner_unresolved")
+            if connection_involves_metal and (first is None or second is None):
+                issues.append(f"{source} {connection_id} partner unresolved")
             continue
         if first is None or second is None:
             issues.append(f"{source} {connection_id} partner unresolved")
