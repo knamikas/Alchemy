@@ -22,13 +22,14 @@ Requirements
 * CCP4 `mtzfix`, `fft`, `mapmask`, and `edstats` on PATH -- either already
   sourced, or via --ccp4-setup pointing at a CCP4 setup script
   (e.g. <CCP4>/bin/ccp4.setup-sh).
-* Run under a Python environment with gemmi>=0.7.0.
+* Run under Python 3.11+ with gemmi>=0.7.0 and numpy>=1.17. Both are
+  required; gemmi does not install numpy.
 
 Examples
 --------
-  conda run -n metal python src/main.py --id 109m \
+  python src/main.py --id 109m \
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
-  conda run -n metal python src/main.py --max-pdbs 20 --workers 4 \
+  python src/main.py --max-pdbs 20 --workers 4 \
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
 """
 import argparse
@@ -2625,10 +2626,17 @@ def _run(args, run_log):
             confidence_columns = (
                 *CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
         else:
+            # Expected on a fresh checkout: no reference is distributed with
+            # Alchemy because the confidence score is not finalized. Say so
+            # plainly -- naming the searched directories alone read as a
+            # misconfiguration the user was supposed to fix.
             print(
-                "No frozen confidence reference found in "
-                f"{', '.join(searched_reference_dirs)}; confidence scoring disabled "
-                "for this non-database run.",
+                "Confidence scoring is not enabled: no frozen reference is "
+                "distributed with Alchemy, because the score is not yet "
+                "finalized. All other outputs are unaffected. To enable it, "
+                "complete an uncapped full-database run or pass "
+                "--confidence-reference-dir. (Searched: "
+                f"{', '.join(searched_reference_dirs)}.)",
                 flush=True,
             )
     if args.resume:

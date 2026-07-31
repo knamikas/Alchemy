@@ -17,15 +17,15 @@ manually supplied coordinate and MTZ files.
 
 ```bash
 # Smoke test: 9myr has two Cys3-His zinc sites
-conda run -n metal python src/main.py --id 9myr \
+python src/main.py --id 9myr \
     --ccp4-setup <path/to/ccp4.setup-sh>
 
 # Additional examples: 6nlr is a multi-element stress case; 9nxl is metal-free
-conda run -n metal python src/main.py --id 6nlr --ccp4-setup <…>
-conda run -n metal python src/main.py --id 9nxl --ccp4-setup <…>
+python src/main.py --id 6nlr --ccp4-setup <…>
+python src/main.py --id 9nxl --ccp4-setup <…>
 
 # Run IDs from a comma-, whitespace-, or newline-separated file
-conda run -n metal python src/main.py \
+python src/main.py \
     --id-file path/to/pdb_ids.txt --ccp4-setup <…>
 ```
 
@@ -79,13 +79,19 @@ Results are written to:
 - **CCP4** with `mtzfix`, `fft`, `mapmask`, and `edstats` on `PATH`. Pass
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
   `--configure-ccp4`.
-- **Python package:** `gemmi>=0.7.0`, as declared in `pyproject.toml`.
+- **Python:** 3.11 or newer.
+- **Python packages:** `gemmi>=0.7.0` and `numpy>=1.17`, as declared in
+  `pyproject.toml`. Both are required: `gemmi` does not install `numpy`.
 
 Install the Python dependencies in the environment used to run Alchemy:
 
 ```bash
-python -m pip install "gemmi>=0.7.0"
+python -m pip install "gemmi>=0.7.0" "numpy>=1.17"
 ```
+
+Alchemy is run from a clone of this repository, not installed as a package.
+No conda environment is required; any Python 3.11+ environment with the two
+packages above will do.
 
 ## Input modes
 
@@ -386,6 +392,14 @@ database percentile are visibly distinct. A deterministic
 distribution and prevents resumed output from mixing database snapshots.
 `context_warning` is carried into the result as an interpretive annotation and
 does not subtract points.
+
+**No confidence reference is distributed with Alchemy, and the score is not
+finalized.** A fresh clone therefore produces every other output but reports
+that confidence scoring is not enabled; this is expected behaviour, not a
+misconfiguration. Enabling it requires either completing an uncapped
+full-database run, which writes a reference of your own, or supplying one
+explicitly with `--confidence-reference-dir`. Treat the score described in this
+section as provisional and subject to change until it is released.
 
 For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
 the reference produced under the current output directory's
