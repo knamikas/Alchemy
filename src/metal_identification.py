@@ -9,6 +9,7 @@
 
 import math
 import os
+from typing import Any, Iterable, Optional
 
 from structure_analysis import canonical_pdb_residue_id
 
@@ -21,7 +22,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
 
 
-def load_cofactor_ids():
+def load_cofactor_ids() -> set[str]:
     """Load component IDs from Alchemy's fixed bundled catalog."""
     with open(COFACTOR_CATALOG_PATH, encoding="utf-8") as handle:
         cofactor_ids = {
@@ -237,8 +238,12 @@ def _density_observation_id(pdb_id, fields, indices):
 
 
 def extract_metal_statistics(
-    pdb_id, stats_out, metals_set, cofactor_set, structure=None
-):
+    pdb_id: str,
+    stats_out: str,
+    metals_set: Iterable[str],
+    cofactor_set: Iterable[str],
+    structure: Any,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Parse an edstats stats.out file, returning (rows, header).
     `structure` is the shared first-model Gemmi context used by bond analysis.
 
@@ -271,15 +276,15 @@ def extract_metal_statistics(
     analysis.
     """
 
-    if structure is None:
-        raise ValueError(
-            "A parsed structure is required for element-based metal identification"
-        )
     metals_upper = {element.upper() for element in metals_set}
 
     rows = []
-    header = None
-    indices = None
+    # The column names and their positions are one value, not two: they are
+    # produced together by header validation and are meaningless apart. Keeping
+    # them in a single Optional makes the "not yet seen a header" state a
+    # property of one variable, so every use below is reachable only after it
+    # has been set -- which a reader and a type checker can both follow.
+    schema: Optional[tuple[list[str], dict[str, int]]] = None
     residue_row_count = 0
     observed_residues = set()
     with open(stats_out, encoding="utf-8", errors="strict") as f:
@@ -288,17 +293,16 @@ def extract_metal_statistics(
             if not stripped:
                 continue
             fields = stripped.split()
-            if header is None:
+            if schema is None:
                 # first non-empty line is the edstats column header
-                header = fields
-                indices = _validated_edstats_header(header)
+                schema = (fields, _validated_edstats_header(fields))
                 continue
 
             if _is_edstats_separator(fields):
                 continue
 
-            if indices is None:  # defensive; header validation sets this
-                raise ValueError("EDSTATS header was not validated")
+            header, indices = schema
+
             fields = _normalize_edstats_row(fields, header, indices)
             row_model = _validate_edstats_row(fields, header, indices, line_number)
             if row_model != structure.model_analyzed:
@@ -319,12 +323,9 @@ def extract_metal_statistics(
             chain = fields[indices["CI"]]
             resnum = fields[indices["RN"]]
             observed_residues.add((coordinate_resname, chain, resnum))
-            coordinate_lookup = getattr(
-                structure,
-                "residues_for_coordinate_author",
-                structure.residues_for_author,
+            matched_residues = structure.residues_for_coordinate_author(
+                coordinate_resname, chain, resnum
             )
-            matched_residues = coordinate_lookup(coordinate_resname, chain, resnum)
             if not matched_residues:
                 mapping_status = "coordinate_residue_not_found"
             elif len(matched_residues) == 1:
@@ -429,8 +430,9 @@ def extract_metal_statistics(
                     }
                 )
 
-    if header is None:
+    if schema is None:
         raise ValueError("EDSTATS output is empty")
+    header, _indices = schema
     if residue_row_count == 0:
         raise ValueError("EDSTATS output contains no residue rows")
 

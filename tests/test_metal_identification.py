@@ -92,7 +92,11 @@ class _RemappedStructure:
     def residues(self):
         return (self._residues[0],)
 
-    def residues_for_author(self, residue_name, chain_id, resnum):
+    def residues_for_coordinate_author(self, residue_name, chain_id, resnum):
+        # The lookup `extract_metal_statistics` actually performs. Named to
+        # match the real context: a stub that implements a neighbouring method
+        # instead only works while production carries a fallback, and silently
+        # stops exercising the intended path once that fallback is removed.
         if (residue_name, chain_id, resnum) == self._author_key:
             return self._residues
         return self._context.residues_for_author(residue_name, chain_id, resnum)
@@ -908,11 +912,19 @@ def test_blank_lines_between_rows_are_ignored(tmp_path):
 
 
 def test_a_structure_is_required_for_identification(tmp_path):
-    """Element-based identification cannot run against the table alone."""
+    """Element-based identification cannot run against the table alone.
+
+    ``structure`` used to be an optional parameter that raised the moment it
+    was omitted -- a signature that documented the opposite of the contract.
+    It is now required, so the interpreter enforces what the runtime check
+    used to, and the failure names the missing argument.
+    """
     stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "1")])
-    with pytest.raises(ValueError, match="parsed structure is required"):
-        extract_metal_statistics(
-            "test", str(stats), set(METAL_ELEMENTS), set(), structure=None
+    with pytest.raises(TypeError, match="structure"):
+        # The omission is the point of the test, so the type checker's
+        # complaint about it is correct and expected.
+        extract_metal_statistics(  # type: ignore[call-arg]
+            "test", str(stats), set(METAL_ELEMENTS), set()
         )
 
 

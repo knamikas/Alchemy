@@ -17,7 +17,7 @@ import math
 import os
 import sys
 from collections import Counter, defaultdict
-from typing import Any, Dict
+from typing import Any, Optional, Sequence
 
 
 REFERENCE_METADATA_FILE = "metadata.json"
@@ -132,15 +132,6 @@ def _read_csv(path, label):
         return tuple(reader.fieldnames), list(reader)
 
 
-def _write_csv(path, fieldnames, rows):
-    output_dir = os.path.dirname(os.path.abspath(path))
-    os.makedirs(output_dir, exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
 def _bond_summary(rows):
     finite_bonds = []
     reference_covered = 0
@@ -197,7 +188,7 @@ def _orphan_bond_site_input(key, rows):
         missing_reasons.append("zbond_unavailable_for_reference")
     if summary["reference_covered_contact_count"] < summary["assigned_contact_count"]:
         missing_reasons.append("partial_geometry_coverage")
-    values: Dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
+    values: dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
     values.update(
         {
             "pdbID": key[0],
@@ -227,7 +218,9 @@ def _orphan_bond_site_input(key, rows):
     return values
 
 
-def prepare_confidence_inputs(stats_rows, bond_rows):
+def prepare_confidence_inputs(
+    stats_rows: Sequence[dict[str, Any]], bond_rows: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Return deterministic confidence inputs for every selected metal site."""
     bonds_by_site = defaultdict(list)
     for row in bond_rows:
@@ -337,7 +330,7 @@ def complete_confidence_site_count(
             row["confidence_inputs_status"] = "unscorable"
             row["confidence_inputs_missing_reasons"] = "|".join(reasons)
     for index in range(len(rows), selected_site_count):
-        values: Dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
+        values: dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
         values.update(
             {
                 "pdbID": pdb_id,
@@ -357,7 +350,7 @@ def complete_confidence_site_count(
     return completed
 
 
-def severity(value, anchors):
+def severity(value: float, anchors: Sequence[tuple[float, float]]) -> float:
     """Piecewise-linear bounded severity for a non-negative magnitude."""
     if not math.isfinite(value) or value < 0:
         return math.nan
@@ -370,7 +363,9 @@ def severity(value, anchors):
     return anchors[-1][1]
 
 
-def score_site(rszd_magnitude, max_abs_zbond, geometry_coverage):
+def score_site(
+    rszd_magnitude: float, max_abs_zbond: float, geometry_coverage: float
+) -> Optional[dict[str, float]]:
     """Return the provisional score and its auditable weighted components."""
     density_severity = severity(rszd_magnitude, DENSITY_ANCHORS)
     if not math.isfinite(density_severity):
@@ -447,7 +442,7 @@ class ConfidenceReference:
 COVERAGE_POLICY = "invalid_coverage_excluded_v1"
 
 
-def coverage_is_valid(coverage):
+def coverage_is_valid(coverage: float) -> bool:
     """Whether ``coverage`` is usable geometry evidence.
 
     A blank, non-numeric or out-of-range coverage is damaged input, not
@@ -528,7 +523,7 @@ def write_reference(reference_dir, score_counts, input_row_count):
     )
 
 
-def load_reference(reference_dir):
+def load_reference(reference_dir: str) -> "ConfidenceReference":
     """Load and strictly validate a frozen database confidence reference."""
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     with open(metadata_path, encoding="utf-8") as handle:
@@ -631,7 +626,9 @@ def _score_prepared_row(row, reference):
     return output, score
 
 
-def score_against_reference(rows, reference):
+def score_against_reference(
+    rows: Sequence[dict[str, Any]], reference: "ConfidenceReference"
+) -> list[dict[str, Any]]:
     """Score prepared rows against a frozen database reference."""
     return [_score_prepared_row(row, reference)[0] for row in rows]
 
@@ -656,7 +653,7 @@ def _validated_input_reader(handle):
 
 
 def finalize_database_confidence(
-    input_path, output_path, reference_dir
+    input_path: str, output_path: str, reference_dir: str
 ) -> tuple[int, int, int]:
     """Build the database reference and assign final values from compact rows."""
     # Metadata is the completion marker. Remove it before rebuilding so a

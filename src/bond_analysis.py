@@ -29,6 +29,7 @@ import json
 import math
 import os
 import re
+from typing import Any, Mapping, Optional
 
 from metal_elements import METAL_ELEMENTS
 from metal_identification import COFACTOR_CATALOG_PATH, DATA_DIR
@@ -1794,7 +1795,11 @@ def _site_summary(
     }
 
 
-def stats_extra_values(structure, metal=None, summary=None):
+def stats_extra_values(
+    structure: Any,
+    metal: Optional[Any] = None,
+    summary: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
     """Return fixed per-site values appended to an EDSTATS row."""
     summary = summary or {}
     residue = structure.residue_for_atom(metal) if metal is not None else None

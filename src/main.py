@@ -3424,7 +3424,11 @@ def _run(args, run_log):
                                     r["n"],
                                     r.get("confidence_inputs_missing_reason", ""),
                                 )
-                                if confidence_mode == "reference":
+                                # Equivalent to `confidence_mode == "reference"`:
+                                # the mode is set only where a reference has
+                                # just been loaded. Testing the reference
+                                # itself says what the call actually needs.
+                                if confidence_reference is not None:
                                     confidence_rows = score_against_reference(
                                         confidence_rows, confidence_reference
                                     )

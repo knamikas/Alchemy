@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Mapping, Optional, Sequence
 import shutil
 import sys
 
@@ -103,15 +104,21 @@ def save_ccp4_setup(setup_path, config_files=None):
 
 
 def find_ccp4_setup(
-    explicit_setup=None,
-    env=None,
-    config=None,
-    config_files=None,
-    common_candidates=None,
-):
-    env = env or os.environ.copy()
-    config = config or load_ccp4_setup_config(config_files=config_files)
-    common_candidates = common_candidates or COMMON_CCP4_SETUP_CANDIDATES
+    explicit_setup: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+    config: Optional[Mapping[str, str]] = None,
+    config_files: Optional[Sequence[str]] = None,
+) -> Optional[str]:
+    """Locate a CCP4 setup script, or return ``None``.
+
+    ``None`` means two different things and the caller must distinguish them:
+    CCP4 is already on PATH and no script is needed, or nothing could be found
+    at all. ``main.resolve_ccp4_environment`` treats the second as fatal.
+    """
+    env = os.environ.copy() if env is None else env
+    config = (
+        load_ccp4_setup_config(config_files=config_files) if config is None else config
+    )
 
     if explicit_setup:
         return explicit_setup
@@ -125,7 +132,7 @@ def find_ccp4_setup(
     if config.get("ccp4_setup") and os.path.exists(config["ccp4_setup"]):
         return config["ccp4_setup"]
 
-    for candidate in common_candidates:
+    for candidate in COMMON_CCP4_SETUP_CANDIDATES:
         if candidate and os.path.exists(candidate):
             return candidate
 

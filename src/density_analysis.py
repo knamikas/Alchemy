@@ -19,6 +19,8 @@ import shutil
 import struct
 import time
 
+from typing import Any
+
 import gemmi
 import numpy as np
 
@@ -119,7 +121,9 @@ def _coefficient_residual_ratio(observed, expected, *scale_terms):
     return float(np.max(np.abs(observed - expected) / scale))
 
 
-def normalize_refmac_twin_coefficients(mtz_path, output_path):
+def normalize_refmac_twin_coefficients(
+    mtz_path: str, output_path: str
+) -> dict[str, Any]:
     """Write a guarded Refmac-to-EDSTATS coefficient conversion.
 
     REFMAC writes both acentric and centric map coefficients using
