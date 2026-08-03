@@ -655,7 +655,9 @@ def _validated_input_reader(handle):
     return input_columns, reader
 
 
-def finalize_database_confidence(input_path, output_path, reference_dir):
+def finalize_database_confidence(
+    input_path, output_path, reference_dir
+) -> tuple[int, int, int]:
     """Build the database reference and assign final values from compact rows."""
     # Metadata is the completion marker. Remove it before rebuilding so a
     # failed finalization cannot leave an older reference looking current.
@@ -685,7 +687,9 @@ def finalize_database_confidence(input_path, output_path, reference_dir):
     return total, scored, reference.cohort_size
 
 
-def score_file_against_reference(input_path, output_path, reference):
+def score_file_against_reference(
+    input_path, output_path, reference
+) -> tuple[int, int]:
     """Score a compact input CSV against a loaded frozen reference."""
     output_tmp = output_path + ".tmp"
     output_dir = os.path.dirname(os.path.abspath(output_path))
