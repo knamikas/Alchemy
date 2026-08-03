@@ -175,6 +175,11 @@ IDENTIFICATION_REASON_MESSAGES = {
     ),
 }
 
+# CSV column names keep the deposited-data spelling ``pdbID`` even though every
+# Python identifier is ``pdb_id``. The columns are an external contract: users'
+# scripts, notebooks and downstream joins address them by name, and renaming
+# one would break those silently while gaining nothing. The two spellings meet
+# only where a row dict is built, e.g. ``{"pdbID": pdb_id}``.
 MANIFEST_COLUMNS = [
     "pdbID",
     "status",
@@ -446,9 +451,9 @@ def resolve_ccp4_environment(args):
 # --------------------------------------------------------------------------- #
 # Per-entry input preparation
 # --------------------------------------------------------------------------- #
-def entry_dir_for(root, pdbID):
+def entry_dir_for(root, pdb_id):
     """PDB-REDO layout: <root>/<middle two chars of id>/<id>/."""
-    return os.path.join(root, pdbID[1:3], pdbID)
+    return os.path.join(root, pdb_id[1:3], pdb_id)
 
 
 def _gunzip_to(src_gz, dst):
@@ -920,7 +925,7 @@ def _first_existing(*paths):
     return next((path for path in paths if os.path.exists(path)), None)
 
 
-def prepare_inputs(pdbID, entry_dir, work_dir):
+def prepare_inputs(pdb_id, entry_dir, work_dir):
     """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
 
     Prefer the authoritative final mmCIF and convert it under Alchemy's
@@ -929,30 +934,30 @@ def prepare_inputs(pdbID, entry_dir, work_dir):
     format.
     """
     mtz = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.mtz"),
-        os.path.join(entry_dir, f"{pdbID}_final.mtz.gz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
     )
     if mtz is None:
-        raise FileNotFoundError(os.path.join(entry_dir, f"{pdbID}_final.mtz"))
+        raise FileNotFoundError(os.path.join(entry_dir, f"{pdb_id}_final.mtz"))
     if mtz.endswith(".gz"):
-        mtz = _gunzip_to(mtz, os.path.join(work_dir, f"{pdbID}_final.mtz"))
+        mtz = _gunzip_to(mtz, os.path.join(work_dir, f"{pdb_id}_final.mtz"))
 
     cif = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.cif"),
-        os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.cif"),
+        os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
     )
     if cif is not None:
-        pdb = _cif_to_pdb(cif, os.path.join(work_dir, f"{pdbID}_final_from_cif.pdb"))
+        pdb = _cif_to_pdb(cif, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb"))
         return mtz, pdb
 
     pdb = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
-        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
+        os.path.join(entry_dir, f"{pdb_id}_final.pdb.gz"),
     )
     if pdb is None:
-        raise FileNotFoundError(f"{pdbID}_final.cif or {pdbID}_final.pdb")
+        raise FileNotFoundError(f"{pdb_id}_final.cif or {pdb_id}_final.pdb")
     if pdb.endswith(".gz"):
-        pdb = _gunzip_to(pdb, os.path.join(work_dir, f"{pdbID}_final.pdb"))
+        pdb = _gunzip_to(pdb, os.path.join(work_dir, f"{pdb_id}_final.pdb"))
     return mtz, pdb
 
 
@@ -1042,17 +1047,17 @@ def read_map_column_resolution(mtz_path):
     return float(usable_d.max()), float(usable_d.min())
 
 
-def has_final_files(entry_dir, pdbID):
+def has_final_files(entry_dir, pdb_id):
     """Whether an entry has final map coefficients and usable coordinates."""
     mtz = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.mtz"),
-        os.path.join(entry_dir, f"{pdbID}_final.mtz.gz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
     )
     coordinates = _first_existing(
-        os.path.join(entry_dir, f"{pdbID}_final.cif"),
-        os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
-        os.path.join(entry_dir, f"{pdbID}_final.pdb"),
-        os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.cif"),
+        os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
+        os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
+        os.path.join(entry_dir, f"{pdb_id}_final.pdb.gz"),
     )
     return mtz is not None and coordinates is not None
 
@@ -1083,10 +1088,10 @@ def _download_stream(url, dst, timeout=30):
     return dst
 
 
-def download_entry_to_cache(pdbID, cache_root):
+def download_entry_to_cache(pdb_id, cache_root):
     """Download final PDB-REDO files into a mirror-like ``cache_root``."""
-    base = f"https://pdb-redo.eu/db/{pdbID}/"
-    entry = entry_dir_for(cache_root, pdbID)
+    base = f"https://pdb-redo.eu/db/{pdb_id}/"
+    entry = entry_dir_for(cache_root, pdb_id)
     os.makedirs(entry, exist_ok=True)
 
     def try_fetch(name):
@@ -1108,39 +1113,39 @@ def download_entry_to_cache(pdbID, cache_root):
             return True
         return try_fetch(name) or try_fetch(name + ".gz")
 
-    fetch_variant(f"{pdbID}_final.mtz")
-    if not fetch_variant(f"{pdbID}_final.cif"):
-        fetch_variant(f"{pdbID}_final.pdb")
+    fetch_variant(f"{pdb_id}_final.mtz")
+    if not fetch_variant(f"{pdb_id}_final.cif"):
+        fetch_variant(f"{pdb_id}_final.pdb")
     if not os.path.exists(os.path.join(entry, "data.json")):
         try_fetch("data.json")
 
-    if not has_final_files(entry, pdbID):
-        raise FileNotFoundError(f"PDB-REDO entry {pdbID} is missing final model files")
+    if not has_final_files(entry, pdb_id):
+        raise FileNotFoundError(f"PDB-REDO entry {pdb_id} is missing final model files")
 
 
-def ensure_entry_available(pdbID, mirror_root, cache_root):
+def ensure_entry_available(pdb_id, mirror_root, cache_root):
     """Return the root (mirror or cache) containing the final model files.
 
     Preference order: mirror_root (full local mirror) -> cache_root (auto-download).
     Raises FileNotFoundError when unavailable.
     """
     # 1) check full mirror specified by user
-    mirror_entry = entry_dir_for(mirror_root, pdbID)
-    if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdbID):
+    mirror_entry = entry_dir_for(mirror_root, pdb_id)
+    if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdb_id):
         return mirror_root
     # 2) check cache
-    cache_entry = entry_dir_for(cache_root, pdbID)
-    if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdbID):
+    cache_entry = entry_dir_for(cache_root, pdb_id)
+    if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
         return cache_root
     # 3) try to download into cache
-    download_entry_to_cache(pdbID, cache_root)
-    if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdbID):
+    download_entry_to_cache(pdb_id, cache_root)
+    if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
         return cache_root
-    raise FileNotFoundError(pdbID)
+    raise FileNotFoundError(pdb_id)
 
 
 def resolve_manual_inputs(
-    pdbID, pdb_file=None, mtz_file=None, cif_file=None, work_dir=None
+    pdb_id, pdb_file=None, mtz_file=None, cif_file=None, work_dir=None
 ):
     """Return (mtz_path, pdb_path) for a manually supplied local input set."""
     if not mtz_file:
@@ -1151,7 +1156,7 @@ def resolve_manual_inputs(
     if cif_file:
         if not os.path.exists(cif_file):
             raise FileNotFoundError(f"cif file not found: {cif_file}")
-        target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdbID}.pdb")
+        target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdb_id}.pdb")
         return mtz_file, _cif_to_pdb(cif_file, target_pdb)
 
     if pdb_file:
@@ -1289,7 +1294,7 @@ def _init_worker(cfg: Dict[str, Any], inflight=None, log_queue=None) -> None:
     configure_worker_logging(log_queue, level=(cfg or {}).get("log_level", 20))
 
 
-def _announce_inflight(state: str, pdbID: str) -> None:
+def _announce_inflight(state: str, pdb_id: str) -> None:
     """Tell the driver which entry this worker process currently holds.
 
     A worker killed by the OOM killer or felled by a segfault in a compiled
@@ -1306,7 +1311,7 @@ def _announce_inflight(state: str, pdbID: str) -> None:
     if _INFLIGHT is None:
         return
     try:
-        _INFLIGHT.put((state, os.getpid(), pdbID))
+        _INFLIGHT.put((state, os.getpid(), pdb_id))
     except Exception:  # noqa: BLE001 - bookkeeping must never fail an entry
         pass
 
@@ -1316,7 +1321,7 @@ def _announce_inflight(state: str, pdbID: str) -> None:
 TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
 
 
-def _preserve_timeout_log(timeout, pdbID, output_dir):
+def _preserve_timeout_log(timeout, pdb_id, output_dir):
     """Copy a timed-out program's partial log somewhere it will survive.
 
     ``process`` deletes the whole scratch directory unless --keep-intermediates
@@ -1335,7 +1340,7 @@ def _preserve_timeout_log(timeout, pdbID, output_dir):
         destination_dir = os.path.join(output_dir, TIMEOUT_LOG_DIRNAME)
         os.makedirs(destination_dir, exist_ok=True)
         destination = os.path.join(
-            destination_dir, f"{pdbID}_{timeout.tool}_timeout.log"
+            destination_dir, f"{pdb_id}_{timeout.tool}_timeout.log"
         )
         shutil.copyfile(source, destination)
         return destination
@@ -1343,7 +1348,7 @@ def _preserve_timeout_log(timeout, pdbID, output_dir):
         return ""
 
 
-def _initial_result(pdbID, cfg, manual_inputs):
+def _initial_result(pdb_id, cfg, manual_inputs):
     """Return the per-entry result skeleton, pre-filled with run provenance.
 
     Every manifest column is present from the outset so a failure at any stage
@@ -1356,7 +1361,7 @@ def _initial_result(pdbID, cfg, manual_inputs):
     permanently.
     """
     return {
-        "pdbID": pdbID,
+        "pdbID": pdb_id,
         "status": "error",
         "n": 0,
         "runtime": 0.0,
@@ -1401,11 +1406,11 @@ def _drain_inflight(inflight, assignments):
         try:
             if inflight.empty():
                 return
-            state, pid, pdbID = inflight.get()
+            state, pid, pdb_id = inflight.get()
         except (OSError, EOFError):  # pragma: no cover - pipe torn down
             return
         if state == "start":
-            assignments[pid] = pdbID
+            assignments[pid] = pdb_id
         else:
             assignments.pop(pid, None)
 
@@ -1532,27 +1537,29 @@ def _shutdown_pool(pool):
     return True
 
 
-def _worker_death_result(pdbID, cfg, pid):
+def _worker_death_result(pdb_id, cfg, pid):
     """Synthesize the retryable result a killed worker could not return."""
-    result = _initial_result(pdbID, cfg, cfg.get("manual_inputs"))
+    result = _initial_result(pdb_id, cfg, cfg.get("manual_inputs"))
     result.update(
         status="error",
         retryable=True,
         reason_codes=["worker_process_died"],
         error=(
             f"worker process {pid} terminated without returning a result "
-            f"(out-of-memory kill or crash); {pdbID} was not analyzed"
+            f"(out-of-memory kill or crash); {pdb_id} was not analyzed"
         ),
     )
     return result
 
 
-def _resolve_entry_dir(pdbID, cfg):
+def _resolve_entry_dir(pdb_id, cfg):
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
     if cfg["allow_download"]:
-        used_root = ensure_entry_available(pdbID, cfg["mirror_root"], cfg["cache_root"])
-        return entry_dir_for(used_root, pdbID)
-    return entry_dir_for(cfg["root"], pdbID)
+        used_root = ensure_entry_available(
+            pdb_id, cfg["mirror_root"], cfg["cache_root"]
+        )
+        return entry_dir_for(used_root, pdb_id)
+    return entry_dir_for(cfg["root"], pdb_id)
 
 
 def _identification_reason_codes(rows):
@@ -1661,7 +1668,7 @@ def _finalize_result(
     )
 
 
-def process(pdbID):
+def process(pdb_id):
     """Run one initialized worker entry and return its result dictionary."""
     cfg = _CFG
     if cfg is None:
@@ -1672,15 +1679,15 @@ def process(pdbID):
     work_dir: Optional[str] = None
     manual_inputs = cfg.get("manual_inputs")
     data_json = None
-    result = _initial_result(pdbID, cfg, manual_inputs)
-    _announce_inflight("start", pdbID)
+    result = _initial_result(pdb_id, cfg, manual_inputs)
+    _announce_inflight("start", pdb_id)
     try:
         if manual_inputs:
             work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"]
+                prefix=f".alchemy-{pdb_id}-", dir=cfg["output_dir"]
             )
             mtz, pdb = resolve_manual_inputs(
-                pdbID,
+                pdb_id,
                 pdb_file=manual_inputs.get("pdb_file"),
                 mtz_file=manual_inputs.get("mtz_file"),
                 cif_file=manual_inputs.get("cif_file"),
@@ -1692,14 +1699,14 @@ def process(pdbID):
         else:
             # Resolved before any scratch space is created, so a missing entry
             # never leaves a temporary directory behind.
-            entry = _resolve_entry_dir(pdbID, cfg)
+            entry = _resolve_entry_dir(pdb_id, cfg)
             if not os.path.isdir(entry):
                 result.update(status="skip", error="entry dir missing")
                 return result
             work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"]
+                prefix=f".alchemy-{pdb_id}-", dir=cfg["output_dir"]
             )
-            mtz, pdb = prepare_inputs(pdbID, entry, work_dir)
+            mtz, pdb = prepare_inputs(pdb_id, entry, work_dir)
             data_reshi = read_resolution(entry, mtz)
         density_data_json = (
             data_json if manual_inputs else os.path.join(entry, "data.json")
@@ -1707,13 +1714,13 @@ def process(pdbID):
         pdb_redo_is_twin = read_pdb_redo_is_twin(density_data_json)
         map_reslo, map_reshi = read_map_column_resolution(mtz)
         source_pdb = pdb
-        source_coordinate_path = _source_coordinate_path(cfg, pdbID, entry, source_pdb)
+        source_coordinate_path = _source_coordinate_path(cfg, pdb_id, entry, source_pdb)
         source_format, analysis_format, converted = _coordinate_provenance(
             cfg, source_coordinate_path
         )
-        model1_pdb = os.path.join(work_dir, f"{pdbID}_model1.pdb")
+        model1_pdb = os.path.join(work_dir, f"{pdb_id}_model1.pdb")
         if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
-            model1_pdb = os.path.join(work_dir, f"{pdbID}_analysis_model1.pdb")
+            model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
         pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
         result.update(
             source_coordinate_format=source_format,
@@ -1722,7 +1729,7 @@ def process(pdbID):
             source_coordinate_path=source_coordinate_path,
             analysis_coordinate_path=pdb,
         )
-        structure = load_structure(pdbID, pdb, source_model_count=input_model_count)
+        structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
         result["timings"]["input_structure_s"] = round(time.monotonic() - t0, 3)
         result.update(
             analysis_coordinate_format=structure.analysis_coordinate_format,
@@ -1750,7 +1757,7 @@ def process(pdbID):
         density_started = time.monotonic()
         try:
             res = run_density_analysis(
-                pdbID,
+                pdb_id,
                 mtz,
                 pdb,
                 work_dir,
@@ -1769,7 +1776,7 @@ def process(pdbID):
             # generic handler, so a stalled CCP4 install is visible in the
             # manifest instead of looking like an unexplained crash.
             rows, header = [], []
-            kept_log = _preserve_timeout_log(exc, pdbID, cfg["output_dir"])
+            kept_log = _preserve_timeout_log(exc, pdb_id, cfg["output_dir"])
             result.update(
                 retryable=True,
                 reason_codes=["ccp4_tool_timeout"],
@@ -1806,7 +1813,7 @@ def process(pdbID):
                 )
             statistics_started = time.monotonic()
             rows, header = extract_metal_statistics(
-                pdbID,
+                pdb_id,
                 res["stats_out"],
                 METALS_SET,
                 cfg["cofactors"],
@@ -1841,7 +1848,7 @@ def process(pdbID):
             try:
                 (bond_rows, candidate_rows, site_summaries, bond_meta) = (
                     run_bond_analysis(
-                        pdbID,
+                        pdb_id,
                         pdb,
                         rows,
                         header,
@@ -1903,7 +1910,7 @@ def process(pdbID):
                 time.monotonic() - cleanup_started, 3
             )
         result["runtime"] = round(time.monotonic() - t0, 2)
-        _announce_inflight("end", pdbID)
+        _announce_inflight("end", pdb_id)
     return result
 
 
@@ -1945,7 +1952,7 @@ def load_done(
                         "0",
                         "no",
                     )
-                    pdbID = row.get("pdbID", "").strip().lower()
+                    pdb_id = row.get("pdbID", "").strip().lower()
                     bonds_complete = not bonds_required or (
                         bond_output_present
                         and candidate_output_present
@@ -1953,10 +1960,10 @@ def load_done(
                         and row.get("n_candidates", "").strip() != ""
                     )
                     protected_terminal = status == "ok" or (
-                        terminal_partial and pdbID not in retry_partial_ids
+                        terminal_partial and pdb_id not in retry_partial_ids
                     )
-                    if protected_terminal and bonds_complete and pdbID:
-                        done.add(pdbID)
+                    if protected_terminal and bonds_complete and pdb_id:
+                        done.add(pdb_id)
     return done
 
 
@@ -2421,19 +2428,19 @@ def _select_entry_ids(args, cache_root):
     """
     root = args.pdb_redo_root
     if args.pdb_file or args.mtz_file or args.cif_file:
-        pdbID = (
+        pdb_id = (
             args.id
             or infer_pdb_id_from_path(args.cif_file)
             or infer_pdb_id_from_path(args.pdb_file)
             or infer_pdb_id_from_path(args.mtz_file)
         )
-        if not pdbID:
+        if not pdb_id:
             raise _DriverError(
                 "Manual input mode requires --id or a file name that contains "
                 "a 4-character PDB id."
             )
         return (
-            [pdbID],
+            [pdb_id],
             root,
             {
                 "pdb_file": args.pdb_file,

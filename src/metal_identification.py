@@ -237,7 +237,7 @@ def _density_observation_id(pdb_id, fields, indices):
 
 
 def extract_metal_statistics(
-    pdbID, stats_out, metals_set, cofactor_set, structure=None
+    pdb_id, stats_out, metals_set, cofactor_set, structure=None
 ):
     """Parse an edstats stats.out file, returning (rows, header).
     `structure` is the shared first-model Gemmi context used by bond analysis.
@@ -356,13 +356,13 @@ def extract_metal_statistics(
                     output_fields[indices["CI"]] = residue.chain_id
                     output_fields[indices["RN"]] = residue.resnum
                 density_observation_id = _density_observation_id(
-                    pdbID, output_fields, indices
+                    pdb_id, output_fields, indices
                 )
                 output_chain = output_fields[indices["CI"]]
                 output_resnum = output_fields[indices["RN"]]
                 rows.append(
                     {
-                        "pdbID": pdbID,
+                        "pdbID": pdb_id,
                         "category": category,
                         "resname": resname,
                         "chain": output_chain,
@@ -403,11 +403,11 @@ def extract_metal_statistics(
                 output_chain = output_fields[indices["CI"]]
                 output_resnum = output_fields[indices["RN"]]
                 density_observation_id = _density_observation_id(
-                    pdbID, output_fields, indices
+                    pdb_id, output_fields, indices
                 )
                 rows.append(
                     {
-                        "pdbID": pdbID,
+                        "pdbID": pdb_id,
                         "category": "cofactor",
                         "resname": resname,
                         "chain": output_chain,

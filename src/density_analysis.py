@@ -266,7 +266,7 @@ def normalize_refmac_twin_coefficients(mtz_path, output_path):
 
 
 def run_density_analysis(
-    pdbID,
+    pdb_id,
     mtz_path,
     pdb_path,
     out_dir,
@@ -307,14 +307,14 @@ def run_density_analysis(
         )
 
     os.makedirs(out_dir, exist_ok=True)
-    fixed_mtz = os.path.join(out_dir, f"{pdbID}_mtzfix.mtz")
-    mtzfix_log = os.path.join(out_dir, f"{pdbID}_mtzfix.log")
-    fo_map = os.path.join(out_dir, f"{pdbID}_fo.map")
-    df_map = os.path.join(out_dir, f"{pdbID}_df.map")
-    stats_out = os.path.join(out_dir, f"{pdbID}_stats.out")
-    rszd = os.path.join(out_dir, f"{pdbID}_rszd.pdb")
-    qq_out = os.path.join(out_dir, f"{pdbID}_qq.out")
-    twin_normalized_mtz = os.path.join(out_dir, f"{pdbID}_twin_edstats.mtz")
+    fixed_mtz = os.path.join(out_dir, f"{pdb_id}_mtzfix.mtz")
+    mtzfix_log = os.path.join(out_dir, f"{pdb_id}_mtzfix.log")
+    fo_map = os.path.join(out_dir, f"{pdb_id}_fo.map")
+    df_map = os.path.join(out_dir, f"{pdb_id}_df.map")
+    stats_out = os.path.join(out_dir, f"{pdb_id}_stats.out")
+    rszd = os.path.join(out_dir, f"{pdb_id}_rszd.pdb")
+    qq_out = os.path.join(out_dir, f"{pdb_id}_qq.out")
+    twin_normalized_mtz = os.path.join(out_dir, f"{pdb_id}_twin_edstats.mtz")
 
     timings = {}
 
@@ -327,7 +327,7 @@ def run_density_analysis(
             )
         cmd = [resolved, *cmd[1:]]
         program = os.path.basename(resolved)
-        logger.debug("%s: running %s (budget %gs)", pdbID, program, timeout_s)
+        logger.debug("%s: running %s (budget %gs)", pdb_id, program, timeout_s)
         started = time.monotonic()
         try:
             # The budget is per program, not per entry: an entry running four
@@ -346,7 +346,7 @@ def run_density_analysis(
         except subprocess.TimeoutExpired as exc:
             logger.error(
                 "%s: %s exceeded its %gs budget; partial log kept at %s",
-                pdbID,
+                pdb_id,
                 program,
                 timeout_s,
                 log_path,
@@ -368,14 +368,14 @@ def run_density_analysis(
             # "ended after" rather than "finished": this runs on the timeout
             # path too, where the program was killed rather than completing.
             logger.debug(
-                "%s: %s ended after %.3fs", pdbID, program, timings[timing_name]
+                "%s: %s ended after %.3fs", pdb_id, program, timings[timing_name]
             )
         if proc.returncode != 0:
             detail = truncate(proc.stderr or "")
             detail_suffix = f": {detail}" if detail else ""
             logger.warning(
                 "%s: %s exited %d; see %s%s",
-                pdbID,
+                pdb_id,
                 program,
                 proc.returncode,
                 log_path,
@@ -389,11 +389,12 @@ def run_density_analysis(
                     mtzfix_log_text = ""
                 if "FAILED a test on re-take" in mtzfix_log_text:
                     raise MtzfixValidationError(
-                        f"MTZFIX consistency re-test failed for {pdbID}{detail_suffix}",
+                        "MTZFIX consistency re-test failed for "
+                        f"{pdb_id}{detail_suffix}",
                         timings=timings,
                     )
             raise RuntimeError(
-                f"{cmd[0]} failed for {pdbID} (rc={proc.returncode}): "
+                f"{cmd[0]} failed for {pdb_id} (rc={proc.returncode}): "
                 f"see {log_path}{detail_suffix}"
             )
 
@@ -441,7 +442,7 @@ def run_density_analysis(
         mtzfix_applied = False
     elif os.path.exists(fixed_mtz):
         if not os.path.isfile(fixed_mtz) or os.path.getsize(fixed_mtz) == 0:
-            raise RuntimeError(f"mtzfix produced an invalid corrected MTZ for {pdbID}")
+            raise RuntimeError(f"mtzfix produced an invalid corrected MTZ for {pdb_id}")
         map_mtz = fixed_mtz
         mtzfix_applied = True
     else:
@@ -452,7 +453,7 @@ def run_density_analysis(
         _run(
             ["fft", "HKLIN", map_mtz, "MAPOUT", map_path],
             f"labi F1={f_label} PHI={phi_label}\nGRID SAMP=5\n",
-            f"{pdbID}_fft_{log_suffix}.log",
+            f"{pdb_id}_fft_{log_suffix}.log",
             timing_name,
         )
 
@@ -460,17 +461,17 @@ def run_density_analysis(
         _run(
             ["mapmask", "MAPIN", full_map, "MAPOUT", envelope_map, "XYZIN", pdb_path],
             f"BORDER {MODEL_ENVELOPE_BORDER_ANGSTROM}\nEND\n",
-            f"{pdbID}_mapmask_{log_suffix}.log",
+            f"{pdb_id}_mapmask_{log_suffix}.log",
             timing_name,
         )
 
     def _map_size(path, stage):
         if not os.path.isfile(path):
-            raise RuntimeError(f"{stage} produced no map file for {pdbID}: {path}")
+            raise RuntimeError(f"{stage} produced no map file for {pdb_id}: {path}")
         size = os.path.getsize(path)
         if size == 0:
             raise RuntimeError(
-                f"{stage} produced an empty map file for {pdbID}: {path}"
+                f"{stage} produced an empty map file for {pdb_id}: {path}"
             )
         return size
 
@@ -487,7 +488,7 @@ def run_density_analysis(
             header = handle.read(1024)
         if len(header) != 1024:
             raise RuntimeError(
-                f"MAPMASK produced an invalid CCP4 map header for {pdbID}: {path}"
+                f"MAPMASK produced an invalid CCP4 map header for {pdb_id}: {path}"
             )
         for byte_order in ("<", ">"):
             words = struct.unpack(f"{byte_order}256i", header)
@@ -509,7 +510,7 @@ def run_density_analysis(
                 start >= grid_size for start, grid_size in zip(xyz_starts, sampling)
             )
         raise RuntimeError(
-            f"MAPMASK produced an unrecognized CCP4 map header for {pdbID}: {path}"
+            f"MAPMASK produced an unrecognized CCP4 map header for {pdb_id}: {path}"
         )
 
     map_scope_used = map_scope
@@ -523,7 +524,7 @@ def run_density_analysis(
         )
         edstats_map_bytes = full_map_bytes
     else:
-        full_fo_map = os.path.join(out_dir, f"{pdbID}_fo_full.map")
+        full_fo_map = os.path.join(out_dir, f"{pdb_id}_fo_full.map")
         _fft(full_fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
         _model_envelope(full_fo_map, fo_map, "fo", "mapmask_2fofc_s")
         full_fo_bytes = _map_size(full_fo_map, "2mFo-DFc FFT")
@@ -552,14 +553,14 @@ def run_density_analysis(
             edstats_map_bytes += envelope_fo_bytes
             if not keep_full_maps:
                 os.remove(full_fo_map)
-            full_df_map = os.path.join(out_dir, f"{pdbID}_df_full.map")
+            full_df_map = os.path.join(out_dir, f"{pdb_id}_df_full.map")
             _fft(full_df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
             _model_envelope(full_df_map, df_map, "df", "mapmask_fofc_s")
             full_df_bytes = _map_size(full_df_map, "mFo-DFc FFT")
             envelope_df_bytes = _map_size(df_map, "mFo-DFc MAPMASK")
             if full_df_bytes != full_fo_bytes or envelope_df_bytes != envelope_fo_bytes:
                 raise RuntimeError(
-                    f"density map extents differ for {pdbID}: "
+                    f"density map extents differ for {pdb_id}: "
                     f"full={full_fo_bytes}/{full_df_bytes}, "
                     f"model-envelope={envelope_fo_bytes}/{envelope_df_bytes}"
                 )
@@ -586,12 +587,12 @@ def run_density_analysis(
             qq_out,
         ],
         f"reslo={reslo},reshi={reshi}\n",
-        f"{pdbID}_edstats.log",
+        f"{pdb_id}_edstats.log",
         "edstats_s",
     )
 
     if not os.path.exists(stats_out):
-        raise RuntimeError(f"edstats produced no stats file for {pdbID}")
+        raise RuntimeError(f"edstats produced no stats file for {pdb_id}")
     return {
         "stats_out": stats_out,
         "rszd": rszd,
@@ -643,7 +644,7 @@ if __name__ == "__main__":
     args = p.parse_args()
     print(
         run_density_analysis(
-            args.pdbID,
+            args.pdb_id,
             args.mtz,
             args.pdb,
             args.out_dir,

@@ -403,7 +403,7 @@ _STUB_MARKER_DIR = ""
 _DRIVER_HARD_TIMEOUT_S = 60.0
 
 
-def _announce(state, pdbID):
+def _announce(state, pdb_id):
     """Announce like a real worker, on builds that have the mechanism.
 
     Deliberately tolerant of a missing ``_announce_inflight``: on a build
@@ -412,12 +412,12 @@ def _announce(state, pdbID):
     never finishes -- instead of on an AttributeError raised inside the test's
     own fake, which would prove nothing about the driver.
     """
-    getattr(main, "_announce_inflight", lambda *args: None)(state, pdbID)
+    getattr(main, "_announce_inflight", lambda *args: None)(state, pdb_id)
 
 
-def _first_visit(pdbID):
+def _first_visit(pdb_id):
     """True the first time this entry is seen, across every worker process."""
-    marker = os.path.join(_STUB_MARKER_DIR, f"visited-{pdbID}")
+    marker = os.path.join(_STUB_MARKER_DIR, f"visited-{pdb_id}")
     try:
         os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     except FileExistsError:
@@ -440,7 +440,7 @@ def _kill_self_after(delay):
     threading.Thread(target=kill, daemon=True).start()
 
 
-def _stub_process(pdbID):
+def _stub_process(pdb_id):
     """Stand in for ``main.process``: no CCP4, no downloads, scripted deaths.
 
     Every entry announces itself exactly as the real worker does, so the driver
@@ -449,14 +449,14 @@ def _stub_process(pdbID):
     cfg = main._CFG
     if cfg is None:  # pragma: no cover - would mean the initializer never ran
         raise RuntimeError("worker configuration has not been initialized")
-    step = _STUB_SCRIPT.get(pdbID, {})
+    step = _STUB_SCRIPT.get(pdb_id, {})
     runtime = float(step.get("runtime", 0.02))
-    result = main._initial_result(pdbID, cfg, cfg.get("manual_inputs"))
+    result = main._initial_result(pdb_id, cfg, cfg.get("manual_inputs"))
 
     die = step.get("die")
-    if die and _first_visit(pdbID):
+    if die and _first_visit(pdb_id):
         if die == "announced":
-            _announce("start", pdbID)
+            _announce("start", pdb_id)
         # A "silent" worker dies without ever naming its entry, so the driver
         # can only recover it from the stall fallback.
         # The pause is long enough for the driver to have taken a roster
@@ -464,9 +464,9 @@ def _stub_process(pdbID):
         time.sleep(runtime)
         os.kill(os.getpid(), signal.SIGKILL)
 
-    _announce("start", pdbID)
+    _announce("start", pdb_id)
     time.sleep(runtime)
-    _announce("end", pdbID)
+    _announce("end", pdb_id)
 
     if step.get("claim"):
         # This worker finished its own entry and then, before dying, leaves the
@@ -867,8 +867,8 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
 # --------------------------------------------------------------------------- #
 def _spawn_task(payload):
     """Announce, then either finish or die abnormally, inside a spawn worker."""
-    action, pdbID = payload
-    main._announce_inflight("start", pdbID)
+    action, pdb_id = payload
+    main._announce_inflight("start", pdb_id)
     if action == "die":
         # An abrupt exit with no result, the way a segfault or OOM kill ends a
         # worker; SIGKILL is not portable, os._exit is. The pause keeps the
@@ -876,10 +876,10 @@ def _spawn_task(payload):
         # that runs for a while before being killed would.
         time.sleep(0.5)
         os._exit(9)
-    main._announce_inflight("end", pdbID)
+    main._announce_inflight("end", pdb_id)
     cfg = main._CFG
     assert cfg is not None
-    return (pdbID, cfg["output_dir"], sorted(cfg["cofactors"])[:1])
+    return (pdb_id, cfg["output_dir"], sorted(cfg["cofactors"])[:1])
 
 
 def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
@@ -960,7 +960,7 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
 # --------------------------------------------------------------------------- #
 # SIGTERM to the driver must stop its workers, not orphan them
 # --------------------------------------------------------------------------- #
-def _never_finishing_process(pdbID):
+def _never_finishing_process(pdb_id):
     """A per-entry stub that outlives the signal, so workers are busy.
 
     Module level, not a closure: ``Pool`` pickles the task callable even under
@@ -968,7 +968,7 @@ def _never_finishing_process(pdbID):
     object" before any worker starts.
     """
     time.sleep(30)
-    return main._initial_result(pdbID, main._CFG, None)
+    return main._initial_result(pdb_id, main._CFG, None)
 
 
 def _sigterm_driver_child(argv, ready, channel):

@@ -2035,7 +2035,7 @@ def _candidate_row(pdb_id, structure, metal, candidate):
 
 
 def run_bond_analysis(
-    pdbID,
+    pdb_id,
     pdb_path,
     stats_rows,
     header,
@@ -2056,7 +2056,7 @@ def run_bond_analysis(
     Missing DPI does not prevent identification or distance reporting.
     """
     if structure is None:
-        structure = load_structure(pdbID, pdb_path)
+        structure = load_structure(pdb_id, pdb_path)
 
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
     metadata = {
@@ -2182,12 +2182,12 @@ def run_bond_analysis(
         parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
         rows.extend(
             _bond_row(
-                pdbID, structure, metal, contact, dpi, resolution, sigma, parent_type
+                pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_type
             )
             for contact in primary_contacts
         )
         candidate_rows.extend(
-            _candidate_row(pdbID, structure, metal, candidate)
+            _candidate_row(pdb_id, structure, metal, candidate)
             for candidate in primary_candidates
         )
 
