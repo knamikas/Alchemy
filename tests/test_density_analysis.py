@@ -1,6 +1,8 @@
 """Guarded density-map coefficient normalization and twin routing."""
 
 import json
+import os
+import struct
 from types import SimpleNamespace
 
 import gemmi
@@ -306,3 +308,190 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     assert {timeout for _, timeout in seen} == {123}, (
         f"every program must receive the same per-program budget: {seen}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Model-envelope cropping
+# --------------------------------------------------------------------------- #
+#
+# ``model-envelope`` is the *default* map scope, but every other offline test
+# here drives ``full``: the only model-envelope coverage lived in the ccp4+slow
+# integration lane, which does not run in CI. These tests reach all three of its
+# outcomes -- crop accepted, crop larger than the original, crop positioned
+# where EDSTATS cannot read it -- with a stub standing in for MAPMASK.
+
+
+def _ccp4_map(size, *, starts=(0, 0, 0), sampling=(64, 64, 64), mode=2):
+    """A byte string that ``_map_extent_requires_full_map`` will parse.
+
+    Only the first 1024 bytes are a real CCP4 header; the remainder is padding
+    that makes the file a chosen size, which is all ``_map_size`` inspects.
+    """
+    words = [0] * 256
+    words[0:3] = [10, 10, 10]  # NC, NR, NS
+    words[3] = mode
+    words[4:7] = list(starts)  # NCSTART, NRSTART, NSSTART
+    words[7:10] = list(sampling)  # NX, NY, NZ
+    words[16:19] = [1, 2, 3]  # MAPC, MAPR, MAPS
+    header = struct.pack("<256i", *words)
+    if size < len(header):
+        raise ValueError("a CCP4 map cannot be smaller than its header")
+    return header + b"\0" * (size - len(header))
+
+
+def _envelope_run_factory(*, full_size, envelope_size, envelope_starts=(0, 0, 0)):
+    """A stub CCP4 suite whose FFT and MAPMASK outputs have chosen extents."""
+
+    def fake_run(
+        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
+    ):
+        program = cmd[0].rsplit("/", 1)[-1]
+        if program == "fft":
+            with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
+                handle.write(_ccp4_map(full_size))
+        elif program == "mapmask":
+            with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
+                handle.write(_ccp4_map(envelope_size, starts=envelope_starts))
+        elif program == "edstats":
+            with open(cmd[cmd.index("OUT") + 1], "w", encoding="utf-8") as handle:
+                handle.write("stats\n")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    return fake_run
+
+
+def _run_envelope(tmp_path, monkeypatch, fake_run, **kwargs):
+    source = tmp_path / "source.mtz"
+    pdb = tmp_path / "model.pdb"
+    source.write_bytes(b"source")
+    pdb.write_text("END\n", encoding="ascii")
+    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
+    monkeypatch.setattr(density.subprocess, "run", fake_run)
+    return density.run_density_analysis(
+        "1abc",
+        str(source),
+        str(pdb),
+        str(tmp_path / "out"),
+        20.0,
+        2.0,
+        map_scope="model-envelope",
+        pdb_redo_is_twin=False,
+        **kwargs,
+    )
+
+
+def test_a_usable_envelope_is_cropped_and_the_full_maps_discarded(
+    tmp_path, monkeypatch
+):
+    """The default path: a smaller, readable crop is what EDSTATS receives."""
+    result = _run_envelope(
+        tmp_path,
+        monkeypatch,
+        _envelope_run_factory(full_size=8192, envelope_size=2048),
+    )
+
+    assert result["density_map_scope_used"] == "model-envelope"
+    assert result["full_map_bytes"] == 8192 * 2
+    assert result["edstats_map_bytes"] == 2048 * 2
+    assert not os.path.exists(tmp_path / "out" / "1abc_fo_full.map"), (
+        "the pre-crop map is redundant once cropping succeeded"
+    )
+    assert not os.path.exists(tmp_path / "out" / "1abc_df_full.map")
+
+
+def test_keeping_intermediates_retains_the_pre_crop_maps(tmp_path, monkeypatch):
+    """``--keep-intermediates`` must preserve what cropping replaced."""
+    _run_envelope(
+        tmp_path,
+        monkeypatch,
+        _envelope_run_factory(full_size=8192, envelope_size=2048),
+        keep_full_maps=True,
+    )
+
+    assert os.path.exists(tmp_path / "out" / "1abc_fo_full.map")
+    assert os.path.exists(tmp_path / "out" / "1abc_df_full.map")
+
+
+def test_an_envelope_larger_than_the_original_falls_back_to_the_full_map(
+    tmp_path, monkeypatch
+):
+    """A model spanning the cell can produce a crop bigger than its input.
+
+    Cropping is then pointless, so the original is kept and MAPMASK is skipped
+    for the second map.
+    """
+    result = _run_envelope(
+        tmp_path,
+        monkeypatch,
+        _envelope_run_factory(full_size=2048, envelope_size=4096),
+    )
+
+    assert result["density_map_scope_used"] == "full-size-fallback"
+    assert result["edstats_map_bytes"] == result["full_map_bytes"]
+    assert os.path.getsize(tmp_path / "out" / "1abc_fo.map") == 2048, (
+        "the retained map must be the original, not the larger crop"
+    )
+
+
+def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
+    tmp_path, monkeypatch
+):
+    """EDSTATS wraps lookups when a stored axis starts past the positive edge.
+
+    A translated model can make MAPMASK emit exactly that, so the crop is
+    smaller yet unusable -- a case size alone cannot detect.
+    """
+    result = _run_envelope(
+        tmp_path,
+        monkeypatch,
+        _envelope_run_factory(
+            full_size=8192,
+            envelope_size=2048,
+            # Exactly at the grid size: the first start the check rejects.
+            # A larger value would still pass if `>=` were weakened to `>`.
+            envelope_starts=(64, 0, 0),
+        ),
+    )
+
+    assert result["density_map_scope_used"] == "full-extent-fallback"
+    assert result["edstats_map_bytes"] == result["full_map_bytes"]
+    assert os.path.getsize(tmp_path / "out" / "1abc_fo.map") == 8192
+
+
+def test_a_crop_starting_inside_the_cell_is_accepted(tmp_path, monkeypatch):
+    """The last start the check accepts, one below the grid size.
+
+    Paired with the test above, this pins the comparison at exactly the
+    boundary: 63 must be accepted and 64 rejected, so neither `>` nor `>`
+    widened to `>=` on the other side could pass both.
+    """
+    result = _run_envelope(
+        tmp_path,
+        monkeypatch,
+        _envelope_run_factory(
+            full_size=8192, envelope_size=2048, envelope_starts=(63, 0, 0)
+        ),
+    )
+
+    assert result["density_map_scope_used"] == "model-envelope"
+
+
+def test_an_unreadable_map_header_is_reported_rather_than_guessed(
+    tmp_path, monkeypatch
+):
+    """A truncated or unrecognizable header must not be silently accepted."""
+
+    def fake_run(
+        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
+    ):
+        program = cmd[0].rsplit("/", 1)[-1]
+        if program == "fft":
+            with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
+                handle.write(_ccp4_map(8192))
+        elif program == "mapmask":
+            with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
+                handle.write(b"\0" * 512)  # shorter than a CCP4 header
+        return SimpleNamespace(returncode=0, stderr="")
+
+    with pytest.raises(RuntimeError, match="invalid CCP4 map header"):
+        _run_envelope(tmp_path, monkeypatch, fake_run)

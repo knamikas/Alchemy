@@ -671,16 +671,28 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 
 ## Progress
 
+**Phases A and B are complete** — the production-readiness gate. Six of 26 commits.
+
 | Commit | Landed as | Notes |
 |---|---|---|
-| 1 · `Fix the setup documentation` | `02d3261` | numpy added to README and `main.py`; `conda run -n metal` removed from all six lines; confidence documented as unreleased and its runtime message reworded. Five tests in `tests/test_documentation.py`, each verified to fail on the original defect. |
-| 2 · `Make the repository configuration honest` | `10009fa` | `packages = []` / `py-modules = []`; inert `package-data` table deleted; `*.egg-info/` and `build/` ignored; redundant `sys.path` block removed from `helpers.py`; `DATA_DIR` single-sourced with both file paths derived from it. Two tests assert the built wheel carries only `alchemy-*.dist-info/` members. |
+| 1 · `Fix the setup documentation` | `02d3261` | numpy added to README and `main.py`; `conda run -n metal` removed from all six lines; confidence documented as unreleased and its runtime message reworded. Five tests, each verified to fail on the original defect. |
+| 2 · `Make the repository configuration honest` | `10009fa` | `packages = []` / `py-modules = []`; inert `package-data` table deleted; `*.egg-info/` and `build/` ignored; redundant `sys.path` block removed; `DATA_DIR` single-sourced. Two tests assert the built wheel carries only `alchemy-*.dist-info/` members. |
 | — · 1.8 coverage defect | `36e5dbf` | Out of plan by exception; see 1.8. Production reference re-finalized to `…0fcf30bc2ff40fba1551`, distribution byte-identical. |
+| 3 · `Add project governance files and gates` | `878f334` | `ruff` (E/W/F/B at line-length 88) and `pytest-cov` with a 75% floor, both enforced in CI; version single-sourced to `src/_version.py` via `dynamic = ["version"]`. **The licence is still outstanding** — the only part of commit 3 not done. |
+| 4 · `Apply ruff format` | `9e64b1f` | Whole tree formatted, 24 files. Verified semantics-preserving by comparing the AST of every file before and after. Ruff pinned to `0.16.1` in CI, with `ruff format --check` enforcing it. |
+| 5 · `Bound every external process with a timeout` | `7888153` | Three budgets: CCP4 900 s (per program, `--ccp4-timeout`), setup shell 30 s, provenance 1 s — each with its own outcome. A stalled program becomes a retryable `ccp4_tool_timeout`, its partial log copied to `<output-dir>/ccp4_timeout_logs/`. |
+| — · `Annotate confidence scoring return values` | `bbad75f` | Landed outside the plan. |
+| 6 · `Route diagnostics through logging` | `6bda639` | `src/run_logging.py`; 35 of 46 prints converted, the rest being the progress line, final summary and interrupt message. Workers log over a queue the driver re-emits. `-v` / `--quiet` / `--log-file`. Scattered `[:300]` slices replaced by two named bounds. |
 
-Suite: **867 passed, 26 skipped** offline (was 853 at review time). Next up is Phase B; commit 3 is blocked on choosing a licence.
+Suite: **924 passed, 26 skipped** offline, coverage **80.2%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
+
+**Two decisions resolved since the review.** 1.8 was fixed rather than gated, because full-database runs finalize confidence automatically (see 1.8). The CCP4 integration lane is knowingly skipped for want of an always-on runner (see 1.7), which is why Phase C is a prerequisite rather than an improvement: nothing in CI exercises the density or bond path that Phases E–G restructure.
+
+**Still open:** the licence, and whether editing `metal_distances_info.txt` should invalidate frozen references (2.5).
+
+Next up is Phase C.
 
 ---
-
 
 **There is no CI safety net.** The CCP4 lane is knowingly skipped (1.7), so every commit below is defended by the offline suite alone. Commits 7 and 8 close the two coverage holes that sit directly under the code Phases E–G restructure; they are prerequisites, not improvements. And the 25 end-to-end tests should be run by hand before any significant merge — they are the only check that exercises real maps.* Where a phase replaces a roadmap step, the heading says so.*
 
