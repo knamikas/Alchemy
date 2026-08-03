@@ -124,7 +124,7 @@ def entry_file(cache_root: str, pdb_id: str, suffix: str) -> str:
     expected = _ENTRY_SNAPSHOT_SHA256.get(pdb_id)
     if expected is None or suffix not in expected:
         raise KeyError(f"{pdb_id}/{suffix} is not part of the integration snapshot")
-    return os.path.join(main.entry_dir_for(cache_root, pdb_id), suffix)
+    return os.path.join(inputs.entry_dir_for(cache_root, pdb_id), suffix)
 
 
 def _entry_ready(cache_root: str, pdb_id: str) -> bool:
@@ -237,7 +237,7 @@ def entry_cache(tmp_path_factory) -> str:
         # the fetch itself regressed. Every other exception (OSError from an
         # unwritable cache, say) propagates untouched and fails the run.
         try:
-            main.download_entry_to_cache(pdb_id, target)
+            inputs.download_entry_to_cache(pdb_id, target)
         except FileNotFoundError as exc:
             if _network_available_now():
                 raise AssertionError(
@@ -250,7 +250,7 @@ def entry_cache(tmp_path_factory) -> str:
         if not _entry_ready(target, pdb_id):
             raise AssertionError(
                 f"download_entry_to_cache reported success for {pdb_id} but "
-                f"{main.entry_dir_for(target, pdb_id)} does not contain the "
+                f"{inputs.entry_dir_for(target, pdb_id)} does not contain the "
                 "uncompressed mmCIF, MTZ, and data.json snapshot files"
             )
     _assert_entry_snapshot(target)
@@ -1774,9 +1774,9 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     """
     mirror = os.path.join(str(tmp_path), "mirror")
     for pdb_id in ENTRY_IDS:
-        entry = main.entry_dir_for(mirror, pdb_id)
+        entry = inputs.entry_dir_for(mirror, pdb_id)
         os.makedirs(os.path.dirname(entry), exist_ok=True)
-        source = main.entry_dir_for(entry_cache, pdb_id)
+        source = inputs.entry_dir_for(entry_cache, pdb_id)
         try:
             os.symlink(source, entry, target_is_directory=True)
         except (NotImplementedError, OSError):
@@ -1808,12 +1808,12 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
 
     reference_dir = os.path.join(str(output_dir), "confidence_reference")
     manifest = manifest_by_id(output_dir)
-    inputs = read_rows(output_dir, "confidence_inputs_all.csv")
+    streamed_inputs = read_rows(output_dir, "confidence_inputs_all.csv")
     rows = read_rows(output_dir, "confidence_scores_all.csv")
 
     # Every selected metal site of every entry reaches both files exactly once.
     assert (
-        len(inputs)
+        len(streamed_inputs)
         == len(rows)
         == sum(int(row["n_metals"]) for row in manifest.values())
         == 13
@@ -1821,7 +1821,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     for pdb_id, manifest_row in manifest.items():
         assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
     # Scoring adds columns to the streamed inputs; it does not re-derive them.
-    for streamed, scored in zip(inputs, rows):
+    for streamed, scored in zip(streamed_inputs, rows):
         for column in confidence_score.CONFIDENCE_INPUT_COLUMNS:
             assert scored[column] == streamed[column], column
 

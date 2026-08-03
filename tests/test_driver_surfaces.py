@@ -217,7 +217,7 @@ def _make_entry(
     be built: production prefers the authoritative mmCIF and keeps the legacy
     PDB export only as a fallback.
     """
-    entry_dir = main.entry_dir_for(str(root), pdb_id)
+    entry_dir = inputs.entry_dir_for(str(root), pdb_id)
     os.makedirs(entry_dir, exist_ok=True)
 
     def write(name, payload=b"x"):
@@ -321,7 +321,7 @@ def test_missing_map_coefficients_are_reported_by_path(tmp_path):
     work_dir.mkdir()
 
     with pytest.raises(FileNotFoundError, match="9myr_final.mtz"):
-        main.prepare_inputs("9myr", entry_dir, str(work_dir))
+        inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
@@ -333,7 +333,7 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(tmp_path, compressed):
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
-    mtz, pdb = main.prepare_inputs("9myr", entry_dir, str(work_dir))
+    mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert pdb.endswith(".pdb"), "a gzipped export must be decompressed first"
     assert os.path.isfile(pdb)
@@ -363,7 +363,7 @@ def test_the_authoritative_mmcif_wins_over_the_legacy_export(tmp_path, monkeypat
         return destination
 
     monkeypatch.setattr(inputs, "_cif_to_pdb", fake_cif_to_pdb)
-    _mtz, pdb = main.prepare_inputs("9myr", entry_dir, str(work_dir))
+    _mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert converted and converted[0].endswith("_final.cif")
     with open(pdb, encoding="ascii") as handle:
@@ -376,7 +376,7 @@ def test_an_entry_with_neither_coordinate_format_names_both(tmp_path):
     work_dir.mkdir()
 
     with pytest.raises(FileNotFoundError, match=r"9myr_final\.cif or 9myr_final\.pdb"):
-        main.prepare_inputs("9myr", entry_dir, str(work_dir))
+        inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
 
 def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
@@ -395,7 +395,7 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
         return destination
 
     monkeypatch.setattr(inputs, "_cif_to_pdb", fake_cif_to_pdb)
-    mtz, pdb = main.prepare_inputs("9myr", entry_dir, str(work_dir))
+    mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert os.path.dirname(mtz) == str(work_dir), "the mirror must not be written to"
     assert not mtz.endswith(".gz")
@@ -556,7 +556,7 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path):
     )
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
-    assert main.read_resolution(entry_dir, mtz) == pytest.approx(1.72)
+    assert inputs.read_resolution(entry_dir, mtz) == pytest.approx(1.72)
 
 
 @pytest.mark.parametrize(
@@ -579,9 +579,9 @@ def test_incomplete_metadata_falls_back_to_the_mtz(tmp_path, payload, reason):
     entry_dir = _make_entry(tmp_path, "9myr", data_json=payload)
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
-    resolution = main.read_resolution(entry_dir, mtz)
+    resolution = inputs.read_resolution(entry_dir, mtz)
     assert resolution == pytest.approx(
-        main.read_resolution(tmp_path / "absent", mtz)
+        inputs.read_resolution(tmp_path / "absent", mtz)
     ), f"{reason} should have fallen back to the MTZ"
 
 
@@ -590,7 +590,7 @@ def test_absent_metadata_falls_back_to_the_mtz(tmp_path):
     entry_dir = _make_entry(tmp_path, "9myr")
     mtz = _minimal_mtz(tmp_path / "only.mtz")
 
-    assert main.read_resolution(entry_dir, mtz) > 0.0
+    assert inputs.read_resolution(entry_dir, mtz) > 0.0
 
 
 def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
@@ -612,7 +612,7 @@ def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
     )
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
-    assert main.read_resolution(
+    assert inputs.read_resolution(
         entry_dir, mtz, data_json_path=str(explicit)
     ) == pytest.approx(1.72)
 

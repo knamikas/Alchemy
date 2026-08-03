@@ -669,7 +669,7 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 
 ## Progress
 
-**Phases A–D are complete, and Phase E is under way** — the production-readiness gate, the coverage work the restructuring depends on, the mechanical cleanups, and the first two `main.py` extractions. Twelve of 26 commits.
+**Phases A–D are complete, and Phase E is under way** — the production-readiness gate, the coverage work the restructuring depends on, the mechanical cleanups, and the first three `main.py` extractions. Thirteen of 26 commits.
 
 | Commit | Landed as | Notes |
 |---|---|---|
@@ -685,8 +685,9 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 | 8 · `Unit-test the highest-risk CLI and resume surfaces` | `de8a36d` | 59 tests in `tests/test_driver_surfaces.py` covering resume-schema validation, the exit-code contract, entry selection, input preparation including the legacy PDB fallback, `read_resolution`, and worker autoscaling. Eleven mutations confirmed caught. `main.py` 66% → 70%. |
 | 9 · `Rename pdbID to pdb_id throughout` | `337310f` | Identifiers only, across five files; the `pdbID` CSV columns are untouched, so no output schema moved. |
 | 10 · `Remove dead code and annotate the public surfaces` | `81ddd05` | `_write_csv`, `COMMON_METALS`/`UNCOMMON_METALS` and `find_ccp4_setup`'s `common_candidates` deleted; the unreachable `metal_identification` branches removed by making the header/index pair one `Optional` state; PEP 585 annotations on the public functions. |
-| 11 · `Move CCP4 environment resolution into ccp4_setup` | *pending* | `resolve_env`, its two Windows helpers, `_normalize_path_key` and `verify_ccp4` moved; one `DEFAULT_CONFIG_FILES` the driver no longer shadows; `ccp4_tools_available` and `verify_ccp4` reduced to one `missing_ccp4_tools` probe; `Ccp4SetupError` replaces `SystemExit` throughout the library, leaving `resolve_ccp4_environment` the only exit. Three mutations confirmed caught. |
-| 12 · `Extract input preparation and conversion provenance` | *pending* | 24 functions and 3 constants out of `main.py`, verified AST-identical to the originals: `coordinate_conversion.py` (mmCIF→legacy-PDB conversion and the residue-identity remarks that make it reversible) and `inputs.py` (mirror/cache resolution, decompression, resolution metadata). `main.py` 1,580 → 1,193 statements. Named `coordinate_conversion.py` rather than the plan's `provenance.py`: the repo already uses "provenance" for run, coordinate-format and `image_provenance` lineage, none of which this module holds. |
+| 11 · `Move CCP4 environment resolution into ccp4_setup` | `52732ab` | `resolve_env`, its two Windows helpers, `_normalize_path_key` and `verify_ccp4` moved; one `DEFAULT_CONFIG_FILES` the driver no longer shadows; `ccp4_tools_available` and `verify_ccp4` reduced to one `missing_ccp4_tools` probe; `Ccp4SetupError` replaces `SystemExit` throughout the library, leaving `resolve_ccp4_environment` the only exit. Three mutations confirmed caught. |
+| 12 · `Separate input preparation and coordinate conversion` | `55c7a1a` | 24 functions and 3 constants out of `main.py`, verified AST-identical to the originals: `coordinate_conversion.py` (mmCIF→legacy-PDB conversion and the residue-identity remarks that make it reversible) and `inputs.py` (mirror/cache resolution, decompression, resolution metadata). `main.py` 1,580 → 1,193 statements. Named `coordinate_conversion.py` rather than the plan's `provenance.py`: the repo already uses "provenance" for run, coordinate-format and `image_provenance` lineage, none of which this module holds. |
+| 13 · `Extract the worker entry point` | *pending* | 13 functions, 7 constants and the two per-worker globals out of `main.py`, verified AST-identical to the originals except one token: `_initial_result` now stamps `_version.__version__` directly rather than reaching for the driver's `ALCHEMY_VERSION`. `worker.py` holds the whole per-entry pipeline plus the worker half of the liveness protocol; the driver keeps its half (`_drain_inflight`, `_dead_worker_pids`, `_shutdown_pool`) and the run-provenance stampers, which run once before the pool exists. `main.py` 1,193 → 991 statements. Four mutations tried, three confirmed caught; the fourth is noted below. |
 
 Suite: **991 passed, 26 skipped** offline, coverage **84.3%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
 
@@ -694,7 +695,9 @@ Suite: **991 passed, 26 skipped** offline, coverage **84.3%** (853 and untracked
 
 **Still open:** the licence, and whether editing `metal_distances_info.txt` should invalidate frozen references (2.5).
 
-Next up is the rest of Phase E: commit 13 extracts `worker.py`, then 14–16 take the driver's output machinery, resume handling and CLI.
+Next up is the rest of Phase E: commits 14–16 take the driver's output machinery, resume handling and CLI.
+
+**Two things commit 13 surfaced rather than caused.** The mutation that makes `_coordinate_provenance` always report a conversion survives the offline suite: the mirror branch is exercised only by the entry-data lane. And the entry-data lane itself had been erroring at fixture setup since commit 12, which left `tests/conftest`-adjacent `main.download_entry_to_cache` pointing at a name `main` no longer re-exports; commit 13 repairs the reference. With the lane running again, seven of its end-to-end tests fail on stdout assertions for messages commit 6 moved from `print` to `logger` — identical failures on `HEAD` before this commit, so they are a separate repair.
 
 ---
 

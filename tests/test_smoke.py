@@ -46,11 +46,13 @@ def test_src_modules_import():
     import metal_elements
     import metal_identification  # noqa: F401 - imported to prove it loads
     import structure_analysis
+    import worker
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert bond_analysis.CUTOFF == 4.0
     assert callable(structure_analysis.load_structure)
-    assert callable(main.process)
+    assert callable(main.main)
+    assert callable(worker.process)
     assert callable(density_analysis.run_density_analysis)
     assert callable(confidence_score.score_site)
     # Named explicitly rather than asserted truthy: a non-empty tuple literal is

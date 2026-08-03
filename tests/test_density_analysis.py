@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import density_analysis as density
-import main
+import inputs
 
 
 def _write_refmac_mtz(
@@ -97,7 +97,7 @@ def test_refmac_twin_normalization_requires_refmac_provenance(tmp_path):
 def test_twin_routing_requires_explicit_boolean_metadata(tmp_path, value, expected):
     path = tmp_path / "data.json"
     path.write_text(json.dumps({"properties": {"ISTWIN": value}}), encoding="utf-8")
-    assert main.read_pdb_redo_is_twin(path) is expected
+    assert inputs.read_pdb_redo_is_twin(path) is expected
 
 
 def _fake_ccp4_run_factory(mtzfix_log_text):

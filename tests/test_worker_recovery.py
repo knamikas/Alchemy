@@ -41,6 +41,7 @@ import traceback
 import pytest
 
 import main
+import worker
 
 
 # Killing a worker outright, and forking the driver so the parent can time it
@@ -291,7 +292,7 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     entry up again instead of treating it as terminally finished.
     """
     cfg = _reference_cfg(str(tmp_path))
-    result = main._worker_death_result("1abc", cfg, 4321)
+    result = worker._worker_death_result("1abc", cfg, 4321)
 
     assert result["pdbID"] == "1abc"
     assert result["status"] == "error"
@@ -330,7 +331,7 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
     stage had completed for an entry that was never analyzed.
     """
     cfg = _reference_cfg(str(tmp_path))
-    result = main._worker_death_result("1abc", cfg, 7)
+    result = worker._worker_death_result("1abc", cfg, 7)
     assert result["n_bonds"] == ""
     assert result["n_candidates"] == ""
 
@@ -358,7 +359,7 @@ def test_worker_death_result_reports_the_run_refinement_state(
     the worker that knew it is gone.
     """
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
-    result = main._worker_death_result("1abc", cfg, 7)
+    result = worker._worker_death_result("1abc", cfg, 7)
     assert result["refinement_state"] == expected_state
 
 
@@ -371,8 +372,8 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
     unambiguous in both directions.
     """
     cfg = _reference_cfg(str(tmp_path))
-    synthesized = main._worker_death_result("1abc", cfg, 7)
-    genuine = main._initial_result("1abc", cfg, None)
+    synthesized = worker._worker_death_result("1abc", cfg, 7)
+    genuine = worker._initial_result("1abc", cfg, None)
 
     assert synthesized["reason_codes"] == ["worker_process_died"]
     assert genuine["reason_codes"] == []
@@ -382,11 +383,12 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
 # --------------------------------------------------------------------------- #
 # Driving the real dispatch loop  (regression, 3141593)
 # --------------------------------------------------------------------------- #
-# The tests below run ``main._run`` itself in a child process with only
-# ``main.process`` replaced, so the bookkeeping under test -- drain the
-# notifications, diff the roster, synthesize the lost row, drop a late real
-# result for an already-lost entry, count completions, pick the exit code -- is
-# the shipped code and not a re-implementation of it.
+# The tests below run ``main._run`` itself in a child process with only the
+# name it dispatches on -- ``main.process``, the driver's reference to
+# ``worker.process`` -- rebound to a stub, so the bookkeeping under test --
+# drain the notifications, diff the roster, synthesize the lost row, drop a
+# late real result for an already-lost entry, count completions, pick the exit
+# code -- is the shipped code and not a re-implementation of it.
 #
 # ``_STUB_SCRIPT`` maps a pdbID to what its worker should do. It is a module
 # global because the driver child sets it before creating the pool, and the
@@ -412,7 +414,7 @@ def _announce(state, pdb_id):
     never finishes -- instead of on an AttributeError raised inside the test's
     own fake, which would prove nothing about the driver.
     """
-    getattr(main, "_announce_inflight", lambda *args: None)(state, pdb_id)
+    getattr(worker, "_announce_inflight", lambda *args: None)(state, pdb_id)
 
 
 def _first_visit(pdb_id):
@@ -441,17 +443,17 @@ def _kill_self_after(delay):
 
 
 def _stub_process(pdb_id):
-    """Stand in for ``main.process``: no CCP4, no downloads, scripted deaths.
+    """Stand in for ``worker.process``: no CCP4, no downloads, scripted deaths.
 
     Every entry announces itself exactly as the real worker does, so the driver
     sees the same notification stream it would see in production.
     """
-    cfg = main._CFG
+    cfg = worker._CFG
     if cfg is None:  # pragma: no cover - would mean the initializer never ran
         raise RuntimeError("worker configuration has not been initialized")
     step = _STUB_SCRIPT.get(pdb_id, {})
     runtime = float(step.get("runtime", 0.02))
-    result = main._initial_result(pdb_id, cfg, cfg.get("manual_inputs"))
+    result = worker._initial_result(pdb_id, cfg, cfg.get("manual_inputs"))
 
     die = step.get("die")
     if die and _first_visit(pdb_id):
@@ -868,7 +870,7 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
 def _spawn_task(payload):
     """Announce, then either finish or die abnormally, inside a spawn worker."""
     action, pdb_id = payload
-    main._announce_inflight("start", pdb_id)
+    worker._announce_inflight("start", pdb_id)
     if action == "die":
         # An abrupt exit with no result, the way a segfault or OOM kill ends a
         # worker; SIGKILL is not portable, os._exit is. The pause keeps the
@@ -876,8 +878,8 @@ def _spawn_task(payload):
         # that runs for a while before being killed would.
         time.sleep(0.5)
         os._exit(9)
-    main._announce_inflight("end", pdb_id)
-    cfg = main._CFG
+    worker._announce_inflight("end", pdb_id)
+    cfg = worker._CFG
     assert cfg is not None
     return (pdb_id, cfg["output_dir"], sorted(cfg["cofactors"])[:1])
 
@@ -898,7 +900,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     dead_pids = set()
     finished = []
 
-    with ctx.Pool(2, initializer=main._init_worker, initargs=(cfg, inflight)) as pool:
+    with ctx.Pool(2, initializer=worker._init_worker, initargs=(cfg, inflight)) as pool:
         # Prime the roster, as the driver's first loop iteration does.
         main._dead_worker_pids(pool, worker_pids)
         results = pool.imap_unordered(
@@ -952,9 +954,9 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
     assert restored["cofactors"] == cfg["cofactors"]
     assert restored["cofactors"], "the bundled cofactor catalog must be loaded"
     # And it still drives the code that consumes it in the worker.
-    assert main._initial_result(
+    assert worker._initial_result(
         "1abc", restored, restored["manual_inputs"]
-    ) == main._initial_result("1abc", cfg, cfg["manual_inputs"])
+    ) == worker._initial_result("1abc", cfg, cfg["manual_inputs"])
 
 
 # --------------------------------------------------------------------------- #
@@ -968,7 +970,7 @@ def _never_finishing_process(pdb_id):
     object" before any worker starts.
     """
     time.sleep(30)
-    return main._initial_result(pdb_id, main._CFG, None)
+    return worker._initial_result(pdb_id, worker._CFG, None)
 
 
 def _sigterm_driver_child(argv, ready, channel):

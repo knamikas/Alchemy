@@ -29,6 +29,7 @@ import density_analysis as density
 import main
 import metal_identification
 import structure_analysis
+import worker
 from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 
 
@@ -57,7 +58,7 @@ DERIVED_MANIFEST_COLUMNS = frozenset(
 
 def _result(pdb_id="109m", **overrides):
     """A worker result skeleton plus overrides, as the driver would see it."""
-    result = main._initial_result(pdb_id, CFG, None)
+    result = worker._initial_result(pdb_id, CFG, None)
     result.update(overrides)
     return result
 
@@ -593,7 +594,7 @@ class TestInitialResult:
         ``0`` is a measured result. Seeding it made an entry that failed
         before the bond stage look like a completed bond analysis.
         """
-        result = main._initial_result("109m", CFG, None)
+        result = worker._initial_result("109m", CFG, None)
         assert result["n_bonds"] == ""
         assert result["n_candidates"] == ""
         assert result["n_bonds"] != 0
@@ -601,32 +602,32 @@ class TestInitialResult:
 
     def test_every_non_derived_manifest_column_is_present_up_front(self):
         """A failure at any stage still projects onto a complete row."""
-        result = main._initial_result("109m", CFG, None)
+        result = worker._initial_result("109m", CFG, None)
         required = set(main.MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
         assert required.issubset(result.keys())
 
     def test_supplies_the_keys_manifest_row_reads_directly(self):
         """``_manifest_row`` indexes these without a default; they must exist."""
-        result = main._initial_result("109m", CFG, None)
+        result = worker._initial_result("109m", CFG, None)
         for key in ("n", "runtime", "n_bonds", "n_candidates", "pdbID"):
             assert key in result
 
     def test_defaults_to_a_retryable_error(self):
         """An entry that dies before setting a status must be retried."""
-        result = main._initial_result("109m", CFG, None)
+        result = worker._initial_result("109m", CFG, None)
         assert result["status"] == "error"
         assert result["retryable"] is True
 
     def test_carries_run_provenance_from_the_config(self):
         """Version provenance is stamped once and shared by every row."""
-        result = main._initial_result("109m", CFG, None)
+        result = worker._initial_result("109m", CFG, None)
         assert result["alchemy_version"] == main.ALCHEMY_VERSION
         assert result["alchemy_commit"] == CFG["alchemy_commit"]
         assert result["gemmi_version"] == CFG["gemmi_version"]
         assert result["ccp4_version"] == CFG["ccp4_version"]
-        assert result["model_policy"] == main.MODEL_POLICY
-        assert result["altloc_policy"] == main.ALTLOC_POLICY
-        assert result["symmetry_contact_policy"] == main.SYMMETRY_POLICY
+        assert result["model_policy"] == worker.MODEL_POLICY
+        assert result["altloc_policy"] == worker.ALTLOC_POLICY
+        assert result["symmetry_contact_policy"] == worker.SYMMETRY_POLICY
 
     @pytest.mark.parametrize(
         "manual_inputs,expected",
@@ -638,13 +639,13 @@ class TestInitialResult:
     )
     def test_refinement_state_reflects_manual_inputs(self, manual_inputs, expected):
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
-        result = main._initial_result("109m", CFG, manual_inputs)
+        result = worker._initial_result("109m", CFG, manual_inputs)
         assert result["refinement_state"] == expected
 
     def test_row_lists_are_independent_between_entries(self):
         """Two skeletons must not share mutable row accumulators."""
-        first = main._initial_result("109m", CFG, None)
-        second = main._initial_result("1cll", CFG, None)
+        first = worker._initial_result("109m", CFG, None)
+        second = worker._initial_result("1cll", CFG, None)
         first["rows"].append({"x": 1})
         first["reason_codes"].append("boom")
         assert second["rows"] == []
@@ -1865,7 +1866,7 @@ class TestFirstModelPdb:
         )
         source = builder.write_pdb(tmp_path / "site.pdb")
         dst = tmp_path / "first.pdb"
-        path, count = main._first_model_pdb(source, str(dst))
+        path, count = conversion._first_model_pdb(source, str(dst))
         assert path == source
         assert count == 1
         assert not dst.exists()
@@ -1875,7 +1876,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        path, count = main._first_model_pdb(str(source), str(dst))
+        path, count = conversion._first_model_pdb(str(source), str(dst))
         assert path == str(dst)
         assert count == 2
 
@@ -1890,7 +1891,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        main._first_model_pdb(str(source), str(dst))
+        conversion._first_model_pdb(str(source), str(dst))
         for line in dst.read_text().splitlines():
             assert line[:6].strip().upper() not in ("MODEL", "ENDMDL")
         assert gemmi.read_structure(str(dst)).__len__() == 1
@@ -1900,7 +1901,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        main._first_model_pdb(str(source), str(dst))
+        conversion._first_model_pdb(str(source), str(dst))
         lines = dst.read_text().splitlines()
         assert not any(line.startswith("NUMMDL") for line in lines)
         assert any(line.startswith("CRYST1") for line in lines)
@@ -1912,7 +1913,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        main._first_model_pdb(str(source), str(dst))
+        conversion._first_model_pdb(str(source), str(dst))
         lines = dst.read_text().splitlines()
         assert not any(line.startswith("MASTER") for line in lines)
         assert lines[-1] == "END"
@@ -1922,7 +1923,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        main._first_model_pdb(str(source), str(dst))
+        conversion._first_model_pdb(str(source), str(dst))
         source_atom_lines = [
             line for line in _MULTI_MODEL_PDB.splitlines() if line.startswith("ATOM")
         ]
@@ -1935,14 +1936,14 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "nested" / "first.pdb"
-        path, _ = main._first_model_pdb(str(source), str(dst))
+        path, _ = conversion._first_model_pdb(str(source), str(dst))
         assert os.path.isfile(path)
 
     def test_reported_model_count_is_the_source_ensemble_size(self, tmp_path):
         """The manifest's input_model_count describes the deposited file."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
-        _, count = main._first_model_pdb(str(source), str(tmp_path / "first.pdb"))
+        _, count = conversion._first_model_pdb(str(source), str(tmp_path / "first.pdb"))
         assert count == 2
         assert len(gemmi.read_structure(str(source))) == count
 
@@ -2122,15 +2123,15 @@ class TestCcp4TimeoutOutcome:
         mtz_path = tmp_path / "entry.mtz"
         mtz_path.write_bytes(b"unused: the readers below are stubbed")
 
-        monkeypatch.setattr(main, "read_resolution", lambda *a, **k: 2.0)
+        monkeypatch.setattr(worker, "read_resolution", lambda *a, **k: 2.0)
         monkeypatch.setattr(
-            main, "read_map_column_resolution", lambda *a, **k: (20.0, 2.0)
+            worker, "read_map_column_resolution", lambda *a, **k: (20.0, 2.0)
         )
 
         def fake_density(*args, **kwargs):
             raise failure
 
-        monkeypatch.setattr(main, "run_density_analysis", fake_density)
+        monkeypatch.setattr(worker, "run_density_analysis", fake_density)
 
         cfg = {
             "root": str(tmp_path),
@@ -2156,8 +2157,8 @@ class TestCcp4TimeoutOutcome:
         }
         # Set the worker global directly: monkeypatch restores it after the
         # test, whereas _init_worker has no teardown counterpart.
-        monkeypatch.setattr(main, "_CFG", cfg)
-        return main.process("1abc")
+        monkeypatch.setattr(worker, "_CFG", cfg)
+        return worker.process("1abc")
 
     def test_timeout_is_reported_as_a_named_retryable_outcome(
         self, tmp_path, monkeypatch
@@ -2216,7 +2217,7 @@ class TestCcp4TimeoutOutcome:
             f"the retained log is missing at {kept}; the path named in the "
             "timeout message must outlive the scratch directory"
         )
-        assert main.TIMEOUT_LOG_DIRNAME in kept
+        assert worker.TIMEOUT_LOG_DIRNAME in kept
         with open(kept, encoding="utf-8") as handle:
             assert "before the stall" in handle.read()
 
