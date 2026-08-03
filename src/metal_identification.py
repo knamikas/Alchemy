@@ -13,11 +13,12 @@ import os
 from structure_analysis import canonical_pdb_residue_id
 
 
-COFACTOR_CATALOG_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "data",
-    "metallocofactors_id.txt",
-)
+# Single source for the bundled reference-data directory. Every file under it
+# is named relative to this constant so the location is defined once; the
+# directory travels with the checkout, which is how Alchemy is distributed.
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
 
 
 def load_cofactor_ids():

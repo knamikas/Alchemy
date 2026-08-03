@@ -27,7 +27,6 @@ import math
 import os
 import shutil
 import socket
-import sys
 from dataclasses import dataclass, replace
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -37,8 +36,10 @@ import gemmi
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(REPO_ROOT, "src")
-if SRC_DIR not in sys.path:  # importable even when helpers is used standalone
-    sys.path.insert(0, SRC_DIR)
+# ``src`` is placed on sys.path by conftest.py, which pytest always imports
+# before this module. The standalone catalog builder in tools/ runs without
+# pytest and keeps its own bootstrap; a single shared insertion point is not
+# possible for both.
 
 Vec3 = Tuple[float, float, float]
 

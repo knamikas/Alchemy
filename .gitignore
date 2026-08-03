@@ -7,3 +7,7 @@ __pycache__/
 
 # Test artifacts
 .pytest_cache/
+
+# Packaging metadata left behind by `pip install .`
+*.egg-info/
+/build/

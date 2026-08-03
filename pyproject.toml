@@ -18,11 +18,16 @@ test = [
     "pytest>=7.0",
 ]
 
-[tool.setuptools.package-data]
-data = [
-    "*.txt",
-    "*.json",
-]
+# Alchemy is run from a clone (`python src/main.py`), never imported as a
+# library, so it deliberately ships no importable modules. Declaring both lists
+# empty keeps `pip install .` a dependency-only operation: it records the
+# distribution metadata that resolves gemmi and numpy, and installs nothing
+# else. Left to auto-discovery, setuptools would instead publish `main`, `data`
+# and six other generic top-level names into site-packages, where they would
+# shadow or be shadowed by unrelated projects.
+[tool.setuptools]
+packages = []
+py-modules = []
 
 [tool.pytest.ini_options]
 minversion = "7.0"

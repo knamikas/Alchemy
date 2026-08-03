@@ -30,7 +30,7 @@ import os
 import re
 
 from metal_elements import METAL_ELEMENTS
-from metal_identification import COFACTOR_CATALOG_PATH
+from metal_identification import COFACTOR_CATALOG_PATH, DATA_DIR
 from structure_analysis import (
     blank_if_missing,
     count_deposited_ni,
@@ -39,8 +39,9 @@ from structure_analysis import (
     position_distance,
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+# Derived from the shared DATA_DIR rather than recomputed, so the bundled data
+# location has one definition (see metal_identification.DATA_DIR).
+DONOR_DISTANCE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
 
 # Recognized amino-acid donors. Waters are recognized separately with Gemmi's
 # Residue.is_water(), which also handles WAT, H2O, and DOD.
@@ -278,7 +279,7 @@ def _load_literature(path):
     return lit
 
 
-LIT = _load_literature(os.path.join(DATA_DIR, "metal_distances_info.txt"))
+LIT = _load_literature(DONOR_DISTANCE_PATH)
 FIRST_SPHERE_TARGETS = {}
 for (_, donor, metal_element), (target, _) in LIT.items():
     key = (metal_element, donor)

@@ -80,18 +80,22 @@ Results are written to:
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
   `--configure-ccp4`.
 - **Python:** 3.11 or newer.
-- **Python packages:** `gemmi>=0.7.0` and `numpy>=1.17`, as declared in
-  `pyproject.toml`. Both are required: `gemmi` does not install `numpy`.
+- **Python packages:** `gemmi>=0.7.0` and `numpy>=1.17`. Both are required:
+  `gemmi` does not install `numpy`. The authoritative dependency list and
+  version constraints are in `pyproject.toml`.
 
-Install the Python dependencies in the environment used to run Alchemy:
+Install these packages in the Python environment used to run Alchemy, using
+your preferred system or environment package manager. If you use pip, run:
 
 ```bash
-python -m pip install "gemmi>=0.7.0" "numpy>=1.17"
+python -m pip install .
 ```
 
-Alchemy is run from a clone of this repository, not installed as a package.
-No conda environment is required; any Python 3.11+ environment with the two
-packages above will do.
+The pip command reads the requirements from `pyproject.toml`, installs them and
+Alchemy's distribution metadata, but deliberately installs no importable
+Alchemy modules. Alchemy is run from a clone of this repository, not imported
+as a library. Pip and conda are optional; a system-wide Python installation is
+also suitable as long as it provides the required packages.
 
 ## Input modes
 

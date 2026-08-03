@@ -22,8 +22,11 @@ from __future__ import annotations
 import ast
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
+import zipfile
 from typing import Set
 
 import pytest
@@ -166,4 +169,87 @@ def test_examples_do_not_assume_a_private_environment(path):
     assert not offending, (
         f"{os.path.basename(path)} documents a specific conda environment: "
         f"{offending}. Use a plain `python src/main.py` invocation instead."
+    )
+
+
+def test_setuptools_declares_nothing_installable():
+    """``pyproject.toml`` still declares an empty distribution.
+
+    The cheap half of the empty-wheel invariant: it runs everywhere, needs no
+    build toolchain, and catches the likeliest regression, which is someone
+    deleting these two lines while adding unrelated packaging configuration.
+    """
+    with open(PYPROJECT_PATH, "rb") as handle:
+        config = tomllib.load(handle)
+    setuptools = config.get("tool", {}).get("setuptools", {})
+    assert setuptools.get("packages") == [], (
+        "[tool.setuptools] packages must stay empty; otherwise auto-discovery "
+        "publishes main, data and six other generic names into site-packages"
+    )
+    assert setuptools.get("py-modules") == [], (
+        "[tool.setuptools] py-modules must stay empty for the same reason"
+    )
+    assert "packages" not in setuptools.get("dynamic", {}), (
+        "dynamic package discovery would defeat the empty declaration"
+    )
+
+
+def test_built_wheel_contains_only_distribution_metadata(tmp_path):
+    """A built wheel ships metadata and dependencies, but no Alchemy code.
+
+    Regression guard for the invariant that ``pip install .`` is a
+    dependency-only operation. Nothing else detects its loss: the test suite
+    reaches ``src`` through ``conftest.py``'s ``sys.path`` insertion and CI
+    installs editable, so both stay green even if modules are published again.
+
+    Built from a copy rather than the checkout because ``pip wheel`` leaves
+    ``build/`` and ``*.egg-info/`` beside the sources it builds, and this suite
+    promises to write nothing inside the repository.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    shutil.copytree(SRC_DIR, source / "src")
+    for name in ("pyproject.toml", "README.md"):
+        shutil.copyfile(os.path.join(REPO_ROOT, name), source / name)
+
+    outdir = tmp_path / "wheel"
+    completed = subprocess.run(
+        [sys.executable, "-m", "pip", "wheel", "--no-deps",
+         "--no-build-isolation", "--wheel-dir", str(outdir), str(source)],
+        capture_output=True, text=True,
+    )
+    if completed.returncode != 0:
+        pytest.skip(
+            "no usable wheel-build toolchain in this environment: "
+            + (completed.stderr or completed.stdout).strip()[:200]
+        )
+
+    wheels = sorted(outdir.glob("*.whl"))
+    assert len(wheels) == 1, f"expected exactly one wheel, got {wheels}"
+    members = [
+        name for name in zipfile.ZipFile(wheels[0]).namelist()
+        if not name.endswith("/")
+    ]
+    assert members, "wheel is empty; the build produced no metadata at all"
+
+    payload = [
+        name for name in members
+        if not re.match(r"^alchemy-[^/]*\.dist-info/", name)
+    ]
+    assert not payload, (
+        "wheel ships importable content outside alchemy-*.dist-info/: "
+        f"{sorted(payload)}. Alchemy is run from a clone; `pip install .` must "
+        "install dependencies and metadata only."
+    )
+
+    metadata = zipfile.ZipFile(wheels[0]).read(
+        next(n for n in members if n.endswith(".dist-info/METADATA"))
+    ).decode()
+    required = {
+        re.split(r"[<>=!~; \[]", spec, maxsplit=1)[0].strip().lower()
+        for spec in re.findall(r"^Requires-Dist: (.+)$", metadata, re.M)
+    }
+    assert _declared_dependencies() <= required, (
+        "wheel metadata dropped declared runtime dependencies: "
+        f"declared {sorted(_declared_dependencies())}, wheel has {sorted(required)}"
     )
