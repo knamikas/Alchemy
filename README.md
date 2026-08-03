@@ -447,6 +447,7 @@ and atom serial rather than parser traversal order.
 | `--pdb-redo-cache <path>` | Set the cache for downloaded entries. |
 | `--output-dir <path>` | Set the result directory. |
 | `--density-map-scope {model-envelope,full}` | Set the map extent passed to EDSTATS. The default model envelope retains every coordinate plus a 10 Angstrom border; `full` selects the legacy complete-map path. |
+| `--ccp4-timeout <s>` | Per-program wall-clock budget for each CCP4 step (`mtzfix`, `fft`, `mapmask`, `edstats`), in seconds; default 900. The budget applies to each program separately, not to the entry as a whole. A program that exceeds it is killed and the entry becomes a retryable `partial` with reason `ccp4_tool_timeout`; its partial log is copied to `<output-dir>/ccp4_timeout_logs/`. Raise it for exceptionally large structures. |
 | `--workers <n>` | Override multiprocessing parallelism; must be at least 1. By default, Alchemy uses the lower CPU or available-memory limit, budgeting 1.25 GiB per worker. |
 | `--max-pdbs <n>` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
@@ -559,6 +560,12 @@ list or classification rules change.
 - The command exits nonzero when any entry ends as `error`, `skip`, or a
   retryable `partial`. Completed `ok` and terminal `partial` results exit
   successfully.
+- A CCP4 program that exceeds `--ccp4-timeout` is killed and its entry recorded
+  as a retryable `partial` with reason `ccp4_tool_timeout`, distinct from a
+  program that failed with an error. A killed program reported nothing about the
+  entry, so retrying it is meaningful. Its partial log is copied to
+  `<output-dir>/ccp4_timeout_logs/<id>_<tool>_timeout.log` before the entry's
+  scratch directory is removed; the maps beside it are not retained.
 - `partial` describes usable but incomplete scientific output; it does not by
   itself mean that rerunning can repair the entry. Deterministic limitations,
   such as invalid deposited occupancy or unavailable symmetry metadata, are

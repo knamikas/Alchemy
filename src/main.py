@@ -64,6 +64,8 @@ from urllib.request import urlopen
 
 from _version import __version__
 from density_analysis import (
+    CCP4_TOOL_TIMEOUT_S,
+    Ccp4ToolTimeout,
     DENSITY_MAP_SCOPES,
     MODEL_ENVELOPE_BORDER_ANGSTROM,
     MtzfixValidationError,
@@ -134,6 +136,20 @@ WORKER_SHUTDOWN_GRACE_S = 5.0
 # Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
 # is never mistaken for environment variables.
 ENV_SENTINEL = "__ALCHEMY_CCP4_ENV__"
+
+# Sourcing a CCP4 setup script should take well under a second. A budget this
+# small still leaves room for a slow network filesystem, and a setup script that
+# blocks past it is hung -- most often on an interactive prompt no one can
+# answer, since the shell has no terminal. Exceeding it aborts the run rather
+# than failing one entry: without CCP4 there is nothing to process.
+SETUP_SHELL_TIMEOUT_S = 30
+
+# Budget for the `git` probes that stamp run provenance. These read a local
+# repository and are expected to finish in milliseconds; a second is generous.
+# Exceeding it is not an entry failure -- `_alchemy_commit` already degrades to
+# "unknown" for any subprocess error -- so a stuck index lock costs the commit
+# hash rather than the run.
+PROVENANCE_COMMAND_TIMEOUT_S = 1
 
 # Human-readable text for each EDSTATS-join reason code, reported alongside the
 # machine-readable code in the manifest's error column.
@@ -244,7 +260,21 @@ def _resolve_env_windows(ccp4_setup):
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\r\n") as fh:
             fh.write(f'@echo off\ncall "{ccp4_setup}"\necho {ENV_SENTINEL}\nset\n')
-        out = subprocess.run(["cmd", "/c", script_path], capture_output=True, text=True)
+        try:
+            out = subprocess.run(
+                ["cmd", "/c", script_path],
+                capture_output=True,
+                text=True,
+                timeout=SETUP_SHELL_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            raise SystemExit(
+                f"CCP4 setup {ccp4_setup} did not finish within "
+                f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script "
+                "that blocks usually waits on input the launcher cannot "
+                "provide. Alchemy cannot run without CCP4, so this stops the "
+                "run rather than failing one entry."
+            ) from None
     finally:
         # A fixed name in %TEMP% left one file behind per run and let
         # concurrent runs overwrite each other's script.
@@ -281,7 +311,21 @@ def resolve_env(ccp4_setup):
         return _resolve_env_windows(ccp4_setup)
 
     cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null 2>&1 && env -0"
-    out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+    try:
+        out = subprocess.run(
+            ["bash", "-c", cmd],
+            capture_output=True,
+            text=True,
+            timeout=SETUP_SHELL_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(
+            f"CCP4 setup {ccp4_setup} did not finish within "
+            f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script that "
+            "blocks usually waits on input the shell cannot provide. Alchemy "
+            "cannot run without CCP4, so this stops the run rather than "
+            "failing one entry."
+        ) from None
     if out.returncode != 0:
         raise SystemExit(f"Failed to source CCP4 setup {ccp4_setup}:\n{out.stderr}")
     env = {}
@@ -1178,6 +1222,7 @@ def _alchemy_commit():
             capture_output=True,
             text=True,
             check=True,
+            timeout=PROVENANCE_COMMAND_TIMEOUT_S,
         )
         commit = completed.stdout.strip()
         dirty = subprocess.run(
@@ -1186,6 +1231,7 @@ def _alchemy_commit():
             capture_output=True,
             text=True,
             check=True,
+            timeout=PROVENANCE_COMMAND_TIMEOUT_S,
         )
         return commit + ("+dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
@@ -1237,6 +1283,38 @@ def _announce_inflight(state: str, pdbID: str) -> None:
         pass
 
 
+#: Where a stalled CCP4 program's partial log is copied so it outlives the
+#: entry's scratch directory.
+TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
+
+
+def _preserve_timeout_log(timeout, pdbID, output_dir):
+    """Copy a timed-out program's partial log somewhere it will survive.
+
+    ``process`` deletes the whole scratch directory unless --keep-intermediates
+    is given, so the log named in the timeout message would be gone by the time
+    anyone read the manifest. Only the log is copied: the maps beside it can run
+    to hundreds of megabytes per entry, and a database run that starts timing
+    out would fill the output directory with them.
+
+    Returns the retained path, or ``""`` when there was nothing to copy. Never
+    raises -- failing to keep a diagnostic must not change the entry's outcome.
+    """
+    source = getattr(timeout, "log_path", "")
+    if not source or not os.path.isfile(source):
+        return ""
+    try:
+        destination_dir = os.path.join(output_dir, TIMEOUT_LOG_DIRNAME)
+        os.makedirs(destination_dir, exist_ok=True)
+        destination = os.path.join(
+            destination_dir, f"{pdbID}_{timeout.tool}_timeout.log"
+        )
+        shutil.copyfile(source, destination)
+        return destination
+    except OSError:
+        return ""
+
+
 def _initial_result(pdbID, cfg, manual_inputs):
     """Return the per-entry result skeleton, pre-filled with run provenance.
 
@@ -1269,6 +1347,7 @@ def _initial_result(pdbID, cfg, manual_inputs):
         "reason_codes": [],
         "warning_codes": [],
         "confidence_inputs_missing_reason": "",
+        "ccp4_timeout_log_path": "",
         "alchemy_version": ALCHEMY_VERSION,
         "alchemy_commit": cfg["alchemy_commit"],
         "gemmi_version": cfg["gemmi_version"],
@@ -1652,7 +1731,24 @@ def process(pdbID):
                 map_scope=cfg["density_map_scope"],
                 keep_full_maps=cfg["keep"],
                 pdb_redo_is_twin=pdb_redo_is_twin,
+                tool_timeout_s=cfg["ccp4_timeout_s"],
             )
+        except Ccp4ToolTimeout as exc:
+            # The program told us nothing about the entry -- it was killed for
+            # running too long -- so this is retryable, unlike a failure exit.
+            # It gets its own reason code rather than falling through to the
+            # generic handler, so a stalled CCP4 install is visible in the
+            # manifest instead of looking like an unexplained crash.
+            rows, header = [], []
+            kept_log = _preserve_timeout_log(exc, pdbID, cfg["output_dir"])
+            result.update(
+                retryable=True,
+                reason_codes=["ccp4_tool_timeout"],
+                error=f"density unavailable: {exc}"[:300],
+                confidence_inputs_missing_reason="ccp4_tool_timeout",
+                ccp4_timeout_log_path=kept_log,
+            )
+            result["timings"].update(exc.timings)
         except MtzfixValidationError as exc:
             # The input is readable, but MTZFIX could not make its Fourier
             # coefficients internally consistent. Do not use those maps or
@@ -2186,6 +2282,16 @@ def parse_args(argv=None):
             f"coordinate plus a {MODEL_ENVELOPE_BORDER_ANGSTROM} Angstrom "
             "border and falls back to full when cropping would be unsafe or "
             "larger"
+        ),
+    )
+    ap.add_argument(
+        "--ccp4-timeout",
+        type=positive_int,
+        default=CCP4_TOOL_TIMEOUT_S,
+        help=(
+            "per-program wall-clock budget in seconds for each CCP4 step "
+            "(mtzfix, fft, mapmask, edstats); raise it for exceptionally "
+            "large structures"
         ),
     )
     ap.add_argument(
@@ -3089,6 +3195,7 @@ def _run(args, run_log):
         "keep": args.keep_intermediates,
         "bonds": args.bonds,
         "density_map_scope": args.density_map_scope,
+        "ccp4_timeout_s": args.ccp4_timeout,
         "allow_download": bool(args.id or args.id_file),
         "manual_inputs": manual_inputs,
         "alchemy_commit": _alchemy_commit(),

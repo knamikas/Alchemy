@@ -13,11 +13,13 @@ import contextlib
 import io
 import os
 import shutil
+import subprocess
 import sys
 
 import pytest
 
 import ccp4_setup
+import density_analysis as density
 import main
 
 
@@ -321,3 +323,90 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     assert str(requested) in resolved, (
         f"the ambient PATH installation won over the requested one: {resolved}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Timeout budgets
+# --------------------------------------------------------------------------- #
+def test_the_three_timeout_budgets_are_distinct_and_ordered():
+    """Each class of subprocess gets a budget matched to its own work.
+
+    A single shared value cannot fit all three: a budget generous enough for
+    EDSTATS on a large structure would let a hung ``git`` probe stall startup
+    for a quarter of an hour, while one tight enough for ``git`` would kill
+    legitimate crystallographic work.
+    """
+    assert (
+        main.PROVENANCE_COMMAND_TIMEOUT_S
+        < main.SETUP_SHELL_TIMEOUT_S
+        < density.CCP4_TOOL_TIMEOUT_S
+    )
+    # Observed maxima in the July 2026 database runs were EDSTATS 185.7 s and
+    # FFT 54.2 s, so the CCP4 budget must retain real headroom over them.
+    assert density.CCP4_TOOL_TIMEOUT_S >= 4 * 186
+
+
+@pytest.mark.parametrize(
+    ("setup_name", "shell"), [("ccp4.setup-sh", "bash"), ("ccp4.setup.bat", "cmd")]
+)
+def test_a_hanging_setup_script_aborts_the_run(
+    tmp_path, monkeypatch, setup_name, shell
+):
+    """A setup script that blocks stops the run rather than failing one entry.
+
+    Without CCP4 there is nothing to process, so this is a startup failure on
+    both the POSIX and Windows paths.
+    """
+    setup = tmp_path / setup_name
+    setup.write_text("sleep forever\n", encoding="utf-8")
+
+    def fake_run(cmd, **kwargs):
+        timeout = kwargs.get("timeout")
+        assert timeout == main.SETUP_SHELL_TIMEOUT_S
+        raise subprocess.TimeoutExpired(cmd, float(timeout))
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main.resolve_env(str(setup))
+
+    message = str(excinfo.value)
+    assert str(main.SETUP_SHELL_TIMEOUT_S) in message
+    assert "stops the run" in message
+
+
+def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(monkeypatch):
+    """Provenance degrades to ``unknown`` instead of failing anything.
+
+    ``git`` here only stamps the run log. A stuck index lock must not take the
+    analysis with it, so the probe is bounded and its failure is absorbed.
+    """
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        timeout = kwargs.get("timeout")
+        calls.append(timeout)
+        assert timeout is not None, "provenance probes must be bounded"
+        raise subprocess.TimeoutExpired(cmd, float(timeout))
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+
+    assert main._alchemy_commit() == "unknown"
+    assert calls and set(calls) == {main.PROVENANCE_COMMAND_TIMEOUT_S}
+
+
+def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense():
+    """``--ccp4-timeout`` is settable, and its default is the module constant."""
+    assert main.parse_args([]).ccp4_timeout == density.CCP4_TOOL_TIMEOUT_S
+    assert main.parse_args(["--ccp4-timeout", "3600"]).ccp4_timeout == 3600
+
+    # positive_int rejects values that would make every entry fail immediately.
+    for bad in ("0", "-1", "not-a-number"):
+        with pytest.raises(SystemExit):
+            main.parse_args(["--ccp4-timeout", bad])
+
+
+def test_ccp4_timeout_help_states_its_default():
+    """A reader must be able to see the budget without reading the source."""
+    help_text = _option_help("--ccp4-timeout")
+    assert f"default: {density.CCP4_TOOL_TIMEOUT_S}" in help_text

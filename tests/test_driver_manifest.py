@@ -24,6 +24,7 @@ import pytest
 
 import helpers
 import bond_analysis
+import density_analysis as density
 import main
 import metal_identification
 import structure_analysis
@@ -2089,3 +2090,188 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
         name for name in os.listdir(output_dir) if name.startswith(".alchemy-")
     )
     assert leftovers == [], f"the run left scratch behind: {leftovers}"
+
+
+# --------------------------------------------------------------------------- #
+# CCP4 timeout as an entry outcome
+# --------------------------------------------------------------------------- #
+class TestCcp4TimeoutOutcome:
+    """A stalled CCP4 program must be a named, retryable entry outcome.
+
+    Regression risk: falling through to the generic ``except Exception`` handler
+    would report ``unexpected_processing_error``, which reads like a crash in
+    Alchemy rather than a CCP4 program that never returned -- and would hide a
+    stalled installation behind an error code shared with real bugs.
+    """
+
+    @staticmethod
+    def _entry(tmp_path, monkeypatch, failure):
+        """Run one manual-input entry whose density stage raises ``failure``.
+
+        Only the three MTZ-dependent readers are stubbed. Structure loading,
+        result assembly and status computation all run for real, which is the
+        part under test.
+        """
+        builder = helpers.StructureBuilder()
+        builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
+        builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.05, 0.0, 0.0)})
+        pdb_path = tmp_path / "entry.pdb"
+        builder.write_pdb(str(pdb_path))
+        mtz_path = tmp_path / "entry.mtz"
+        mtz_path.write_bytes(b"unused: the readers below are stubbed")
+
+        monkeypatch.setattr(main, "read_resolution", lambda *a, **k: 2.0)
+        monkeypatch.setattr(
+            main, "read_map_column_resolution", lambda *a, **k: (20.0, 2.0)
+        )
+
+        def fake_density(*args, **kwargs):
+            raise failure
+
+        monkeypatch.setattr(main, "run_density_analysis", fake_density)
+
+        cfg = {
+            "root": str(tmp_path),
+            "mirror_root": str(tmp_path),
+            "cache_root": str(tmp_path),
+            "env": {},
+            "output_dir": str(tmp_path),
+            "cofactors": set(),
+            "keep": False,
+            "bonds": False,
+            "density_map_scope": "full",
+            "ccp4_timeout_s": 900,
+            "allow_download": False,
+            "manual_inputs": {
+                "pdb_file": str(pdb_path),
+                "mtz_file": str(mtz_path),
+                "cif_file": None,
+                "data_json": None,
+            },
+            "alchemy_commit": "test",
+            "gemmi_version": "test",
+            "ccp4_version": "test",
+        }
+        # Set the worker global directly: monkeypatch restores it after the
+        # test, whereas _init_worker has no teardown counterpart.
+        monkeypatch.setattr(main, "_CFG", cfg)
+        return main.process("1abc")
+
+    def test_timeout_is_reported_as_a_named_retryable_outcome(
+        self, tmp_path, monkeypatch
+    ):
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            density.Ccp4ToolTimeout(
+                tool="edstats",
+                timeout_s=900,
+                elapsed_s=900.4,
+                log_path=str(tmp_path / "edstats.log"),
+                timings={"edstats_s": 900.4},
+            ),
+        )
+
+        assert result["reason_codes"] == ["ccp4_tool_timeout"]
+        assert result["retryable"] is True, (
+            "the program was killed for running too long and reported nothing "
+            "about the entry, so it must stay eligible for retry"
+        )
+        assert result["status"] == "partial"
+        assert "edstats" in result["error"]
+        assert result["confidence_inputs_missing_reason"] == "ccp4_tool_timeout"
+        # The cost of the abandoned attempt is preserved for the run log.
+        assert result["timings"].get("edstats_s") == 900.4
+
+    def test_the_partial_log_survives_scratch_cleanup(self, tmp_path, monkeypatch):
+        """The log the timeout message names must still exist afterwards.
+
+        Regression: ``Ccp4ToolTimeout`` reports "partial log kept at <path>",
+        but ``process`` deletes the whole scratch directory unless
+        --keep-intermediates is given, so under the default configuration that
+        path was gone by the time anyone read the manifest. Only the log is
+        copied out -- the maps beside it can be hundreds of megabytes, and a
+        run that started timing out would otherwise fill the output directory.
+        """
+        scratch_log = tmp_path / "scratch_edstats.log"
+        scratch_log.write_text("edstats output before the stall\n", encoding="utf-8")
+
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            density.Ccp4ToolTimeout(
+                tool="edstats",
+                timeout_s=900,
+                elapsed_s=900.4,
+                log_path=str(scratch_log),
+                timings={"edstats_s": 900.4},
+            ),
+        )
+
+        kept = result["ccp4_timeout_log_path"]
+        assert kept, "the timeout log path must be recorded on the result"
+        assert os.path.isfile(kept), (
+            f"the retained log is missing at {kept}; the path named in the "
+            "timeout message must outlive the scratch directory"
+        )
+        assert main.TIMEOUT_LOG_DIRNAME in kept
+        with open(kept, encoding="utf-8") as handle:
+            assert "before the stall" in handle.read()
+
+    def test_only_the_log_is_kept_not_the_scratch_directory(
+        self, tmp_path, monkeypatch
+    ):
+        """Retention is deliberately narrow: maps are not preserved."""
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        (scratch / "edstats.log").write_text("stalled\n", encoding="utf-8")
+        huge_map = scratch / "1abc_fo.map"
+        huge_map.write_bytes(b"0" * 4096)
+
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            density.Ccp4ToolTimeout(
+                tool="edstats",
+                timeout_s=900,
+                elapsed_s=900.4,
+                log_path=str(scratch / "edstats.log"),
+                timings={},
+            ),
+        )
+
+        kept_dir = os.path.dirname(result["ccp4_timeout_log_path"])
+        assert os.listdir(kept_dir) == ["1abc_edstats_timeout.log"], (
+            "only the log belongs in the retained directory"
+        )
+
+    def test_a_missing_log_is_not_an_error(self, tmp_path, monkeypatch):
+        """Failing to keep a diagnostic must not change the entry's outcome."""
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            density.Ccp4ToolTimeout(
+                tool="fft",
+                timeout_s=900,
+                elapsed_s=900.1,
+                log_path=str(tmp_path / "never_written.log"),
+                timings={},
+            ),
+        )
+
+        assert result["ccp4_timeout_log_path"] == ""
+        assert result["reason_codes"] == ["ccp4_tool_timeout"]
+        assert result["retryable"] is True
+
+    def test_a_validation_failure_remains_terminal_and_distinct(
+        self, tmp_path, monkeypatch
+    ):
+        """The neighbouring handler keeps its own, non-retryable meaning."""
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            density.MtzfixValidationError("bad coefficients", timings={}),
+        )
+
+        assert result["reason_codes"] == ["mtzfix_validation_failure"]
+        assert result["retryable"] is False

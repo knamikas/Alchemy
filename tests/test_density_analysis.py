@@ -101,9 +101,12 @@ def test_twin_routing_requires_explicit_boolean_metadata(tmp_path, value, expect
 def _fake_ccp4_run_factory(mtzfix_log_text):
     """Return a subprocess stub sufficient for the full-map density path."""
 
-    def fake_run(cmd, input=None, text=None, stdout=None, stderr=None, env=None):
+    def fake_run(
+        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
+    ):
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "mtzfix":
+            assert stdout is not None, "the runner must redirect stdout to a log"
             stdout.write(mtzfix_log_text)
             return SimpleNamespace(returncode=1, stderr="")
         if program == "fft":
@@ -196,3 +199,110 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
             map_scope="full",
             pdb_redo_is_twin=True,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Timeouts
+# --------------------------------------------------------------------------- #
+def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
+    tmp_path, monkeypatch
+):
+    """A hung CCP4 step raises ``Ccp4ToolTimeout`` and keeps what it wrote.
+
+    Without a budget a stalled ``edstats`` holds its worker slot for the rest of
+    the run: the driver detects workers that have *died*, but nothing detects
+    one that is merely stuck. The partial log is retained deliberately -- what
+    the program printed before it stalled is the only evidence of where.
+    """
+    source = tmp_path / "source.mtz"
+    pdb = tmp_path / "model.pdb"
+    source.write_bytes(b"source")
+    pdb.write_text("END\n", encoding="ascii")
+    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
+
+    def fake_run(
+        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
+    ):
+        if cmd[0].rsplit("/", 1)[-1] == "mtzfix":
+            assert stdout is not None, "the runner must redirect stdout to a log"
+            assert timeout is not None, "the runner must pass a budget"
+            stdout.write("mtzfix progress before the stall\n")
+            stdout.flush()
+            raise density.subprocess.TimeoutExpired(cmd, timeout)
+        raise AssertionError("no program should run after a timeout")
+
+    monkeypatch.setattr(density.subprocess, "run", fake_run)
+
+    with pytest.raises(density.Ccp4ToolTimeout) as excinfo:
+        density.run_density_analysis(
+            "1abc",
+            str(source),
+            str(pdb),
+            str(tmp_path / "out"),
+            20.0,
+            2.0,
+            map_scope="full",
+            pdb_redo_is_twin=False,
+            tool_timeout_s=900,
+        )
+
+    error = excinfo.value
+    assert error.tool == "mtzfix"
+    assert error.timeout_s == 900
+    assert "mtzfix" in str(error) and "900" in str(error)
+    # The cost of the abandoned attempt is still recorded.
+    assert error.timings.get("mtzfix_s") is not None
+
+    with open(error.log_path, encoding="utf-8") as handle:
+        assert "progress before the stall" in handle.read(), (
+            "the partial log must survive; it is the only record of where the "
+            "program stalled"
+        )
+
+
+def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
+    tmp_path, monkeypatch
+):
+    """Every CCP4 step gets the full budget rather than sharing one deadline.
+
+    An entry runs four programs; charging them against a single deadline would
+    make the last one fail for the sum of the others' legitimate work.
+    """
+    source = tmp_path / "source.mtz"
+    pdb = tmp_path / "model.pdb"
+    source.write_bytes(b"source")
+    pdb.write_text("END\n", encoding="ascii")
+    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
+
+    seen = []
+
+    def fake_run(
+        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
+    ):
+        seen.append((cmd[0].rsplit("/", 1)[-1], timeout))
+        program = cmd[0].rsplit("/", 1)[-1]
+        if program == "fft":
+            with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
+                handle.write(b"map")
+        elif program == "edstats":
+            with open(cmd[cmd.index("OUT") + 1], "w", encoding="utf-8") as handle:
+                handle.write("stats\n")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(density.subprocess, "run", fake_run)
+    density.run_density_analysis(
+        "1abc",
+        str(source),
+        str(pdb),
+        str(tmp_path / "out"),
+        20.0,
+        2.0,
+        map_scope="full",
+        pdb_redo_is_twin=False,
+        tool_timeout_s=123,
+    )
+
+    assert len(seen) >= 3, seen
+    assert {timeout for _, timeout in seen} == {123}, (
+        f"every program must receive the same per-program budget: {seen}"
+    )

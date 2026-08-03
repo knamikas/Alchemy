@@ -25,6 +25,16 @@ import numpy as np
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
+
+#: Per-program wall-clock budget for a CCP4 step, in seconds.
+#:
+#: Derived from the July 2026 database runs over several thousand entries,
+#: whose observed maxima were EDSTATS 185.7 s, FFT 54.2 s, MAPMASK 6.3 s and
+#: MTZFIX 1.3 s -- including the unusually large 8p4v. Fifteen minutes is
+#: roughly five times the worst case, which bounds a genuine hang without
+#: being aggressive toward an exceptionally large structure. Override with
+#: --ccp4-timeout when one needs longer.
+CCP4_TOOL_TIMEOUT_S = 15 * 60
 DENSITY_MAP_SCOPES = ("model-envelope", "full")
 REFMAC_TWIN_COLUMNS = {
     "FP": "F",
@@ -45,6 +55,31 @@ class MtzfixValidationError(RuntimeError):
 
     def __init__(self, message, timings=None):
         super().__init__(message)
+        self.timings = dict(timings or {})
+
+
+class Ccp4ToolTimeout(RuntimeError):
+    """A CCP4 program ran past its time budget and was killed.
+
+    Distinguished from a non-zero exit so the driver can report it as its own
+    retryable outcome rather than as a generic processing error: a program that
+    exceeded its budget has told us nothing about the entry, whereas a failure
+    exit usually has.
+
+    Carries the tool name, the elapsed time, the budget, and the timings
+    accumulated before the timeout, so a run log records what the entry cost
+    before it was abandoned.
+    """
+
+    def __init__(self, tool, timeout_s, elapsed_s, log_path, timings=None):
+        super().__init__(
+            f"{tool} exceeded its {timeout_s:g}s time budget "
+            f"(killed after {elapsed_s:.1f}s); partial log kept at {log_path}"
+        )
+        self.tool = tool
+        self.timeout_s = timeout_s
+        self.elapsed_s = elapsed_s
+        self.log_path = log_path
         self.timings = dict(timings or {})
 
 
@@ -237,6 +272,7 @@ def run_density_analysis(
     map_scope="model-envelope",
     keep_full_maps=False,
     pdb_redo_is_twin=False,
+    tool_timeout_s=CCP4_TOOL_TIMEOUT_S,
 ):
     """Validate the MTZ, compute maps with `fft`, then run `edstats`.
 
@@ -257,7 +293,9 @@ def run_density_analysis(
     MTZ is used for both FFT calculations.
 
     Returns a dict of output paths and MTZFIX provenance. Raises RuntimeError if
-    any CCP4 step exits non-zero or edstats produces no stats file.
+    any CCP4 step exits non-zero or edstats produces no stats file, and
+    ``Ccp4ToolTimeout`` if one of them runs past ``tool_timeout_s``. The budget
+    applies to each program separately, not to the entry as a whole.
     """
     if map_scope not in DENSITY_MAP_SCOPES:
         raise ValueError(
@@ -276,7 +314,7 @@ def run_density_analysis(
 
     timings = {}
 
-    def _run(cmd, stdin, logname, timing_name):
+    def _run(cmd, stdin, logname, timing_name, timeout_s=tool_timeout_s):
         log_path = os.path.join(out_dir, logname)
         resolved = shutil.which(cmd[0], path=(env or {}).get("PATH"))
         if resolved is None:
@@ -286,7 +324,10 @@ def run_density_analysis(
         cmd = [resolved, *cmd[1:]]
         started = time.monotonic()
         try:
-            with open(log_path, "w") as log:
+            # The budget is per program, not per entry: an entry running four
+            # CCP4 steps is allowed the full budget for each rather than
+            # sharing one deadline between them.
+            with open(log_path, "w", encoding="utf-8", errors="replace") as log:
                 proc = subprocess.run(
                     cmd,
                     input=stdin,
@@ -294,9 +335,23 @@ def run_density_analysis(
                     stdout=log,
                     stderr=subprocess.PIPE,
                     env=env,
+                    timeout=timeout_s,
                 )
+        except subprocess.TimeoutExpired as exc:
+            # subprocess.run has already killed the child and reaped it. The
+            # log is left in place deliberately: whatever the program wrote
+            # before it stalled is the only evidence of where it stalled.
+            elapsed = time.monotonic() - started
+            timings[timing_name] = round(elapsed, 3)
+            raise Ccp4ToolTimeout(
+                tool=os.path.basename(cmd[0]),
+                timeout_s=timeout_s,
+                elapsed_s=elapsed,
+                log_path=log_path,
+                timings=timings,
+            ) from exc
         finally:
-            timings[timing_name] = round(time.monotonic() - started, 3)
+            timings.setdefault(timing_name, round(time.monotonic() - started, 3))
         if proc.returncode != 0:
             detail = (proc.stderr or "").strip()[:500]
             detail_suffix = f": {detail}" if detail else ""
