@@ -40,10 +40,16 @@ CFG = {
 
 # Columns that ``_manifest_row`` recomputes from the worker result rather than
 # copying straight out of it.
-DERIVED_MANIFEST_COLUMNS = frozenset({
-    "n_metals", "n_bonds", "n_candidates", "runtime_s",
-    "reason_codes", "warning_codes",
-})
+DERIVED_MANIFEST_COLUMNS = frozenset(
+    {
+        "n_metals",
+        "n_bonds",
+        "n_candidates",
+        "runtime_s",
+        "reason_codes",
+        "warning_codes",
+    }
+)
 
 
 def _result(pdb_id="109m", **overrides):
@@ -109,13 +115,37 @@ _atom_site.pdbx_PDB_model_num
 _CIF_HEADER_NO_OCCUPANCY = _CIF_HEADER.replace("_atom_site.occupancy\n", "")
 
 
-def _cif_atom(serial, element, atom_name, comp_id, label_asym, entity,
-              label_seq, xyz, occupancy, auth_seq, auth_asym,
-              group="ATOM", with_occupancy=True):
+def _cif_atom(
+    serial,
+    element,
+    atom_name,
+    comp_id,
+    label_asym,
+    entity,
+    label_seq,
+    xyz,
+    occupancy,
+    auth_seq,
+    auth_asym,
+    group="ATOM",
+    with_occupancy=True,
+):
     x, y, z = xyz
-    fields = [group, str(serial), element, atom_name, ".", comp_id,
-              label_asym, str(entity), str(label_seq), "?",
-              f"{x}", f"{y}", f"{z}"]
+    fields = [
+        group,
+        str(serial),
+        element,
+        atom_name,
+        ".",
+        comp_id,
+        label_asym,
+        str(entity),
+        str(label_seq),
+        "?",
+        f"{x}",
+        f"{y}",
+        f"{z}",
+    ]
     if with_occupancy:
         fields.append(occupancy)
     fields += ["20.0", str(auth_seq), auth_asym, "1"]
@@ -131,8 +161,9 @@ def _write_cif(path, atom_lines, header=_CIF_HEADER):
 
 def _pdb_atom_lines(path):
     with open(path) as handle:
-        return [line for line in handle
-                if line[:6].strip().upper() in ("ATOM", "HETATM")]
+        return [
+            line for line in handle if line[:6].strip().upper() in ("ATOM", "HETATM")
+        ]
 
 
 def _occupancy_field(line):
@@ -187,15 +218,18 @@ _BASE_RESIDUES = [
 class TestPositiveInt:
     """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
 
-    @pytest.mark.parametrize("value,expected", [
-        ("1", 1),
-        ("2", 2),
-        ("28", 28),
-        ("  7  ", 7),        # int() tolerates surrounding whitespace
-        ("+3", 3),
-        ("1000000", 1000000),
-        (5, 5),              # already an int (programmatic callers)
-    ])
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("1", 1),
+            ("2", 2),
+            ("28", 28),
+            ("  7  ", 7),  # int() tolerates surrounding whitespace
+            ("+3", 3),
+            ("1000000", 1000000),
+            (5, 5),  # already an int (programmatic callers)
+        ],
+    )
     def test_accepts_integers_of_at_least_one(self, value, expected):
         """Any representation of an integer >= 1 is accepted and normalized."""
         assert main.positive_int(value) == expected
@@ -208,10 +242,22 @@ class TestPositiveInt:
             main.positive_int(value)
         assert "at least 1" in str(excinfo.value)
 
-    @pytest.mark.parametrize("value", [
-        "1.5", "2.0", "abc", "", " ", "1e3", "0x2", None, "nan", "inf",
-        "1,000",
-    ])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "1.5",
+            "2.0",
+            "abc",
+            "",
+            " ",
+            "1e3",
+            "0x2",
+            None,
+            "nan",
+            "inf",
+            "1,000",
+        ],
+    )
     def test_rejects_non_integer_text(self, value):
         """Argparse hands over raw strings; anything non-integral is a usage error."""
         with pytest.raises(argparse.ArgumentTypeError) as excinfo:
@@ -231,53 +277,92 @@ class TestPositiveInt:
 class TestLoadDone:
     """Which manifest rows count as finished work that --resume may skip."""
 
-    @pytest.mark.parametrize("status,retryable,expected_done", [
-        ("ok", "False", True),
-        ("ok", "True", True),          # status ok is terminal regardless
-        ("ok", "", True),
-        ("partial", "False", True),    # terminal partial: nothing left to do
-        ("partial", "0", True),
-        ("partial", "no", True),
-        ("partial", "True", False),    # retryable partial must be retried
-        ("partial", "", False),
-        ("error", "True", False),
-        ("error", "False", False),     # even a terminal error is not "done"
-        ("skip", "False", False),
-        ("skip", "True", False),
-        ("", "", False),
-    ])
-    def test_terminality_by_status_and_retryable(self, tmp_path, status,
-                                                 retryable, expected_done):
+    @pytest.mark.parametrize(
+        "status,retryable,expected_done",
+        [
+            ("ok", "False", True),
+            ("ok", "True", True),  # status ok is terminal regardless
+            ("ok", "", True),
+            ("partial", "False", True),  # terminal partial: nothing left to do
+            ("partial", "0", True),
+            ("partial", "no", True),
+            ("partial", "True", False),  # retryable partial must be retried
+            ("partial", "", False),
+            ("error", "True", False),
+            ("error", "False", False),  # even a terminal error is not "done"
+            ("skip", "False", False),
+            ("skip", "True", False),
+            ("", "", False),
+        ],
+    )
+    def test_terminality_by_status_and_retryable(
+        self, tmp_path, status, retryable, expected_done
+    ):
         """Only ok and non-retryable partial rows are skippable."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109m", "status": status, "retryable": retryable,
-             "n_bonds": "3", "n_candidates": "5"},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": status,
+                    "retryable": retryable,
+                    "n_bonds": "3",
+                    "n_candidates": "5",
+                },
+            ],
+        )
         assert ("109m" in _manifest_ids(path)) is expected_done
 
     def test_ids_are_normalized_to_lowercase(self, tmp_path):
         """Manifest IDs join against the driver's lowercased selection list."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": " 1CLL ", "status": "ok", "retryable": "False"},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {"pdbID": " 1CLL ", "status": "ok", "retryable": "False"},
+            ],
+        )
         assert _manifest_ids(path) == {"1cll"}
 
-    def test_explicit_terminal_retry_unprotects_only_selected_partials(
-            self, tmp_path):
+    def test_explicit_terminal_retry_unprotects_only_selected_partials(self, tmp_path):
         """Forced resume never turns an explicitly selected ``ok`` into work."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "1ok1", "status": "ok", "retryable": "False",
-             "n_bonds": "1", "n_candidates": "1"},
-            {"pdbID": "1par", "status": "partial", "retryable": "False",
-             "n_bonds": "1", "n_candidates": "1"},
-            {"pdbID": "2par", "status": "partial", "retryable": "False",
-             "n_bonds": "1", "n_candidates": "1"},
-            {"pdbID": "1err", "status": "error", "retryable": "True",
-             "n_bonds": "", "n_candidates": ""},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "1ok1",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": "1",
+                    "n_candidates": "1",
+                },
+                {
+                    "pdbID": "1par",
+                    "status": "partial",
+                    "retryable": "False",
+                    "n_bonds": "1",
+                    "n_candidates": "1",
+                },
+                {
+                    "pdbID": "2par",
+                    "status": "partial",
+                    "retryable": "False",
+                    "n_bonds": "1",
+                    "n_candidates": "1",
+                },
+                {
+                    "pdbID": "1err",
+                    "status": "error",
+                    "retryable": "True",
+                    "n_bonds": "",
+                    "n_candidates": "",
+                },
+            ],
+        )
 
-        assert _manifest_ids(
-            path, retry_partial_ids={"1OK1", "1PAR"}) == {"1ok1", "2par"}
+        assert _manifest_ids(path, retry_partial_ids={"1OK1", "1PAR"}) == {
+            "1ok1",
+            "2par",
+        }
 
     def test_missing_manifest_is_an_empty_done_set(self, tmp_path):
         """A first run has no manifest; resume must not crash on that."""
@@ -298,74 +383,138 @@ class TestLoadDone:
 
     def test_row_without_a_pdb_id_is_not_done(self, tmp_path):
         """A blank ID cannot mark anything complete."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "", "status": "ok", "retryable": "False",
-             "n_bonds": "0", "n_candidates": "0"},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": "0",
+                    "n_candidates": "0",
+                },
+            ],
+        )
         assert _manifest_ids(path) == set()
 
-    @pytest.mark.parametrize("n_bonds,n_candidates,expected_done", [
-        ("0", "0", True),      # measured zero: the stage ran and found none
-        ("4", "9", True),
-        ("", "0", False),      # blank: the stage never ran
-        ("0", "", False),
-        ("", "", False),
-        ("   ", "0", False),   # whitespace is still blank
-    ])
+    @pytest.mark.parametrize(
+        "n_bonds,n_candidates,expected_done",
+        [
+            ("0", "0", True),  # measured zero: the stage ran and found none
+            ("4", "9", True),
+            ("", "0", False),  # blank: the stage never ran
+            ("0", "", False),
+            ("", "", False),
+            ("   ", "0", False),  # whitespace is still blank
+        ],
+    )
     def test_blank_counts_mean_the_bond_stage_never_ran(
-            self, tmp_path, n_bonds, n_candidates, expected_done):
+        self, tmp_path, n_bonds, n_candidates, expected_done
+    ):
         """README: blank counts = not run, 0 = ran and found nothing."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109m", "status": "ok", "retryable": "False",
-             "n_bonds": n_bonds, "n_candidates": n_candidates},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": n_bonds,
+                    "n_candidates": n_candidates,
+                },
+            ],
+        )
         done = _manifest_ids(path, bonds_required=True)
         assert ("109m" in done) is expected_done
 
-    def test_blank_counts_are_irrelevant_when_bonds_are_not_required(
-            self, tmp_path):
+    def test_blank_counts_are_irrelevant_when_bonds_are_not_required(self, tmp_path):
         """A --no-bonds resume must not re-run density-complete entries."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109m", "status": "ok", "retryable": "False",
-             "n_bonds": "", "n_candidates": ""},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": "",
+                    "n_candidates": "",
+                },
+            ],
+        )
         assert _manifest_ids(path, bonds_required=False) == {"109m"}
 
-    @pytest.mark.parametrize("bond_present,candidate_present,expected_done", [
-        (True, True, True),
-        (False, True, False),
-        (True, False, False),
-        (False, False, False),
-    ])
+    @pytest.mark.parametrize(
+        "bond_present,candidate_present,expected_done",
+        [
+            (True, True, True),
+            (False, True, False),
+            (True, False, False),
+            (False, False, False),
+        ],
+    )
     def test_absent_bond_outputs_make_the_result_incomplete(
-            self, tmp_path, bond_present, candidate_present, expected_done):
+        self, tmp_path, bond_present, candidate_present, expected_done
+    ):
         """Counts in the manifest are worthless if the CSV rows are gone."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109m", "status": "ok", "retryable": "False",
-             "n_bonds": "4", "n_candidates": "9"},
-        ])
-        done = main.load_done(path, bonds_required=True,
-                              bond_output_present=bond_present,
-                              candidate_output_present=candidate_present)
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": "4",
+                    "n_candidates": "9",
+                },
+            ],
+        )
+        done = main.load_done(
+            path,
+            bonds_required=True,
+            bond_output_present=bond_present,
+            candidate_output_present=candidate_present,
+        )
         assert ("109m" in done) is expected_done
 
     def test_selects_only_the_terminal_rows_of_a_mixed_manifest(self, tmp_path):
         """A realistic manifest yields exactly the finished subset."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109m", "status": "ok", "retryable": "False",
-             "n_bonds": "6", "n_candidates": "8"},
-            {"pdbID": "1cll", "status": "partial", "retryable": "False",
-             "n_bonds": "0", "n_candidates": "0"},
-            {"pdbID": "1blu", "status": "partial", "retryable": "True",
-             "n_bonds": "1", "n_candidates": "2"},
-            {"pdbID": "2fha", "status": "error", "retryable": "True"},
-            {"pdbID": "2cyp", "status": "skip", "retryable": "False"},
-            {"pdbID": "100d", "status": "ok", "retryable": "False",
-             "n_bonds": "", "n_candidates": ""},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": "6",
+                    "n_candidates": "8",
+                },
+                {
+                    "pdbID": "1cll",
+                    "status": "partial",
+                    "retryable": "False",
+                    "n_bonds": "0",
+                    "n_candidates": "0",
+                },
+                {
+                    "pdbID": "1blu",
+                    "status": "partial",
+                    "retryable": "True",
+                    "n_bonds": "1",
+                    "n_candidates": "2",
+                },
+                {"pdbID": "2fha", "status": "error", "retryable": "True"},
+                {"pdbID": "2cyp", "status": "skip", "retryable": "False"},
+                {
+                    "pdbID": "100d",
+                    "status": "ok",
+                    "retryable": "False",
+                    "n_bonds": "",
+                    "n_candidates": "",
+                },
+            ],
+        )
         assert _manifest_ids(path, bonds_required=True) == {"109m", "1cll"}
-        assert _manifest_ids(path, bonds_required=False) == {
-            "109m", "1cll", "100d"}
+        assert _manifest_ids(path, bonds_required=False) == {"109m", "1cll", "100d"}
 
 
 # --------------------------------------------------------------------------- #
@@ -376,20 +525,25 @@ class TestManifestValuesById:
 
     def test_returns_the_column_keyed_by_normalized_id(self, tmp_path):
         """Values are returned verbatim under a lowercased, stripped key."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109M", "status": "ok", "n_bonds": "7"},
-            {"pdbID": " 1cll", "status": "ok", "n_bonds": "0"},
-            {"pdbID": "1blu", "status": "error", "n_bonds": ""},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {"pdbID": "109M", "status": "ok", "n_bonds": "7"},
+                {"pdbID": " 1cll", "status": "ok", "n_bonds": "0"},
+                {"pdbID": "1blu", "status": "error", "n_bonds": ""},
+            ],
+        )
         assert main._manifest_values_by_id(path, "n_bonds") == {
-            "109m": "7", "1cll": "0", "1blu": ""}
+            "109m": "7",
+            "1cll": "0",
+            "1blu": "",
+        }
 
     def test_missing_and_empty_files_yield_no_values(self, tmp_path):
         """A first run or a truncated manifest carries nothing forward."""
         empty = tmp_path / "empty.csv"
         empty.write_text("")
-        assert main._manifest_values_by_id(str(tmp_path / "gone.csv"),
-                                           "n_bonds") == {}
+        assert main._manifest_values_by_id(str(tmp_path / "gone.csv"), "n_bonds") == {}
         assert main._manifest_values_by_id(str(empty), "n_bonds") == {}
 
     def test_unknown_column_yields_blanks_not_an_error(self, tmp_path):
@@ -397,23 +551,30 @@ class TestManifestValuesById:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [{"pdbID": "109m", "status": "ok"}],
-            columns=["pdbID", "status"])
+            columns=["pdbID", "status"],
+        )
         assert main._manifest_values_by_id(path, "n_bonds") == {"109m": ""}
 
     def test_blank_ids_are_dropped(self, tmp_path):
         """An unattributable row must not become a wildcard carry-forward."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "", "status": "ok", "n_bonds": "9"},
-            {"pdbID": "109m", "status": "ok", "n_bonds": "1"},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {"pdbID": "", "status": "ok", "n_bonds": "9"},
+                {"pdbID": "109m", "status": "ok", "n_bonds": "1"},
+            ],
+        )
         assert main._manifest_values_by_id(path, "n_bonds") == {"109m": "1"}
 
     def test_a_later_row_supersedes_an_earlier_one(self, tmp_path):
         """Resume appends, so the last row for an ID is the current one."""
-        path = _write_manifest(tmp_path / "manifest.csv", [
-            {"pdbID": "109m", "status": "error", "n_bonds": ""},
-            {"pdbID": "109m", "status": "ok", "n_bonds": "5"},
-        ])
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {"pdbID": "109m", "status": "error", "n_bonds": ""},
+                {"pdbID": "109m", "status": "ok", "n_bonds": "5"},
+            ],
+        )
         assert main._manifest_values_by_id(path, "n_bonds") == {"109m": "5"}
 
 
@@ -464,13 +625,15 @@ class TestInitialResult:
         assert result["altloc_policy"] == main.ALTLOC_POLICY
         assert result["symmetry_contact_policy"] == main.SYMMETRY_POLICY
 
-    @pytest.mark.parametrize("manual_inputs,expected", [
-        (None, "final"),
-        ({}, "final"),
-        ({"pdb_file": "/x.pdb"}, "manual"),
-    ])
-    def test_refinement_state_reflects_manual_inputs(self, manual_inputs,
-                                                     expected):
+    @pytest.mark.parametrize(
+        "manual_inputs,expected",
+        [
+            (None, "final"),
+            ({}, "final"),
+            ({"pdb_file": "/x.pdb"}, "manual"),
+        ],
+    )
+    def test_refinement_state_reflects_manual_inputs(self, manual_inputs, expected):
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
         result = main._initial_result("109m", CFG, manual_inputs)
         assert result["refinement_state"] == expected
@@ -501,8 +664,14 @@ class TestManifestRow:
 
     def test_renames_and_joins_the_derived_columns(self):
         """n/runtime become n_metals/runtime_s; code lists become pipe text."""
-        result = _result(n=3, runtime=12.5, n_bonds=7, n_candidates=11,
-                         reason_codes=["a", "b"], warning_codes=["w"])
+        result = _result(
+            n=3,
+            runtime=12.5,
+            n_bonds=7,
+            n_candidates=11,
+            reason_codes=["a", "b"],
+            warning_codes=["w"],
+        )
         row = main._manifest_row(result, False, True, {}, {})
         assert row["n_metals"] == 3
         assert row["runtime_s"] == 12.5
@@ -519,44 +688,49 @@ class TestManifestRow:
 
     def test_bonds_enabled_reports_the_measured_zero(self):
         """A bond run that found nothing records 0, distinct from blank."""
-        row = main._manifest_row(_result(n_bonds=0, n_candidates=0),
-                                 False, True, {}, {})
+        row = main._manifest_row(
+            _result(n_bonds=0, n_candidates=0), False, True, {}, {}
+        )
         assert row["n_bonds"] == 0
         assert row["n_candidates"] == 0
 
     def test_fresh_no_bonds_run_writes_blank_counts(self):
         """Without --resume there is no prior stage to carry forward."""
-        row = main._manifest_row(_result(n_bonds=4, n_candidates=6),
-                                 False, False,
-                                 {"109m": "99"}, {"109m": "98"})
+        row = main._manifest_row(
+            _result(n_bonds=4, n_candidates=6),
+            False,
+            False,
+            {"109m": "99"},
+            {"109m": "98"},
+        )
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
     def test_resume_no_bonds_carries_the_prior_counts_forward(self):
         """--resume --no-bonds preserves an earlier run's bond-stage counts."""
-        row = main._manifest_row(_result("109M"), True, False,
-                                 {"109m": "6"}, {"109m": "8"})
+        row = main._manifest_row(
+            _result("109M"), True, False, {"109m": "6"}, {"109m": "8"}
+        )
         assert row["n_bonds"] == "6"
         assert row["n_candidates"] == "8"
 
     def test_resume_no_bonds_carry_forward_preserves_a_prior_zero(self):
         """A prior measured zero stays a zero, not a blank."""
-        row = main._manifest_row(_result(), True, False,
-                                 {"109m": "0"}, {"109m": "0"})
+        row = main._manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
         assert row["n_bonds"] == "0"
         assert row["n_candidates"] == "0"
 
     def test_resume_no_bonds_without_a_prior_row_stays_blank(self):
         """An entry new to this output dir has no bond stage to inherit."""
-        row = main._manifest_row(_result("1cll"), True, False,
-                                 {"109m": "6"}, {"109m": "8"})
+        row = main._manifest_row(
+            _result("1cll"), True, False, {"109m": "6"}, {"109m": "8"}
+        )
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
     def test_prior_blank_counts_are_not_upgraded(self):
         """Carrying forward a blank must keep it blank, never zero."""
-        row = main._manifest_row(_result(), True, False,
-                                 {"109m": ""}, {"109m": ""})
+        row = main._manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
@@ -583,11 +757,11 @@ class TestUnrunBondStageChain:
             for row in rows:
                 writer.writerow(row)
 
-    def test_failed_bond_enabled_entry_is_not_marked_bond_complete(
-            self, tmp_path):
+    def test_failed_bond_enabled_entry_is_not_marked_bond_complete(self, tmp_path):
         """Step 1: a pre-bond failure writes blank counts, so it is retried."""
-        result = _result("109m", status="error", retryable=True,
-                         error="density stage failed")
+        result = _result(
+            "109m", status="error", retryable=True, error="density stage failed"
+        )
         row = main._manifest_row(result, False, True, {}, {})
         manifest = tmp_path / "manifest.csv"
         self._write_rows(manifest, [row])
@@ -600,7 +774,8 @@ class TestUnrunBondStageChain:
         assert row["n_candidates"] == ""
 
     def test_resume_no_bonds_recovery_does_not_fake_a_completed_bond_stage(
-            self, tmp_path):
+        self, tmp_path
+    ):
         """The full chain: fail, resume --no-bonds to ok, then resume bonds.
 
         The entry must still be scheduled by the bond-enabled resume, because
@@ -610,24 +785,27 @@ class TestUnrunBondStageChain:
 
         # Run 1: bonds enabled, but the entry fails before the bond stage.
         failed = main._manifest_row(
-            _result("109m", status="error", retryable=True,
-                    error="edstats failed"),
-            resume=False, bonds_enabled=True,
-            prior_bond_counts={}, prior_candidate_counts={})
+            _result("109m", status="error", retryable=True, error="edstats failed"),
+            resume=False,
+            bonds_enabled=True,
+            prior_bond_counts={},
+            prior_candidate_counts={},
+        )
         self._write_rows(manifest, [failed])
 
         # Run 2: --resume --no-bonds. The entry is scheduled (not done) and
         # this time the density stage succeeds.
         assert main.load_done(str(manifest), bonds_required=False) == set()
         prior_bonds = main._manifest_values_by_id(str(manifest), "n_bonds")
-        prior_candidates = main._manifest_values_by_id(
-            str(manifest), "n_candidates")
+        prior_candidates = main._manifest_values_by_id(str(manifest), "n_candidates")
 
         recovered = main._manifest_row(
             _result("109m", status="ok", retryable=False, n=2),
-            resume=True, bonds_enabled=False,
+            resume=True,
+            bonds_enabled=False,
             prior_bond_counts=prior_bonds,
-            prior_candidate_counts=prior_candidates)
+            prior_candidate_counts=prior_candidates,
+        )
         assert recovered["status"] == "ok"
         assert recovered["n_metals"] == 2
         self._write_rows(manifest, [recovered])
@@ -641,10 +819,14 @@ class TestUnrunBondStageChain:
         # Run 3 completes the bond stage with a genuine measured zero; only
         # now may a later bond-enabled resume skip the entry.
         completed = main._manifest_row(
-            _result("109m", status="ok", retryable=False, n=2,
-                    n_bonds=0, n_candidates=0),
-            resume=True, bonds_enabled=True,
-            prior_bond_counts={}, prior_candidate_counts={})
+            _result(
+                "109m", status="ok", retryable=False, n=2, n_bonds=0, n_candidates=0
+            ),
+            resume=True,
+            bonds_enabled=True,
+            prior_bond_counts={},
+            prior_candidate_counts={},
+        )
         self._write_rows(manifest, [completed])
         assert main.load_done(str(manifest), bonds_required=True) == {"109m"}
 
@@ -655,18 +837,21 @@ class TestUnrunBondStageChain:
 class TestResumeReplacementSucceeded:
     """Only a terminal retry may replace the rows it is retrying."""
 
-    @pytest.mark.parametrize("status,retryable,expected", [
-        ("ok", False, True),
-        ("ok", True, True),
-        ("OK", True, True),
-        (" ok ", False, True),
-        ("partial", False, True),
-        ("partial", True, False),
-        ("error", False, False),
-        ("error", True, False),
-        ("skip", False, False),
-        ("", True, False),
-    ])
+    @pytest.mark.parametrize(
+        "status,retryable,expected",
+        [
+            ("ok", False, True),
+            ("ok", True, True),
+            ("OK", True, True),
+            (" ok ", False, True),
+            ("partial", False, True),
+            ("partial", True, False),
+            ("error", False, False),
+            ("error", True, False),
+            ("skip", False, False),
+            ("", True, False),
+        ],
+    )
     def test_terminality(self, status, retryable, expected):
         """A retryable or failed retry leaves the previous rows in place."""
         result = {"status": status, "retryable": retryable}
@@ -683,8 +868,12 @@ class TestResumeReplacementSucceeded:
 class TestResumeStaging:
     """Staged retries replace rows only on a completed, terminal batch."""
 
-    TARGET_NAMES = ("manifest.csv", "metal_stats_all.csv",
-                    "metal_bonds_all.csv", "metal_candidates_all.csv")
+    TARGET_NAMES = (
+        "manifest.csv",
+        "metal_stats_all.csv",
+        "metal_bonds_all.csv",
+        "metal_candidates_all.csv",
+    )
 
     def _outputs(self, output_dir, confidence=False):
         """Create the four (or five) output CSVs with two entries' rows."""
@@ -711,18 +900,17 @@ class TestResumeStaging:
                 for row in rows:
                     writer.writerow(row)
 
-    def test_staged_paths_mirror_the_targets_inside_the_output_dir(
-            self, tmp_path):
+    def test_staged_paths_mirror_the_targets_inside_the_output_dir(self, tmp_path):
         """Staging is a sibling temp dir so a merge is a same-filesystem move."""
         targets = self._outputs(tmp_path)
         staging = main._ResumeStaging(str(tmp_path), targets)
         try:
             assert os.path.isdir(staging.dir)
             assert os.path.dirname(staging.dir) == str(tmp_path)
-            assert [os.path.basename(p) for p in staging.staged] == \
-                [os.path.basename(p) for p in targets]
-            assert all(os.path.dirname(p) == staging.dir
-                       for p in staging.staged)
+            assert [os.path.basename(p) for p in staging.staged] == [
+                os.path.basename(p) for p in targets
+            ]
+            assert all(os.path.dirname(p) == staging.dir for p in staging.staged)
             assert staging.replacement_ids == set()
             # Nothing has touched the real outputs yet.
             for target in targets:
@@ -731,7 +919,8 @@ class TestResumeStaging:
             staging.discard()
 
     def test_commit_without_replacement_ids_leaves_outputs_byte_identical(
-            self, tmp_path):
+        self, tmp_path
+    ):
         """A batch in which no retry succeeded must change nothing."""
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
@@ -748,10 +937,13 @@ class TestResumeStaging:
         targets = self._outputs(tmp_path)
         staging = main._ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {
-                index: [["109m", f"new-109m-{name}"]]
-                for index, name in enumerate(self.TARGET_NAMES)
-            })
+            self._stage(
+                staging,
+                {
+                    index: [["109m", f"new-109m-{name}"]]
+                    for index, name in enumerate(self.TARGET_NAMES)
+                },
+            )
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True)
         finally:
@@ -764,8 +956,7 @@ class TestResumeStaging:
             assert values["1cll"] == f"old-1cll-{name}"
             assert len(rows) == 3
 
-    def test_commit_drops_stale_rows_when_the_retry_produced_none(
-            self, tmp_path):
+    def test_commit_drops_stale_rows_when_the_retry_produced_none(self, tmp_path):
         """A retry that yields no rows must not leave the old ones behind."""
         targets = self._outputs(tmp_path)
         staging = main._ResumeStaging(str(tmp_path), targets)
@@ -779,27 +970,28 @@ class TestResumeStaging:
             values = {row[0] for row in _read_csv(target)[1:]}
             assert values == {"1cll"}
 
-    def test_commit_with_bonds_disabled_leaves_bond_outputs_untouched(
-            self, tmp_path):
+    def test_commit_with_bonds_disabled_leaves_bond_outputs_untouched(self, tmp_path):
         """--resume --no-bonds must preserve existing bond and candidate rows."""
         targets = self._outputs(tmp_path)
         bond_paths = targets[2:4]
         before = {p: open(p, "rb").read() for p in bond_paths}
         staging = main._ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {
-                0: [["109m", "new-manifest"]],
-                1: [["109m", "new-stats"]],
-                2: [["109m", "SHOULD-NOT-APPEAR"]],
-                3: [["109m", "SHOULD-NOT-APPEAR"]],
-            })
+            self._stage(
+                staging,
+                {
+                    0: [["109m", "new-manifest"]],
+                    1: [["109m", "new-stats"]],
+                    2: [["109m", "SHOULD-NOT-APPEAR"]],
+                    3: [["109m", "SHOULD-NOT-APPEAR"]],
+                },
+            )
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=False)
         finally:
             staging.discard()
         assert {p: open(p, "rb").read() for p in bond_paths} == before
-        manifest_values = {row[0]: row[1]
-                           for row in _read_csv(targets[0])[1:]}
+        manifest_values = {row[0]: row[1] for row in _read_csv(targets[0])[1:]}
         assert manifest_values == {
             "109m": "new-manifest",
             "1cll": "old-1cll-manifest.csv",
@@ -828,8 +1020,7 @@ class TestResumeStaging:
         finally:
             staging.discard()
         values = {row[0]: row[1] for row in _read_csv(confidence_path)[1:]}
-        assert values == {"109m": "new", "1cll": (
-            "old-1cll-confidence_inputs_all.csv")}
+        assert values == {"109m": "new", "1cll": ("old-1cll-confidence_inputs_all.csv")}
 
     def test_commit_replaces_every_enabled_confidence_output(self, tmp_path):
         """Scored and input confidence rows participate in one staged commit."""
@@ -837,31 +1028,33 @@ class TestResumeStaging:
         scores = tmp_path / "confidence_scores_all.csv"
         with open(scores, "w", newline="") as handle:
             writer = csv.writer(handle)
-            writer.writerows([
-                ["pdbID", "value"],
-                ["109m", "old-109m-scores"],
-                ["1cll", "old-1cll-scores"],
-            ])
+            writer.writerows(
+                [
+                    ["pdbID", "value"],
+                    ["109m", "old-109m-scores"],
+                    ["1cll", "old-1cll-scores"],
+                ]
+            )
         targets.append(str(scores))
         staging = main._ResumeStaging(str(tmp_path), tuple(targets))
         try:
-            self._stage(staging, {
-                index: [["109m", f"new-{index}"]]
-                for index in range(len(targets))
-            })
+            self._stage(
+                staging,
+                {index: [["109m", f"new-{index}"]] for index in range(len(targets))},
+            )
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True, confidence_enabled=True)
         finally:
             staging.discard()
 
         for index in (4, 5):
-            values = {row[0]: row[1]
-                      for row in _read_csv(targets[index])[1:]}
+            values = {row[0]: row[1] for row in _read_csv(targets[index])[1:]}
             expected_old = (
                 "old-1cll-confidence_inputs_all.csv"
-                if index == 4 else "old-1cll-scores")
-            assert values == {
-                "109m": f"new-{index}", "1cll": expected_old}
+                if index == 4
+                else "old-1cll-scores"
+            )
+            assert values == {"109m": f"new-{index}", "1cll": expected_old}
 
     def test_discard_leaves_previous_rows_intact(self, tmp_path):
         """An interrupted retry batch must not damage the existing outputs."""
@@ -887,8 +1080,7 @@ class TestResumeStaging:
         targets = self._outputs(tmp_path)
         staging = main._ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {index: [["109M", "new"]]
-                                  for index in range(4)})
+            self._stage(staging, {index: [["109M", "new"]] for index in range(4)})
             staging.replacement_ids.add("109M")
             staging.commit(bonds_enabled=True)
         finally:
@@ -898,7 +1090,8 @@ class TestResumeStaging:
         assert len(values) == 2
 
     def test_a_staged_schema_mismatch_aborts_without_touching_the_target(
-            self, tmp_path):
+        self, tmp_path
+    ):
         """A header disagreement must fail loudly, not silently misalign rows."""
         targets = self._outputs(tmp_path)
         before = open(targets[0], "rb").read()
@@ -916,8 +1109,9 @@ class TestResumeStaging:
             staging.discard()
         assert open(targets[0], "rb").read() == before
         # No temporary merge file was left behind next to the target.
-        leftovers = [name for name in os.listdir(tmp_path)
-                     if name.startswith(".manifest.csv.")]
+        leftovers = [
+            name for name in os.listdir(tmp_path) if name.startswith(".manifest.csv.")
+        ]
         assert leftovers == []
 
 
@@ -931,12 +1125,13 @@ class TestOutputWriters:
     def _handles(tmp_path, bonds=True, candidates=True, confidence=None):
         manifest = open(tmp_path / "manifest.csv", "w", newline="")
         stats = open(tmp_path / "stats.csv", "w", newline="")
-        bonds_fh = (open(tmp_path / "bonds.csv", "w", newline="")
-                    if bonds else None)
-        candidates_fh = (open(tmp_path / "candidates.csv", "w", newline="")
-                         if candidates else None)
-        confidence_fh = (open(tmp_path / "confidence.csv", "w", newline="")
-                         if confidence else None)
+        bonds_fh = open(tmp_path / "bonds.csv", "w", newline="") if bonds else None
+        candidates_fh = (
+            open(tmp_path / "candidates.csv", "w", newline="") if candidates else None
+        )
+        confidence_fh = (
+            open(tmp_path / "confidence.csv", "w", newline="") if confidence else None
+        )
         return manifest, stats, bonds_fh, candidates_fh, confidence_fh
 
     @staticmethod
@@ -957,21 +1152,23 @@ class TestOutputWriters:
         assert _read_csv(tmp_path / "manifest.csv") == [main.MANIFEST_COLUMNS]
         assert _read_csv(tmp_path / "stats.csv") == [list(main.STATS_COLUMNS)]
         assert _read_csv(tmp_path / "bonds.csv") == [list(main.BOND_COLUMNS)]
-        assert _read_csv(tmp_path / "candidates.csv") == [
-            list(main.CANDIDATE_COLUMNS)]
-        assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (
-            0, 0, 0)
+        assert _read_csv(tmp_path / "candidates.csv") == [list(main.CANDIDATE_COLUMNS)]
+        assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
 
     def test_running_counts_track_the_rows_actually_written(self, tmp_path):
         """The end-of-run totals come from these counters, not from re-reading."""
         handles = self._handles(tmp_path)
         writers = main._OutputWriters(*handles)
-        stats_rows = [{"pdbID": "109m", "category": "metal",
-                       "fields": ["x"] * (len(main.STATS_COLUMNS) - 2)}
-                      for _ in range(3)]
+        stats_rows = [
+            {
+                "pdbID": "109m",
+                "category": "metal",
+                "fields": ["x"] * (len(main.STATS_COLUMNS) - 2),
+            }
+            for _ in range(3)
+        ]
         bond_rows = [dict.fromkeys(main.BOND_COLUMNS, "") for _ in range(4)]
-        candidate_rows = [dict.fromkeys(main.CANDIDATE_COLUMNS, "")
-                          for _ in range(2)]
+        candidate_rows = [dict.fromkeys(main.CANDIDATE_COLUMNS, "") for _ in range(2)]
         writers.write_stats_rows(stats_rows)
         writers.write_bond_rows(bond_rows)
         writers.write_candidate_rows(candidate_rows)
@@ -981,7 +1178,7 @@ class TestOutputWriters:
         assert writers.n_rows == 6
         assert writers.n_bonds == 4
         assert writers.n_candidates == 2
-        assert len(_read_csv(tmp_path / "stats.csv")) == 7   # header + 6
+        assert len(_read_csv(tmp_path / "stats.csv")) == 7  # header + 6
         assert len(_read_csv(tmp_path / "bonds.csv")) == 5
         assert len(_read_csv(tmp_path / "candidates.csv")) == 3
 
@@ -991,7 +1188,8 @@ class TestOutputWriters:
         writers = main._OutputWriters(*handles)
         fields = [str(i) for i in range(len(main.STATS_COLUMNS) - 2)]
         writers.write_stats_rows(
-            [{"pdbID": "109m", "category": "cofactor", "fields": fields}])
+            [{"pdbID": "109m", "category": "cofactor", "fields": fields}]
+        )
         self._close(handles)
         rows = _read_csv(tmp_path / "stats.csv")
         assert rows[1] == ["109m", "cofactor"] + fields
@@ -1021,12 +1219,14 @@ class TestOutputWriters:
         assert not (tmp_path / "bonds.csv").exists()
         assert not (tmp_path / "candidates.csv").exists()
 
-    @pytest.mark.parametrize("mutate,columns_name", [
-        ("drop", "BOND_COLUMNS"),
-        ("add", "BOND_COLUMNS"),
-    ])
-    def test_bond_row_schema_drift_fails_loudly(self, tmp_path, mutate,
-                                                columns_name):
+    @pytest.mark.parametrize(
+        "mutate,columns_name",
+        [
+            ("drop", "BOND_COLUMNS"),
+            ("add", "BOND_COLUMNS"),
+        ],
+    )
+    def test_bond_row_schema_drift_fails_loudly(self, tmp_path, mutate, columns_name):
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
         writers = main._OutputWriters(*handles)
@@ -1061,8 +1261,9 @@ class TestOutputWriters:
         handles = self._handles(tmp_path, confidence=True)
         try:
             with pytest.raises(ValueError):
-                main._OutputWriters(*handles[:4], confidence_fh=handles[4],
-                                    confidence_columns=None)
+                main._OutputWriters(
+                    *handles[:4], confidence_fh=handles[4], confidence_columns=None
+                )
         finally:
             self._close(handles)
 
@@ -1070,33 +1271,35 @@ class TestOutputWriters:
         """The optional fifth stream behaves like the others."""
         columns = list(main.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = main._OutputWriters(*handles[:4], confidence_fh=handles[4],
-                                      confidence_columns=columns)
+        writers = main._OutputWriters(
+            *handles[:4], confidence_fh=handles[4], confidence_columns=columns
+        )
         writers.write_confidence_rows([])
         assert writers.n_confidence == 0
         writers.write_confidence_rows(
-            [dict.fromkeys(columns, ""), dict.fromkeys(columns, "")])
+            [dict.fromkeys(columns, ""), dict.fromkeys(columns, "")]
+        )
         self._close(handles)
         rows = _read_csv(tmp_path / "confidence.csv")
         assert rows[0] == columns
         assert writers.n_confidence == 2
         assert len(rows) == 3
 
-    def test_scored_confidence_stream_projects_synchronized_inputs(
-            self, tmp_path):
+    def test_scored_confidence_stream_projects_synchronized_inputs(self, tmp_path):
         """A targeted scored resume updates its reusable input rows as well."""
         scored_columns = [
             *main.CONFIDENCE_INPUT_COLUMNS,
             *main.CONFIDENCE_ANALYSIS_COLUMNS,
         ]
         handles = self._handles(tmp_path, confidence=True)
-        inputs_handle = open(tmp_path / "confidence_inputs.csv", "w",
-                             newline="")
+        inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
         try:
             writers = main._OutputWriters(
-                *handles[:4], confidence_fh=handles[4],
+                *handles[:4],
+                confidence_fh=handles[4],
                 confidence_columns=scored_columns,
-                confidence_inputs_fh=inputs_handle)
+                confidence_inputs_fh=inputs_handle,
+            )
             row = {column: f"value-{column}" for column in scored_columns}
             writers.write_confidence_rows([row])
         finally:
@@ -1107,15 +1310,15 @@ class TestOutputWriters:
         inputs = _read_csv(tmp_path / "confidence_inputs.csv")
         assert scored[0] == scored_columns
         assert inputs[0] == list(main.CONFIDENCE_INPUT_COLUMNS)
-        assert inputs[1] == [
-            row[column] for column in main.CONFIDENCE_INPUT_COLUMNS]
+        assert inputs[1] == [row[column] for column in main.CONFIDENCE_INPUT_COLUMNS]
 
     def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path):
         """A drifted confidence row must not be written under the old header."""
         columns = list(main.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = main._OutputWriters(*handles[:4], confidence_fh=handles[4],
-                                      confidence_columns=columns)
+        writers = main._OutputWriters(
+            *handles[:4], confidence_fh=handles[4], confidence_columns=columns
+        )
         row = dict.fromkeys(columns, "")
         row.pop(columns[0])
         try:
@@ -1125,34 +1328,54 @@ class TestOutputWriters:
             self._close(handles)
         assert writers.n_confidence == 0
 
-    def test_manifest_rows_round_trip_through_the_real_projection(self,
-                                                                  tmp_path):
+    def test_manifest_rows_round_trip_through_the_real_projection(self, tmp_path):
         """A written manifest is readable by load_done without reinterpretation."""
         handles = self._handles(tmp_path)
         writers = main._OutputWriters(*handles)
-        writers.write_manifest_row(main._manifest_row(
-            _result("109m", status="ok", retryable=False, n=1,
-                    n_bonds=0, n_candidates=0, runtime=1.0),
-            False, True, {}, {}))
-        writers.write_manifest_row(main._manifest_row(
-            _result("1cll", status="error", retryable=True), False, True,
-            {}, {}))
+        writers.write_manifest_row(
+            main._manifest_row(
+                _result(
+                    "109m",
+                    status="ok",
+                    retryable=False,
+                    n=1,
+                    n_bonds=0,
+                    n_candidates=0,
+                    runtime=1.0,
+                ),
+                False,
+                True,
+                {},
+                {},
+            )
+        )
+        writers.write_manifest_row(
+            main._manifest_row(
+                _result("1cll", status="error", retryable=True), False, True, {}, {}
+            )
+        )
         self._close(handles)
         path = str(tmp_path / "manifest.csv")
         assert main.load_done(path, bonds_required=True) == {"109m"}
-        assert main._manifest_values_by_id(path, "n_bonds") == {
-            "109m": "0", "1cll": ""}
+        assert main._manifest_values_by_id(path, "n_bonds") == {"109m": "0", "1cll": ""}
 
     def test_each_stream_is_flushed_before_the_manifest_marker(self, tmp_path):
         """An interrupted batch must retain the rows of completed entries."""
         handles = self._handles(tmp_path)
         writers = main._OutputWriters(*handles)
-        writers.write_stats_rows([{"pdbID": "109m", "category": "metal",
-                                   "fields": ["x"] * (
-                                       len(main.STATS_COLUMNS) - 2)}])
+        writers.write_stats_rows(
+            [
+                {
+                    "pdbID": "109m",
+                    "category": "metal",
+                    "fields": ["x"] * (len(main.STATS_COLUMNS) - 2),
+                }
+            ]
+        )
         writers.write_bond_rows([dict.fromkeys(main.BOND_COLUMNS, "")])
         writers.write_manifest_row(
-            main._manifest_row(_result(status="ok"), False, True, {}, {}))
+            main._manifest_row(_result(status="ok"), False, True, {}, {})
+        )
         # Without closing the handles, the data must already be on disk.
         assert len(_read_csv(tmp_path / "stats.csv")) == 2
         assert len(_read_csv(tmp_path / "bonds.csv")) == 2
@@ -1168,18 +1391,48 @@ class TestCifToPdb:
 
     @staticmethod
     def _standard_cif(tmp_path, name="in.cif"):
-        return _write_cif(tmp_path / name, [
-            _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0),
-                      "1.00", 1, "A"),
-            _cif_atom(2, "C", "CA", "GLY", "A", 1, 1, (21.5, 20.0, 20.0),
-                      "?", 1, "A"),
-            _cif_atom(3, "C", "C", "GLY", "A", 1, 1, (22.0, 21.4, 20.0),
-                      ".", 1, "A"),
-            _cif_atom(4, "ZN", "ZN", "ZN", "B", 2, ".", (0.0, 0.0, 0.0),
-                      "0.75", 1, "B", group="HETATM"),
-            _cif_atom(5, "FE", "FE1", "SF4X", "C", 3, ".", (5.0, 0.0, 0.0),
-                      "1.00", 2, "B", group="HETATM"),
-        ])
+        return _write_cif(
+            tmp_path / name,
+            [
+                _cif_atom(
+                    1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A"
+                ),
+                _cif_atom(
+                    2, "C", "CA", "GLY", "A", 1, 1, (21.5, 20.0, 20.0), "?", 1, "A"
+                ),
+                _cif_atom(
+                    3, "C", "C", "GLY", "A", 1, 1, (22.0, 21.4, 20.0), ".", 1, "A"
+                ),
+                _cif_atom(
+                    4,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    "B",
+                    2,
+                    ".",
+                    (0.0, 0.0, 0.0),
+                    "0.75",
+                    1,
+                    "B",
+                    group="HETATM",
+                ),
+                _cif_atom(
+                    5,
+                    "FE",
+                    "FE1",
+                    "SF4X",
+                    "C",
+                    3,
+                    ".",
+                    (5.0, 0.0, 0.0),
+                    "1.00",
+                    2,
+                    "B",
+                    group="HETATM",
+                ),
+            ],
+        )
 
     def test_missing_occupancies_are_blank_not_one(self, tmp_path):
         """README: '.' and '?' become blank PDB occupancy, never 1.00."""
@@ -1188,14 +1441,13 @@ class TestCifToPdb:
         lines = _pdb_atom_lines(out)
         assert len(lines) == 5
         occupancies = [_occupancy_field(line) for line in lines]
-        assert occupancies[1].strip() == ""      # '?'
-        assert occupancies[2].strip() == ""      # '.'
+        assert occupancies[1].strip() == ""  # '?'
+        assert occupancies[2].strip() == ""  # '.'
         assert occupancies[0].strip() == "1.00"
         assert float(occupancies[3]) == 0.75
         assert float(occupancies[4]) == 1.00
 
-    def test_blanking_occupancy_does_not_shift_the_other_columns(self,
-                                                                 tmp_path):
+    def test_blanking_occupancy_does_not_shift_the_other_columns(self, tmp_path):
         """Only columns 55-60 change; coordinates, B and element stay put."""
         cif = self._standard_cif(tmp_path)
         out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
@@ -1208,12 +1460,41 @@ class TestCifToPdb:
 
     def test_absent_occupancy_column_blanks_every_atom(self, tmp_path):
         """An mmCIF with no occupancy loop item asserts nothing about it."""
-        cif = _write_cif(tmp_path / "noocc.cif", [
-            _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0),
-                      None, 1, "A", with_occupancy=False),
-            _cif_atom(2, "ZN", "ZN", "ZN", "B", 2, ".", (0.0, 0.0, 0.0),
-                      None, 1, "B", group="HETATM", with_occupancy=False),
-        ], header=_CIF_HEADER_NO_OCCUPANCY)
+        cif = _write_cif(
+            tmp_path / "noocc.cif",
+            [
+                _cif_atom(
+                    1,
+                    "N",
+                    "N",
+                    "GLY",
+                    "A",
+                    1,
+                    1,
+                    (20.0, 20.0, 20.0),
+                    None,
+                    1,
+                    "A",
+                    with_occupancy=False,
+                ),
+                _cif_atom(
+                    2,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    "B",
+                    2,
+                    ".",
+                    (0.0, 0.0, 0.0),
+                    None,
+                    1,
+                    "B",
+                    group="HETATM",
+                    with_occupancy=False,
+                ),
+            ],
+            header=_CIF_HEADER_NO_OCCUPANCY,
+        )
         out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         for line in _pdb_atom_lines(out):
             assert _occupancy_field(line).strip() == ""
@@ -1230,8 +1511,11 @@ class TestCifToPdb:
         cif = self._standard_cif(tmp_path)
         out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
-            remarks = [line.split() for line in handle
-                       if line.startswith(main.RESNAME_REMARK_PREFIX)]
+            remarks = [
+                line.split()
+                for line in handle
+                if line.startswith(main.RESNAME_REMARK_PREFIX)
+            ]
         assert len(remarks) == 1
         fields = remarks[0]
         # REMARK 950 ALCHEMY RESNAME <model> <chain> <resnum> <written> <source>
@@ -1242,16 +1526,33 @@ class TestCifToPdb:
 
     def test_no_mapping_remark_when_every_name_fits(self, tmp_path):
         """Short component ids need no provenance record."""
-        cif = _write_cif(tmp_path / "short.cif", [
-            _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0),
-                      "1.00", 1, "A"),
-            _cif_atom(2, "ZN", "ZN", "ZN", "B", 2, ".", (0.0, 0.0, 0.0),
-                      "1.00", 1, "B", group="HETATM"),
-        ])
+        cif = _write_cif(
+            tmp_path / "short.cif",
+            [
+                _cif_atom(
+                    1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A"
+                ),
+                _cif_atom(
+                    2,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    "B",
+                    2,
+                    ".",
+                    (0.0, 0.0, 0.0),
+                    "1.00",
+                    1,
+                    "B",
+                    group="HETATM",
+                ),
+            ],
+        )
         out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
-            assert not any(line.startswith(main.RESNAME_REMARK_PREFIX)
-                           for line in handle)
+            assert not any(
+                line.startswith(main.RESNAME_REMARK_PREFIX) for line in handle
+            )
 
     def test_conversion_round_trips_through_load_structure(self, tmp_path):
         """The mapping is reversible: the analysis load restores the CCD id.
@@ -1275,19 +1576,30 @@ class TestCifToPdb:
         assert by_atom["N"].occupancy == pytest.approx(1.0)
         assert by_atom["ZN"].occupancy == pytest.approx(0.75)
 
-    def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(
-            self, tmp_path):
+    def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(self, tmp_path):
         """Every source site survives when one-character chain ids run out."""
         source_chains = [f"C{index:02d}" for index in range(62)]
         source_chains.insert(20, "A")
-        cif = _write_cif(tmp_path / "many-chains.cif", [
-            _cif_atom(
-                index + 1, "ZN", "ZN", "ZN", chain, index + 1, ".",
-                (float(index), 0.0, 0.0), "1.00", 1, chain,
-                group="HETATM",
-            )
-            for index, chain in enumerate(source_chains)
-        ])
+        cif = _write_cif(
+            tmp_path / "many-chains.cif",
+            [
+                _cif_atom(
+                    index + 1,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    chain,
+                    index + 1,
+                    ".",
+                    (float(index), 0.0, 0.0),
+                    "1.00",
+                    1,
+                    chain,
+                    group="HETATM",
+                )
+                for index, chain in enumerate(source_chains)
+            ],
+        )
 
         out = main._cif_to_pdb(cif, str(tmp_path / "many-chains.pdb"))
         atom_lines = _pdb_atom_lines(out)
@@ -1295,8 +1607,7 @@ class TestCifToPdb:
         assert {line[21:22] for line in atom_lines} == {"A"}
         with open(out) as handle:
             identity_remarks = [
-                line for line in handle
-                if line.startswith(main.RESIDUE_REMARK_PREFIX)
+                line for line in handle if line.startswith(main.RESIDUE_REMARK_PREFIX)
             ]
         assert len(identity_remarks) == 63
 
@@ -1306,7 +1617,8 @@ class TestCifToPdb:
         assert {metal.chain_id for metal in metals} == set(source_chains)
         assert {metal.coordinate_chain_id for metal in metals} == {"A"}
         assert {metal.coordinate_resnum for metal in metals} == {
-            str(index) for index in range(1, 64)}
+            str(index) for index in range(1, 64)
+        }
         assert {metal.chain_index for metal in metals} == {0}
         assert [metal.output_chain_index for metal in metals] == list(range(63))
         assert {metal.output_residue_index for metal in metals} == {0}
@@ -1316,17 +1628,18 @@ class TestCifToPdb:
         # The explicit indexes keep those two namespaces unambiguous.
         assert len(context.residues_for_author("ZN", "A", "1")) == 2
         (source_a,) = context.residues_for_source_author("ZN", "A", "1")
-        (coordinate_a1,) = context.residues_for_coordinate_author(
-            "ZN", "A", "1")
+        (coordinate_a1,) = context.residues_for_coordinate_author("ZN", "A", "1")
         assert source_a.chain_id == "A"
         assert coordinate_a1.chain_id == source_chains[0]
 
         # EDSTATS sees the packed identities, while aggregate rows restore the
         # original mmCIF author identifiers.
         stats_path = helpers.write_edstats_for_structure(
-            tmp_path / "stats.out", context, metrics={"ZDm": 2.0})
+            tmp_path / "stats.out", context, metrics={"ZDm": 2.0}
+        )
         rows, _ = metal_identification.extract_metal_statistics(
-            "test", stats_path, {"ZN"}, set(), structure=context)
+            "test", stats_path, {"ZN"}, set(), structure=context
+        )
         assert len(rows) == 63
         assert {row["chain"] for row in rows} == set(source_chains)
         assert {row["fields"][1] for row in rows} == set(source_chains)
@@ -1335,14 +1648,13 @@ class TestCifToPdb:
         # Source struct_conn partners resolve directly through the same
         # provenance, without trying to reproduce the packed numbering.
         source = gemmi.read_structure(cif)
-        source_chain = next(
-            chain for chain in source[0] if chain.name == "A")
+        source_chain = next(chain for chain in source[0] if chain.name == "A")
         source_residue = source_chain[0]
         source_atom = source_residue[0]
         cra = SimpleNamespace(
-            chain=source_chain, residue=source_residue, atom=source_atom)
-        resolved = bond_analysis._analysis_atom_for_partner(
-            context, cra, {})
+            chain=source_chain, residue=source_residue, atom=source_atom
+        )
+        resolved = bond_analysis._analysis_atom_for_partner(context, cra, {})
         assert resolved is not None
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"
@@ -1350,36 +1662,60 @@ class TestCifToPdb:
     def test_missing_input_file_raises_file_not_found(self, tmp_path):
         """A vanished mirror file must not be reported as a conversion bug."""
         with pytest.raises(FileNotFoundError):
-            main._cif_to_pdb(str(tmp_path / "gone.cif"),
-                             str(tmp_path / "out.pdb"))
+            main._cif_to_pdb(str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb"))
 
     def test_duplicate_atom_site_id_is_rejected(self, tmp_path):
         """Serials key the occupancy restoration; duplicates make it ambiguous."""
-        cif = _write_cif(tmp_path / "dup.cif", [
-            _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0),
-                      "1.00", 1, "A"),
-            _cif_atom(1, "ZN", "ZN", "ZN", "B", 2, ".", (0.0, 0.0, 0.0),
-                      "?", 1, "B", group="HETATM"),
-        ])
+        cif = _write_cif(
+            tmp_path / "dup.cif",
+            [
+                _cif_atom(
+                    1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A"
+                ),
+                _cif_atom(
+                    1,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    "B",
+                    2,
+                    ".",
+                    (0.0, 0.0, 0.0),
+                    "?",
+                    1,
+                    "B",
+                    group="HETATM",
+                ),
+            ],
+        )
         with pytest.raises(ValueError, match="duplicate mmCIF atom_site id"):
             main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
     def test_non_integer_atom_site_id_is_rejected(self, tmp_path):
         """gemmi exposes an integer serial; a non-integer id cannot be joined."""
-        cif = _write_cif(tmp_path / "bad.cif", [
-            _cif_atom("A1", "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0),
-                      "1.00", 1, "A"),
-        ])
+        cif = _write_cif(
+            tmp_path / "bad.cif",
+            [
+                _cif_atom(
+                    "A1", "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A"
+                ),
+            ],
+        )
         with pytest.raises(ValueError, match="not an integer"):
             main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
     def test_multiple_atom_site_blocks_are_rejected(self, tmp_path):
         """Ambiguous input must fail rather than silently convert one block."""
-        atoms = [_cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0),
-                           "1.00", 1, "A")]
-        text = (_CIF_HEADER + "".join(line + "\n" for line in atoms) + "\n" +
-                _CIF_HEADER.replace("data_TEST", "data_SECOND") +
-                "".join(line + "\n" for line in atoms))
+        atoms = [
+            _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A")
+        ]
+        text = (
+            _CIF_HEADER
+            + "".join(line + "\n" for line in atoms)
+            + "\n"
+            + _CIF_HEADER.replace("data_TEST", "data_SECOND")
+            + "".join(line + "\n" for line in atoms)
+        )
         path = tmp_path / "two.cif"
         path.write_text(text)
         with pytest.raises(ValueError, match="exactly one block"):
@@ -1412,16 +1748,21 @@ class TestResidueConversionRecords:
 
     def test_a_renamed_residue_is_recorded_with_its_author_identity(self):
         """The record must locate the residue the way the PDB reader will."""
-        source = _simple_structure([
-            ("A", 1, "GLY", [("N", "N")]),
-            ("B", 7, "SF4X", [("FE1", "FE")]),
-        ])
-        converted = _simple_structure([
-            ("A", 1, "GLY", [("N", "N")]),
-            ("B", 7, "SF4", [("FE1", "FE")]),
-        ])
+        source = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N")]),
+                ("B", 7, "SF4X", [("FE1", "FE")]),
+            ]
+        )
+        converted = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N")]),
+                ("B", 7, "SF4", [("FE1", "FE")]),
+            ]
+        )
         assert main._residue_conversion_records(source, converted) == [
-            (1, "B", "7", "SF4", "SF4X")]
+            (1, "B", "7", "SF4", "SF4X")
+        ]
 
     def test_reordering_is_rejected(self):
         """EDSTATS joins by position-independent identity only if order holds."""
@@ -1433,32 +1774,40 @@ class TestResidueConversionRecords:
     def test_changed_author_identifiers_are_rejected(self):
         """A renumbered or rechained residue would break every downstream join."""
         source = _simple_structure(_BASE_RESIDUES)
-        converted = _simple_structure([
-            ("A", 1, "GLY", [("N", "N"), ("CA", "C")]),
-            ("B", 99, "ZN", [("ZN", "ZN")]),
-        ])
+        converted = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N"), ("CA", "C")]),
+                ("B", 99, "ZN", [("ZN", "ZN")]),
+            ]
+        )
         with pytest.raises(ValueError, match="ordering|author identifiers"):
             main._residue_conversion_records(source, converted)
 
     def test_changed_atom_membership_is_rejected(self):
         """Dropping or renaming an atom silently would corrupt coordination."""
         source = _simple_structure(_BASE_RESIDUES)
-        converted = _simple_structure([
-            ("A", 1, "GLY", [("N", "N")]),
-            ("B", 2, "ZN", [("ZN", "ZN")]),
-        ])
+        converted = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N")]),
+                ("B", 2, "ZN", [("ZN", "ZN")]),
+            ]
+        )
         with pytest.raises(ValueError, match="atom membership"):
             main._residue_conversion_records(source, converted)
 
     def test_changed_duplicate_multiplicity_is_rejected(self):
         """Two residues sharing an author id must stay two after conversion."""
-        source = _simple_structure([
-            ("A", 1, "GLY", [("N", "N")]),
-            ("A", 1, "ALA", [("N", "N")]),
-        ])
-        converted = _simple_structure([
-            ("A", 1, "GLY", [("N", "N")]),
-        ])
+        source = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N")]),
+                ("A", 1, "ALA", [("N", "N")]),
+            ]
+        )
+        converted = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N")]),
+            ]
+        )
         with pytest.raises(ValueError, match="ordering|multiplicity"):
             main._residue_conversion_records(source, converted)
 
@@ -1471,10 +1820,12 @@ class TestResidueConversionRecords:
 
     def test_duplicate_author_ids_are_indexed_together_in_order(self):
         """Two residues with one author id must both survive the index."""
-        structure = _simple_structure([
-            ("A", 1, "GLY", [("N", "N")]),
-            ("A", 1, "ALA", [("N", "N")]),
-        ])
+        structure = _simple_structure(
+            [
+                ("A", 1, "GLY", [("N", "N")]),
+                ("A", 1, "ALA", [("N", "N")]),
+            ]
+        )
         index, order = main._residue_index_by_author(structure, "mmCIF")
         assert order == [(0, "A", "1"), (0, "A", "1")]
         assert [name for name, _ in index[(0, "A", "1")]] == ["GLY", "ALA"]
@@ -1507,7 +1858,8 @@ class TestFirstModelPdb:
     def test_single_model_file_is_used_in_place(self, tmp_path):
         """A file with no MODEL wrapper needs no rewrite at all."""
         builder = helpers.simple_metal_site(
-            "ZN", [("HIS", "NE2", 2.03), ("HOH", "O", 2.09)])
+            "ZN", [("HIS", "NE2", 2.03), ("HOH", "O", 2.09)]
+        )
         source = builder.write_pdb(tmp_path / "site.pdb")
         dst = tmp_path / "first.pdb"
         path, count = main._first_model_pdb(source, str(dst))
@@ -1527,8 +1879,7 @@ class TestFirstModelPdb:
         text = dst.read_text()
         atom_lines = _pdb_atom_lines(dst)
         assert len(atom_lines) == 2
-        assert [line[30:38].strip() for line in atom_lines] == [
-            "20.000", "21.500"]
+        assert [line[30:38].strip() for line in atom_lines] == ["20.000", "21.500"]
         assert "30.000" not in text
 
     def test_model_wrappers_are_removed(self, tmp_path):
@@ -1541,8 +1892,7 @@ class TestFirstModelPdb:
             assert line[:6].strip().upper() not in ("MODEL", "ENDMDL")
         assert gemmi.read_structure(str(dst)).__len__() == 1
 
-    def test_nummdl_is_dropped_but_crystallographic_header_is_kept(self,
-                                                                   tmp_path):
+    def test_nummdl_is_dropped_but_crystallographic_header_is_kept(self, tmp_path):
         """NUMMDL would lie about a one-model file; CRYST1 must survive."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
@@ -1570,10 +1920,12 @@ class TestFirstModelPdb:
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
         main._first_model_pdb(str(source), str(dst))
-        source_atom_lines = [line for line in _MULTI_MODEL_PDB.splitlines()
-                             if line.startswith("ATOM")]
-        assert [line.rstrip("\n") for line in _pdb_atom_lines(dst)] == \
-            source_atom_lines[:2]
+        source_atom_lines = [
+            line for line in _MULTI_MODEL_PDB.splitlines() if line.startswith("ATOM")
+        ]
+        assert [
+            line.rstrip("\n") for line in _pdb_atom_lines(dst)
+        ] == source_atom_lines[:2]
 
     def test_creates_the_destination_directory(self, tmp_path):
         """The analysis file may be the first thing written to a work dir."""
@@ -1587,8 +1939,7 @@ class TestFirstModelPdb:
         """The manifest's input_model_count describes the deposited file."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
-        _, count = main._first_model_pdb(str(source),
-                                         str(tmp_path / "first.pdb"))
+        _, count = main._first_model_pdb(str(source), str(tmp_path / "first.pdb"))
         assert count == 2
         assert len(gemmi.read_structure(str(source))) == count
 
@@ -1627,14 +1978,17 @@ class TestLeakedWorkDirectorySweep:
         even slightly too broad would delete a completed run's output.
         """
         (tmp_path / "manifest.csv").write_text("keep", encoding="utf-8")
-        (tmp_path / "alchemy_run_20260101.log").write_text(
-            "keep", encoding="utf-8")
-        (tmp_path / "109m").mkdir()          # a user directory named for an id
+        (tmp_path / "alchemy_run_20260101.log").write_text("keep", encoding="utf-8")
+        (tmp_path / "109m").mkdir()  # a user directory named for an id
         (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
 
         assert main._sweep_leaked_work_dirs(str(tmp_path)) == 0
         assert sorted(os.listdir(tmp_path)) == [
-            ".alchemyrc", "109m", "alchemy_run_20260101.log", "manifest.csv"]
+            ".alchemyrc",
+            "109m",
+            "alchemy_run_20260101.log",
+            "manifest.csv",
+        ]
 
     def test_missing_directory_is_not_an_error(self, tmp_path):
         """A sweep of a directory that does not exist yet is a no-op."""
@@ -1646,7 +2000,8 @@ class TestLeakedWorkDirectorySweep:
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
 def test_unwritable_output_dir_exits_cleanly_naming_the_path(
-        tmp_path, monkeypatch, capsys):
+    tmp_path, monkeypatch, capsys
+):
     """A read-only destination exits like every other unusable input.
 
     Regression: ``os.makedirs(args.output_dir, exist_ok=True)`` was unguarded,
@@ -1661,8 +2016,9 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     if os.geteuid() == 0:
         pytest.skip("root ignores directory permissions")
 
-    monkeypatch.setattr(main, "resolve_ccp4_environment",
-                        lambda args: (dict(os.environ), None))
+    monkeypatch.setattr(
+        main, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
+    )
     parent = tmp_path / "readonly"
     parent.mkdir()
     parent.chmod(0o500)
@@ -1672,10 +2028,18 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
 
     try:
         with pytest.raises(SystemExit) as excinfo:
-            main.main(["--id-file", str(id_file),
-                       "--output-dir", str(output_dir),
-                       "--pdb-redo-root", str(tmp_path / "absent-mirror"),
-                       "--pdb-redo-cache", str(tmp_path / "cache")])
+            main.main(
+                [
+                    "--id-file",
+                    str(id_file),
+                    "--output-dir",
+                    str(output_dir),
+                    "--pdb-redo-root",
+                    str(tmp_path / "absent-mirror"),
+                    "--pdb-redo-cache",
+                    str(tmp_path / "cache"),
+                ]
+            )
     finally:
         parent.chmod(0o700)
 
@@ -1697,8 +2061,9 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     point: sweeping happens at startup, so even a run that goes on to fail must
     leave the directory clean.
     """
-    monkeypatch.setattr(main, "resolve_ccp4_environment",
-                        lambda args: (dict(os.environ), None))
+    monkeypatch.setattr(
+        main, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
+    )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     leaked = output_dir / ".alchemy-109m-leaked"
@@ -1707,10 +2072,20 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     id_file = tmp_path / "ids.txt"
     id_file.write_text("109m\n", encoding="utf-8")
 
-    main.main(["--id-file", str(id_file), "--output-dir", str(output_dir),
-               "--pdb-redo-root", str(tmp_path / "absent-mirror"),
-               "--pdb-redo-cache", str(tmp_path / "cache")])
+    main.main(
+        [
+            "--id-file",
+            str(id_file),
+            "--output-dir",
+            str(output_dir),
+            "--pdb-redo-root",
+            str(tmp_path / "absent-mirror"),
+            "--pdb-redo-cache",
+            str(tmp_path / "cache"),
+        ]
+    )
 
-    leftovers = sorted(name for name in os.listdir(output_dir)
-                       if name.startswith(".alchemy-"))
+    leftovers = sorted(
+        name for name in os.listdir(output_dir) if name.startswith(".alchemy-")
+    )
     assert leftovers == [], f"the run left scratch behind: {leftovers}"

@@ -56,7 +56,11 @@ def test_src_modules_import():
     # Named explicitly rather than asserted truthy: a non-empty tuple literal is
     # always true, so `assert REQUIRED_CCP4_TOOLS` could never fail.
     assert set(ccp4_setup.REQUIRED_CCP4_TOOLS) == {
-        "mtzfix", "fft", "mapmask", "edstats"}
+        "mtzfix",
+        "fft",
+        "mapmask",
+        "edstats",
+    }
 
 
 def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
@@ -73,8 +77,7 @@ def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
 # --------------------------------------------------------------------------- #
 # The isolation fixtures
 # --------------------------------------------------------------------------- #
-def test_analysis_writes_nothing_into_the_current_directory(
-        work_dir, tmp_path_factory):
+def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_factory):
     """A full in-memory analysis leaves the process working directory empty.
 
     The suite's release-critical promise is that a test run puts nothing inside
@@ -91,18 +94,18 @@ def test_analysis_writes_nothing_into_the_current_directory(
     path = simple_metal_site().write_pdb(inputs / "site.pdb")
     context = load_structure("test", path)
     stats_rows, header, _ = helpers.stats_rows_for_structure(
-        context, inputs / "stats.out", metrics={"ZDm": 2.5})
+        context, inputs / "stats.out", metrics={"ZDm": 2.5}
+    )
     rows, _, _, _ = run_bond_analysis(
-        "test", path, stats_rows, header, helpers.dpi_inputs(),
-        structure=context)
+        "test", path, stats_rows, header, helpers.dpi_inputs(), structure=context
+    )
 
     assert rows, "the analysis must have actually run for this to mean anything"
     assert os.path.realpath(os.getcwd()) == os.path.realpath(work_dir)
     assert os.listdir(work_dir) == []
 
 
-def test_cache_directory_helper_uses_canonical_then_legacy(
-        monkeypatch, tmp_path):
+def test_cache_directory_helper_uses_canonical_then_legacy(monkeypatch, tmp_path):
     """The shared helper prefers the canonical nonblank cache variable.
 
     ``ALCHEMY_TESTS_CACHE`` is the canonical name, matching the other
@@ -165,7 +168,8 @@ def test_builder_output_loads_cleanly(tmp_path, suffix):
     context = load_structure("test", path)
 
     assert context.analysis_coordinate_format == (
-        "mmcif" if suffix == ".cif" else "pdb")
+        "mmcif" if suffix == ".cif" else "pdb"
+    )
     # No occupancy, element or duplicate-record complaints from a clean build.
     assert context.warning_codes == ()
     assert not context.occupancy_validation_failed
@@ -196,12 +200,13 @@ def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix
     path = simple_metal_site("ZN", donors).write(tmp_path / f"s{suffix}")
     context = load_structure("test", path)
     rows, candidates, summaries, metadata = run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(),
-        structure=context)
+        "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(), structure=context
+    )
 
     assert len(summaries) == 1
-    measured = {(row["neighbor_resname"], row["neighbor_atom"]): row["distance"]
-                for row in rows}
+    measured = {
+        (row["neighbor_resname"], row["neighbor_atom"]): row["distance"] for row in rows
+    }
     for resname, atom_name, distance in donors:
         assert measured[(resname, atom_name)] == pytest.approx(distance, abs=1e-6)
     # Nothing else of the schematic skeletons came within the 4 A search radius.
@@ -230,16 +235,24 @@ def test_declared_connection_is_reported_for_both_formats(tmp_path):
         metal = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
         # LYS NZ is not a proximity-inferable donor at this distance for Zn:
         # the declaration is the only reason it becomes a bond.
-        lys = builder.add_amino_acid("LYS", 10, chain="A",
-                                     positions={"NZ": (2.10, 0.0, 0.0)})
-        builder.add_connection(metal.ref("ZN"), lys.ref("NZ"),
-                               name="metal1", reported_distance=2.10)
+        lys = builder.add_amino_acid(
+            "LYS", 10, chain="A", positions={"NZ": (2.10, 0.0, 0.0)}
+        )
+        builder.add_connection(
+            metal.ref("ZN"), lys.ref("NZ"), name="metal1", reported_distance=2.10
+        )
         path = builder.write(tmp_path / f"declared{suffix}")
 
         context = load_structure("test", path)
         rows, _, _, metadata = run_bond_analysis(
-            "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(),
-            structure=context, connection_path=path)
+            "test",
+            path,
+            [],
+            list(EDSTATS_HEADER),
+            helpers.dpi_inputs(),
+            structure=context,
+            connection_path=path,
+        )
 
         assert metadata["messages"] == ["DPI unavailable: missing_dpi_metadata_source"]
         declared = [row for row in rows if row["declared_connection"]]
@@ -261,10 +274,14 @@ def test_conformers_drive_the_altloc_selection_policy(tmp_path):
 
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = next(r for r in builder.residues if r.name == "HIS")
-    builder.add_conformers(his, [
-        ("A", 0.35, {"NE2": (2.03, 0.0, 0.0)}),
-        ("B", 0.65, {"NE2": (2.80, 0.0, 0.0)}),
-    ], atom_names=["NE2"])
+    builder.add_conformers(
+        his,
+        [
+            ("A", 0.35, {"NE2": (2.03, 0.0, 0.0)}),
+            ("B", 0.65, {"NE2": (2.80, 0.0, 0.0)}),
+        ],
+        atom_names=["NE2"],
+    )
     path = builder.write_pdb(tmp_path / "alt.pdb")
 
     context = load_structure("test", path)
@@ -276,8 +293,10 @@ def test_conformers_drive_the_altloc_selection_policy(tmp_path):
     # source records for the occupancy-weighted atom count.
     selected = [a for a in residue.contact_atoms if a.atom_name == "NE2"]
     assert [a.altloc for a in selected] == ["B"]
-    assert sorted(a.altloc for a in residue.source_atoms
-                  if a.atom_name == "NE2") == ["A", "B"]
+    assert sorted(a.altloc for a in residue.source_atoms if a.atom_name == "NE2") == [
+        "A",
+        "B",
+    ]
 
 
 def test_connection_can_name_a_specific_conformer(tmp_path):
@@ -294,17 +313,27 @@ def test_connection_can_name_a_specific_conformer(tmp_path):
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     metal = next(r for r in builder.residues if r.name == "ZN")
     his = next(r for r in builder.residues if r.name == "HIS")
-    builder.add_conformers(his, [
-        ("A", 0.35, {"NE2": (2.03, 0.0, 0.0)}),
-        ("B", 0.65, {"NE2": (2.80, 0.0, 0.0)}),
-    ], atom_names=["NE2"])
+    builder.add_conformers(
+        his,
+        [
+            ("A", 0.35, {"NE2": (2.03, 0.0, 0.0)}),
+            ("B", 0.65, {"NE2": (2.80, 0.0, 0.0)}),
+        ],
+        atom_names=["NE2"],
+    )
     builder.add_connection(metal.ref("ZN"), his.ref("NE2", "A"))
     path = builder.write_cif(tmp_path / "altdecl.cif")
 
     context = load_structure("test", path)
     rows, _, _, metadata = run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(),
-        structure=context, connection_path=path)
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+        connection_path=path,
+    )
 
     # The declaration names conformer A, which selection did not choose, so the
     # contact is re-pointed onto the selected conformer B and flagged.
@@ -419,7 +448,8 @@ def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path):
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
     rows, header, stats_path = helpers.stats_rows_for_structure(
-        context, tmp_path / "stats.out", metrics={"ZDm": 2.5, "ZD-m": -2.5})
+        context, tmp_path / "stats.out", metrics={"ZDm": 2.5, "ZD-m": -2.5}
+    )
 
     assert header == list(EDSTATS_HEADER)
     assert [(row["category"], row["resname"]) for row in rows] == [("metal", "ZN")]
@@ -444,12 +474,12 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
     stats_rows, header, _ = helpers.stats_rows_for_structure(
-        context, tmp_path / "stats.out",
-        metrics={"ZDm": 3.0, "ZD-m": -1.0, "ZD+m": 4.0})
+        context, tmp_path / "stats.out", metrics={"ZDm": 3.0, "ZD-m": -1.0, "ZD+m": 4.0}
+    )
 
     rows, _, _, _ = run_bond_analysis(
-        "test", path, stats_rows, header, helpers.dpi_inputs(),
-        structure=context)
+        "test", path, stats_rows, header, helpers.dpi_inputs(), structure=context
+    )
 
     assert rows
     for row in rows:
@@ -477,12 +507,14 @@ def test_blank_chain_rows_round_trip_through_the_parser(tmp_path):
     context = load_structure("test", path)
     assert {r.chain_id for r in context.residues} == {""}
     stats_path = helpers.write_edstats_for_structure(
-        tmp_path / "stats.out", context, blank_chain_form=True)
+        tmp_path / "stats.out", context, blank_chain_form=True
+    )
     text = open(stats_path, encoding="utf-8").read().splitlines()
     assert [len(line.split()) for line in text[1:]] == [41, 41]
 
     rows, _ = extract_metal_statistics(
-        "test", stats_path, set(METAL_ELEMENTS), set(), structure=context)
+        "test", stats_path, set(METAL_ELEMENTS), set(), structure=context
+    )
     assert [row["resname"] for row in rows] == ["ZN"]
     assert rows[0]["chain"] == ""
 
@@ -500,19 +532,24 @@ def test_cofactor_rows_repeat_once_per_metal_site(tmp_path):
     from structure_analysis import load_structure
 
     builder = StructureBuilder()
-    builder.add_hetero_residue("FES", 1, [
-        AtomSpec("FE1", "FE", (0.0, 0.0, 0.0)),
-        AtomSpec("FE2", "FE", (2.7, 0.0, 0.0)),
-        AtomSpec("S1", "S", (1.35, 1.8, 0.0)),
-        AtomSpec("S2", "S", (1.35, -1.8, 0.0)),
-    ], chain="B")
+    builder.add_hetero_residue(
+        "FES",
+        1,
+        [
+            AtomSpec("FE1", "FE", (0.0, 0.0, 0.0)),
+            AtomSpec("FE2", "FE", (2.7, 0.0, 0.0)),
+            AtomSpec("S1", "S", (1.35, 1.8, 0.0)),
+            AtomSpec("S2", "S", (1.35, -1.8, 0.0)),
+        ],
+        chain="B",
+    )
     path = builder.write_cif(tmp_path / "fes.cif")
 
     context = load_structure("test", path)
-    stats_path = helpers.write_edstats_for_structure(
-        tmp_path / "stats.out", context)
+    stats_path = helpers.write_edstats_for_structure(tmp_path / "stats.out", context)
     rows, _ = extract_metal_statistics(
-        "test", stats_path, set(METAL_ELEMENTS), {"FES"}, structure=context)
+        "test", stats_path, set(METAL_ELEMENTS), {"FES"}, structure=context
+    )
 
     assert [row["category"] for row in rows] == ["cofactor", "cofactor"]
     assert [row["site"].atom_name for row in rows] == ["FE1", "FE2"]
@@ -533,15 +570,15 @@ def test_insertion_codes_survive_into_the_edstats_join(tmp_path):
 
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
-    builder.add_amino_acid("HIS", 10, chain="A", icode="A",
-                           positions={"NE2": (2.03, 0.0, 0.0)})
+    builder.add_amino_acid(
+        "HIS", 10, chain="A", icode="A", positions={"NE2": (2.03, 0.0, 0.0)}
+    )
     path = builder.write_pdb(tmp_path / "icode.pdb")
 
     context = load_structure("test", path)
     resnums = {r.residue_name: r.resnum for r in context.residues}
     assert resnums == {"ZN": "1", "HIS": "10A"}
-    rows, _, _ = helpers.stats_rows_for_structure(
-        context, tmp_path / "stats.out")
+    rows, _, _ = helpers.stats_rows_for_structure(context, tmp_path / "stats.out")
     assert [row["resnum"] for row in rows] == ["1"]
 
 
@@ -557,16 +594,17 @@ def test_symmetry_image_contacts_are_reachable(tmp_path):
     from structure_analysis import load_structure
 
     # A small P 1 cell puts the water's -a image 1.0 A from the metal.
-    builder = StructureBuilder(cell=(20.0, 20.0, 20.0, 90.0, 90.0, 90.0),
-                               spacegroup="P 1")
+    builder = StructureBuilder(
+        cell=(20.0, 20.0, 20.0, 90.0, 90.0, 90.0), spacegroup="P 1"
+    )
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))
     builder.add_water(101, (19.5, 0.5, 0.5), chain="B")
     path = builder.write_pdb(tmp_path / "sym.pdb")
 
     context = load_structure("test", path)
     rows, _, _, _ = run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(),
-        structure=context)
+        "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(), structure=context
+    )
 
     assert len(rows) == 1
     assert rows[0]["distance"] == pytest.approx(1.0, abs=1e-6)
@@ -588,14 +626,23 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     from structure_analysis import load_structure
 
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
-    data_json = helpers.write_data_json(tmp_path / "data.json",
-                                        nrefcnt=50000, rffin=0.2)
+    data_json = helpers.write_data_json(
+        tmp_path / "data.json", nrefcnt=50000, rffin=0.2
+    )
     context = load_structure("test", path)
     rows, _, _, metadata = run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER),
-        helpers.dpi_inputs(pdb_path=path, mtz_path=str(tmp_path / "missing.mtz"),
-                           data_json=data_json, resolution=1.5),
-        structure=context)
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(
+            pdb_path=path,
+            mtz_path=str(tmp_path / "missing.mtz"),
+            data_json=data_json,
+            resolution=1.5,
+        ),
+        structure=context,
+    )
 
     assert metadata["partial_reason_codes"] == []
     assert rows and math.isfinite(rows[0]["dpi"])
@@ -618,8 +665,7 @@ def test_ccp4_capability_probe_is_boolean_and_does_not_raise():
     assert isinstance(helpers.ccp4_available(), bool)
 
 
-def test_not_network_selection_does_not_call_the_network_probe(
-        tmp_path, repo_root):
+def test_not_network_selection_does_not_call_the_network_probe(tmp_path, repo_root):
     """Marker deselection happens before the external capability probe.
 
     ``-m 'not network'`` is an offline selection boundary, not merely a promise
@@ -653,9 +699,21 @@ def test_not_network_selection_does_not_call_the_network_probe(
         python_path.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(python_path)
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--collect-only",
-         "-p", "conftest", "-p", "forbid_network_probe", str(test_file),
-         "-m", "not network", "--no-ccp4"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--collect-only",
+            "-p",
+            "conftest",
+            "-p",
+            "forbid_network_probe",
+            str(test_file),
+            "-m",
+            "not network",
+            "--no-ccp4",
+        ],
         cwd=repo_root,
         env=env,
         stdout=subprocess.PIPE,
@@ -680,17 +738,18 @@ def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
     through an end-to-end run: the dynamic loader fails before ``main`` runs, so
     the program never announces itself.
     """
-    resolved = {tool: helpers.which(tool, ccp4_env)
-                for tool in helpers.CCP4_TOOLS}
+    resolved = {tool: helpers.which(tool, ccp4_env) for tool in helpers.CCP4_TOOLS}
     assert all(resolved.values()), resolved
 
     # What the loader says when a shared object is missing or a symbol is
     # unresolved. Deliberately not "no such file or directory": fft and mapmask
     # print that themselves when given no input file, which is healthy.
-    loader_failures = ("error while loading shared libraries",
-                       "cannot open shared object file",
-                       "symbol lookup error",
-                       "undefined symbol")
+    loader_failures = (
+        "error while loading shared libraries",
+        "cannot open shared object file",
+        "symbol lookup error",
+        "undefined symbol",
+    )
 
     for tool, path in resolved.items():
         assert path is not None
@@ -698,22 +757,29 @@ def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
         # naming itself and exits promptly. The exit status differs between
         # them (edstats 0, the other three 1) and is not the point.
         completed = subprocess.run(
-            [path], env=ccp4_env, stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            [path],
+            env=ccp4_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+        )
         output = completed.stdout.decode("utf-8", "replace")
         excerpt = output[:500]
 
         # Negative means killed by a signal: a SIGSEGV on startup is exactly
         # the "present but broken" install this test exists to catch.
         assert completed.returncode >= 0, (
-            f"{tool} died on signal {-completed.returncode}: {excerpt!r}")
+            f"{tool} died on signal {-completed.returncode}: {excerpt!r}"
+        )
         for marker in loader_failures:
             assert marker not in output.lower(), f"{tool}: {excerpt!r}"
         # mtzfix prints "MTZFIX", fft prints "FFTBIG", and mapmask and edstats
         # print their own names. Reaching the banner means the binary loaded
         # and its own code ran.
         assert tool in output.lower(), (
-            f"{tool} produced no banner naming itself: {excerpt!r}")
+            f"{tool} produced no banner naming itself: {excerpt!r}"
+        )
 
 
 @pytest.mark.network

@@ -83,11 +83,7 @@ def _documented_dependencies() -> Set[str]:
 def _third_party_imports() -> Set[str]:
     """Distributions imported by ``src/``, whether at module or function scope."""
     found: Set[str] = set()
-    local = {
-        name[:-3]
-        for name in os.listdir(SRC_DIR)
-        if name.endswith(".py")
-    }
+    local = {name[:-3] for name in os.listdir(SRC_DIR) if name.endswith(".py")}
     for name in sorted(os.listdir(SRC_DIR)):
         if not name.endswith(".py"):
             continue
@@ -122,7 +118,8 @@ def test_declared_dependencies_cover_every_third_party_import():
     """Nothing in ``src/`` imports a distribution that is not declared."""
     declared = _declared_dependencies()
     undeclared = {
-        root for root in _third_party_imports()
+        root
+        for root in _third_party_imports()
         if _IMPORT_TO_DISTRIBUTION.get(root, root).lower() not in declared
     }
     assert not undeclared, (
@@ -139,9 +136,7 @@ def test_main_docstring_requirements_match_the_declaration():
     import main
 
     requirements = (main.__doc__ or "").lower()
-    missing = [
-        name for name in _declared_dependencies() if name not in requirements
-    ]
+    missing = [name for name in _declared_dependencies() if name not in requirements]
     assert not missing, (
         f"main.py's module docstring omits declared dependencies: {missing}"
     )
@@ -214,9 +209,19 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path):
 
     outdir = tmp_path / "wheel"
     completed = subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", "--no-deps",
-         "--no-build-isolation", "--wheel-dir", str(outdir), str(source)],
-        capture_output=True, text=True,
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--no-build-isolation",
+            "--wheel-dir",
+            str(outdir),
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
     )
     if completed.returncode != 0:
         pytest.skip(
@@ -227,14 +232,12 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path):
     wheels = sorted(outdir.glob("*.whl"))
     assert len(wheels) == 1, f"expected exactly one wheel, got {wheels}"
     members = [
-        name for name in zipfile.ZipFile(wheels[0]).namelist()
-        if not name.endswith("/")
+        name for name in zipfile.ZipFile(wheels[0]).namelist() if not name.endswith("/")
     ]
     assert members, "wheel is empty; the build produced no metadata at all"
 
     payload = [
-        name for name in members
-        if not re.match(r"^alchemy-[^/]*\.dist-info/", name)
+        name for name in members if not re.match(r"^alchemy-[^/]*\.dist-info/", name)
     ]
     assert not payload, (
         "wheel ships importable content outside alchemy-*.dist-info/: "
@@ -242,9 +245,11 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path):
         "install dependencies and metadata only."
     )
 
-    metadata = zipfile.ZipFile(wheels[0]).read(
-        next(n for n in members if n.endswith(".dist-info/METADATA"))
-    ).decode()
+    metadata = (
+        zipfile.ZipFile(wheels[0])
+        .read(next(n for n in members if n.endswith(".dist-info/METADATA")))
+        .decode()
+    )
     required = {
         re.split(r"[<>=!~; \[]", spec, maxsplit=1)[0].strip().lower()
         for spec in re.findall(r"^Requires-Dist: (.+)$", metadata, re.M)

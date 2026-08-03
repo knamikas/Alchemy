@@ -61,12 +61,21 @@ PORPHYRINOID_MIN_FE_N_BONDS = 3
 # after every build so a change to the rules above cannot silently drop a
 # member of the published reference populations.
 CANONICAL_CLASSES = {
-    "HEM": CLASS_HEME, "HEC": CLASS_HEME, "HEA": CLASS_HEME,
-    "HEB": CLASS_HEME, "DHE": CLASS_HEME, "HEO": CLASS_HEME,
+    "HEM": CLASS_HEME,
+    "HEC": CLASS_HEME,
+    "HEA": CLASS_HEME,
+    "HEB": CLASS_HEME,
+    "DHE": CLASS_HEME,
+    "HEO": CLASS_HEME,
     "HEV": CLASS_HEME,
-    "SF4": CLASS_CLUSTER, "FES": CLASS_CLUSTER, "F3S": CLASS_CLUSTER,
-    "SF3": CLASS_CLUSTER, "F4S": CLASS_CLUSTER, "NFS": CLASS_CLUSTER,
-    "FSX": CLASS_CLUSTER, "FS5": CLASS_CLUSTER,
+    "SF4": CLASS_CLUSTER,
+    "FES": CLASS_CLUSTER,
+    "F3S": CLASS_CLUSTER,
+    "SF3": CLASS_CLUSTER,
+    "F4S": CLASS_CLUSTER,
+    "NFS": CLASS_CLUSTER,
+    "FSX": CLASS_CLUSTER,
+    "FS5": CLASS_CLUSTER,
 }
 
 
@@ -84,16 +93,20 @@ def _component_graph(block):
     """Return CCD atom elements and undirected bond adjacency for ``block``."""
     elements = {
         atom_id: symbol.strip().upper()
-        for atom_id, symbol in block.find([
-            "_chem_comp_atom.atom_id",
-            "_chem_comp_atom.type_symbol",
-        ])
+        for atom_id, symbol in block.find(
+            [
+                "_chem_comp_atom.atom_id",
+                "_chem_comp_atom.type_symbol",
+            ]
+        )
     }
     adjacency = {atom_id: set() for atom_id in elements}
-    for atom_1, atom_2 in block.find([
+    for atom_1, atom_2 in block.find(
+        [
             "_chem_comp_bond.atom_id_1",
             "_chem_comp_bond.atom_id_2",
-            ]):
+        ]
+    ):
         if atom_1 not in elements or atom_2 not in elements:
             continue
         adjacency[atom_1].add(atom_2)
@@ -130,8 +143,7 @@ def _biconnected_components(adjacency, allowed_atoms):
                             break
                     if component:
                         components.append(component)
-            elif (parent.get(atom) != neighbor and
-                  discovery[neighbor] < discovery[atom]):
+            elif parent.get(atom) != neighbor and discovery[neighbor] < discovery[atom]:
                 low[atom] = min(low[atom], discovery[neighbor])
                 edge_stack.append((atom, neighbor))
 
@@ -154,8 +166,7 @@ def classify_component(block):
     """
     elements, adjacency = _component_graph(block)
     cluster_metals = {
-        atom_id for atom_id, element in elements.items()
-        if element in CLUSTER_METALS
+        atom_id for atom_id, element in elements.items() if element in CLUSTER_METALS
     }
     for atom_id, element in elements.items():
         if element not in CLUSTER_CHALCOGENS:
@@ -164,46 +175,48 @@ def classify_component(block):
         if len(bonded_metals) >= 2:
             return CLASS_CLUSTER
 
-    iron_atoms = [atom_id for atom_id, element in elements.items()
-                  if element == "FE"]
+    iron_atoms = [atom_id for atom_id, element in elements.items() if element == "FE"]
     if len(iron_atoms) != 1:
         return ""
     iron = iron_atoms[0]
     nitrogen_donors = {
-        atom_id for atom_id in adjacency.get(iron, ())
-        if elements.get(atom_id) == "N"
+        atom_id for atom_id in adjacency.get(iron, ()) if elements.get(atom_id) == "N"
     }
     if len(nitrogen_donors) < PORPHYRINOID_MIN_FE_N_BONDS:
         return ""
 
     ligand_heavy_atoms = {
-        atom_id for atom_id, element in elements.items()
+        atom_id
+        for atom_id, element in elements.items()
         if element != "H" and element not in METAL_ELEMENTS
     }
-    for component in _biconnected_components(
-            adjacency, ligand_heavy_atoms):
+    for component in _biconnected_components(adjacency, ligand_heavy_atoms):
         carbon = sum(elements[atom_id] == "C" for atom_id in component)
         nitrogen = sum(elements[atom_id] == "N" for atom_id in component)
         donors = len(component.intersection(nitrogen_donors))
-        if (len(component) >= PORPHYRINOID_CORE_MIN_ATOMS and
-                carbon >= PORPHYRINOID_CORE_MIN_CARBON and
-                nitrogen >= PORPHYRINOID_CORE_MIN_NITROGEN and
-                donors >= PORPHYRINOID_MIN_FE_N_BONDS):
+        if (
+            len(component) >= PORPHYRINOID_CORE_MIN_ATOMS
+            and carbon >= PORPHYRINOID_CORE_MIN_CARBON
+            and nitrogen >= PORPHYRINOID_CORE_MIN_NITROGEN
+            and donors >= PORPHYRINOID_MIN_FE_N_BONDS
+        ):
             return CLASS_HEME
     return ""
 
 
 def _verify_canonical_classes(classes):
     """Fail the build if a manuscript-named reference cofactor was lost."""
-    wrong = {component_id: (expected, classes.get(component_id, "<absent>"))
-             for component_id, expected in CANONICAL_CLASSES.items()
-             if classes.get(component_id) != expected}
+    wrong = {
+        component_id: (expected, classes.get(component_id, "<absent>"))
+        for component_id, expected in CANONICAL_CLASSES.items()
+        if classes.get(component_id) != expected
+    }
     if wrong:
         details = ", ".join(
             f"{component_id} expected {expected}, got {actual}"
-            for component_id, (expected, actual) in sorted(wrong.items()))
-        raise ValueError(
-            "canonical cofactor classification changed: " + details)
+            for component_id, (expected, actual) in sorted(wrong.items())
+        )
+        raise ValueError("canonical cofactor classification changed: " + details)
 
 
 def _sha256(path: str) -> str:
@@ -240,8 +253,7 @@ def download_ccd(temp_dir):
     try:
         response = urlopen(CCD_URL, timeout=60)
     except HTTPError as exc:
-        raise RuntimeError(
-            f"CCD download failed with HTTP {exc.code}") from exc
+        raise RuntimeError(f"CCD download failed with HTTP {exc.code}") from exc
     except URLError as exc:
         raise RuntimeError(f"CCD download failed: {exc.reason}") from exc
 
@@ -268,8 +280,7 @@ def download_ccd(temp_dir):
                     if total_size:
                         percent = 100 * downloaded / total_size
                         print(
-                            f"  ...downloaded {amount:.0f} MB "
-                            f"({percent:.0f}%)",
+                            f"  ...downloaded {amount:.0f} MB ({percent:.0f}%)",
                             flush=True,
                         )
                     else:
@@ -328,20 +339,17 @@ def build_metallocofactors_list(cif_path, output_path):
 
         component_id = block.find_value("_chem_comp.id")
         if not component_id or component_id in (".", "?"):
-            raise ValueError(
-                f"CCD block {block.name!r} has no usable component ID")
+            raise ValueError(f"CCD block {block.name!r} has no usable component ID")
         if not COMPONENT_ID_PATTERN.fullmatch(component_id):
             raise ValueError(
-                f"CCD block {block.name!r} has invalid component ID "
-                f"{component_id!r}")
+                f"CCD block {block.name!r} has invalid component ID {component_id!r}"
+            )
         formula = block.find_value("_chem_comp.formula") or ""
         atom_symbols = [
             symbol.strip().upper()
             for symbol in block.find_values("_chem_comp_atom.type_symbol")
         ]
-        single_metal_atom = (
-            len(atom_symbols) == 1 and atom_symbols[0] in METAL_ELEMENTS
-        )
+        single_metal_atom = len(atom_symbols) == 1 and atom_symbols[0] in METAL_ELEMENTS
 
         has_metal = False
         if single_metal_atom:
@@ -359,18 +367,19 @@ def build_metallocofactors_list(cif_path, output_path):
 
         if has_metal:
             if component_id in records:
-                raise ValueError(
-                    f"duplicate CCD component ID: {component_id}")
+                raise ValueError(f"duplicate CCD component ID: {component_id}")
             records[component_id] = (formula or "?", classify_component(block))
 
-    classes = {component_id: structural_class
-               for component_id, (_, structural_class) in records.items()
-               if structural_class}
+    classes = {
+        component_id: structural_class
+        for component_id, (_, structural_class) in records.items()
+        if structural_class
+    }
     _verify_canonical_classes(classes)
     counts["cluster_entries"] = sum(
-        1 for value in classes.values() if value == CLASS_CLUSTER)
-    counts["heme_entries"] = sum(
-        1 for value in classes.values() if value == CLASS_HEME)
+        1 for value in classes.values() if value == CLASS_CLUSTER
+    )
+    counts["heme_entries"] = sum(1 for value in classes.values() if value == CLASS_HEME)
 
     with open(output_path, "w", encoding="utf-8", newline="") as handle:
         for component_id in sorted(records):
@@ -380,8 +389,11 @@ def build_metallocofactors_list(cif_path, output_path):
     counts["catalog_entries"] = len(records)
     print(f"Catalog contains {len(records)} metallocofactors", flush=True)
     print(f"Skipped {counts['skipped_ions']} single-metal ions", flush=True)
-    print(f"Classified {counts['cluster_entries']} clusters and "
-          f"{counts['heme_entries']} hemes", flush=True)
+    print(
+        f"Classified {counts['cluster_entries']} clusters and "
+        f"{counts['heme_entries']} hemes",
+        flush=True,
+    )
     return counts
 
 
@@ -394,8 +406,7 @@ def rebuild_catalog(output_dir, ccd_path=None):
 
     with tempfile.TemporaryDirectory(dir=output_dir) as temp_dir:
         if ccd_path:
-            prepared_ccd, ccd_provenance = prepare_local_ccd(
-                ccd_path, temp_dir)
+            prepared_ccd, ccd_provenance = prepare_local_ccd(ccd_path, temp_dir)
         else:
             prepared_ccd, ccd_provenance = download_ccd(temp_dir)
 
@@ -406,17 +417,14 @@ def rebuild_catalog(output_dir, ccd_path=None):
             "generated": datetime.now(timezone.utc).isoformat(),
             "ccd_source": ccd_provenance["source"],
             "ccd_sha256": _sha256(prepared_ccd),
-            "ccd_compressed_sha256": ccd_provenance.get(
-                "compressed_sha256"),
+            "ccd_compressed_sha256": ccd_provenance.get("compressed_sha256"),
             "ccd_etag": ccd_provenance.get("etag"),
             "ccd_last_modified": ccd_provenance.get("last_modified"),
             "catalog_sha256": catalog_hash,
             "counts": counts,
         }
         temporary_metadata = os.path.join(temp_dir, METADATA_FILENAME)
-        with open(
-                temporary_metadata, "w", encoding="utf-8", newline=""
-                ) as handle:
+        with open(temporary_metadata, "w", encoding="utf-8", newline="") as handle:
             json.dump(metadata, handle, indent=2)
             handle.write("\n")
 
@@ -438,19 +446,21 @@ def report_status(output_dir):
     recorded_hash = metadata.get("catalog_sha256")
 
     print(f"Generated: {metadata.get('generated', 'unknown')}")
-    entry_count = metadata.get("counts", {}).get(
-        "catalog_entries", "unknown")
+    entry_count = metadata.get("counts", {}).get("catalog_entries", "unknown")
     print(f"Entries: {entry_count}")
     counts = metadata.get("counts", {})
-    print(f"Structural classes: {counts.get('cluster_entries', 'unknown')} "
-          f"cluster, {counts.get('heme_entries', 'unknown')} heme")
+    print(
+        f"Structural classes: {counts.get('cluster_entries', 'unknown')} "
+        f"cluster, {counts.get('heme_entries', 'unknown')} heme"
+    )
     print(f"Catalog SHA-256: {actual_hash}")
     if recorded_hash is None:
         print("Recorded hash: unavailable in legacy metadata")
     elif recorded_hash != actual_hash:
         raise RuntimeError(
             "catalog checksum does not match its metadata: "
-            f"recorded {recorded_hash}, actual {actual_hash}")
+            f"recorded {recorded_hash}, actual {actual_hash}"
+        )
     else:
         print("Integrity: verified")
     return metadata
@@ -458,13 +468,14 @@ def report_status(output_dir):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description=(
-            "Explicitly rebuild Alchemy's bundled metallocofactor catalog."))
+        description=("Explicitly rebuild Alchemy's bundled metallocofactor catalog.")
+    )
     parser.add_argument(
         "--ccd",
         help=(
             "local components.cif or components.cif.gz; downloads the current "
-            "wwPDB CCD when omitted"),
+            "wwPDB CCD when omitted"
+        ),
     )
     parser.add_argument(
         "--output-dir",

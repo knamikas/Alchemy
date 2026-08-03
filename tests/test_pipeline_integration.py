@@ -67,28 +67,19 @@ ENTRY_IDS = ("9myr", "6nlr", "9nxl")
 #: require data.json.
 _ENTRY_SNAPSHOT_SHA256 = {
     "9myr": {
-        "9myr_final.mtz":
-            "7d47d24a5a1e1cafc003adde878082aa9a2f4da8e947031b8228e1cf2234d21a",
-        "9myr_final.cif":
-            "1013a862cd408d87d7ecfa0bf7521818454150fed7681dee392cde7bc2d9090e",
-        "data.json":
-            "063a97b17a3fba9f970e39f99833322329879d1a76ae2ebad6d366ae12c74e3a",
+        "9myr_final.mtz": "7d47d24a5a1e1cafc003adde878082aa9a2f4da8e947031b8228e1cf2234d21a",  # noqa: E501 - a SHA-256 digest cannot be wrapped
+        "9myr_final.cif": "1013a862cd408d87d7ecfa0bf7521818454150fed7681dee392cde7bc2d9090e",  # noqa: E501 - a SHA-256 digest cannot be wrapped
+        "data.json": "063a97b17a3fba9f970e39f99833322329879d1a76ae2ebad6d366ae12c74e3a",
     },
     "6nlr": {
-        "6nlr_final.mtz":
-            "a44d757d49a054738831e2b3d93f38d69f420513f92ecf77cff4a6b9cc995f5b",
-        "6nlr_final.cif":
-            "e85475aeb6b89b95f8bb8df4ef1dfb16a77c12e059591541c3b25f64ec7aaa21",
-        "data.json":
-            "6f7e3efca7d75d4b419b332445646082ee1b2fb5671ed465ce45ade3df7634cb",
+        "6nlr_final.mtz": "a44d757d49a054738831e2b3d93f38d69f420513f92ecf77cff4a6b9cc995f5b",  # noqa: E501 - a SHA-256 digest cannot be wrapped
+        "6nlr_final.cif": "e85475aeb6b89b95f8bb8df4ef1dfb16a77c12e059591541c3b25f64ec7aaa21",  # noqa: E501 - a SHA-256 digest cannot be wrapped
+        "data.json": "6f7e3efca7d75d4b419b332445646082ee1b2fb5671ed465ce45ade3df7634cb",
     },
     "9nxl": {
-        "9nxl_final.mtz":
-            "87948fbae05c75fe8d03dde231b821b125b11badbf4595c2ade955e5a6026991",
-        "9nxl_final.cif":
-            "185f55ec47be2b7ec42ea35a2986615f1ab289a435cea8ff16569c2053840e2f",
-        "data.json":
-            "ded26ff60eee2b0b2faa730468443641eecb0c5f226375e53390b752d695e79d",
+        "9nxl_final.mtz": "87948fbae05c75fe8d03dde231b821b125b11badbf4595c2ade955e5a6026991",  # noqa: E501 - a SHA-256 digest cannot be wrapped
+        "9nxl_final.cif": "185f55ec47be2b7ec42ea35a2986615f1ab289a435cea8ff16569c2053840e2f",  # noqa: E501 - a SHA-256 digest cannot be wrapped
+        "data.json": "ded26ff60eee2b0b2faa730468443641eecb0c5f226375e53390b752d695e79d",
     },
 }
 
@@ -137,8 +128,10 @@ def entry_file(cache_root: str, pdb_id: str, suffix: str) -> str:
 
 def _entry_ready(cache_root: str, pdb_id: str) -> bool:
     """Whether the exact files required by this suite exist for ``pdb_id``."""
-    return all(os.path.isfile(entry_file(cache_root, pdb_id, suffix))
-               for suffix in _ENTRY_SNAPSHOT_SHA256[pdb_id])
+    return all(
+        os.path.isfile(entry_file(cache_root, pdb_id, suffix))
+        for suffix in _ENTRY_SNAPSHOT_SHA256[pdb_id]
+    )
 
 
 def _file_sha256(path: str) -> str:
@@ -161,11 +154,13 @@ def _assert_entry_snapshot(cache_root: str) -> None:
             actual = _file_sha256(path)
             if actual != expected:
                 mismatches.append(
-                    f"{pdb_id}/{suffix}: expected {expected}, got {actual}")
+                    f"{pdb_id}/{suffix}: expected {expected}, got {actual}"
+                )
     if mismatches:
         raise AssertionError(
             "PDB-REDO integration input differs from the checksum-pinned "
-            "snapshot:\n  " + "\n  ".join(mismatches))
+            "snapshot:\n  " + "\n  ".join(mismatches)
+        )
 
 
 def _network_available_now(timeout: float = 5.0) -> bool:
@@ -185,9 +180,10 @@ def _network_available_now(timeout: float = 5.0) -> bool:
 _CONFIGURED_ENTRY_CACHE = helpers.cache_dir_from_env()
 _ENTRY_SNAPSHOT_IS_WARM = bool(
     _CONFIGURED_ENTRY_CACHE
-    and all(_entry_ready(_CONFIGURED_ENTRY_CACHE, pdb_id)
-            for pdb_id in ENTRY_IDS)
+    and all(_entry_ready(_CONFIGURED_ENTRY_CACHE, pdb_id) for pdb_id in ENTRY_IDS)
 )
+
+
 def _requires_entry_data(test):
     """Mark a snapshot-backed test, plus its conditional network requirement."""
     test = pytest.mark.entry_data(test)
@@ -215,11 +211,12 @@ def entry_cache(tmp_path_factory) -> str:
         snapshot_cache = _CONFIGURED_ENTRY_CACHE
         assert snapshot_cache is not None
         if configured != snapshot_cache or not all(
-                _entry_ready(snapshot_cache, pdb_id)
-                for pdb_id in ENTRY_IDS):
+            _entry_ready(snapshot_cache, pdb_id) for pdb_id in ENTRY_IDS
+        ):
             raise AssertionError(
                 "the configured PDB-REDO cache changed after test collection; "
-                "refusing a network fallback for tests collected as offline")
+                "refusing a network fallback for tests collected as offline"
+            )
         _assert_entry_snapshot(configured)
         return configured
 
@@ -229,7 +226,8 @@ def entry_cache(tmp_path_factory) -> str:
     if missing and not helpers.network_available():
         pytest.skip(
             f"PDB-REDO entries {', '.join(missing)} are not cached and there is "
-            "no network access to fetch them")
+            "no network access to fetch them"
+        )
     for pdb_id in missing:
         # download_entry_to_cache funnels every failure -- a dead socket, a 404
         # and a renamed file alike -- into FileNotFoundError, so the exception
@@ -243,15 +241,17 @@ def entry_cache(tmp_path_factory) -> str:
             if _network_available_now():
                 raise AssertionError(
                     f"pdb-redo.eu is reachable but PDB-REDO entry {pdb_id} "
-                    f"could not be downloaded into {target}: {exc}") from exc
+                    f"could not be downloaded into {target}: {exc}"
+                ) from exc
             pytest.skip(
-                f"network access to pdb-redo.eu was lost while fetching "
-                f"{pdb_id}: {exc}")
+                f"network access to pdb-redo.eu was lost while fetching {pdb_id}: {exc}"
+            )
         if not _entry_ready(target, pdb_id):
             raise AssertionError(
                 f"download_entry_to_cache reported success for {pdb_id} but "
                 f"{main.entry_dir_for(target, pdb_id)} does not contain the "
-                "uncompressed mmCIF, MTZ, and data.json snapshot files")
+                "uncompressed mmCIF, MTZ, and data.json snapshot files"
+            )
     _assert_entry_snapshot(target)
     return target
 
@@ -286,8 +286,15 @@ def _environment(overrides: Optional[Dict[str, str]]):
         os.environ.update(saved)
 
 
-def run_alchemy(output_dir, *args, ccp4_environ=None, cache=None,
-                tmp_root=None, mirror=None, reference_dir=None) -> RunResult:
+def run_alchemy(
+    output_dir,
+    *args,
+    ccp4_environ=None,
+    cache=None,
+    tmp_root=None,
+    mirror=None,
+    reference_dir=None,
+) -> RunResult:
     """Invoke the driver in-process and return its exit code and output.
 
     ``--output-dir`` plus every path option that otherwise defaults into the
@@ -302,13 +309,18 @@ def run_alchemy(output_dir, *args, ccp4_environ=None, cache=None,
     argv = ["--output-dir", output_dir]
     if cache is not None:
         argv += ["--pdb-redo-cache", str(cache)]
-    root = (str(mirror) if mirror is not None
-            else os.path.join(str(tmp_root or output_dir), "absent-mirror"))
+    root = (
+        str(mirror)
+        if mirror is not None
+        else os.path.join(str(tmp_root or output_dir), "absent-mirror")
+    )
     argv += ["--pdb-redo-root", root]
-    argv += ["--confidence-reference-dir",
-             str(reference_dir) if reference_dir is not None
-             else os.path.join(str(tmp_root or output_dir),
-                               "absent-reference")]
+    argv += [
+        "--confidence-reference-dir",
+        str(reference_dir)
+        if reference_dir is not None
+        else os.path.join(str(tmp_root or output_dir), "absent-reference"),
+    ]
     argv += [str(a) for a in args]
 
     out, err = io.StringIO(), io.StringIO()
@@ -369,10 +381,14 @@ def literature_reference(residue: str, atom_element: str, metal: str):
             if len(parts) < 5:
                 continue
             if (parts[0].upper(), parts[1].upper(), parts[2].upper()) == (
-                    residue, atom_element, metal):
+                residue,
+                atom_element,
+                metal,
+            ):
                 return float(parts[3]), float(parts[4])
     raise AssertionError(
-        f"no literature reference for {residue}/{atom_element}/{metal}")
+        f"no literature reference for {residue}/{atom_element}/{metal}"
+    )
 
 
 @dataclass
@@ -388,15 +404,31 @@ class Batch:
     candidates: List[Dict[str, str]]
 
 
-def run_batch(output_dir, cache, ccp4_environ, pdb_ids=ENTRY_IDS,
-              extra=(), tmp_root=None, reference_dir=None) -> Batch:
+def run_batch(
+    output_dir,
+    cache,
+    ccp4_environ,
+    pdb_ids=ENTRY_IDS,
+    extra=(),
+    tmp_root=None,
+    reference_dir=None,
+) -> Batch:
     """Run ``--id-file`` over ``pdb_ids`` and parse every output CSV."""
     output_dir = str(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     ids_path = id_file(tmp_root or output_dir, pdb_ids)
-    result = run_alchemy(output_dir, "--id-file", ids_path, "--workers", "3",
-                         *extra, ccp4_environ=ccp4_environ, cache=cache,
-                         tmp_root=tmp_root, reference_dir=reference_dir)
+    result = run_alchemy(
+        output_dir,
+        "--id-file",
+        ids_path,
+        "--workers",
+        "3",
+        *extra,
+        ccp4_environ=ccp4_environ,
+        cache=cache,
+        tmp_root=tmp_root,
+        reference_dir=reference_dir,
+    )
     manifest_rows = read_rows(output_dir, "manifest.csv")
     return Batch(
         result=result,
@@ -424,8 +456,7 @@ def batch(tmp_path_factory, entry_cache, ccp4_env) -> Batch:
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_single_entry_run_writes_documented_outputs(
-        tmp_path, entry_cache, ccp4_env):
+def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_env):
     """One ``--id`` run writes exactly the documented output set.
 
     README "Results are written to": manifest, statistics, bond and candidate
@@ -433,14 +464,25 @@ def test_single_entry_run_writes_documented_outputs(
     fixed schema, and the per-entry scratch directory must be cleaned up.
     """
     output_dir = tmp_path / "output"
-    result = run_alchemy(output_dir, "--id", "9myr", "--workers", "1",
-                         ccp4_environ=ccp4_env, cache=entry_cache,
-                         tmp_root=tmp_path)
+    result = run_alchemy(
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 0, result.text
 
     written = set(os.listdir(output_dir))
-    assert {"manifest.csv", "metal_stats_all.csv", "metal_bonds_all.csv",
-            "metal_candidates_all.csv"} <= written
+    assert {
+        "manifest.csv",
+        "metal_stats_all.csv",
+        "metal_bonds_all.csv",
+        "metal_candidates_all.csv",
+    } <= written
     assert len(log_paths(output_dir)) == 1
 
     # No confidence artefacts: no frozen reference is installed for this run.
@@ -454,28 +496,55 @@ def test_single_entry_run_writes_documented_outputs(
     assert read_header(output_dir, "manifest.csv") == main.MANIFEST_COLUMNS
     assert read_header(output_dir, "metal_stats_all.csv") == main.STATS_COLUMNS
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
-    assert (read_header(output_dir, "metal_candidates_all.csv")
-            == CANDIDATE_COLUMNS)
+    assert read_header(output_dir, "metal_candidates_all.csv") == CANDIDATE_COLUMNS
 
     # Columns the README names explicitly must really be present, so a schema
     # that silently drifted away from the documentation is caught here and not
     # only by comparison with the code's own constant.
     stats_header = read_header(output_dir, "metal_stats_all.csv")
     assert set(helpers.EDSTATS_HEADER) <= set(stats_header)
-    assert {"density_observation_id", "density_scope",
-            "density_shared_site_count", "density_is_shared",
-            "coordinate_mapping_status", "selected_metal_site_status",
-            "dpi", "resolution"} <= set(stats_header)
-    assert {"distance", "zscore", "geometry_outlier", "geometry_consistent",
-            "declared_connection", "contact_scope", "symmetry_contact",
-            "crystallographic_contact", "strict_ncs_contact",
-            "multi_donor_detected", "context_warning",
-            "context_warning_reasons"} <= set(BOND_COLUMNS)
-    assert {"first_sphere_eligible", "eligibility_status", "eligibility_reason",
-            "candidate_source", "inferred_donor_allowed", "first_sphere_cutoff",
-            "assignment_reference_kind"} <= set(CANDIDATE_COLUMNS)
-    assert {"n_metals", "n_bonds", "n_candidates", "status", "retryable",
-            "reason_codes", "runtime_s"} <= set(main.MANIFEST_COLUMNS)
+    assert {
+        "density_observation_id",
+        "density_scope",
+        "density_shared_site_count",
+        "density_is_shared",
+        "coordinate_mapping_status",
+        "selected_metal_site_status",
+        "dpi",
+        "resolution",
+    } <= set(stats_header)
+    assert {
+        "distance",
+        "zscore",
+        "geometry_outlier",
+        "geometry_consistent",
+        "declared_connection",
+        "contact_scope",
+        "symmetry_contact",
+        "crystallographic_contact",
+        "strict_ncs_contact",
+        "multi_donor_detected",
+        "context_warning",
+        "context_warning_reasons",
+    } <= set(BOND_COLUMNS)
+    assert {
+        "first_sphere_eligible",
+        "eligibility_status",
+        "eligibility_reason",
+        "candidate_source",
+        "inferred_donor_allowed",
+        "first_sphere_cutoff",
+        "assignment_reference_kind",
+    } <= set(CANDIDATE_COLUMNS)
+    assert {
+        "n_metals",
+        "n_bonds",
+        "n_candidates",
+        "status",
+        "retryable",
+        "reason_codes",
+        "runtime_s",
+    } <= set(main.MANIFEST_COLUMNS)
 
 
 # --------------------------------------------------------------------------- #
@@ -496,8 +565,9 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
     assert set(stats) == {"B", "D"}
 
     bonds = rows_for(batch.bonds, "9myr")
-    by_chain = {chain: [row for row in bonds if row["metal_chain"] == chain]
-                for chain in stats}
+    by_chain = {
+        chain: [row for row in bonds if row["metal_chain"] == chain] for chain in stats
+    }
     expected_donors = {
         ("CYS", "SG", "31"),
         ("HIS", "ND1", "35"),
@@ -515,38 +585,41 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
 
         expected_density = _MEASURED_RSZD[("9myr", chain, "201")]
         for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected_density):
-            assert float(site[column]) == pytest.approx(
-                value, abs=_RSZD_TOLERANCE), (chain, column)
+            assert float(site[column]) == pytest.approx(value, abs=_RSZD_TOLERANCE), (
+                chain,
+                column,
+            )
         rszd = float(site["ZDm"])
         assert math.isfinite(rszd)
         assert abs(rszd) == pytest.approx(
-            max(abs(float(site["ZD-m"])), abs(float(site["ZD+m"]))),
-            abs=0.05)
+            max(abs(float(site["ZD-m"])), abs(float(site["ZD+m"]))), abs=0.05
+        )
 
         site_bonds = by_chain[chain]
         assert len(site_bonds) == 4
-        assert {(row["neighbor_resname"], row["neighbor_atom"],
-                 row["neighbor_resnum"]) for row in site_bonds} == expected_donors
+        assert {
+            (row["neighbor_resname"], row["neighbor_atom"], row["neighbor_resnum"])
+            for row in site_bonds
+        } == expected_donors
         assert all(row["declared_connection"] == "True" for row in site_bonds)
 
         for bond in site_bonds:
             distance = float(bond["distance"])
             mu, sigma = literature_reference(
-                bond["neighbor_resname"], bond["neighbor_element"], "ZN")
+                bond["neighbor_resname"], bond["neighbor_element"], "ZN"
+            )
             assert float(bond["literature_distance"]) == pytest.approx(mu)
             assert float(bond["literature_stdev"]) == pytest.approx(sigma)
             dpi = float(bond["dpi"])
             assert math.isfinite(dpi) and dpi > 0.0
-            expected_z = (distance - mu) / math.sqrt(dpi ** 2 + sigma ** 2)
+            expected_z = (distance - mu) / math.sqrt(dpi**2 + sigma**2)
             assert float(bond["zscore"]) == pytest.approx(expected_z, abs=5e-4)
             assert abs(expected_z) < float(bond["zscore_outlier_cutoff"])
             assert bond["geometry_outlier"] == "False"
             assert bond["geometry_consistent"] == "True"
             assert float(bond["sigma_mag"]) == pytest.approx(rszd)
-            assert float(bond["sigma_neg"]) == pytest.approx(
-                float(site["ZD-m"]))
-            assert float(bond["sigma_pos"]) == pytest.approx(
-                float(site["ZD+m"]))
+            assert float(bond["sigma_neg"]) == pytest.approx(float(site["ZD-m"]))
+            assert float(bond["sigma_pos"]) == pytest.approx(float(site["ZD+m"]))
 
     # The histidine reference used above is an explicit shipped-data oracle.
     assert literature_reference(*_HIS_N_ZN) == pytest.approx((2.03, 0.05))
@@ -562,29 +635,34 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch
     repeated residue numbers. A map that is mis-scaled, mis-cropped, or joined
     using an incomplete site key cannot pass.
     """
-    sites = {(row["CI"], row["RN"]): row
-             for row in rows_for(batch.stats, "6nlr")}
+    sites = {(row["CI"], row["RN"]): row for row in rows_for(batch.stats, "6nlr")}
     expected_keys = {key[1:] for key in _MEASURED_RSZD if key[0] == "6nlr"}
     assert set(sites) == expected_keys
     assert Counter(row["metal_element"] for row in sites.values()) == Counter(
-        {"MN": 3, "CO": 3, "FE": 3, "CA": 2})
+        {"MN": 3, "CO": 3, "FE": 3, "CA": 2}
+    )
 
     for (chain, resnum), row in sites.items():
         expected = _MEASURED_RSZD[("6nlr", chain, resnum)]
         assert row["selected_metal_site_status"] == "selected", (chain, resnum)
         assert row["coordinate_mapping_status"] == "matched", (chain, resnum)
         for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected):
-            assert float(row[column]) == pytest.approx(
-                value, abs=_RSZD_TOLERANCE), (chain, resnum, column)
+            assert float(row[column]) == pytest.approx(value, abs=_RSZD_TOLERANCE), (
+                chain,
+                resnum,
+                column,
+            )
         assert abs(float(row["ZDm"])) == pytest.approx(
-            max(abs(float(row["ZD-m"])), abs(float(row["ZD+m"]))),
-            abs=0.05), (chain, resnum)
+            max(abs(float(row["ZD-m"])), abs(float(row["ZD+m"]))), abs=0.05
+        ), (chain, resnum)
 
     # The spread is a property of the snapshot, not merely a broad sanity
     # bound: A302 and C303 tie at the low end while C304 reaches the top anchor.
     minimum = min(float(row["ZDm"]) for row in sites.values())
-    assert {key for key, row in sites.items()
-            if float(row["ZDm"]) == minimum} == {("A", "302"), ("C", "303")}
+    assert {key for key, row in sites.items() if float(row["ZDm"]) == minimum} == {
+        ("A", "302"),
+        ("C", "303"),
+    }
     assert max(sites, key=lambda key: float(sites[key]["ZDm"])) == ("C", "304")
 
 
@@ -612,9 +690,11 @@ def test_declared_connections_measure_their_own_reported_distance(batch):
     assert declared, "the batch must contain declared metal connections"
 
     for row in declared:
-        where = (f"{row['pdbID']} {row['metal_resname']}{row['metal_resnum']}"
-                 f"-{row['neighbor_resname']}{row['neighbor_resnum']}"
-                 f":{row['neighbor_atom']}")
+        where = (
+            f"{row['pdbID']} {row['metal_resname']}{row['metal_resnum']}"
+            f"-{row['neighbor_resname']}{row['neighbor_resnum']}"
+            f":{row['neighbor_atom']}"
+        )
         reported = float(row["connection_reported_distance"])
         measured = float(row["distance"])
         assert reported > 0.0, where
@@ -655,9 +735,15 @@ def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(batch):
     }
     for chain in ("B", "D"):
         rows = [row for row in zinc if row["metal_chain"] == chain]
-        assert {(row["neighbor_resname"], row["neighbor_atom"],
-                 row["neighbor_element"], row["neighbor_resnum"])
-                for row in rows} == expected
+        assert {
+            (
+                row["neighbor_resname"],
+                row["neighbor_atom"],
+                row["neighbor_element"],
+                row["neighbor_resnum"],
+            )
+            for row in rows
+        } == expected
         assert {row["neighbor_chain"] for row in rows} == {chain}
         assert all(row["neighbor_class"] == "amino_acid" for row in rows)
         assert all(row["declared_connection"] == "True" for row in rows)
@@ -696,8 +782,9 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
 
     # The density stages are skipped entirely for a metal-free entry.
     log_text = open(log_paths(batch.output_dir)[0], encoding="utf-8").read()
-    entry_line = next(line for line in log_text.splitlines()
-                      if line.startswith("9nxl | status="))
+    entry_line = next(
+        line for line in log_text.splitlines() if line.startswith("9nxl | status=")
+    )
     assert "no_metals=true" in entry_line
     assert "density_map_scope=-" in entry_line
     assert "edstats_s" not in entry_line
@@ -725,15 +812,21 @@ def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch):
 
     # Aggregate totals are the sum of the per-entry manifest counts.
     assert len(batch.bonds) == sum(
-        int(row["n_bonds"]) for row in batch.manifest.values())
+        int(row["n_bonds"]) for row in batch.manifest.values()
+    )
     assert len(batch.candidates) == sum(
-        int(row["n_candidates"]) for row in batch.manifest.values())
+        int(row["n_candidates"]) for row in batch.manifest.values()
+    )
 
     # Each entry's rows really belong to it: metals only ever appear in the
     # coordinate file they were read from.
     assert {row["metal_element"] for row in rows_for(batch.bonds, "9myr")} == {"ZN"}
     assert {row["metal_element"] for row in rows_for(batch.bonds, "6nlr")} == {
-        "MN", "CO", "FE", "CA"}
+        "MN",
+        "CO",
+        "FE",
+        "CA",
+    }
 
 
 @_requires_entry_data
@@ -751,8 +844,11 @@ def test_manifest_counts_match_the_rows_actually_written(batch, pdb_id):
     assert int(row["n_bonds"]) == len(rows_for(batch.bonds, pdb_id))
     assert int(row["n_candidates"]) == len(rows_for(batch.candidates, pdb_id))
 
-    selected = [stat for stat in rows_for(batch.stats, pdb_id)
-                if stat["selected_metal_site_status"] == "selected"]
+    selected = [
+        stat
+        for stat in rows_for(batch.stats, pdb_id)
+        if stat["selected_metal_site_status"] == "selected"
+    ]
     assert int(row["n_metals"]) == len(selected)
 
     # Candidate evidence is a superset of assigned contacts: every bond was
@@ -770,17 +866,32 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     Resume runs create another log rather than replacing the original record."
     """
     output_dir = tmp_path / "output"
-    first = run_alchemy(output_dir, "--id", "9nxl", "--workers", "1",
-                        ccp4_environ=ccp4_env, cache=entry_cache,
-                        tmp_root=tmp_path)
+    first = run_alchemy(
+        output_dir,
+        "--id",
+        "9nxl",
+        "--workers",
+        "1",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert first.exit_code == 0, first.text
     original = log_paths(output_dir)
     assert len(original) == 1
     original_text = open(original[0], encoding="utf-8").read()
 
-    second = run_alchemy(output_dir, "--id", "9nxl", "--workers", "1",
-                         "--resume", ccp4_environ=ccp4_env, cache=entry_cache,
-                         tmp_root=tmp_path)
+    second = run_alchemy(
+        output_dir,
+        "--id",
+        "9nxl",
+        "--workers",
+        "1",
+        "--resume",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert second.exit_code == 0, second.text
     assert len(log_paths(output_dir)) == 2
     assert open(original[0], encoding="utf-8").read() == original_text
@@ -794,7 +905,8 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
-        tmp_path, entry_cache, ccp4_env):
+    tmp_path, entry_cache, ccp4_env
+):
     """Resuming a finished batch reprocesses nothing and rewrites nothing.
 
     README: ``--resume`` skips ``ok`` and terminal ``partial`` outcomes without
@@ -804,18 +916,25 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
     first = run_batch(output_dir, entry_cache, ccp4_env, tmp_root=tmp_path)
     assert first.result.exit_code == 0, first.result.text
 
-    names = ("manifest.csv", "metal_stats_all.csv", "metal_bonds_all.csv",
-             "metal_candidates_all.csv")
-    before = {name: open(os.path.join(str(output_dir), name), "rb").read()
-              for name in names}
+    names = (
+        "manifest.csv",
+        "metal_stats_all.csv",
+        "metal_bonds_all.csv",
+        "metal_candidates_all.csv",
+    )
+    before = {
+        name: open(os.path.join(str(output_dir), name), "rb").read() for name in names
+    }
 
-    second = run_batch(output_dir, entry_cache, ccp4_env, extra=("--resume",),
-                       tmp_root=tmp_path)
+    second = run_batch(
+        output_dir, entry_cache, ccp4_env, extra=("--resume",), tmp_root=tmp_path
+    )
     assert second.result.exit_code == 0, second.result.text
     assert "No entries to process." in second.result.stdout
 
-    after = {name: open(os.path.join(str(output_dir), name), "rb").read()
-             for name in names}
+    after = {
+        name: open(os.path.join(str(output_dir), name), "rb").read() for name in names
+    }
     assert after == before
 
     # And, stated as row counts rather than bytes, nothing was appended.
@@ -829,7 +948,8 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
-        tmp_path, entry_cache, ccp4_env):
+    tmp_path, entry_cache, ccp4_env
+):
     """``--no-bonds`` erases stale bond output; a later resume fills it back in.
 
     README: "A fresh --no-bonds run removes pre-existing metal_bonds_all.csv and
@@ -842,15 +962,21 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
     assert complete.result.exit_code == 0, complete.result.text
     assert complete.bonds, "the seeding run must produce bond rows"
 
-    disabled = run_alchemy(output_dir, "--id-file", id_file(tmp_path, ENTRY_IDS),
-                           "--workers", "3", "--no-bonds",
-                           ccp4_environ=ccp4_env, cache=entry_cache,
-                           tmp_root=tmp_path)
+    disabled = run_alchemy(
+        output_dir,
+        "--id-file",
+        id_file(tmp_path, ENTRY_IDS),
+        "--workers",
+        "3",
+        "--no-bonds",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert disabled.exit_code == 0, disabled.text
     assert "Removed stale bond-stage output" in disabled.stdout
     assert not os.path.exists(os.path.join(str(output_dir), "metal_bonds_all.csv"))
-    assert not os.path.exists(
-        os.path.join(str(output_dir), "metal_candidates_all.csv"))
+    assert not os.path.exists(os.path.join(str(output_dir), "metal_candidates_all.csv"))
 
     blank = manifest_by_id(output_dir)
     assert set(blank) == set(ENTRY_IDS)
@@ -861,15 +987,15 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
     # Statistics are still produced by the bond-disabled run.
     assert read_rows(output_dir, "metal_stats_all.csv")
 
-    restored = run_batch(output_dir, entry_cache, ccp4_env, extra=("--resume",),
-                         tmp_root=tmp_path)
+    restored = run_batch(
+        output_dir, entry_cache, ccp4_env, extra=("--resume",), tmp_root=tmp_path
+    )
     assert restored.result.exit_code == 0, restored.result.text
     assert set(restored.manifest) == set(ENTRY_IDS)
     for pdb_id, row in restored.manifest.items():
         assert row["n_bonds"] != "", pdb_id
         assert int(row["n_bonds"]) == len(rows_for(restored.bonds, pdb_id))
-        assert int(row["n_candidates"]) == len(
-            rows_for(restored.candidates, pdb_id))
+        assert int(row["n_candidates"]) == len(rows_for(restored.candidates, pdb_id))
     # The retry replaced rows rather than duplicating them.
     assert len(restored.bonds) == len(complete.bonds)
     assert len(restored.stats) == len(complete.stats)
@@ -883,7 +1009,8 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
-        tmp_path, entry_cache, ccp4_env):
+    tmp_path, entry_cache, ccp4_env
+):
     """A pre-bond failure leaves blank counts, so bonds are still filled later.
 
     Regression for cf55dd5. ``_initial_result`` used to seed ``n_bonds`` and
@@ -902,33 +1029,63 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
     data_json = entry_file(entry_cache, "9myr", "data.json")
     broken_mtz = _mtz_without_map_coefficients(good_mtz, tmp_path / "broken.mtz")
 
-    base = ["--id", "9myr", "--cif-file", cif, "--data-json", data_json,
-            "--workers", "1"]
+    base = [
+        "--id",
+        "9myr",
+        "--cif-file",
+        cif,
+        "--data-json",
+        data_json,
+        "--workers",
+        "1",
+    ]
 
-    failed = run_alchemy(output_dir, *base, "--mtz-file", broken_mtz,
-                         ccp4_environ=ccp4_env, cache=entry_cache,
-                         tmp_root=tmp_path)
+    failed = run_alchemy(
+        output_dir,
+        *base,
+        "--mtz-file",
+        broken_mtz,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert failed.exit_code == 1, failed.text
     row = manifest_by_id(output_dir)["9myr"]
     assert row["status"] == "error"
     assert row["n_bonds"] == "", "an unrun bond stage must not claim zero rows"
     assert row["n_candidates"] == ""
 
-    carried = run_alchemy(output_dir, *base, "--mtz-file", good_mtz,
-                          "--resume", "--no-bonds", ccp4_environ=ccp4_env,
-                          cache=entry_cache, tmp_root=tmp_path)
+    carried = run_alchemy(
+        output_dir,
+        *base,
+        "--mtz-file",
+        good_mtz,
+        "--resume",
+        "--no-bonds",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert carried.exit_code == 0, carried.text
     row = manifest_by_id(output_dir)["9myr"]
     assert row["status"] == "ok"
     assert row["n_bonds"] == "", "a bond-disabled resume must keep counts blank"
     assert row["n_candidates"] == ""
 
-    filled = run_alchemy(output_dir, *base, "--mtz-file", good_mtz, "--resume",
-                         ccp4_environ=ccp4_env, cache=entry_cache,
-                         tmp_root=tmp_path)
+    filled = run_alchemy(
+        output_dir,
+        *base,
+        "--mtz-file",
+        good_mtz,
+        "--resume",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert filled.exit_code == 0, filled.text
     assert "No entries to process." not in filled.stdout, (
-        "the bond stage never ran for this entry, so resume must process it")
+        "the bond stage never ran for this entry, so resume must process it"
+    )
     bonds = rows_for(read_rows(output_dir, "metal_bonds_all.csv"), "9myr")
     assert bonds, "the bond-enabled resume must actually write bond rows"
     row = manifest_by_id(output_dir)["9myr"]
@@ -943,7 +1100,8 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
-        tmp_path, entry_cache, ccp4_env, batch):
+    tmp_path, entry_cache, ccp4_env, batch
+):
     """Manual ``--cif-file/--mtz-file/--data-json`` matches the automatic run.
 
     Manual mode is an input-selection path, not a different analysis: given the
@@ -952,11 +1110,21 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
-        output_dir, "--id", "9myr", "--workers", "1",
-        "--cif-file", entry_file(entry_cache, "9myr", "9myr_final.cif"),
-        "--mtz-file", entry_file(entry_cache, "9myr", "9myr_final.mtz"),
-        "--data-json", entry_file(entry_cache, "9myr", "data.json"),
-        ccp4_environ=ccp4_env, cache=entry_cache, tmp_root=tmp_path)
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        "--cif-file",
+        entry_file(entry_cache, "9myr", "9myr_final.cif"),
+        "--mtz-file",
+        entry_file(entry_cache, "9myr", "9myr_final.mtz"),
+        "--data-json",
+        entry_file(entry_cache, "9myr", "data.json"),
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 0, result.text
 
     row = manifest_by_id(output_dir)["9myr"]
@@ -969,10 +1137,18 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
     reference_bonds = rows_for(batch.bonds, "9myr")
     assert len(manual_bonds) == len(reference_bonds) == 8
     for manual, reference in zip(manual_bonds, reference_bonds):
-        for column in ("metal_chain", "metal_element", "neighbor_resname",
-                       "neighbor_atom", "neighbor_resnum", "distance", "dpi",
-                       "zscore", "literature_distance",
-                       "connection_reported_distance"):
+        for column in (
+            "metal_chain",
+            "metal_element",
+            "neighbor_resname",
+            "neighbor_atom",
+            "neighbor_resnum",
+            "distance",
+            "dpi",
+            "zscore",
+            "literature_distance",
+            "connection_reported_distance",
+        ):
             assert manual[column] == reference[column], column
 
 
@@ -980,7 +1156,8 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_manual_files_without_data_json_are_a_terminal_partial(
-        tmp_path, entry_cache, ccp4_env, batch):
+    tmp_path, entry_cache, ccp4_env, batch
+):
     """Omitting ``--data-json`` costs DPI only, and is not a failure.
 
     README: "Without --data-json there is no reflection count, so DPI and every
@@ -991,10 +1168,19 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
-        output_dir, "--id", "9myr", "--workers", "1",
-        "--cif-file", entry_file(entry_cache, "9myr", "9myr_final.cif"),
-        "--mtz-file", entry_file(entry_cache, "9myr", "9myr_final.mtz"),
-        ccp4_environ=ccp4_env, cache=entry_cache, tmp_root=tmp_path)
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        "--cif-file",
+        entry_file(entry_cache, "9myr", "9myr_final.cif"),
+        "--mtz-file",
+        entry_file(entry_cache, "9myr", "9myr_final.mtz"),
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 0, result.text
 
     row = manifest_by_id(output_dir)["9myr"]
@@ -1009,7 +1195,8 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     assert not math.isfinite(float(site["dpi"]))
     # Density is unaffected: only the DPI-derived numbers are lost.
     assert float(site["ZDm"]) == pytest.approx(
-        float(rows_for(batch.stats, "9myr")[0]["ZDm"]))
+        float(rows_for(batch.stats, "9myr")[0]["ZDm"])
+    )
 
     bond = read_rows(output_dir, "metal_bonds_all.csv")[0]
     reference = rows_for(batch.bonds, "9myr")[0]
@@ -1029,7 +1216,8 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_full_and_model_envelope_map_scopes_give_identical_statistics(
-        tmp_path, entry_cache, ccp4_env):
+    tmp_path, entry_cache, ccp4_env
+):
     """Cropping the FFT map to the model envelope changes no EDSTATS number.
 
     README: "Model-envelope mode still calculates each complete FFT map before
@@ -1037,12 +1225,20 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
     full-map mode." That makes the default a pure performance optimisation, and
     it is the pipeline's strongest numerical claim.
     """
-    cropped = run_batch(tmp_path / "envelope", entry_cache, ccp4_env,
-                        extra=("--density-map-scope", "model-envelope"),
-                        tmp_root=tmp_path / "envelope-tmp")
-    full = run_batch(tmp_path / "full", entry_cache, ccp4_env,
-                     extra=("--density-map-scope", "full"),
-                     tmp_root=tmp_path / "full-tmp")
+    cropped = run_batch(
+        tmp_path / "envelope",
+        entry_cache,
+        ccp4_env,
+        extra=("--density-map-scope", "model-envelope"),
+        tmp_root=tmp_path / "envelope-tmp",
+    )
+    full = run_batch(
+        tmp_path / "full",
+        entry_cache,
+        ccp4_env,
+        extra=("--density-map-scope", "full"),
+        tmp_root=tmp_path / "full-tmp",
+    )
     assert cropped.result.exit_code == 0, cropped.result.text
     assert full.result.exit_code == 0, full.result.text
 
@@ -1051,7 +1247,8 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
     cropped_log = open(log_paths(cropped.output_dir)[0], encoding="utf-8").read()
     full_log = open(log_paths(full.output_dir)[0], encoding="utf-8").read()
     assert re.search(r"density_map_scope=model-envelope\b", cropped_log), (
-        "no entry exercised model-envelope cropping")
+        "no entry exercised model-envelope cropping"
+    )
     assert not re.search(r"density_map_scope=model-envelope\b", full_log)
     assert re.search(r"density_map_scope=full\b", full_log)
 
@@ -1069,15 +1266,18 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
 
     # The downstream numbers that depend on those statistics agree too.
     def bond_key(row):
-        return (row["pdbID"], row["metal_resnum"], row["neighbor_resnum"],
-                row["neighbor_atom"])
+        return (
+            row["pdbID"],
+            row["metal_resnum"],
+            row["neighbor_resnum"],
+            row["neighbor_atom"],
+        )
 
     cropped_bonds = {bond_key(row): row for row in cropped.bonds}
     full_bonds = {bond_key(row): row for row in full.bonds}
     assert set(cropped_bonds) == set(full_bonds)
     for bond_id, row in cropped_bonds.items():
-        for column in ("distance", "zscore", "sigma_mag", "sigma_neg",
-                       "sigma_pos"):
+        for column in ("distance", "zscore", "sigma_mag", "sigma_neg", "sigma_pos"):
             assert row[column] == full_bonds[bond_id][column], (bond_id, column)
 
 
@@ -1098,11 +1298,15 @@ def _mtz_without_map_coefficients(source_mtz: str, destination) -> str:
     stripped.add_column("SIGFP", "Q")
     indices = source.array[:, :3]
     rows = len(indices)
-    stripped.set_data(np.hstack([
-        indices,
-        np.full((rows, 1), 100.0),
-        np.full((rows, 1), 1.0),
-    ]))
+    stripped.set_data(
+        np.hstack(
+            [
+                indices,
+                np.full((rows, 1), 100.0),
+                np.full((rows, 1), 1.0),
+            ]
+        )
+    )
     stripped.write_to_file(str(destination))
     return str(destination)
 
@@ -1110,21 +1314,30 @@ def _mtz_without_map_coefficients(source_mtz: str, destination) -> str:
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
-        tmp_path, ccp4_env, monkeypatch):
+    tmp_path, ccp4_env, monkeypatch
+):
     """An id that exists nowhere ends the run with an explanation and exit 1.
 
     The downloader is replaced at its boundary: this is an error-reporting test,
     not a live-network test, and an unmarked test must never open a socket under
     ``-m 'not network'``.
     """
+
     def unavailable(pdb_id, cache_root):
         raise FileNotFoundError(pdb_id)
 
     monkeypatch.setattr(main, "download_entry_to_cache", unavailable)
     output_dir = tmp_path / "output"
-    result = run_alchemy(output_dir, "--id", "zzzz", "--workers", "1",
-                         ccp4_environ=ccp4_env, cache=tmp_path / "empty-cache",
-                         tmp_root=tmp_path)
+    result = run_alchemy(
+        output_dir,
+        "--id",
+        "zzzz",
+        "--workers",
+        "1",
+        ccp4_environ=ccp4_env,
+        cache=tmp_path / "empty-cache",
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 1
     assert "not found locally and download failed" in result.text
     assert "Traceback" not in result.text
@@ -1139,7 +1352,8 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
-        tmp_path, entry_cache, ccp4_env):
+    tmp_path, entry_cache, ccp4_env
+):
     """A missing FWT/PHWT/DELFWT/PHDELWT set fails one entry, not the process.
 
     README: "The MTZ input must contain FWT, PHWT, DELFWT, and PHDELWT columns."
@@ -1148,12 +1362,22 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
     """
     output_dir = tmp_path / "output"
     broken = _mtz_without_map_coefficients(
-        entry_file(entry_cache, "9myr", "9myr_final.mtz"), tmp_path / "bad.mtz")
+        entry_file(entry_cache, "9myr", "9myr_final.mtz"), tmp_path / "bad.mtz"
+    )
     result = run_alchemy(
-        output_dir, "--id", "9myr", "--workers", "1",
-        "--cif-file", entry_file(entry_cache, "9myr", "9myr_final.cif"),
-        "--mtz-file", broken, ccp4_environ=ccp4_env, cache=entry_cache,
-        tmp_root=tmp_path)
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        "--cif-file",
+        entry_file(entry_cache, "9myr", "9myr_final.cif"),
+        "--mtz-file",
+        broken,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
 
     assert result.exit_code == 1
     assert "Traceback" not in result.text
@@ -1170,8 +1394,9 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
     # The other outputs exist and are empty rather than absent or malformed.
     assert read_rows(output_dir, "metal_stats_all.csv") == []
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
-    assert [name for name in os.listdir(str(output_dir))
-            if name.startswith(".alchemy-")] == []
+    assert [
+        name for name in os.listdir(str(output_dir)) if name.startswith(".alchemy-")
+    ] == []
 
 
 @pytest.mark.parametrize("value", ["0", "-1"])
@@ -1183,8 +1408,15 @@ def test_workers_below_one_is_rejected_before_any_work(tmp_path, value):
     neither CCP4 nor the network.
     """
     output_dir = tmp_path / "output"
-    result = run_alchemy(output_dir, "--id", "9myr", "--workers", value,
-                         cache=tmp_path / "cache", tmp_root=tmp_path)
+    result = run_alchemy(
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        value,
+        cache=tmp_path / "cache",
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 2
     assert "--workers" in result.stderr
     assert "at least 1" in result.stderr
@@ -1237,8 +1469,7 @@ def _severity(value: float, anchors) -> float:
     return anchors[-1][1]
 
 
-def readme_confidence(rszd: float, max_abs_zbond: float,
-                      coverage: float) -> float:
+def readme_confidence(rszd: float, max_abs_zbond: float, coverage: float) -> float:
     """``100 * (1 - 0.50*SR - 0.35*QG*SG - 0.15*QG*sqrt(SR*SG))``.
 
     The README's published score, computed here from the site's own recorded
@@ -1259,23 +1490,24 @@ def readme_confidence(rszd: float, max_abs_zbond: float,
 
 def frozen_cohort(reference_dir) -> List[Tuple[float, int]]:
     """``[(score, count)]`` read straight from a published distribution file."""
-    path = os.path.join(str(reference_dir),
-                        confidence_score.REFERENCE_DISTRIBUTION_FILE)
+    path = os.path.join(
+        str(reference_dir), confidence_score.REFERENCE_DISTRIBUTION_FILE
+    )
     with open(path, newline="", encoding="utf-8") as handle:
-        return [(float(row["confidence_score"]), int(row["count"]))
-                for row in csv.DictReader(handle)]
+        return [
+            (float(row["confidence_score"]), int(row["count"]))
+            for row in csv.DictReader(handle)
+        ]
 
 
 def reference_metadata(reference_dir) -> Dict[str, object]:
     """The published policy metadata of a frozen reference directory."""
-    path = os.path.join(str(reference_dir),
-                        confidence_score.REFERENCE_METADATA_FILE)
+    path = os.path.join(str(reference_dir), confidence_score.REFERENCE_METADATA_FILE)
     with open(path, encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def average_rank_percentile(cohort, score: float,
-                            tolerance: float = 1e-6) -> float:
+def average_rank_percentile(cohort, score: float, tolerance: float = 1e-6) -> float:
     """Average-rank ECDF of ``score`` in ``cohort``, computed independently.
 
     ``tolerance`` groups a printed score with the cohort value it came from:
@@ -1285,13 +1517,13 @@ def average_rank_percentile(cohort, score: float,
     """
     total = sum(count for _, count in cohort)
     below = sum(count for value, count in cohort if value < score - tolerance)
-    equal = sum(count for value, count in cohort
-                if abs(value - score) <= tolerance)
+    equal = sum(count for value, count in cohort if abs(value - score) <= tolerance)
     return 100.0 * (below + 0.5 * equal) / total
 
 
-def frozen_reference(directory, rszd_values=_COHORT_RSZD,
-                     zbond_values=_COHORT_ZBOND) -> str:
+def frozen_reference(
+    directory, rszd_values=_COHORT_RSZD, zbond_values=_COHORT_ZBOND
+) -> str:
     """Publish a frozen confidence reference and return its directory.
 
     Built the way a real one is: a compact confidence-input CSV is finalized by
@@ -1303,10 +1535,8 @@ def frozen_reference(directory, rszd_values=_COHORT_RSZD,
     directory = str(directory)
     os.makedirs(directory, exist_ok=True)
     rows = []
-    for index, (rszd, zbond) in enumerate(
-            itertools.product(rszd_values, zbond_values)):
-        row = {column: ""
-               for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
+    for index, (rszd, zbond) in enumerate(itertools.product(rszd_values, zbond_values)):
+        row = {column: "" for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
         row.update(
             pdbID=f"c{index:03d}",
             category="ion",
@@ -1322,8 +1552,7 @@ def frozen_reference(directory, rszd_values=_COHORT_RSZD,
         )
         rows.append(row)
     for index in range(2):
-        row = {column: ""
-               for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
+        row = {column: "" for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
         row.update(
             pdbID=f"u{index:03d}",
             selected_metal_site_status="selected",
@@ -1335,25 +1564,32 @@ def frozen_reference(directory, rszd_values=_COHORT_RSZD,
     inputs = os.path.join(directory, "confidence_inputs.csv")
     with open(inputs, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
-            handle, fieldnames=confidence_score.CONFIDENCE_INPUT_COLUMNS)
+            handle, fieldnames=confidence_score.CONFIDENCE_INPUT_COLUMNS
+        )
         writer.writeheader()
         writer.writerows(rows)
 
     reference_dir = os.path.join(directory, "confidence_reference")
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = confidence_score.main([
-            "finalize",
-            "--input", inputs,
-            "--output", os.path.join(directory, "confidence_scores.csv"),
-            "--reference-dir", reference_dir,
-        ])
+        code = confidence_score.main(
+            [
+                "finalize",
+                "--input",
+                inputs,
+                "--output",
+                os.path.join(directory, "confidence_scores.csv"),
+                "--reference-dir",
+                reference_dir,
+            ]
+        )
     assert code == 0, out.getvalue() + err.getvalue()
     return reference_dir
 
 
-CONFIDENCE_COLUMNS = (list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-                      + list(confidence_score.ANALYSIS_COLUMNS))
+CONFIDENCE_COLUMNS = list(confidence_score.CONFIDENCE_INPUT_COLUMNS) + list(
+    confidence_score.ANALYSIS_COLUMNS
+)
 
 
 def assert_policy_was_applied(rows, reference_dir):
@@ -1371,8 +1607,10 @@ def assert_policy_was_applied(rows, reference_dir):
 
     scored = 0
     for row in rows:
-        where = (f"{row['pdbID']} {row['metal_resname']}"
-                 f"{row['metal_resnum']}/{row['metal_atom']}")
+        where = (
+            f"{row['pdbID']} {row['metal_resname']}"
+            f"{row['metal_resnum']}/{row['metal_atom']}"
+        )
         # Which snapshot produced this row is recorded on the row itself.
         assert row["confidence_reference_id"] == metadata["reference_id"], where
         assert int(row["confidence_cohort_size"]) == cohort_size, where
@@ -1386,12 +1624,14 @@ def assert_policy_was_applied(rows, reference_dir):
         expected = readme_confidence(
             float(row["rszd_magnitude"]),
             float(row["max_abs_zbond"]) if row["max_abs_zbond"] else math.nan,
-            float(row["geometry_coverage"]))
+            float(row["geometry_coverage"]),
+        )
         # 1e-3 absorbs the six-decimal rounding of geometry_coverage in the CSV;
         # the score itself is reproduced to well under that.
         assert score == pytest.approx(expected, abs=1e-3), where
         assert float(row["confidence_percentile"]) == pytest.approx(
-            average_rank_percentile(cohort, expected), abs=1e-6), where
+            average_rank_percentile(cohort, expected), abs=1e-6
+        ), where
         scored += 1
     return scored
 
@@ -1410,10 +1650,10 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path):
     assert _GEOMETRY_ANCHORS == confidence_score.GEOMETRY_ANCHORS
 
     published = reference_metadata(frozen_reference(tmp_path / "policy"))
-    assert published["density_anchors"] == [
-        list(anchor) for anchor in _DENSITY_ANCHORS]
+    assert published["density_anchors"] == [list(anchor) for anchor in _DENSITY_ANCHORS]
     assert published["geometry_anchors"] == [
-        list(anchor) for anchor in _GEOMETRY_ANCHORS]
+        list(anchor) for anchor in _GEOMETRY_ANCHORS
+    ]
     assert published["weights"] == _WEIGHTS
     assert published["percentile_method"] == "average_rank_empirical_cdf"
 
@@ -1422,7 +1662,8 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path):
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_installed_reference_scores_every_selected_site_against_the_database(
-        tmp_path, entry_cache, ccp4_env, batch):
+    tmp_path, entry_cache, ccp4_env, batch
+):
     """``--confidence-reference-dir`` makes a run emit its confidence scores.
 
     README: "For later single-entry, ID-file, manual, or capped runs, place the
@@ -1441,8 +1682,13 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     """
     reference_dir = frozen_reference(tmp_path / "installed")
     output_dir = tmp_path / "output"
-    scored_run = run_batch(output_dir, entry_cache, ccp4_env,
-                           tmp_root=tmp_path, reference_dir=reference_dir)
+    scored_run = run_batch(
+        output_dir,
+        entry_cache,
+        ccp4_env,
+        tmp_root=tmp_path,
+        reference_dir=reference_dir,
+    )
     assert scored_run.result.exit_code == 0, scored_run.result.text
 
     written = set(os.listdir(str(output_dir)))
@@ -1451,15 +1697,13 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     # publishes a reference of its own, both of which belong to database runs.
     assert "confidence_inputs_all.csv" not in written
     assert "confidence_reference" not in written
-    assert read_header(output_dir, "confidence_scores_all.csv") == (
-        CONFIDENCE_COLUMNS)
+    assert read_header(output_dir, "confidence_scores_all.csv") == (CONFIDENCE_COLUMNS)
 
     rows = read_rows(output_dir, "confidence_scores_all.csv")
     # One row per selected metal site, entry by entry -- the guarantee
     # complete_confidence_site_count exists to keep.
     for pdb_id, manifest_row in scored_run.manifest.items():
-        assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), \
-            pdb_id
+        assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
     assert len(rows) == 13
     assert rows_for(rows, "9nxl") == []
 
@@ -1471,8 +1715,10 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     assert assert_policy_was_applied(rows, reference_dir) == len(rows)
 
     # The cohort is the frozen database, not this run's thirteen sites.
-    ranked = sorted((float(row["confidence_score"]),
-                     float(row["confidence_percentile"])) for row in rows)
+    ranked = sorted(
+        (float(row["confidence_score"]), float(row["confidence_percentile"]))
+        for row in rows
+    )
     percentiles = [percentile for _, percentile in ranked]
     assert all(0.0 < value < 100.0 for value in percentiles)
     assert len(set(percentiles)) > 1
@@ -1481,20 +1727,24 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 
     # 9myr chain B zinc: its confidence follows from the RSZD the density arm
     # measured for it, and from the density term alone.
-    zinc = next(row for row in rows
-                if row["pdbID"] == "9myr" and row["metal_chain"] == "B")
-    site = next(row for row in rows_for(batch.stats, "9myr")
-                if row["CI"] == "B")
+    zinc = next(
+        row for row in rows if row["pdbID"] == "9myr" and row["metal_chain"] == "B"
+    )
+    site = next(row for row in rows_for(batch.stats, "9myr") if row["CI"] == "B")
     assert float(zinc["rszd_magnitude"]) == pytest.approx(
-        abs(float(site["ZDm"])), abs=1e-6)
+        abs(float(site["ZDm"])), abs=1e-6
+    )
     assert float(zinc["max_abs_zbond"]) < _GEOMETRY_ANCHORS[0][0]
     assert float(zinc["geometry_coverage"]) == 1.0
     assert zinc["confidence_scoring_status"] == "complete"
     assert float(zinc["confidence_score"]) == pytest.approx(
-        _9MYR_B_CONFIDENCE, abs=_9MYR_B_CONFIDENCE_TOLERANCE)
+        _9MYR_B_CONFIDENCE, abs=_9MYR_B_CONFIDENCE_TOLERANCE
+    )
 
-    assert (f"13 confidence rows compared with database cohort {cohort_size}"
-            in scored_run.result.stdout)
+    assert (
+        f"13 confidence rows compared with database cohort {cohort_size}"
+        in scored_run.result.stdout
+    )
     log_text = open(log_paths(output_dir)[0], encoding="utf-8").read()
     assert "confidence_mode: reference" in log_text
     assert "confidence_status: scored_against_reference" in log_text
@@ -1504,7 +1754,8 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
-        tmp_path, entry_cache, ccp4_env):
+    tmp_path, entry_cache, ccp4_env
+):
     """A run over a whole mirror streams inputs and then freezes a reference.
 
     README: confidence inputs are collected "as part of an uncapped
@@ -1531,19 +1782,28 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
             shutil.copytree(source, entry)
 
     output_dir = tmp_path / "output"
-    result = run_alchemy(output_dir, "--workers", "3", mirror=mirror,
-                         ccp4_environ=ccp4_env, cache=tmp_path / "cache",
-                         tmp_root=tmp_path)
+    result = run_alchemy(
+        output_dir,
+        "--workers",
+        "3",
+        mirror=mirror,
+        ccp4_environ=ccp4_env,
+        cache=tmp_path / "cache",
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 0, result.text
     assert f"Enumerating final PDB-REDO entries under {mirror}" in result.stdout
 
     written = set(os.listdir(str(output_dir)))
-    assert {"confidence_inputs_all.csv", "confidence_scores_all.csv",
-            "confidence_reference"} <= written
+    assert {
+        "confidence_inputs_all.csv",
+        "confidence_scores_all.csv",
+        "confidence_reference",
+    } <= written
     assert read_header(output_dir, "confidence_inputs_all.csv") == list(
-        confidence_score.CONFIDENCE_INPUT_COLUMNS)
-    assert read_header(output_dir, "confidence_scores_all.csv") == (
-        CONFIDENCE_COLUMNS)
+        confidence_score.CONFIDENCE_INPUT_COLUMNS
+    )
+    assert read_header(output_dir, "confidence_scores_all.csv") == (CONFIDENCE_COLUMNS)
 
     reference_dir = os.path.join(str(output_dir), "confidence_reference")
     manifest = manifest_by_id(output_dir)
@@ -1551,11 +1811,14 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     rows = read_rows(output_dir, "confidence_scores_all.csv")
 
     # Every selected metal site of every entry reaches both files exactly once.
-    assert len(inputs) == len(rows) == sum(
-        int(row["n_metals"]) for row in manifest.values()) == 13
+    assert (
+        len(inputs)
+        == len(rows)
+        == sum(int(row["n_metals"]) for row in manifest.values())
+        == 13
+    )
     for pdb_id, manifest_row in manifest.items():
-        assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), \
-            pdb_id
+        assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
     # Scoring adds columns to the streamed inputs; it does not re-derive them.
     for streamed, scored in zip(inputs, rows):
         for column in confidence_score.CONFIDENCE_INPUT_COLUMNS:
@@ -1569,31 +1832,40 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     percentiles = [float(row["confidence_percentile"]) for row in rows]
     assert sum(percentiles) / len(percentiles) == pytest.approx(50.0)
 
-    assert (f"13 confidence rows (13 scored; reference cohort 13) -> "
-            f"{os.path.join(str(output_dir), 'confidence_scores_all.csv')}"
-            in result.stdout)
+    assert (
+        f"13 confidence rows (13 scored; reference cohort 13) -> "
+        f"{os.path.join(str(output_dir), 'confidence_scores_all.csv')}" in result.stdout
+    )
     log_text = open(log_paths(output_dir)[0], encoding="utf-8").read()
     assert "confidence_mode: database" in log_text
     assert "confidence_status: finalized" in log_text
 
     # The published reference is directly reusable by a later scored run.
     reused = tmp_path / "reused"
-    second = run_alchemy(reused, "--id", "9myr", "--workers", "1",
-                         reference_dir=reference_dir, ccp4_environ=ccp4_env,
-                         cache=entry_cache, tmp_root=tmp_path / "reused-tmp")
+    second = run_alchemy(
+        reused,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        reference_dir=reference_dir,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path / "reused-tmp",
+    )
     assert second.exit_code == 0, second.text
     reused_rows = read_rows(reused, "confidence_scores_all.csv")
     assert len(reused_rows) == 2
     assert assert_policy_was_applied(reused_rows, reference_dir) == 2
-    assert ([row["confidence_score"] for row in reused_rows]
-            == [row["confidence_score"] for row in rows_for(rows, "9myr")])
+    assert [row["confidence_score"] for row in reused_rows] == [
+        row["confidence_score"] for row in rows_for(rows, "9myr")
+    ]
 
 
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_resume_refuses_to_mix_two_database_snapshots(
-        tmp_path, entry_cache, ccp4_env):
+def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp4_env):
     """Resuming against a different frozen reference is refused, not blended.
 
     README: "A deterministic `confidence_reference_id` identifies the exact
@@ -1606,29 +1878,55 @@ def test_resume_refuses_to_mix_two_database_snapshots(
     case cannot be a resume that was broken for some unrelated reason.
     """
     installed = frozen_reference(tmp_path / "installed")
-    other = frozen_reference(tmp_path / "other", _ALTERNATE_RSZD,
-                             _ALTERNATE_ZBOND)
-    assert (reference_metadata(installed)["reference_id"]
-            != reference_metadata(other)["reference_id"])
+    other = frozen_reference(tmp_path / "other", _ALTERNATE_RSZD, _ALTERNATE_ZBOND)
+    assert (
+        reference_metadata(installed)["reference_id"]
+        != reference_metadata(other)["reference_id"]
+    )
 
     output_dir = tmp_path / "output"
-    first = run_alchemy(output_dir, "--id", "9myr", "--workers", "1",
-                        reference_dir=installed, ccp4_environ=ccp4_env,
-                        cache=entry_cache, tmp_root=tmp_path)
+    first = run_alchemy(
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        reference_dir=installed,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert first.exit_code == 0, first.text
     scores_path = os.path.join(str(output_dir), "confidence_scores_all.csv")
     original = open(scores_path, "rb").read()
 
-    same = run_alchemy(output_dir, "--id", "9myr", "--workers", "1", "--resume",
-                       reference_dir=installed, ccp4_environ=ccp4_env,
-                       cache=entry_cache, tmp_root=tmp_path)
+    same = run_alchemy(
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        "--resume",
+        reference_dir=installed,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert same.exit_code == 0, same.text
     assert "No entries to process." in same.stdout
 
-    mismatched = run_alchemy(output_dir, "--id", "9myr", "--workers", "1",
-                             "--resume", reference_dir=other,
-                             ccp4_environ=ccp4_env, cache=entry_cache,
-                             tmp_root=tmp_path)
+    mismatched = run_alchemy(
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        "--resume",
+        reference_dir=other,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert mismatched.exit_code == 1
     assert "Traceback" not in mismatched.text
     assert "Cannot resume confidence output" in mismatched.text
@@ -1639,16 +1937,30 @@ def test_resume_refuses_to_mix_two_database_snapshots(
     # And the converse gap: resuming a run that has no confidence output at all
     # would silently score only the entries the resume happens to touch.
     unscored = tmp_path / "unscored"
-    seed = run_alchemy(unscored, "--id", "9myr", "--workers", "1",
-                       ccp4_environ=ccp4_env, cache=entry_cache,
-                       tmp_root=tmp_path / "unscored-tmp")
+    seed = run_alchemy(
+        unscored,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path / "unscored-tmp",
+    )
     assert seed.exit_code == 0, seed.text
-    assert not os.path.exists(
-        os.path.join(str(unscored), "confidence_scores_all.csv"))
-    upgraded = run_alchemy(unscored, "--id", "9myr", "--workers", "1",
-                           "--resume", reference_dir=installed,
-                           ccp4_environ=ccp4_env, cache=entry_cache,
-                           tmp_root=tmp_path / "unscored-tmp")
+    assert not os.path.exists(os.path.join(str(unscored), "confidence_scores_all.csv"))
+    upgraded = run_alchemy(
+        unscored,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        "--resume",
+        reference_dir=installed,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path / "unscored-tmp",
+    )
     assert upgraded.exit_code == 1
     assert "Cannot resume confidence-aware output" in upgraded.text
     assert "use a fresh output directory" in upgraded.text
@@ -1657,12 +1969,16 @@ def test_resume_refuses_to_mix_two_database_snapshots(
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-@pytest.mark.parametrize("damage,message", [
-    ("weights", "weights is incompatible with this code"),
-    ("distribution", "identifier does not match data"),
-])
+@pytest.mark.parametrize(
+    "damage,message",
+    [
+        ("weights", "weights is incompatible with this code"),
+        ("distribution", "identifier does not match data"),
+    ],
+)
 def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
-        tmp_path, entry_cache, ccp4_env, damage, message):
+    tmp_path, entry_cache, ccp4_env, damage, message
+):
     """A reference that is not the one it claims to be aborts the run.
 
     Two ways a reference directory can be wrong: its policy no longer matches
@@ -1674,7 +1990,8 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
     """
     reference_dir = frozen_reference(tmp_path / "installed")
     metadata_path = os.path.join(
-        reference_dir, confidence_score.REFERENCE_METADATA_FILE)
+        reference_dir, confidence_score.REFERENCE_METADATA_FILE
+    )
     if damage == "weights":
         metadata = reference_metadata(reference_dir)
         weights = metadata.get("weights")
@@ -1684,19 +2001,27 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
             json.dump(metadata, handle)
     else:
         distribution_path = os.path.join(
-            reference_dir, confidence_score.REFERENCE_DISTRIBUTION_FILE)
+            reference_dir, confidence_score.REFERENCE_DISTRIBUTION_FILE
+        )
         cohort = frozen_cohort(reference_dir)
-        with open(distribution_path, "w", newline="",
-                  encoding="utf-8") as handle:
+        with open(distribution_path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
             writer.writerow(("confidence_score", "count"))
             for index, (score, count) in enumerate(cohort):
                 writer.writerow((repr(score), count + (1 if index == 0 else 0)))
 
     output_dir = tmp_path / "output"
-    result = run_alchemy(output_dir, "--id", "9myr", "--workers", "1",
-                         reference_dir=reference_dir, ccp4_environ=ccp4_env,
-                         cache=entry_cache, tmp_root=tmp_path)
+    result = run_alchemy(
+        output_dir,
+        "--id",
+        "9myr",
+        "--workers",
+        "1",
+        reference_dir=reference_dir,
+        ccp4_environ=ccp4_env,
+        cache=entry_cache,
+        tmp_root=tmp_path,
+    )
     assert result.exit_code == 1
     assert "Traceback" not in result.text
     assert "Invalid confidence reference" in result.text
@@ -1705,5 +2030,6 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
     # Nothing was analysed, so no output table and no partially scored file.
     assert not os.path.exists(os.path.join(str(output_dir), "manifest.csv"))
     assert not os.path.exists(
-        os.path.join(str(output_dir), "confidence_scores_all.csv"))
+        os.path.join(str(output_dir), "confidence_scores_all.csv")
+    )
     assert len(log_paths(output_dir)) == 1

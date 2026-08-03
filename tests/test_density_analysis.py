@@ -11,8 +11,9 @@ import density_analysis as density
 import main
 
 
-def _write_refmac_mtz(path, *, title="Output mtz file from refmac",
-                      difference=(2.0, 2.0)):
+def _write_refmac_mtz(
+    path, *, title="Output mtz file from refmac", difference=(2.0, 2.0)
+):
     """Write two raw-Refmac reflections: one centric and one acentric."""
     mtz = gemmi.Mtz(with_base=True)
     mtz.title = title
@@ -24,10 +25,13 @@ def _write_refmac_mtz(path, *, title="Output mtz file from refmac",
 
     # For both rows C=10, raw D=2 and raw A=14, hence A-C=2D. In P 21,
     # (1,0,0) is centric while (1,1,0) is acentric.
-    rows = np.asarray([
-        [1, 0, 0, 20, 1, 10, 0, 14, 0, difference[0], 0, 0.8],
-        [1, 1, 0, 20, 1, 10, 0, 14, 0, difference[1], 0, 0.8],
-    ], dtype=np.float32)
+    rows = np.asarray(
+        [
+            [1, 0, 0, 20, 1, 10, 0, 14, 0, difference[0], 0, 0.8],
+            [1, 1, 0, 20, 1, 10, 0, 14, 0, difference[1], 0, 0.8],
+        ],
+        dtype=np.float32,
+    )
     mtz.set_data(rows)
     mtz.write_to_file(str(path))
     return str(path)
@@ -47,24 +51,26 @@ def test_refmac_twin_normalization_uses_edstats_centric_convention(tmp_path):
     assert source.read_bytes() == source_bytes
     normalized = gemmi.read_mtz_file(str(output))
     np.testing.assert_allclose(
-        normalized.column_with_label("FWT").array, [12, 14], atol=1e-5)
+        normalized.column_with_label("FWT").array, [12, 14], atol=1e-5
+    )
     np.testing.assert_allclose(
-        normalized.column_with_label("DELFWT").array, [2, 4], atol=1e-5)
+        normalized.column_with_label("DELFWT").array, [2, 4], atol=1e-5
+    )
     np.testing.assert_allclose(
-        normalized.column_with_label("PHWT").array, [0, 0], atol=1e-5)
+        normalized.column_with_label("PHWT").array, [0, 0], atol=1e-5
+    )
     np.testing.assert_allclose(
-        normalized.column_with_label("PHDELWT").array, [0, 0], atol=1e-5)
+        normalized.column_with_label("PHDELWT").array, [0, 0], atol=1e-5
+    )
     assert provenance["usable_reflections"] == 2
     assert provenance["centric_reflections"] == 1
     assert provenance["raw_identity_max_relative_residual"] == pytest.approx(0)
     assert provenance["output_identity_max_relative_residual"] == pytest.approx(0)
-    assert any("Alchemy: normalized twin Refmac" in line
-               for line in normalized.history)
+    assert any("Alchemy: normalized twin Refmac" in line for line in normalized.history)
 
 
 def test_refmac_twin_normalization_rejects_inconsistent_coefficients(tmp_path):
-    source = _write_refmac_mtz(
-        tmp_path / "inconsistent.mtz", difference=(3.0, 2.0))
+    source = _write_refmac_mtz(tmp_path / "inconsistent.mtz", difference=(3.0, 2.0))
     output = tmp_path / "normalized.mtz"
 
     with pytest.raises(ValueError, match="guarded raw identity"):
@@ -75,27 +81,26 @@ def test_refmac_twin_normalization_rejects_inconsistent_coefficients(tmp_path):
 
 def test_refmac_twin_normalization_requires_refmac_provenance(tmp_path):
     source = _write_refmac_mtz(
-        tmp_path / "unknown.mtz", title="unidentified map coefficients")
+        tmp_path / "unknown.mtz", title="unidentified map coefficients"
+    )
 
     with pytest.raises(ValueError, match="does not identify Refmac"):
-        density.normalize_refmac_twin_coefficients(
-            source, tmp_path / "normalized.mtz")
+        density.normalize_refmac_twin_coefficients(source, tmp_path / "normalized.mtz")
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
     [(True, True), (False, False), ("true", False), (1, False), (None, False)],
 )
-def test_twin_routing_requires_explicit_boolean_metadata(
-        tmp_path, value, expected):
+def test_twin_routing_requires_explicit_boolean_metadata(tmp_path, value, expected):
     path = tmp_path / "data.json"
-    path.write_text(json.dumps({"properties": {"ISTWIN": value}}),
-                    encoding="utf-8")
+    path.write_text(json.dumps({"properties": {"ISTWIN": value}}), encoding="utf-8")
     assert main.read_pdb_redo_is_twin(path) is expected
 
 
 def _fake_ccp4_run_factory(mtzfix_log_text):
     """Return a subprocess stub sufficient for the full-map density path."""
+
     def fake_run(cmd, input=None, text=None, stdout=None, stderr=None, env=None):
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "mtzfix":
@@ -114,16 +119,15 @@ def _fake_ccp4_run_factory(mtzfix_log_text):
     return fake_run
 
 
-def test_mtzfix_retest_failure_normalizes_only_explicit_twins(
-        tmp_path, monkeypatch):
+def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypatch):
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
     monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
     monkeypatch.setattr(
-        density.subprocess, "run",
-        _fake_ccp4_run_factory("FAILED a test on re-take\n"))
+        density.subprocess, "run", _fake_ccp4_run_factory("FAILED a test on re-take\n")
+    )
     normalized_calls = []
 
     def fake_normalize(mtz_path, output_path):
@@ -132,22 +136,37 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(
             handle.write(b"normalized")
         return {"usable_reflections": 2, "centric_reflections": 1}
 
-    monkeypatch.setattr(
-        density, "normalize_refmac_twin_coefficients", fake_normalize)
+    monkeypatch.setattr(density, "normalize_refmac_twin_coefficients", fake_normalize)
 
     with pytest.raises(density.MtzfixValidationError):
         density.run_density_analysis(
-            "test", source, pdb, tmp_path / "not_twin", 20, 2,
-            map_scope="full", pdb_redo_is_twin=False)
+            "test",
+            source,
+            pdb,
+            tmp_path / "not_twin",
+            20,
+            2,
+            map_scope="full",
+            pdb_redo_is_twin=False,
+        )
     assert normalized_calls == []
 
     result = density.run_density_analysis(
-        "test", source, pdb, tmp_path / "twin", 20, 2,
-        map_scope="full", pdb_redo_is_twin=True)
+        "test",
+        source,
+        pdb,
+        tmp_path / "twin",
+        20,
+        2,
+        map_scope="full",
+        pdb_redo_is_twin=True,
+    )
     assert len(normalized_calls) == 1
     assert result["twin_coefficient_normalization_applied"] is True
     assert result["twin_coefficient_normalization"] == {
-        "usable_reflections": 2, "centric_reflections": 1}
+        "usable_reflections": 2,
+        "centric_reflections": 1,
+    }
     assert result["mtz_for_maps"].endswith("test_twin_edstats.mtz")
 
 
@@ -158,13 +177,22 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
     pdb.write_text("END\n", encoding="ascii")
     monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
     monkeypatch.setattr(
-        density.subprocess, "run",
-        _fake_ccp4_run_factory("some unrelated failure\n"))
+        density.subprocess, "run", _fake_ccp4_run_factory("some unrelated failure\n")
+    )
     monkeypatch.setattr(
-        density, "normalize_refmac_twin_coefficients",
-        lambda *_args: pytest.fail("unsafe twin fallback was attempted"))
+        density,
+        "normalize_refmac_twin_coefficients",
+        lambda *_args: pytest.fail("unsafe twin fallback was attempted"),
+    )
 
     with pytest.raises(RuntimeError, match="mtzfix failed"):
         density.run_density_analysis(
-            "test", source, pdb, tmp_path / "out", 20, 2,
-            map_scope="full", pdb_redo_is_twin=True)
+            "test",
+            source,
+            pdb,
+            tmp_path / "out",
+            20,
+            2,
+            map_scope="full",
+            pdb_redo_is_twin=True,
+        )

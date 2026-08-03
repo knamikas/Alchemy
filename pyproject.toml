@@ -57,9 +57,15 @@ filterwarnings = [
     "error::pytest.PytestUnknownMarkWarning",
 ]
 
-# Line length 88 rather than 79: the codebase is already written close to it
-# (19 lines exceed 88, against 571 exceeding 79), so this enforces existing
-# practice instead of mandating a reformat.
+# Line length 88 rather than 79: at the time this was adopted 19 lines exceeded
+# 88 against 571 exceeding 79, so 88 was much the closer fit to how the code was
+# already written.
+#
+# The tree is `ruff format`-formatted, and CI enforces that with
+# `ruff format --check` alongside `ruff check`. Keep the CI pin in
+# .github/workflows/tests.yml in step with whatever version you format with
+# locally: Ruff's style can change between releases, so an unpinned version
+# would reformat the tree and fail unrelated pull requests.
 [tool.ruff]
 line-length = 88
 target-version = "py311"

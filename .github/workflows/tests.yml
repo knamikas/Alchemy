@@ -23,10 +23,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install Alchemy's dependencies
         run: python -m pip install '.[test]'
-      - name: Lint
+      - name: Lint and check formatting
         run: |
-          python -m pip install ruff
+          # Pinned: an unpinned Ruff would reformat the tree on any release
+          # that changes its style, turning an upstream update into a CI
+          # failure on unrelated pull requests.
+          python -m pip install 'ruff==0.16.1'
           ruff check src tests tools
+          ruff format --check src tests tools
       - name: Run the fast offline suite
         run: |
           python -m pytest --no-ccp4 --no-network --skip-slow \

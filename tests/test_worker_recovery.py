@@ -118,20 +118,27 @@ def _reference_cfg(output_dir, manual_inputs=None):
     "notifications, expected, label",
     [
         ([("start", 11, "1abc")], {11: "1abc"}, "start records the holder"),
-        ([("start", 11, "1abc"), ("end", 11, "1abc")], {},
-         "end releases the holder"),
+        ([("start", 11, "1abc"), ("end", 11, "1abc")], {}, "end releases the holder"),
         ([("end", 11, "1abc")], {}, "end for an unknown pid is ignored"),
-        ([("start", 11, "1abc"), ("end", 12, "2xyz")], {11: "1abc"},
-         "end for another pid leaves the holder intact"),
-        ([("start", 11, "1abc"), ("end", 11, "1abc"), ("start", 11, "2xyz")],
-         {11: "2xyz"}, "a reused worker holds only its current entry"),
-        ([("start", 11, "1abc"), ("start", 12, "2xyz")],
-         {11: "1abc", 12: "2xyz"}, "each worker is tracked separately"),
+        (
+            [("start", 11, "1abc"), ("end", 12, "2xyz")],
+            {11: "1abc"},
+            "end for another pid leaves the holder intact",
+        ),
+        (
+            [("start", 11, "1abc"), ("end", 11, "1abc"), ("start", 11, "2xyz")],
+            {11: "2xyz"},
+            "a reused worker holds only its current entry",
+        ),
+        (
+            [("start", 11, "1abc"), ("start", 12, "2xyz")],
+            {11: "1abc", 12: "2xyz"},
+            "each worker is tracked separately",
+        ),
         ([], {}, "an empty queue leaves the map untouched"),
     ],
 )
-def test_drain_inflight_applies_notifications_in_order(
-        notifications, expected, label):
+def test_drain_inflight_applies_notifications_in_order(notifications, expected, label):
     """Draining applies every queued start/end to the pid -> entry map.
 
     The map is the only record of which entry a killed process held, so a
@@ -190,7 +197,8 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue():
     try:
         assert returned.is_set(), (
             "_drain_inflight blocked on an empty queue; the dispatch loop "
-            "would never reach the roster check that recovers lost entries")
+            "would never reach the roster check that recovers lost entries"
+        )
         assert assignments == {}
     finally:
         if returned.is_set():
@@ -300,8 +308,13 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     assert result["gemmi_version"] == cfg["gemmi_version"]
     assert result["ccp4_version"] == cfg["ccp4_version"]
 
-    row = main._manifest_row(result, resume=False, bonds_enabled=True,
-                             prior_bond_counts={}, prior_candidate_counts={})
+    row = main._manifest_row(
+        result,
+        resume=False,
+        bonds_enabled=True,
+        prior_bond_counts={},
+        prior_candidate_counts={},
+    )
     assert set(row) == set(main.MANIFEST_COLUMNS)
     assert row["status"] == "error"
     assert row["retryable"] is True
@@ -321,16 +334,24 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
     assert result["n_bonds"] == ""
     assert result["n_candidates"] == ""
 
-    row = main._manifest_row(result, resume=False, bonds_enabled=True,
-                             prior_bond_counts={}, prior_candidate_counts={})
+    row = main._manifest_row(
+        result,
+        resume=False,
+        bonds_enabled=True,
+        prior_bond_counts={},
+        prior_candidate_counts={},
+    )
     assert row["n_bonds"] == ""
     assert row["n_candidates"] == ""
 
 
-@pytest.mark.parametrize("manual_inputs, expected_state",
-                         [(None, "final"), ({"pdb_file": "x.pdb"}, "manual")])
+@pytest.mark.parametrize(
+    "manual_inputs, expected_state",
+    [(None, "final"), ({"pdb_file": "x.pdb"}, "manual")],
+)
 def test_worker_death_result_reports_the_run_refinement_state(
-        tmp_path, manual_inputs, expected_state):
+    tmp_path, manual_inputs, expected_state
+):
     """Even a synthesized failure records which refinement the run targeted.
 
     ``_worker_death_result`` reads ``manual_inputs`` out of the config because
@@ -341,8 +362,7 @@ def test_worker_death_result_reports_the_run_refinement_state(
     assert result["refinement_state"] == expected_state
 
 
-def test_worker_death_reason_codes_discriminate_synthesized_from_real(
-        tmp_path):
+def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
     """``["worker_process_died"]`` alone identifies a synthesized result.
 
     The dispatch loop uses that exact list to tell its own synthesized row
@@ -412,6 +432,7 @@ def _kill_self_after(delay):
     in-band code path can do. The delay has to outlast the entry's own return
     so that the death really lands after the result was delivered.
     """
+
     def kill():
         time.sleep(delay)
         os.kill(os.getpid(), signal.SIGKILL)
@@ -456,13 +477,19 @@ def _stub_process(pdbID):
     if step.get("die_after") is not None:
         _kill_self_after(float(step["die_after"]))
 
-    result.update(status="ok", n=0, no_metals=True, retryable=False,
-                  runtime=runtime, n_bonds=0, n_candidates=0)
+    result.update(
+        status="ok",
+        n=0,
+        no_metals=True,
+        retryable=False,
+        runtime=runtime,
+        n_bonds=0,
+        n_candidates=0,
+    )
     return result
 
 
-def _driver_child(argv, script, marker_dir, stall_grace, channel,
-                  session_ready):
+def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready):
     """Run the real ``main._run`` with the per-entry pipeline stubbed out.
 
     Executed in its own process so the parent can impose a hard timeout: a
@@ -488,15 +515,18 @@ def _driver_child(argv, script, marker_dir, stall_grace, channel,
         run_log = main._RunLog(args, "pytest")
         channel.put(("exit_code", main._run(args, run_log)))
     except BaseException as exc:  # noqa: BLE001 - reported to the parent
-        channel.put(("crash", f"{type(exc).__name__}: {exc}\n"
-                              f"{traceback.format_exc()}"))
+        channel.put(("crash", f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
 
 
 def _terminate_driver_tree(child, session_ready):
     """Force-stop a timed-out driver and every process in its test session."""
     killed_group = False
-    if (child.pid is not None and session_ready.is_set()
-            and hasattr(os, "killpg") and hasattr(signal, "SIGKILL")):
+    if (
+        child.pid is not None
+        and session_ready.is_set()
+        and hasattr(os, "killpg")
+        and hasattr(signal, "SIGKILL")
+    ):
         try:
             # _driver_child calls setsid() before setting the event, so its PID
             # is also the process-group id.  Using that known id remains valid
@@ -520,11 +550,16 @@ def _run_driver(tmp_path, script, stall_grace=None, workers=None):
     id_file = tmp_path / "ids.txt"
     id_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
     argv = [
-        "--id-file", str(id_file),
-        "--output-dir", str(output_dir),
-        "--pdb-redo-root", str(tmp_path / "mirror"),
-        "--pdb-redo-cache", str(tmp_path / "cache"),
-        "--workers", str(workers if workers is not None else len(ids)),
+        "--id-file",
+        str(id_file),
+        "--output-dir",
+        str(output_dir),
+        "--pdb-redo-root",
+        str(tmp_path / "mirror"),
+        "--pdb-redo-cache",
+        str(tmp_path / "cache"),
+        "--workers",
+        str(workers if workers is not None else len(ids)),
     ]
 
     ctx = multiprocessing.get_context("fork")
@@ -532,8 +567,7 @@ def _run_driver(tmp_path, script, stall_grace=None, workers=None):
     session_ready = ctx.Event()
     child = ctx.Process(
         target=_driver_child,
-        args=(argv, dict(script), str(marker_dir), stall_grace, channel,
-              session_ready),
+        args=(argv, dict(script), str(marker_dir), stall_grace, channel, session_ready),
     )
     started = time.monotonic()
     child.start()
@@ -544,7 +578,8 @@ def _run_driver(tmp_path, script, stall_grace=None, workers=None):
             pytest.fail(
                 "the driver did not finish within "
                 f"{_DRIVER_HARD_TIMEOUT_S:.0f}s after a worker was killed: "
-                "a dead worker's entry is being waited on forever")
+                "a dead worker's entry is being waited on forever"
+            )
         elapsed = time.monotonic() - started
         try:
             kind, payload = channel.get(timeout=10)
@@ -552,7 +587,8 @@ def _run_driver(tmp_path, script, stall_grace=None, workers=None):
             _terminate_driver_tree(child, session_ready)
             pytest.fail(
                 f"the driver process exited (code {child.exitcode}) without "
-                "reporting an outcome")
+                "reporting an outcome"
+            )
         assert kind == "exit_code", payload
         return payload, output_dir, elapsed
     finally:
@@ -575,14 +611,20 @@ def _read_manifest(output_dir):
 @pytest.mark.parametrize(
     "script, stall_grace",
     [
-        ({"aaaa": {"die": "announced", "runtime": 1.2}, "bbbb": {},
-          "cccc": {}, "dddd": {}}, None),
+        (
+            {
+                "aaaa": {"die": "announced", "runtime": 1.2},
+                "bbbb": {},
+                "cccc": {},
+                "dddd": {},
+            },
+            None,
+        ),
         ({"aaaa": {"die": "silent", "runtime": 2.0}}, 1.0),
     ],
     ids=["worker_named_its_entry", "worker_died_before_naming_its_entry"],
 )
-def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script,
-                                                 stall_grace):
+def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
     """A worker killed mid-entry must not hang the batch (regression).
 
     ``multiprocessing.Pool`` never yields a result for a task whose worker died
@@ -597,8 +639,8 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script,
     ids = list(script)
     victim = ids[0]
     exit_code, output_dir, elapsed = _run_driver(
-        tmp_path, script, stall_grace=stall_grace,
-        workers=3 if len(ids) > 1 else 1)
+        tmp_path, script, stall_grace=stall_grace, workers=3 if len(ids) > 1 else 1
+    )
 
     assert elapsed < _DRIVER_HARD_TIMEOUT_S
     rows = _read_manifest(output_dir)
@@ -679,8 +721,7 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
         "cccc": {"runtime": 0.02},
         "dddd": {"die": "silent", "runtime": 0.5},
     }
-    exit_code, output_dir, _ = _run_driver(
-        tmp_path, script, stall_grace=0.5, workers=1)
+    exit_code, output_dir, _ = _run_driver(tmp_path, script, stall_grace=0.5, workers=1)
     rows = _read_manifest(output_dir)
 
     assert len(rows) == len(script)
@@ -713,12 +754,12 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
 # never killed) owns it and the workers that do get killed are merely queued
 # behind it, which is harmless.
 _STALE_ATTRIBUTION_SCRIPT = {
-    "aaaa": {"runtime": 3.0},                                   # late, real
-    "bbbb": {"runtime": 3.8},                                   # keeps it open
+    "aaaa": {"runtime": 3.0},  # late, real
+    "bbbb": {"runtime": 3.8},  # keeps it open
     "cccc": {"runtime": 0.5, "claim": "aaaa", "die_after": 0.6},
     "dddd": {"runtime": 0.5, "claim": "aaaa", "die_after": 1.2},
-    "eeee": {"runtime": 0.5, "die_after": 0.9},                 # unattributed
-    "ffff": {"runtime": 0.02},                                  # lock holder
+    "eeee": {"runtime": 0.5, "die_after": 0.9},  # unattributed
+    "ffff": {"runtime": 0.02},  # lock holder
 }
 
 
@@ -730,8 +771,7 @@ def stale_attribution_batch(tmp_path_factory):
     different invariants out of the same manifest.
     """
     tmp_path = tmp_path_factory.mktemp("stale_attribution")
-    exit_code, output_dir, elapsed = _run_driver(
-        tmp_path, _STALE_ATTRIBUTION_SCRIPT)
+    exit_code, output_dir, elapsed = _run_driver(tmp_path, _STALE_ATTRIBUTION_SCRIPT)
     rows = _read_manifest(output_dir)
     return {
         "exit_code": exit_code,
@@ -743,7 +783,8 @@ def stale_attribution_batch(tmp_path_factory):
 
 @_POSIX_KILL
 def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
-        stale_attribution_batch):
+    stale_attribution_batch,
+):
     """A genuine result for an already-declared-lost entry is dropped.
 
     Once the driver has synthesized the retryable row for an entry, a late real
@@ -762,16 +803,19 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
 
     assert [row["pdbID"] for row in batch["rows"]].count("aaaa") == 1, (
         "the entry declared lost was written twice: the synthesized row and "
-        "the real result that arrived afterwards")
+        "the real result that arrived afterwards"
+    )
     assert {row["pdbID"] for row in batch["rows"]} == set(ids), (
-        "an extra completion ended the batch before every entry was written")
+        "an extra completion ended the batch before every entry was written"
+    )
     assert len(batch["rows"]) == len(ids)
 
     lost = batch["by_id"]["aaaa"]
     assert lost["status"] == "error"
     assert lost["retryable"] == "True"
     assert lost["reason_codes"] == "worker_process_died", (
-        "the real result overwrote the synthesized lost-entry row")
+        "the real result overwrote the synthesized lost-entry row"
+    )
     # The synthesized row stands, so the real result's counts are not there.
     assert lost["n_bonds"] == ""
     assert lost["n_candidates"] == ""
@@ -779,8 +823,7 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
 
 
 @_POSIX_KILL
-def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(
-        stale_attribution_batch):
+def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(stale_attribution_batch):
     """An entry is declared lost once, however the roster churns.
 
     Two workers die a second apart, both holding a start notification for
@@ -789,15 +832,18 @@ def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(
     ending the batch before the remaining entries were written.
     """
     batch = stale_attribution_batch
-    lost_rows = [row for row in batch["rows"]
-                 if row["reason_codes"] == "worker_process_died"]
+    lost_rows = [
+        row for row in batch["rows"] if row["reason_codes"] == "worker_process_died"
+    ]
     assert [row["pdbID"] for row in lost_rows] == ["aaaa"], (
-        "a single lost entry produced more than one synthesized row")
+        "a single lost entry produced more than one synthesized row"
+    )
 
 
 @_POSIX_KILL
 def test_an_entry_released_before_the_death_is_not_declared_lost(
-        stale_attribution_batch):
+    stale_attribution_batch,
+):
     """A worker that finished its entry before dying loses nothing.
 
     Three of these workers were killed after announcing the end of their own
@@ -811,7 +857,8 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
         row = batch["by_id"][pdb_id]
         assert row["status"] == "ok", (
             f"{pdb_id} returned a real result but was recorded as "
-            f"{row['status']} ({row['reason_codes']})")
+            f"{row['status']} ({row['reason_codes']})"
+        )
         assert row["reason_codes"] == ""
 
 
@@ -851,12 +898,12 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     dead_pids = set()
     finished = []
 
-    with ctx.Pool(2, initializer=main._init_worker,
-                  initargs=(cfg, inflight)) as pool:
+    with ctx.Pool(2, initializer=main._init_worker, initargs=(cfg, inflight)) as pool:
         # Prime the roster, as the driver's first loop iteration does.
         main._dead_worker_pids(pool, worker_pids)
         results = pool.imap_unordered(
-            _spawn_task, [("ok", "1abc"), ("die", "2xyz")], chunksize=1)
+            _spawn_task, [("ok", "1abc"), ("die", "2xyz")], chunksize=1
+        )
         deadline = time.monotonic() + 45.0
         while time.monotonic() < deadline and not (finished and dead_pids):
             try:
@@ -880,12 +927,17 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     attributed = {assignments.get(pid) for pid in dead_pids}
     assert "2xyz" in attributed, (
         "the killed spawn worker's entry was not recoverable from its "
-        f"announcement (assignments={assignments}, dead={dead_pids})")
+        f"announcement (assignments={assignments}, dead={dead_pids})"
+    )
 
 
-@pytest.mark.parametrize("manual_inputs",
-                         [None, {"pdb_file": "a.pdb", "mtz_file": "a.mtz",
-                                 "cif_file": None, "data_json": None}])
+@pytest.mark.parametrize(
+    "manual_inputs",
+    [
+        None,
+        {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
+    ],
+)
 def test_worker_config_is_picklable(tmp_path, manual_inputs):
     """The worker config must survive pickling, as spawn requires.
 
@@ -900,8 +952,9 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
     assert restored["cofactors"] == cfg["cofactors"]
     assert restored["cofactors"], "the bundled cofactor catalog must be loaded"
     # And it still drives the code that consumes it in the worker.
-    assert (main._initial_result("1abc", restored, restored["manual_inputs"])
-            == main._initial_result("1abc", cfg, cfg["manual_inputs"]))
+    assert main._initial_result(
+        "1abc", restored, restored["manual_inputs"]
+    ) == main._initial_result("1abc", cfg, cfg["manual_inputs"])
 
 
 # --------------------------------------------------------------------------- #
@@ -947,15 +1000,22 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
     output_dir = tmp_path / "out"
     id_file = tmp_path / "ids.txt"
     id_file.write_text(" ".join(f"e{i:03d}" for i in range(8)), encoding="utf-8")
-    argv = ["--id-file", str(id_file), "--workers", "4",
-            "--output-dir", str(output_dir),
-            "--pdb-redo-root", str(tmp_path / "absent-mirror"),
-            "--pdb-redo-cache", str(tmp_path / "cache")]
+    argv = [
+        "--id-file",
+        str(id_file),
+        "--workers",
+        "4",
+        "--output-dir",
+        str(output_dir),
+        "--pdb-redo-root",
+        str(tmp_path / "absent-mirror"),
+        "--pdb-redo-cache",
+        str(tmp_path / "cache"),
+    ]
 
     ctx = multiprocessing.get_context("fork")
     ready, channel = ctx.Event(), ctx.Queue()
-    child = ctx.Process(target=_sigterm_driver_child,
-                        args=(argv, ready, channel))
+    child = ctx.Process(target=_sigterm_driver_child, args=(argv, ready, channel))
     child.start()
     try:
         assert ready.wait(30), "the driver process never started"
@@ -972,8 +1032,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
 
         os.kill(driver_pid, signal.SIGTERM)
         child.join(60)
-        assert not child.is_alive(), (
-            "the driver did not exit within 60s of SIGTERM")
+        assert not child.is_alive(), "the driver did not exit within 60s of SIGTERM"
 
         kind, payload = channel.get(timeout=10)
         assert kind == "exit_code", payload
@@ -982,8 +1041,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
         time.sleep(1.0)
         alive = [pid for pid in workers if _process_exists(pid)]
         assert alive == [], f"workers outlived the driver: {alive}"
-        logs = [name for name in os.listdir(output_dir)
-                if name.endswith(".log")]
+        logs = [name for name in os.listdir(output_dir) if name.endswith(".log")]
         assert logs, "no run log was written for the interrupted run"
     finally:
         _terminate_driver_tree(child, ready)
@@ -992,8 +1050,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
 
 def _child_pids(pid):
     """Direct children of ``pid`` (POSIX only, used to find pool workers)."""
-    result = subprocess.run(["pgrep", "-P", str(pid)],
-                            capture_output=True, text=True)
+    result = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True)
     return [int(line) for line in result.stdout.split()]
 
 

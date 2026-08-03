@@ -28,18 +28,24 @@ def _windows_ccp4_setup_candidates():
     if ccp4_root:
         roots.append(ccp4_root)
     system_drive = os.environ.get("SystemDrive", "C:")
-    for base in (system_drive + os.sep, os.environ.get("ProgramFiles", ""),
-                 os.path.expanduser("~")):
+    for base in (
+        system_drive + os.sep,
+        os.environ.get("ProgramFiles", ""),
+        os.path.expanduser("~"),
+    ):
         if not base:
             continue
         for version in ("CCP4-9", "CCP4-8", "CCP4"):
             roots.append(os.path.join(base, version))
-    return [os.path.join(root, name)
-            for root in roots for name in WINDOWS_CCP4_SETUP_NAMES]
+    return [
+        os.path.join(root, name) for root in roots for name in WINDOWS_CCP4_SETUP_NAMES
+    ]
 
 
 COMMON_CCP4_SETUP_CANDIDATES = (
-    _windows_ccp4_setup_candidates() if sys.platform == "win32" else [
+    _windows_ccp4_setup_candidates()
+    if sys.platform == "win32"
+    else [
         "/opt/ccp4/bin/ccp4.setup-sh",
         "/usr/local/ccp4/bin/ccp4.setup-sh",
         "/opt/ccp4/ccp4.setup-sh",
@@ -96,8 +102,13 @@ def save_ccp4_setup(setup_path, config_files=None):
     return [str(path)]
 
 
-def find_ccp4_setup(explicit_setup=None, env=None, config=None,
-                    config_files=None, common_candidates=None):
+def find_ccp4_setup(
+    explicit_setup=None,
+    env=None,
+    config=None,
+    config_files=None,
+    common_candidates=None,
+):
     env = env or os.environ.copy()
     config = config or load_ccp4_setup_config(config_files=config_files)
     common_candidates = common_candidates or COMMON_CCP4_SETUP_CANDIDATES

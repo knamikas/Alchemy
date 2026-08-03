@@ -51,13 +51,13 @@ README_SIDE_CHAIN_DONORS = {
 
 #: Atoms README names explicitly as *not* geometry-inferable donors.
 README_EXCLUDED_ATOMS = [
-    ("ALA", "N"),    # internal peptide nitrogen
+    ("ALA", "N"),  # internal peptide nitrogen
     ("GLY", "N"),
     ("PRO", "N"),
     ("ASN", "ND2"),  # amide nitrogen
     ("GLN", "NE2"),  # amide nitrogen (same atom name as the HIS donor)
     ("TRP", "NE1"),  # pyrrole nitrogen
-    ("ARG", "NE"),   # guanidinium nitrogens
+    ("ARG", "NE"),  # guanidinium nitrogens
     ("ARG", "NH1"),
     ("ARG", "NH2"),
 ]
@@ -89,9 +89,11 @@ REQUIRED_REFERENCE_KEYS = frozenset(
     + [("ASP", "O", metal) for metal in REFERENCE_METALS]
     + [("GLU", "O", metal) for metal in REFERENCE_METALS]
     + [("CA", "O", metal) for metal in REFERENCE_METALS]
-    + [(residue, "O", metal)
-       for residue in ("SER", "THR", "TYR")
-       for metal in ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN")]
+    + [
+        (residue, "O", metal)
+        for residue in ("SER", "THR", "TYR")
+        for metal in ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN")
+    ]
     + [("HIS", "N", metal) for metal in ("MN", "FE", "CO", "CU", "ZN", "NI")]
     + [("CYS", "S", metal) for metal in ("MN", "FE", "CO", "CU", "ZN", "NI")]
 )
@@ -100,8 +102,17 @@ REQUIRED_REFERENCE_KEYS = frozenset(
 # --------------------------------------------------------------------------- #
 # Private builders (kept local so tests/helpers.py stays untouched)
 # --------------------------------------------------------------------------- #
-def _probe_structure(tmp_path, name, *, resname, positions, metal="ZN",
-                     probe_index=1, chain_length=3, metal_kwargs=None):
+def _probe_structure(
+    tmp_path,
+    name,
+    *,
+    resname,
+    positions,
+    metal="ZN",
+    probe_index=1,
+    chain_length=3,
+    metal_kwargs=None,
+):
     """Write a metal + polymer chain in which one residue reaches the metal.
 
     The metal sits at the origin in chain ``B``. Chain ``A`` holds
@@ -111,13 +122,15 @@ def _probe_structure(tmp_path, name, *, resname, positions, metal="ZN",
     donor residue is the polymer's first, last, or an internal residue.
     """
     builder = StructureBuilder()
-    builder.add_metal(metal, 1, chain="B", pos=(0.0, 0.0, 0.0),
-                      **(metal_kwargs or {}))
+    builder.add_metal(metal, 1, chain="B", pos=(0.0, 0.0, 0.0), **(metal_kwargs or {}))
     for index in range(chain_length):
         builder.add_amino_acid(
-            resname, 10 + index, chain="A",
+            resname,
+            10 + index,
+            chain="A",
             positions=dict(positions) if index == probe_index else None,
-            origin=(20.0 + 14.0 * index, 20.0, 20.0))
+            origin=(20.0 + 14.0 * index, 20.0, 20.0),
+        )
     return builder.write_pdb(tmp_path / name)
 
 
@@ -130,9 +143,12 @@ def _analyze(path, *, data_json=None, resolution=1.50):
         inputs = helpers.dpi_inputs(
             pdb_path=path,
             mtz_path=os.path.join(os.path.dirname(path), "absent.mtz"),
-            data_json=data_json, resolution=resolution)
-    return ba.run_bond_analysis("test", path, [], list(EDSTATS_HEADER), inputs,
-                                structure=context)
+            data_json=data_json,
+            resolution=resolution,
+        )
+    return ba.run_bond_analysis(
+        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
+    )
 
 
 def _dpi_metadata(tmp_path, *, nrefcnt=50000, rffin=0.20, name="data.json"):
@@ -145,7 +161,8 @@ def _only(rows, atom_name):
     matches = [row for row in rows if row["neighbor_atom"] == atom_name]
     assert len(matches) == 1, (
         f"expected exactly one entry for {atom_name}, got "
-        f"{[(m['neighbor_resnum'], m['neighbor_atom']) for m in matches]}")
+        f"{[(m['neighbor_resnum'], m['neighbor_atom']) for m in matches]}"
+    )
     return matches[0]
 
 
@@ -177,23 +194,25 @@ def _parse_reference_table(path):
 
     assert lines, f"{path} is empty"
     assert lines[0].split() == REFERENCE_TABLE_HEADER, (
-        f"{path}:1: unexpected header {lines[0]!r}")
+        f"{path}:1: unexpected header {lines[0]!r}"
+    )
 
     records = []
     for lineno, line in enumerate(lines[1:], start=2):
         if not line.strip():
-            continue                      # blank separator between metal blocks
+            continue  # blank separator between metal blocks
         fields = line.split()
         assert len(fields) == 5, (
             f"{path}:{lineno}: expected 5 whitespace-separated columns, got "
-            f"{len(fields)}: {line!r}")
+            f"{len(fields)}: {line!r}"
+        )
         residue, atom, metal, mu_text, stdev_text = fields
         try:
             mu, stdev = float(mu_text), float(stdev_text)
         except ValueError as exc:
             raise AssertionError(
-                f"{path}:{lineno}: distance columns are not numbers: "
-                f"{line!r}") from exc
+                f"{path}:{lineno}: distance columns are not numbers: {line!r}"
+            ) from exc
         records.append((lineno, residue, atom, metal, mu, stdev))
     return records
 
@@ -208,10 +227,11 @@ def test_inferred_donor_table_matches_the_documented_atom_list():
     in the database, so the whole table is compared element by element rather
     than spot-checked.
     """
-    expected = {residue: {"O"} | README_SIDE_CHAIN_DONORS.get(residue, set())
-                for residue in helpers.STANDARD_AMINO_ACIDS}
-    actual = {residue: set(atoms)
-              for residue, atoms in ba.INFERRED_DONOR_ATOMS.items()}
+    expected = {
+        residue: {"O"} | README_SIDE_CHAIN_DONORS.get(residue, set())
+        for residue in helpers.STANDARD_AMINO_ACIDS
+    }
+    actual = {residue: set(atoms) for residue, atoms in ba.INFERRED_DONOR_ATOMS.items()}
 
     assert actual == expected
     # The excluded atoms README calls out must not have crept in.
@@ -223,19 +243,25 @@ def test_inferred_donor_table_matches_the_documented_atom_list():
 
 @pytest.mark.parametrize(
     "resname,atom_name",
-    sorted((residue, atom)
-           for residue, atoms in README_SIDE_CHAIN_DONORS.items()
-           for atom in atoms))
-def test_named_side_chain_donors_become_inferred_bonds(tmp_path, resname,
-                                                       atom_name):
+    sorted(
+        (residue, atom)
+        for residue, atoms in README_SIDE_CHAIN_DONORS.items()
+        for atom in atoms
+    ),
+)
+def test_named_side_chain_donors_become_inferred_bonds(tmp_path, resname, atom_name):
     """Each README side-chain donor is inferable from geometry alone.
 
     The atom is placed 2.0 A from a Zn, inside the first-sphere cutoff for every
     donor element, and must produce one inferred bond row attributed to the
     proximity rule.
     """
-    path = _probe_structure(tmp_path, f"{resname}_{atom_name}.pdb",
-                            resname=resname, positions={atom_name: (2.0, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path,
+        f"{resname}_{atom_name}.pdb",
+        resname=resname,
+        positions={atom_name: (2.0, 0.0, 0.0)},
+    )
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
@@ -260,8 +286,9 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(tmp_path, resname
     not onto the residue's own side-chain row, so a Zn-O(backbone) contact must
     be scored against ``CA:O:ZN`` whatever the residue is.
     """
-    path = _probe_structure(tmp_path, f"{resname}_O.pdb", resname=resname,
-                            positions={"O": (2.0, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path, f"{resname}_O.pdb", resname=resname, positions={"O": (2.0, 0.0, 0.0)}
+    )
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "O")
@@ -300,8 +327,9 @@ def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path):
     # A water residue whose atom is not oxygen must not be inferable.
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    builder.add_hetero_residue("HOH", 101, [AtomSpec("N", "N", (2.09, 0.0, 0.0))],
-                               chain="B")
+    builder.add_hetero_residue(
+        "HOH", 101, [AtomSpec("N", "N", (2.09, 0.0, 0.0))], chain="B"
+    )
     path = builder.write_pdb(tmp_path / "odd_water.pdb")
     rows, candidates, _, _ = _analyze(path)
 
@@ -312,17 +340,21 @@ def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path):
 
 
 @pytest.mark.parametrize("resname,atom_name", README_EXCLUDED_ATOMS)
-def test_excluded_nitrogen_donors_never_become_inferred_bonds(tmp_path, resname,
-                                                              atom_name):
+def test_excluded_nitrogen_donors_never_become_inferred_bonds(
+    tmp_path, resname, atom_name
+):
     """Peptide, amide, pyrrole and guanidinium N stay candidates, never bonds.
 
     Each is placed 2.0 A from a Zn -- comfortably inside the first-sphere
     distance -- so only the atom-level chemical rule can keep it out. It must be
     retained as candidate evidence, marked non-typical, and produce no bond row.
     """
-    path = _probe_structure(tmp_path, f"{resname}_{atom_name}.pdb",
-                            resname=resname,
-                            positions={atom_name: (2.0, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path,
+        f"{resname}_{atom_name}.pdb",
+        resname=resname,
+        positions={atom_name: (2.0, 0.0, 0.0)},
+    )
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
@@ -345,10 +377,12 @@ def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path):
     README: "A distant non-typical atom found only by the broad 4 A search does
     not by itself place the complete metal site under warning."
     """
-    near = _probe_structure(tmp_path, "arg_near.pdb", resname="ARG",
-                            positions={"NH1": (2.0, 0.0, 0.0)})
-    far = _probe_structure(tmp_path, "arg_far.pdb", resname="ARG",
-                           positions={"NH1": (3.6, 0.0, 0.0)})
+    near = _probe_structure(
+        tmp_path, "arg_near.pdb", resname="ARG", positions={"NH1": (2.0, 0.0, 0.0)}
+    )
+    far = _probe_structure(
+        tmp_path, "arg_far.pdb", resname="ARG", positions={"NH1": (3.6, 0.0, 0.0)}
+    )
 
     _, near_candidates, near_summaries, _ = _analyze(near)
     _, far_candidates, far_summaries, _ = _analyze(far)
@@ -364,7 +398,8 @@ def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path):
     assert far_summary["context_warning"] is False
     # The distant atom is still visible as candidate evidence.
     assert _only(far_candidates, "NH1")["context_warning_reasons"] == (
-        "non_typical_proximal_candidate")
+        "non_typical_proximal_candidate"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -372,36 +407,47 @@ def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path):
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("probe_index,allowed", [(0, True), (1, False), (2, False)])
 def test_n_terminal_nitrogen_is_a_donor_only_at_the_chain_start(
-        tmp_path, probe_index, allowed):
+    tmp_path, probe_index, allowed
+):
     """Backbone ``N`` donates from the first polymer residue and nowhere else."""
-    path = _probe_structure(tmp_path, f"nterm{probe_index}.pdb", resname="ALA",
-                            positions={"N": (2.0, 0.0, 0.0)},
-                            probe_index=probe_index)
+    path = _probe_structure(
+        tmp_path,
+        f"nterm{probe_index}.pdb",
+        resname="ALA",
+        positions={"N": (2.0, 0.0, 0.0)},
+        probe_index=probe_index,
+    )
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "N")
     assert candidate["neighbor_resnum"] == str(10 + probe_index)
     assert candidate["inferred_donor_allowed"] is allowed
     assert candidate["inferred_donor_rule"] == (
-        "n_terminal_nitrogen" if allowed else "outside_typical_donor_list")
+        "n_terminal_nitrogen" if allowed else "outside_typical_donor_list"
+    )
     assert len(rows) == (1 if allowed else 0)
 
 
 @pytest.mark.parametrize("atom_name", ["OXT", "OT1", "OT2"])
 @pytest.mark.parametrize("probe_index,allowed", [(0, False), (1, False), (2, True)])
 def test_c_terminal_oxygens_are_donors_only_at_the_chain_end(
-        tmp_path, atom_name, probe_index, allowed):
+    tmp_path, atom_name, probe_index, allowed
+):
     """``OXT``/``OT1``/``OT2`` donate from the last polymer residue and nowhere else."""
-    path = _probe_structure(tmp_path, f"cterm_{atom_name}{probe_index}.pdb",
-                            resname="ALA",
-                            positions={atom_name: (2.0, 0.0, 0.0)},
-                            probe_index=probe_index)
+    path = _probe_structure(
+        tmp_path,
+        f"cterm_{atom_name}{probe_index}.pdb",
+        resname="ALA",
+        positions={atom_name: (2.0, 0.0, 0.0)},
+        probe_index=probe_index,
+    )
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
     assert candidate["inferred_donor_allowed"] is allowed
     assert candidate["inferred_donor_rule"] == (
-        "c_terminal_oxygen" if allowed else "outside_typical_donor_list")
+        "c_terminal_oxygen" if allowed else "outside_typical_donor_list"
+    )
     assert len(rows) == (1 if allowed else 0)
     if allowed:
         # No terminal-carboxylate reference is bundled, so the contact is
@@ -413,11 +459,15 @@ def test_c_terminal_oxygens_are_donors_only_at_the_chain_end(
 
 def test_a_single_residue_chain_is_both_polymer_termini(tmp_path):
     """A one-residue polymer is simultaneously the first and the last residue."""
-    for atom_name, rule in (("N", "n_terminal_nitrogen"),
-                            ("OXT", "c_terminal_oxygen")):
-        path = _probe_structure(tmp_path, f"solo_{atom_name}.pdb", resname="ALA",
-                                positions={atom_name: (2.0, 0.0, 0.0)},
-                                probe_index=0, chain_length=1)
+    for atom_name, rule in (("N", "n_terminal_nitrogen"), ("OXT", "c_terminal_oxygen")):
+        path = _probe_structure(
+            tmp_path,
+            f"solo_{atom_name}.pdb",
+            resname="ALA",
+            positions={atom_name: (2.0, 0.0, 0.0)},
+            probe_index=0,
+            chain_length=1,
+        )
         rows, candidates, _, _ = _analyze(path)
         assert _only(candidates, atom_name)["inferred_donor_rule"] == rule
         assert len(rows) == 1
@@ -433,18 +483,26 @@ def test_terminal_rules_require_a_real_polymer_residue(tmp_path):
     """
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    builder.add_hetero_residue("ALA", 20, [
-        AtomSpec("N", "N", (2.0, 0.0, 0.0)),
-        AtomSpec("CA", "C", (20.0, 20.0, 20.0)),
-        AtomSpec("C", "C", (21.0, 20.0, 20.0)),
-        AtomSpec("O", "O", (22.0, 20.0, 20.0)),
-    ], chain="C")
+    builder.add_hetero_residue(
+        "ALA",
+        20,
+        [
+            AtomSpec("N", "N", (2.0, 0.0, 0.0)),
+            AtomSpec("CA", "C", (20.0, 20.0, 20.0)),
+            AtomSpec("C", "C", (21.0, 20.0, 20.0)),
+            AtomSpec("O", "O", (22.0, 20.0, 20.0)),
+        ],
+        chain="C",
+    )
     path = builder.write_pdb(tmp_path / "free_ala.pdb")
 
     rows, candidates, _, _ = _analyze(path)
     context = load_structure("test", path)
-    entity_types = {residue.name: residue.entity_type
-                    for chain in context.model for residue in chain}
+    entity_types = {
+        residue.name: residue.entity_type
+        for chain in context.model
+        for residue in chain
+    }
     assert entity_types["ALA"] != gemmi.EntityType.Polymer
 
     candidate = _only(candidates, "N")
@@ -456,19 +514,24 @@ def test_terminal_rules_require_a_real_polymer_residue(tmp_path):
 # --------------------------------------------------------------------------- #
 # 3. _first_sphere_rule: Harding target + 0.75 A
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("metal,residue,atom,element,is_water,expected_key", [
-    ("ZN", "HIS", "NE2", "N", False, ("HIS", "N", "ZN")),
-    ("ZN", "ASP", "OD2", "O", False, ("ASP", "O", "ZN")),
-    ("ZN", "CYS", "SG", "S", False, ("CYS", "S", "ZN")),
-    ("ZN", "ALA", "O", "O", False, ("CA", "O", "ZN")),
-    ("MG", "HOH", "O", "O", True, ("HOH", "O", "MG")),
-])
+@pytest.mark.parametrize(
+    "metal,residue,atom,element,is_water,expected_key",
+    [
+        ("ZN", "HIS", "NE2", "N", False, ("HIS", "N", "ZN")),
+        ("ZN", "ASP", "OD2", "O", False, ("ASP", "O", "ZN")),
+        ("ZN", "CYS", "SG", "S", False, ("CYS", "S", "ZN")),
+        ("ZN", "ALA", "O", "O", False, ("CA", "O", "ZN")),
+        ("MG", "HOH", "O", "O", True, ("HOH", "O", "MG")),
+    ],
+)
 def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
-        metal, residue, atom, element, is_water, expected_key):
+    metal, residue, atom, element, is_water, expected_key
+):
     """An exact reference sets target = mu and cutoff = mu + 0.75 A."""
     stub_metal = _StubAtom(metal)
-    neighbor = _StubAtom(element, residue_name=residue, atom_name=atom,
-                         is_water=is_water)
+    neighbor = _StubAtom(
+        element, residue_name=residue, atom_name=atom, is_water=is_water
+    )
     mu = ba.LIT[expected_key][0]
 
     target, cutoff, kind, key = ba._first_sphere_rule(stub_metal, neighbor)
@@ -489,8 +552,11 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     """
     stub_metal = _StubAtom("ZN")
     neighbor = _StubAtom("O", residue_name="ASN", atom_name="OD1")
-    widest_zn_o = max(mu for (_, atom, metal), (mu, _sd) in ba.LIT.items()
-                      if metal == "ZN" and atom == "O")
+    widest_zn_o = max(
+        mu
+        for (_, atom, metal), (mu, _sd) in ba.LIT.items()
+        if metal == "ZN" and atom == "O"
+    )
 
     target, cutoff, kind, key = ba._first_sphere_rule(stub_metal, neighbor)
 
@@ -518,8 +584,13 @@ def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path):
     sphere to belong to. It must stay a candidate with NaN geometry and the
     entry must report ``missing_first_sphere_reference``.
     """
-    path = _probe_structure(tmp_path, "k_sg.pdb", resname="CYS", metal="K",
-                            positions={"SG": (2.5, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path,
+        "k_sg.pdb",
+        resname="CYS",
+        metal="K",
+        positions={"SG": (2.5, 0.0, 0.0)},
+    )
     rows, candidates, _, metadata = _analyze(path)
 
     candidate = _only(candidates, "SG")
@@ -535,11 +606,16 @@ def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path):
 
 
 @pytest.mark.parametrize("distance,eligible", [(2.780, True), (2.781, False)])
-def test_first_sphere_membership_at_the_exact_cutoff_boundary(tmp_path, distance,
-                                                              eligible):
+def test_first_sphere_membership_at_the_exact_cutoff_boundary(
+    tmp_path, distance, eligible
+):
     """His NE2 at Zn: 2.030 + 0.750 = 2.780 A is inside, 2.781 A is outside."""
-    path = _probe_structure(tmp_path, f"bound{distance}.pdb", resname="HIS",
-                            positions={"NE2": (distance, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path,
+        f"bound{distance}.pdb",
+        resname="HIS",
+        positions={"NE2": (distance, 0.0, 0.0)},
+    )
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "NE2")
@@ -548,10 +624,13 @@ def test_first_sphere_membership_at_the_exact_cutoff_boundary(tmp_path, distance
     assert candidate["first_sphere_cutoff"] == pytest.approx(2.78)
     assert candidate["first_sphere_eligible"] is eligible
     assert candidate["eligibility_status"] == (
-        "first_sphere_eligible" if eligible else "outside_first_sphere")
+        "first_sphere_eligible" if eligible else "outside_first_sphere"
+    )
     assert candidate["eligibility_reason"] == (
-        "distance_within_target_plus_0.75" if eligible
-        else "distance_exceeds_target_plus_0.75")
+        "distance_within_target_plus_0.75"
+        if eligible
+        else "distance_exceeds_target_plus_0.75"
+    )
     assert len(rows) == (1 if eligible else 0)
 
 
@@ -562,18 +641,20 @@ def test_dpi_never_widens_the_chemical_cutoff(tmp_path):
     is analyzed with no DPI at all and with a deliberately terrible one (few
     reflections, high R-free); the cutoff and the verdict must be identical.
     """
-    path = _probe_structure(tmp_path, "dpi_width.pdb", resname="HIS",
-                            positions={"NE2": (2.781, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path, "dpi_width.pdb", resname="HIS", positions={"NE2": (2.781, 0.0, 0.0)}
+    )
     bad_dpi = _dpi_metadata(tmp_path, nrefcnt=200, rffin=0.45)
 
     no_dpi_rows, no_dpi_candidates, _, _ = _analyze(path)
     dpi_rows, dpi_candidates, summaries, _ = _analyze(
-        path, data_json=bad_dpi, resolution=3.5)
+        path, data_json=bad_dpi, resolution=3.5
+    )
 
     dpi_value = next(iter(summaries.values()))["dpi"]
     assert math.isfinite(dpi_value) and dpi_value > 0.5, (
-        "the test needs a DPI far larger than the 0.75 A tolerance to be "
-        "meaningful")
+        "the test needs a DPI far larger than the 0.75 A tolerance to be meaningful"
+    )
 
     for candidates in (no_dpi_candidates, dpi_candidates):
         candidate = _only(candidates, "NE2")
@@ -610,7 +691,8 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
 def test_zscore_matches_the_documented_formula():
     """z = (d - mu) / sqrt(DPI^2 + sigma^2), rounded to four decimals."""
     assert ba._zscore(2.30, 2.09, 0.05, 0.12) == pytest.approx(
-        round((2.30 - 2.09) / math.sqrt(0.12 ** 2 + 0.05 ** 2), 4))
+        round((2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2), 4)
+    )
     # 0.12 / 0.05 / 0.13 is a right triangle, so this one is exact by hand.
     assert ba._zscore(2.87, 2.09, 0.05, 0.12) == pytest.approx(6.0)
     assert ba._zscore(1.31, 2.09, 0.05, 0.12) == pytest.approx(-6.0)
@@ -626,8 +708,8 @@ def test_zscore_denominator_carries_exactly_one_dpi():
     cutoff, so the difference is asserted, not just the value.
     """
     dist, mu, sigma, dpi = 2.87, 2.09, 0.05, 0.12
-    single = (dist - mu) / math.sqrt(dpi ** 2 + sigma ** 2)
-    two_atom = (dist - mu) / math.sqrt(2 * dpi ** 2 + sigma ** 2)
+    single = (dist - mu) / math.sqrt(dpi**2 + sigma**2)
+    two_atom = (dist - mu) / math.sqrt(2 * dpi**2 + sigma**2)
 
     assert ba._zscore(dist, mu, sigma, dpi) == pytest.approx(round(single, 4))
     assert single == pytest.approx(6.0)
@@ -635,11 +717,14 @@ def test_zscore_denominator_carries_exactly_one_dpi():
     assert ba._zscore(dist, mu, sigma, dpi) != pytest.approx(round(two_atom, 4))
 
 
-@pytest.mark.parametrize("mu,stdev,dpi", [
-    (2.09, 0.05, float("nan")),   # DPI unavailable
-    (float("nan"), 0.05, 0.12),   # no literature mean
-    (2.09, float("nan"), 0.12),   # no literature spread
-])
+@pytest.mark.parametrize(
+    "mu,stdev,dpi",
+    [
+        (2.09, 0.05, float("nan")),  # DPI unavailable
+        (float("nan"), 0.05, 0.12),  # no literature mean
+        (2.09, float("nan"), 0.12),  # no literature spread
+    ],
+)
 def test_zscore_propagates_missing_inputs_as_nan(mu, stdev, dpi):
     """Any missing input yields NaN rather than a fabricated number."""
     assert math.isnan(ba._zscore(2.30, mu, stdev, dpi))
@@ -652,14 +737,18 @@ def test_zscore_is_nan_when_the_denominator_vanishes():
     assert ba._zscore(2.14, 2.09, 0.05, 0.0) == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("distance,expected_z,outlier", [
-    (2.870, 6.0, True),      # exactly at the cutoff -> outlier
-    (2.869, 5.9923, False),  # one thousandth inside -> consistent
-    (1.310, -6.0, True),     # the negative boundary is symmetric
-    (1.311, -5.9923, False),
-])
-def test_outlier_flag_switches_at_absolute_z_of_six(tmp_path, distance,
-                                                    expected_z, outlier):
+@pytest.mark.parametrize(
+    "distance,expected_z,outlier",
+    [
+        (2.870, 6.0, True),  # exactly at the cutoff -> outlier
+        (2.869, 5.9923, False),  # one thousandth inside -> consistent
+        (1.310, -6.0, True),  # the negative boundary is symmetric
+        (1.311, -5.9923, False),
+    ],
+)
+def test_outlier_flag_switches_at_absolute_z_of_six(
+    tmp_path, distance, expected_z, outlier
+):
     """``|Zbond| >= 6`` is an inclusive threshold, and it is symmetric.
 
     DPI 0.12 against the Zn-water spread of 0.05 gives a denominator of exactly
@@ -689,8 +778,9 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):
     The expected value is recomputed from ``(distance, mu, sigma, dpi)`` taken
     off the row, so the test checks the arithmetic rather than recording it.
     """
-    path = _probe_structure(tmp_path, "zscore.pdb", resname="ASP",
-                            positions={"OD1": (2.40, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path, "zscore.pdb", resname="ASP", positions={"OD1": (2.40, 0.0, 0.0)}
+    )
     rows, _, _, metadata = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     assert metadata["partial_reason_codes"] == []
@@ -701,8 +791,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):
     assert row["literature_stdev"] == pytest.approx(sigma)
     assert math.isfinite(row["dpi"]) and row["dpi"] > 0
 
-    expected = round((row["distance"] - mu)
-                     / math.sqrt(row["dpi"] ** 2 + sigma ** 2), 4)
+    expected = round((row["distance"] - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2), 4)
     assert row["zscore"] == pytest.approx(expected)
     assert expected > ba.ZSCORE_OUTLIER_CUTOFF
     assert row["geometry_outlier"] is True
@@ -732,8 +821,16 @@ DPI_BASE_VALUE = 0.25
 DPI_ROUNDING = 5e-5
 
 
-def _atom_count_structure(tmp_path, name, atom_count, *, cell_edge=60.0,
-                          spacegroup="P 1", occupancy=1.0, donor_distance=None):
+def _atom_count_structure(
+    tmp_path,
+    name,
+    atom_count,
+    *,
+    cell_edge=60.0,
+    spacegroup="P 1",
+    occupancy=1.0,
+    donor_distance=None,
+):
     """A Zn plus waters totalling exactly ``atom_count`` non-hydrogen atoms.
 
     Every atom carries ``occupancy``, so ``count_ni`` -- the occupancy-weighted
@@ -748,22 +845,23 @@ def _atom_count_structure(tmp_path, name, atom_count, *, cell_edge=60.0,
     """
     assert atom_count >= 1
     builder = StructureBuilder(
-        cell=(cell_edge, cell_edge, cell_edge, 90.0, 90.0, 90.0),
-        spacegroup=spacegroup)
-    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0),
-                      occupancy=occupancy)
+        cell=(cell_edge, cell_edge, cell_edge, 90.0, 90.0, 90.0), spacegroup=spacegroup
+    )
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0), occupancy=occupancy)
     remaining = atom_count - 1
     if donor_distance is not None:
         assert remaining >= 1
-        builder.add_water(100, (float(donor_distance), 0.0, 0.0), chain="B",
-                          occupancy=occupancy)
+        builder.add_water(
+            100, (float(donor_distance), 0.0, 0.0), chain="B", occupancy=occupancy
+        )
         remaining -= 1
     for index in range(remaining):
-        builder.add_water(200 + index,
-                          (6.0 + 3.0 * (index % 8),
-                           3.0 * ((index // 8) % 8),
-                           3.0 * (index // 64)),
-                          chain="B", occupancy=occupancy)
+        builder.add_water(
+            200 + index,
+            (6.0 + 3.0 * (index % 8), 3.0 * ((index // 8) % 8), 3.0 * (index // 64)),
+            chain="B",
+            occupancy=occupancy,
+        )
     return builder.write_pdb(tmp_path / name)
 
 
@@ -776,26 +874,45 @@ class _DpiRun:
         self.dpi, self.resolution, self.reason = result
 
 
-def _dpi_details(tmp_path, *, atom_count, cell_edge, nrefcnt, rffin,
-                 spacegroup="P 1", resolution=1.50, occupancy=1.0,
-                 pdb_path=None, mtz_path=None, name="dpi"):
+def _dpi_details(
+    tmp_path,
+    *,
+    atom_count,
+    cell_edge,
+    nrefcnt,
+    rffin,
+    spacegroup="P 1",
+    resolution=1.50,
+    occupancy=1.0,
+    pdb_path=None,
+    mtz_path=None,
+    name="dpi",
+):
     """``_calculate_dpi_details`` over a structure with known ni and va.
 
     ``pdb_path``/``mtz_path`` default to the written structure and to a path
     that does not exist, which is what makes ``_asu_volume`` fall back to the
     coordinate file's CRYST1 record.
     """
-    path = _atom_count_structure(tmp_path, f"{name}.pdb", atom_count,
-                                 cell_edge=cell_edge, spacegroup=spacegroup,
-                                 occupancy=occupancy)
+    path = _atom_count_structure(
+        tmp_path,
+        f"{name}.pdb",
+        atom_count,
+        cell_edge=cell_edge,
+        spacegroup=spacegroup,
+        occupancy=occupancy,
+    )
     context = load_structure("test", path)
     inputs = helpers.dpi_inputs(
         pdb_path=path if pdb_path is None else pdb_path,
-        mtz_path=(os.path.join(str(tmp_path), "absent.mtz")
-                  if mtz_path is None else mtz_path),
-        data_json=helpers.write_data_json(tmp_path / f"{name}.json",
-                                          nrefcnt=nrefcnt, rffin=rffin),
-        resolution=resolution)
+        mtz_path=(
+            os.path.join(str(tmp_path), "absent.mtz") if mtz_path is None else mtz_path
+        ),
+        data_json=helpers.write_data_json(
+            tmp_path / f"{name}.json", nrefcnt=nrefcnt, rffin=rffin
+        ),
+        resolution=resolution,
+    )
     return _DpiRun(path, context, ba._calculate_dpi_details(context, inputs))
 
 
@@ -821,13 +938,20 @@ def test_dpi_equals_the_hand_computed_blow_value(tmp_path):
     Any transposition -- ni**(1/3) with va**(1/2), -5/6 written as -6/5 or
     -5/8, a lost 1.28 -- lands somewhere else entirely.
     """
-    run = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096,
-                       rffin=0.25, resolution=1.42)
+    run = _dpi_details(
+        tmp_path,
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=4096,
+        rffin=0.25,
+        resolution=1.42,
+    )
 
     # The two inputs the test claims to know, confirmed against the model.
     assert count_ni(run.context) == pytest.approx(16.0)
-    assert ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"),
-                          run.path) == pytest.approx(100.0 ** 3)
+    assert ba._asu_volume(
+        os.path.join(str(tmp_path), "absent.mtz"), run.path
+    ) == pytest.approx(100.0**3)
 
     assert run.reason == ""
     assert run.dpi == pytest.approx(0.125, abs=DPI_ROUNDING)
@@ -849,31 +973,42 @@ def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path):
     is the same order as the literature spreads it is added to in quadrature --
     which is the whole reason the exponents have to be right.
     """
-    run = _dpi_details(tmp_path, atom_count=400, cell_edge=60.0, nrefcnt=46656,
-                       rffin=0.243, resolution=1.90)
+    run = _dpi_details(
+        tmp_path,
+        atom_count=400,
+        cell_edge=60.0,
+        nrefcnt=46656,
+        rffin=0.243,
+        resolution=1.90,
+    )
 
     assert count_ni(run.context) == pytest.approx(400.0)
-    assert ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"),
-                          run.path) == pytest.approx(216000.0)
+    assert ba._asu_volume(
+        os.path.join(str(tmp_path), "absent.mtz"), run.path
+    ) == pytest.approx(216000.0)
     assert run.reason == ""
     assert run.dpi == pytest.approx(0.048, abs=DPI_ROUNDING)
     assert run.resolution == pytest.approx(1.90)
 
 
-@pytest.mark.parametrize("override,expected", [
-    ({}, DPI_BASE_VALUE),                            # the base case itself
-    ({"atom_count": 4}, 0.125),                      # ni / 4  -> DPI / 2
-    ({"atom_count": 64}, 0.5),                       # ni * 4  -> DPI * 2
-    ({"cell_edge": 100.0}, 0.125),                   # va / 8  -> DPI / 2
-    ({"cell_edge": 400.0}, 0.5),                     # va * 8  -> DPI * 2
-    ({"nrefcnt": 64}, 8.0),                          # nobs / 64 -> DPI * 32
-    ({"nrefcnt": 262144}, 0.0078125),                # nobs * 64 -> DPI / 32
-    ({"nrefcnt": 8192}, 0.25 * 2 ** (-5 / 6)),       # nobs * 2  -> 2**(-5/6)
-    ({"rffin": 0.125}, 0.125),                       # rfree / 2 -> DPI / 2
-    ({"rffin": 0.5}, 0.5),                           # rfree * 2 -> DPI * 2
-])
-def test_each_dpi_input_moves_the_result_by_its_own_exponent(tmp_path, override,
-                                                             expected):
+@pytest.mark.parametrize(
+    "override,expected",
+    [
+        ({}, DPI_BASE_VALUE),  # the base case itself
+        ({"atom_count": 4}, 0.125),  # ni / 4  -> DPI / 2
+        ({"atom_count": 64}, 0.5),  # ni * 4  -> DPI * 2
+        ({"cell_edge": 100.0}, 0.125),  # va / 8  -> DPI / 2
+        ({"cell_edge": 400.0}, 0.5),  # va * 8  -> DPI * 2
+        ({"nrefcnt": 64}, 8.0),  # nobs / 64 -> DPI * 32
+        ({"nrefcnt": 262144}, 0.0078125),  # nobs * 64 -> DPI / 32
+        ({"nrefcnt": 8192}, 0.25 * 2 ** (-5 / 6)),  # nobs * 2  -> 2**(-5/6)
+        ({"rffin": 0.125}, 0.125),  # rfree / 2 -> DPI / 2
+        ({"rffin": 0.5}, 0.5),  # rfree * 2 -> DPI * 2
+    ],
+)
+def test_each_dpi_input_moves_the_result_by_its_own_exponent(
+    tmp_path, override, expected
+):
     """One input at a time, against a value computed by hand from the base case.
 
     The base case is DPI = 0.25 A exactly (see ``DPI_BASE``). Multiplying ni by
@@ -900,10 +1035,10 @@ def test_the_dpi_exponents_are_pinned_individually(tmp_path):
 
     measured = {}
     for label, override, factor in (
-            ("ni", {"atom_count": DPI_BASE["atom_count"] * 4}, 4),
-            ("va", {"cell_edge": DPI_BASE["cell_edge"] * 2}, 8),  # volume * 8
-            ("nobs", {"nrefcnt": DPI_BASE["nrefcnt"] * 2}, 2),
-            ("rfree", {"rffin": DPI_BASE["rffin"] * 2}, 2),
+        ("ni", {"atom_count": DPI_BASE["atom_count"] * 4}, 4),
+        ("va", {"cell_edge": DPI_BASE["cell_edge"] * 2}, 8),  # volume * 8
+        ("nobs", {"nrefcnt": DPI_BASE["nrefcnt"] * 2}, 2),
+        ("rfree", {"rffin": DPI_BASE["rffin"] * 2}, 2),
     ):
         scaled = _dpi_value(tmp_path, name=label, **dict(DPI_BASE, **override))
         measured[label] = math.log(scaled / base) / math.log(factor)
@@ -925,8 +1060,7 @@ def test_dpi_carries_the_1_28_coefficient(tmp_path):
     coefficient straight off: 1.28 * 0.25 = 0.32 A. A dropped coefficient would
     give 0.25 and a 1.2 typo 0.30.
     """
-    dpi = _dpi_value(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096,
-                     rffin=0.64)
+    dpi = _dpi_value(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096, rffin=0.64)
     assert dpi == pytest.approx(0.32, abs=DPI_ROUNDING)
 
 
@@ -947,16 +1081,21 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path):
     2.20 A is computed against the *pinned* DPI rather than against whatever the
     row happens to carry.
     """
-    path = _atom_count_structure(tmp_path, "row_dpi.pdb", 400, cell_edge=60.0,
-                                 donor_distance=2.20)
+    path = _atom_count_structure(
+        tmp_path, "row_dpi.pdb", 400, cell_edge=60.0, donor_distance=2.20
+    )
     context = load_structure("test", path)
     inputs = helpers.dpi_inputs(
-        pdb_path=path, mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=helpers.write_data_json(tmp_path / "row.json",
-                                          nrefcnt=46656, rffin=0.243),
-        resolution=1.90)
+        pdb_path=path,
+        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+        data_json=helpers.write_data_json(
+            tmp_path / "row.json", nrefcnt=46656, rffin=0.243
+        ),
+        resolution=1.90,
+    )
     rows, _candidates, summaries, metadata = ba.run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context)
+        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
+    )
 
     assert metadata["partial_reason_codes"] == []
     row = _only(rows, "O")
@@ -965,7 +1104,7 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path):
 
     mu, sigma = ba.LIT[("HOH", "O", "ZN")]
     assert (mu, sigma) == (2.09, 0.05)
-    expected = round((2.20 - mu) / math.sqrt(0.048 ** 2 + sigma ** 2), 4)
+    expected = round((2.20 - mu) / math.sqrt(0.048**2 + sigma**2), 4)
     assert expected == pytest.approx(1.5871, abs=1e-4)
     assert row["zscore"] == pytest.approx(expected, abs=1e-3)
     assert row["geometry_consistent"] is True
@@ -984,11 +1123,18 @@ def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path):
     halved: sqrt(4/16) = 1/2. Counting records instead would overstate the
     precision of exactly the disordered sites that need it most.
     """
-    full = _dpi_value(tmp_path, name="full", atom_count=16, cell_edge=100.0,
-                      nrefcnt=4096, rffin=0.25)
-    quarter = _dpi_value(tmp_path, name="quarter", atom_count=16,
-                         cell_edge=100.0, nrefcnt=4096, rffin=0.25,
-                         occupancy=0.25)
+    full = _dpi_value(
+        tmp_path, name="full", atom_count=16, cell_edge=100.0, nrefcnt=4096, rffin=0.25
+    )
+    quarter = _dpi_value(
+        tmp_path,
+        name="quarter",
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=4096,
+        rffin=0.25,
+        occupancy=0.25,
+    )
 
     assert full == pytest.approx(0.125, abs=DPI_ROUNDING)
     assert quarter == pytest.approx(0.0625, abs=DPI_ROUNDING)
@@ -997,14 +1143,18 @@ def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path):
 # --------------------------------------------------------------------------- #
 # 5b. The asymmetric-unit volume
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("spacegroup,operations", [
-    ("P 1", 1),
-    ("P 21 21 21", 4),
-    ("C 2", 4),          # 2 symmetry operations x 2 centring translations
-    ("P 43 21 2", 8),
-])
+@pytest.mark.parametrize(
+    "spacegroup,operations",
+    [
+        ("P 1", 1),
+        ("P 21 21 21", 4),
+        ("C 2", 4),  # 2 symmetry operations x 2 centring translations
+        ("P 43 21 2", 8),
+    ],
+)
 def test_asu_volume_is_the_cell_volume_over_the_operation_count(
-        tmp_path, spacegroup, operations):
+    tmp_path, spacegroup, operations
+):
     """va = V(cell) / number of symmetry operations, centring included.
 
     Counting only the point-group operations of a centred lattice would inflate
@@ -1012,8 +1162,9 @@ def test_asu_volume_is_the_cell_volume_over_the_operation_count(
     26% on the DPI through the cube root -- so a centred group is included
     deliberately.
     """
-    builder = StructureBuilder(cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0),
-                               spacegroup=spacegroup)
+    builder = StructureBuilder(
+        cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0), spacegroup=spacegroup
+    )
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "cell.pdb")
 
@@ -1034,20 +1185,21 @@ def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path):
     physically impossible number -- producing a confident z-score for every
     contact in the entry instead of reporting the metadata as missing.
     """
-    builder = StructureBuilder(cell=(1.0, 1.0, 1.0, 90.0, 90.0, 90.0),
-                               spacegroup="P 1")
+    builder = StructureBuilder(cell=(1.0, 1.0, 1.0, 90.0, 90.0, 90.0), spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "placeholder-cell.pdb")
 
     volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
     assert math.isnan(volume), (
-        f"a placeholder 1 A^3 cell was accepted as ASU volume {volume!r}")
+        f"a placeholder 1 A^3 cell was accepted as ASU volume {volume!r}"
+    )
 
     # The user-visible consequence: no DPI, and a reason code saying why.
     data_json = helpers.write_data_json(tmp_path / "data.json")
     context = load_structure("test", path)
     dpi, _, reason = ba._calculate_dpi_details(
-        context, helpers.dpi_inputs(pdb_path=path, data_json=data_json))
+        context, helpers.dpi_inputs(pdb_path=path, data_json=data_json)
+    )
 
     assert math.isnan(dpi)
     assert reason == "missing_or_invalid_asu_volume"
@@ -1061,8 +1213,9 @@ def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path):
     keeps the guard from being widened into a physical-plausibility threshold
     that nobody derived.
     """
-    builder = StructureBuilder(cell=(10.0, 10.0, 10.0, 90.0, 90.0, 90.0),
-                               spacegroup="P 1")
+    builder = StructureBuilder(
+        cell=(10.0, 10.0, 10.0, 90.0, 90.0, 90.0), spacegroup="P 1"
+    )
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "small-cell.pdb")
 
@@ -1077,10 +1230,11 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(tmp_path):
     The two files are given deliberately different cells and space groups, so
     the returned volume says unambiguously which one was used.
     """
-    numpy = pytest.importorskip("numpy")   # only needed to give the MTZ data
+    numpy = pytest.importorskip("numpy")  # only needed to give the MTZ data
 
-    builder = StructureBuilder(cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0),
-                               spacegroup="P 1")
+    builder = StructureBuilder(
+        cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0), spacegroup="P 1"
+    )
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     pdb_path = builder.write_pdb(tmp_path / "coords.pdb")
 
@@ -1091,11 +1245,12 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(tmp_path):
     mtz_path = str(tmp_path / "data.mtz")
     mtz.write_to_file(mtz_path)
 
-    assert ba._asu_volume(mtz_path, pdb_path) == pytest.approx(40.0 ** 3 / 4)
+    assert ba._asu_volume(mtz_path, pdb_path) == pytest.approx(40.0**3 / 4)
     # Without the MTZ the same call falls back to CRYST1, which is a different
     # number -- so the assertion above really did read the MTZ.
-    assert ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"),
-                          pdb_path) == pytest.approx(100.0 ** 3)
+    assert ba._asu_volume(
+        os.path.join(str(tmp_path), "absent.mtz"), pdb_path
+    ) == pytest.approx(100.0**3)
 
 
 def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path):
@@ -1104,25 +1259,28 @@ def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path):
     Alchemy is routinely run on coordinates alone; losing the DPI because the
     reflection file was absent would blank every z-score in the entry.
     """
-    builder = StructureBuilder(cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0),
-                               spacegroup="P 1")
+    builder = StructureBuilder(
+        cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0), spacegroup="P 1"
+    )
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     pdb_path = builder.write_pdb(tmp_path / "coords.pdb")
     corrupt = tmp_path / "corrupt.mtz"
     corrupt.write_text("this is not an MTZ file\n", encoding="utf-8")
 
     for mtz in (os.path.join(str(tmp_path), "absent.mtz"), str(corrupt)):
-        assert ba._asu_volume(mtz, pdb_path) == pytest.approx(100.0 ** 3)
+        assert ba._asu_volume(mtz, pdb_path) == pytest.approx(100.0**3)
 
 
-@pytest.mark.parametrize("content", [
-    None,                                       # the file does not exist
-    "this is not a coordinate file\n",          # unparseable
-    "ATOM      1  O   HOH A   1       0.000   0.000   0.000  1.00 20.00"
-    "           O\nEND\n",                      # parses, but has no CRYST1
-])
-def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(tmp_path,
-                                                                     content):
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,  # the file does not exist
+        "this is not a coordinate file\n",  # unparseable
+        "ATOM      1  O   HOH A   1       0.000   0.000   0.000  1.00 20.00"
+        "           O\nEND\n",  # parses, but has no CRYST1
+    ],
+)
+def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(tmp_path, content):
     """No cell or no space group means no volume -- and NaN, not a guess.
 
     A fabricated volume would propagate silently into every DPI and every
@@ -1151,21 +1309,27 @@ def test_rfree_is_read_from_the_remark_3_header(tmp_path):
     """The final R-free is scraped when PDB-REDO's ``data.json`` has none."""
     path = tmp_path / "header.pdb"
     path.write_text(
-        _remark_3("FIT TO DATA USED IN REFINEMENT.",
-                  "R VALUE     (WORKING SET) : 0.17800",
-                  "FREE R VALUE                     : 0.21530"),
-        encoding="utf-8")
+        _remark_3(
+            "FIT TO DATA USED IN REFINEMENT.",
+            "R VALUE     (WORKING SET) : 0.17800",
+            "FREE R VALUE                     : 0.21530",
+        ),
+        encoding="utf-8",
+    )
 
     assert ba._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
 
 
-@pytest.mark.parametrize("line", [
-    "FREE R VALUE TEST SET SIZE   (%) : 5.100",
-    "FREE R VALUE TEST SET COUNT      : 2500.0",
-    "ESTIMATED ERROR OF FREE R VALUE  : 0.008",
-    "BIN FREE R VALUE                 : 0.2810",
-    "FREE R VALUE (NO CUTOFF) BIN     : 0.3100",
-])
+@pytest.mark.parametrize(
+    "line",
+    [
+        "FREE R VALUE TEST SET SIZE   (%) : 5.100",
+        "FREE R VALUE TEST SET COUNT      : 2500.0",
+        "ESTIMATED ERROR OF FREE R VALUE  : 0.008",
+        "BIN FREE R VALUE                 : 0.2810",
+        "FREE R VALUE (NO CUTOFF) BIN     : 0.3100",
+    ],
+)
 def test_rfree_ignores_test_set_estimate_and_per_bin_lines(tmp_path, line):
     """Only the overall final R-free counts.
 
@@ -1186,19 +1350,23 @@ def test_rfree_ignores_test_set_estimate_and_per_bin_lines(tmp_path, line):
 def test_rfree_takes_the_first_matching_line(tmp_path):
     """Deterministic when a file repeats the record: the first one wins."""
     path = tmp_path / "twice.pdb"
-    path.write_text(_remark_3("FREE R VALUE : 0.21530",
-                              "FREE R VALUE : 0.29900"), encoding="utf-8")
+    path.write_text(
+        _remark_3("FREE R VALUE : 0.21530", "FREE R VALUE : 0.29900"), encoding="utf-8"
+    )
     assert ba._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
 
 
-@pytest.mark.parametrize("content", [
-    None,                                             # no such file
-    "",                                               # empty file
-    "REMARK   2 RESOLUTION.    1.50 ANGSTROMS.\n",    # no refinement remarks
-    "REMARK   3   FREE R VALUE : NULL\n",             # present but not a number
-    "REMARK   3   FREE R VALUE : 0\n",                # no decimal point
-    "REMARK   3   FREE R VALUE : .215\n",             # no integer part
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,  # no such file
+        "",  # empty file
+        "REMARK   2 RESOLUTION.    1.50 ANGSTROMS.\n",  # no refinement remarks
+        "REMARK   3   FREE R VALUE : NULL\n",  # present but not a number
+        "REMARK   3   FREE R VALUE : 0\n",  # no decimal point
+        "REMARK   3   FREE R VALUE : .215\n",  # no integer part
+    ],
+)
 def test_rfree_is_nan_when_absent_or_malformed(tmp_path, content):
     """A header that does not state a usable R-free yields NaN, never 0.0.
 
@@ -1221,17 +1389,19 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
     ``data.json`` without ``RFFIN`` must fall back to the coordinate header; the
     DPI that comes out is the hand-computed one for the header's value.
     """
-    path = _atom_count_structure(tmp_path, "header_rfree.pdb", 16,
-                                 cell_edge=100.0)
+    path = _atom_count_structure(tmp_path, "header_rfree.pdb", 16, cell_edge=100.0)
     # The scrape is a plain text scan, so where in the file the remark sits
     # does not matter; gemmi ignores it when it re-reads the cell.
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(_remark_3("FREE R VALUE : 0.25000"))
     context = load_structure("test", path)
     inputs = helpers.dpi_inputs(
-        pdb_path=path, mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=helpers.write_data_json(tmp_path / "no_rffin.json",
-                                          nrefcnt=4096, rffin=None))
+        pdb_path=path,
+        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+        data_json=helpers.write_data_json(
+            tmp_path / "no_rffin.json", nrefcnt=4096, rffin=None
+        ),
+    )
 
     dpi, _resolution, reason = ba._calculate_dpi_details(context, inputs)
 
@@ -1242,17 +1412,21 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
 # --------------------------------------------------------------------------- #
 # 5d. Why a site has no DPI
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("nrefcnt", [
-    None,   # NREFCNT absent from data.json
-    "",     # present but empty
-    0,      # a count of zero is not a usable denominator
-    -1,     # nor a negative one
-])
+@pytest.mark.parametrize(
+    "nrefcnt",
+    [
+        None,  # NREFCNT absent from data.json
+        "",  # present but empty
+        0,  # a count of zero is not a usable denominator
+        -1,  # nor a negative one
+    ],
+)
 def test_missing_reflection_count_is_named(tmp_path, nrefcnt):
     """``NREFCNT`` missing or unusable is reported as such, with every other
     term of the formula available."""
-    run = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0,
-                       nrefcnt=nrefcnt, rffin=0.20)
+    run = _dpi_details(
+        tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=nrefcnt, rffin=0.20
+    )
 
     assert math.isnan(run.dpi)
     assert run.reason == "missing_or_invalid_reflection_count"
@@ -1270,23 +1444,29 @@ def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path):
 
     for data_json in (str(broken), os.path.join(str(tmp_path), "absent.json")):
         inputs = helpers.dpi_inputs(
-            pdb_path=path, mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-            data_json=data_json)
+            pdb_path=path,
+            mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+            data_json=data_json,
+        )
         dpi, _resolution, reason = ba._calculate_dpi_details(context, inputs)
         assert math.isnan(dpi)
         assert reason == "missing_or_invalid_reflection_count"
 
 
-@pytest.mark.parametrize("rffin", [
-    None,   # RFFIN absent, and the coordinate file carries no REMARK 3 either
-    "",     # present but empty
-    0.0,    # a refinement never reaches R-free 0; treat it as missing
-    -0.1,
-])
+@pytest.mark.parametrize(
+    "rffin",
+    [
+        None,  # RFFIN absent, and the coordinate file carries no REMARK 3 either
+        "",  # present but empty
+        0.0,  # a refinement never reaches R-free 0; treat it as missing
+        -0.1,
+    ],
+)
 def test_missing_rfree_is_named(tmp_path, rffin):
     """``NREFCNT`` alone, with no ``RFFIN`` and no REMARK 3 to fall back on."""
-    run = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096,
-                       rffin=rffin)
+    run = _dpi_details(
+        tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096, rffin=rffin
+    )
 
     assert math.isnan(run.dpi)
     assert run.reason == "missing_or_invalid_rfree"
@@ -1294,9 +1474,14 @@ def test_missing_rfree_is_named(tmp_path, rffin):
 
 def test_missing_asu_volume_is_named(tmp_path):
     """Neither the MTZ nor the coordinate file yields a cell and a space group."""
-    run = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096,
-                       rffin=0.20,
-                       pdb_path=os.path.join(str(tmp_path), "absent.pdb"))
+    run = _dpi_details(
+        tmp_path,
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=4096,
+        rffin=0.20,
+        pdb_path=os.path.join(str(tmp_path), "absent.pdb"),
+    )
 
     assert math.isnan(run.dpi)
     assert run.reason == "missing_or_invalid_asu_volume"
@@ -1310,8 +1495,14 @@ def test_invalid_atom_count_is_named(tmp_path):
     individually valid here, which is what separates this code from
     ``invalid_occupancy``.
     """
-    run = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096,
-                       rffin=0.20, occupancy=0.0)
+    run = _dpi_details(
+        tmp_path,
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=4096,
+        rffin=0.20,
+        occupancy=0.0,
+    )
 
     assert math.isnan(run.dpi)
     assert run.reason == "invalid_dpi_atom_count"
@@ -1328,13 +1519,25 @@ def test_the_missing_terms_are_reported_in_a_fixed_order(tmp_path):
     """
     absent_pdb = os.path.join(str(tmp_path), "absent.pdb")
 
-    everything = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0,
-                              nrefcnt=None, rffin=None, pdb_path=absent_pdb)
+    everything = _dpi_details(
+        tmp_path,
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=None,
+        rffin=None,
+        pdb_path=absent_pdb,
+    )
     assert everything.reason == "missing_or_invalid_reflection_count"
 
-    no_rfree = _dpi_details(tmp_path, atom_count=16, cell_edge=100.0,
-                            nrefcnt=4096, rffin=None, pdb_path=absent_pdb,
-                            name="second")
+    no_rfree = _dpi_details(
+        tmp_path,
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=4096,
+        rffin=None,
+        pdb_path=absent_pdb,
+        name="second",
+    )
     assert no_rfree.reason == "missing_or_invalid_rfree"
 
 
@@ -1346,21 +1549,25 @@ def test_a_non_numeric_reflection_count_is_a_calculation_failure(tmp_path):
     """
     path = _atom_count_structure(tmp_path, "site.pdb", 16, cell_edge=100.0)
     context = load_structure("test", path)
-    data_json = helpers.write_data_json(tmp_path / "bad.json", nrefcnt="many",
-                                        rffin=0.20)
+    data_json = helpers.write_data_json(
+        tmp_path / "bad.json", nrefcnt="many", rffin=0.20
+    )
     inputs = helpers.dpi_inputs(
-        pdb_path=path, mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=data_json)
+        pdb_path=path,
+        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+        data_json=data_json,
+    )
 
     dpi, resolution, reason = ba._calculate_dpi_details(context, inputs)
 
     assert math.isnan(dpi)
     assert reason == "dpi_calculation_failed"
-    assert resolution == pytest.approx(1.50)   # metadata survives the failure
+    assert resolution == pytest.approx(1.50)  # metadata survives the failure
 
 
-def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(tmp_path,
-                                                                  monkeypatch):
+def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
+    tmp_path, monkeypatch
+):
     """The ``invalid_dpi_metadata`` guard keeps its own reason code.
 
     No real input reaches this branch -- ``nobs`` and ``rfree`` have been
@@ -1375,9 +1582,12 @@ def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(tmp_path,
     context = load_structure("test", path)
     monkeypatch.setattr(ba, "_asu_volume", lambda mtz, pdb: "1000000")
     inputs = helpers.dpi_inputs(
-        pdb_path=path, mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=helpers.write_data_json(tmp_path / "meta.json",
-                                          nrefcnt=4096, rffin=0.25))
+        pdb_path=path,
+        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+        data_json=helpers.write_data_json(
+            tmp_path / "meta.json", nrefcnt=4096, rffin=0.25
+        ),
+    )
 
     dpi, _resolution, reason = ba._calculate_dpi_details(context, inputs)
 
@@ -1392,22 +1602,25 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path):
     z-score, so the code produced by ``_calculate_dpi_details`` must survive
     into ``run_bond_analysis``'s summary and its partial-reason list.
     """
-    path = _atom_count_structure(tmp_path, "summary.pdb", 16, cell_edge=100.0,
-                                 donor_distance=2.09)
+    path = _atom_count_structure(
+        tmp_path, "summary.pdb", 16, cell_edge=100.0, donor_distance=2.09
+    )
     context = load_structure("test", path)
     inputs = helpers.dpi_inputs(
-        pdb_path=path, mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=helpers.write_data_json(tmp_path / "no_nref.json",
-                                          nrefcnt=None, rffin=0.20))
+        pdb_path=path,
+        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+        data_json=helpers.write_data_json(
+            tmp_path / "no_nref.json", nrefcnt=None, rffin=0.20
+        ),
+    )
 
     rows, _candidates, summaries, metadata = ba.run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context)
+        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
+    )
 
     summary = next(iter(summaries.values()))
-    assert summary["dpi_unavailable_reason"] == (
-        "missing_or_invalid_reflection_count")
-    assert "missing_or_invalid_reflection_count" in (
-        metadata["partial_reason_codes"])
+    assert summary["dpi_unavailable_reason"] == ("missing_or_invalid_reflection_count")
+    assert "missing_or_invalid_reflection_count" in (metadata["partial_reason_codes"])
     assert math.isnan(summary["dpi"])
     # The measured geometry is still reported; only the derived value is gone.
     row = _only(rows, "O")
@@ -1424,17 +1637,20 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path):
     Two independent ways of losing the z-score are covered: no exact literature
     reference (Lys NZ is admitted by the element fallback) and no DPI.
     """
-    fallback = _probe_structure(tmp_path, "lys.pdb", resname="LYS",
-                                positions={"NZ": (2.10, 0.0, 0.0)})
+    fallback = _probe_structure(
+        tmp_path, "lys.pdb", resname="LYS", positions={"NZ": (2.10, 0.0, 0.0)}
+    )
     fallback_rows, fallback_candidates, _, _ = _analyze(
-        fallback, data_json=_dpi_metadata(tmp_path))
+        fallback, data_json=_dpi_metadata(tmp_path)
+    )
 
     row = _only(fallback_rows, "NZ")
     assert _only(fallback_candidates, "NZ")["assignment_reference_kind"] == (
-        "element_fallback")
-    assert row["coordination_status"] == "inferred"   # it is still a bond
+        "element_fallback"
+    )
+    assert row["coordination_status"] == "inferred"  # it is still a bond
     assert row["reference_covered"] is False
-    assert math.isfinite(row["dpi"])                  # DPI is fine; the ref is not
+    assert math.isfinite(row["dpi"])  # DPI is fine; the ref is not
     assert math.isnan(row["zscore"])
     for column in ("geometry_outlier", "geometry_consistent"):
         assert row[column] == ""
@@ -1442,13 +1658,14 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path):
     assert row["score_eligible"] is False
     assert row["score_exclusion_reason"] == "zscore_unavailable"
 
-    covered = _probe_structure(tmp_path, "asp_nodpi.pdb", resname="ASP",
-                               positions={"OD1": (1.99, 0.0, 0.0)})
+    covered = _probe_structure(
+        tmp_path, "asp_nodpi.pdb", resname="ASP", positions={"OD1": (1.99, 0.0, 0.0)}
+    )
     no_dpi_rows, _, _, metadata = _analyze(covered)
 
     row = _only(no_dpi_rows, "OD1")
     assert metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
-    assert row["reference_covered"] is True            # the reference exists
+    assert row["reference_covered"] is True  # the reference exists
     assert math.isnan(row["dpi"]) and math.isnan(row["zscore"])
     for column in ("geometry_outlier", "geometry_consistent"):
         assert row[column] == ""
@@ -1459,8 +1676,9 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path):
 
 def test_assessed_geometry_columns_are_complementary_booleans(tmp_path):
     """When geometry is assessed the two flags are real, opposite booleans."""
-    path = _probe_structure(tmp_path, "assessed.pdb", resname="ASP",
-                            positions={"OD1": (1.99, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path, "assessed.pdb", resname="ASP", positions={"OD1": (1.99, 0.0, 0.0)}
+    )
     rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     row = _only(rows, "OD1")
@@ -1480,16 +1698,20 @@ def test_assessed_geometry_columns_are_complementary_booleans(tmp_path):
 # --------------------------------------------------------------------------- #
 def _bidentate(tmp_path, name, d1, d2, *, data_json=None):
     """Asp chelating a Zn through both carboxylate oxygens."""
-    path = _probe_structure(tmp_path, name, resname="ASP",
-                            positions={"OD1": (d1, 0.0, 0.0),
-                                       "OD2": (0.0, d2, 0.0)})
+    path = _probe_structure(
+        tmp_path,
+        name,
+        resname="ASP",
+        positions={"OD1": (d1, 0.0, 0.0), "OD2": (0.0, d2, 0.0)},
+    )
     return _analyze(path, data_json=data_json)
 
 
 def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path):
     """One contact per residue image: detected False, count 1, ``single_donor``."""
-    path = _probe_structure(tmp_path, "mono.pdb", resname="HIS",
-                            positions={"NE2": (2.03, 0.0, 0.0)})
+    path = _probe_structure(
+        tmp_path, "mono.pdb", resname="HIS", positions={"NE2": (2.03, 0.0, 0.0)}
+    )
     rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     row = _only(rows, "NE2")
@@ -1504,8 +1726,9 @@ def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path):
 
 def test_two_donors_of_one_residue_form_a_consistent_group(tmp_path):
     """Two well-behaved contacts to one residue image: detected, not suspect."""
-    rows, _, summaries, _ = _bidentate(tmp_path, "chelate_ok.pdb", 1.99, 2.00,
-                                       data_json=_dpi_metadata(tmp_path))
+    rows, _, summaries, _ = _bidentate(
+        tmp_path, "chelate_ok.pdb", 1.99, 2.00, data_json=_dpi_metadata(tmp_path)
+    )
 
     assert len(rows) == 2
     for row in rows:
@@ -1529,8 +1752,9 @@ def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(tmp_pa
     multi_donor_geometry_status=suspect ...; the particular unusual bonds retain
     geometry_outlier=true." Neither bond is excluded from scoring.
     """
-    rows, _, summaries, _ = _bidentate(tmp_path, "chelate_bad.pdb", 1.99, 2.40,
-                                       data_json=_dpi_metadata(tmp_path))
+    rows, _, summaries, _ = _bidentate(
+        tmp_path, "chelate_bad.pdb", 1.99, 2.40, data_json=_dpi_metadata(tmp_path)
+    )
 
     assert len(rows) == 2
     good = _only(rows, "OD1")
@@ -1588,9 +1812,12 @@ def test_backbone_and_side_chain_contacts_share_one_residue_group(tmp_path):
     coordinate model, this grouping automatically includes backbone-side-chain
     combinations without a separate backbone rule."
     """
-    path = _probe_structure(tmp_path, "backbone_group.pdb", resname="ASP",
-                            positions={"OD1": (1.99, 0.0, 0.0),
-                                       "O": (0.0, 2.07, 0.0)})
+    path = _probe_structure(
+        tmp_path,
+        "backbone_group.pdb",
+        resname="ASP",
+        positions={"OD1": (1.99, 0.0, 0.0), "O": (0.0, 2.07, 0.0)},
+    )
     rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     assert {row["neighbor_atom"] for row in rows} == {"OD1", "O"}
@@ -1608,10 +1835,20 @@ def test_separate_residues_are_separate_groups(tmp_path):
     """Two donors from different residues are two single-donor groups."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-    builder.add_amino_acid("HIS", 10, chain="A", origin=(20.0, 20.0, 20.0),
-                           positions={"NE2": (2.03, 0.0, 0.0)})
-    builder.add_amino_acid("ASP", 11, chain="A", origin=(34.0, 20.0, 20.0),
-                           positions={"OD1": (0.0, 1.99, 0.0)})
+    builder.add_amino_acid(
+        "HIS",
+        10,
+        chain="A",
+        origin=(20.0, 20.0, 20.0),
+        positions={"NE2": (2.03, 0.0, 0.0)},
+    )
+    builder.add_amino_acid(
+        "ASP",
+        11,
+        chain="A",
+        origin=(34.0, 20.0, 20.0),
+        positions={"OD1": (0.0, 1.99, 0.0)},
+    )
     path = builder.write_pdb(tmp_path / "two_residues.pdb")
     rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
@@ -1627,12 +1864,18 @@ def test_separate_residues_are_separate_groups(tmp_path):
 
 def test_group_size_has_no_upper_limit(tmp_path):
     """A four-donor residue image reports all four; nothing is truncated."""
-    path = _probe_structure(tmp_path, "tetra.pdb", resname="ASP",
-                            positions={"OD1": (1.99, 0.0, 0.0),
-                                       "OD2": (0.0, 1.99, 0.0),
-                                       "O": (0.0, 0.0, 2.07),
-                                       "N": (-2.03, 0.0, 0.0)},
-                            probe_index=0)
+    path = _probe_structure(
+        tmp_path,
+        "tetra.pdb",
+        resname="ASP",
+        positions={
+            "OD1": (1.99, 0.0, 0.0),
+            "OD2": (0.0, 1.99, 0.0),
+            "O": (0.0, 0.0, 2.07),
+            "N": (-2.03, 0.0, 0.0),
+        },
+        probe_index=0,
+    )
     rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     # N is allowed here because this residue is the polymer's first.
@@ -1659,27 +1902,40 @@ def test_reference_table_holds_exactly_the_expected_rows_and_keys():
     records = _parse_reference_table(REFERENCE_TABLE)
     assert len(records) == EXPECTED_REFERENCE_ROW_COUNT
 
-    keys = {(residue, atom, metal)
-            for _lineno, residue, atom, metal, _mu, _sd in records}
+    keys = {
+        (residue, atom, metal) for _lineno, residue, atom, metal, _mu, _sd in records
+    }
     assert keys == REQUIRED_REFERENCE_KEYS
     # Named individually so a failure says which chemistry was lost.
-    for key in (("CYS", "S", "CU"), ("CYS", "S", "ZN"), ("CYS", "S", "FE"),
-                ("HIS", "N", "ZN"), ("HIS", "N", "NI"), ("HOH", "O", "MG"),
-                ("ASP", "O", "CA"), ("CA", "O", "K")):
+    for key in (
+        ("CYS", "S", "CU"),
+        ("CYS", "S", "ZN"),
+        ("CYS", "S", "FE"),
+        ("HIS", "N", "ZN"),
+        ("HIS", "N", "NI"),
+        ("HOH", "O", "MG"),
+        ("ASP", "O", "CA"),
+        ("CA", "O", "K"),
+    ):
         assert key in keys, f"{key} is missing from {REFERENCE_TABLE}"
 
     # And the loader really exposes all of them, with the same numbers.
     assert len(ba.LIT) == EXPECTED_REFERENCE_ROW_COUNT
     assert set(ba.LIT) == keys
-    assert {(residue, atom, metal): (mu, stdev)
-            for _lineno, residue, atom, metal, mu, stdev in records} == ba.LIT
+    assert {
+        (residue, atom, metal): (mu, stdev)
+        for _lineno, residue, atom, metal, mu, stdev in records
+    } == ba.LIT
 
 
-@pytest.mark.parametrize("corruption", [
-    "CYS S CU 2.two 0.2",     # a typo in the mean
-    "CYS S CU 2.20",          # a lost column
-    "CYS S CU 2.20 0.2 0.3",  # a stray extra column
-])
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "CYS S CU 2.two 0.2",  # a typo in the mean
+        "CYS S CU 2.20",  # a lost column
+        "CYS S CU 2.20 0.2 0.3",  # a stray extra column
+    ],
+)
 def test_the_strict_parser_rejects_a_corrupted_row(tmp_path, corruption):
     """The independence claim above is itself checked.
 
@@ -1744,8 +2000,10 @@ def test_reference_table_values_are_physically_plausible():
         # The 4 A discovery radius must never clip a first sphere.
         assert mu + ba.FIRST_SPHERE_TOLERANCE <= ba.CUTOFF, where
 
-    parsed = {(residue, atom, metal): (mu, stdev)
-              for _lineno, residue, atom, metal, mu, stdev in records}
+    parsed = {
+        (residue, atom, metal): (mu, stdev)
+        for _lineno, residue, atom, metal, mu, stdev in records
+    }
     assert parsed == ba.LIT
 
 
@@ -1760,17 +2018,17 @@ def test_reference_table_is_internally_consistent_by_donor_element():
     for (_residue, atom, metal), (mu, _sd) in ba.LIT.items():
         by_metal[metal][atom].append(mu)
 
-    assert set(by_metal) >= {"ZN", "CA", "MG", "K", "NA", "FE", "CU", "MN",
-                             "CO", "NI"}
+    assert set(by_metal) >= {"ZN", "CA", "MG", "K", "NA", "FE", "CU", "MN", "CO", "NI"}
     for metal, by_atom in by_metal.items():
         oxygens = by_atom.get("O", [])
         assert oxygens, f"{metal} has no oxygen reference"
         assert max(oxygens) - min(oxygens) < 0.6, (
-            f"{metal} oxygen references are implausibly scattered: {oxygens}")
+            f"{metal} oxygen references are implausibly scattered: {oxygens}"
+        )
         if "S" in by_atom:
             assert min(by_atom["S"]) > max(oxygens), (
-                f"{metal}-S should exceed {metal}-O: "
-                f"{by_atom['S']} vs {oxygens}")
+                f"{metal}-S should exceed {metal}-O: {by_atom['S']} vs {oxygens}"
+            )
         # Water is the reference every metal must define, since it is the most
         # common first-sphere donor in the PDB.
         assert ("HOH", "O", metal) in ba.LIT
@@ -1782,9 +2040,12 @@ def test_reference_table_ranks_ions_by_size():
     This ordering is a basic property of ionic radius and catches a shuffled
     metal column that the per-row range checks would let through.
     """
-    water = {metal: ba.LIT[("HOH", "O", metal)][0]
-             for metal in ("K", "NA", "CA", "MN", "ZN", "MG")}
-    assert (water["K"] > water["NA"] > water["CA"] > water["MN"] >
-            water["ZN"] > water["MG"])
+    water = {
+        metal: ba.LIT[("HOH", "O", metal)][0]
+        for metal in ("K", "NA", "CA", "MN", "ZN", "MG")
+    }
+    assert (
+        water["K"] > water["NA"] > water["CA"] > water["MN"] > water["ZN"] > water["MG"]
+    )
     assert water["ZN"] == pytest.approx(2.09)
     assert ba.LIT[("HIS", "N", "ZN")][0] == pytest.approx(2.03)

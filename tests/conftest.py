@@ -75,13 +75,13 @@ def pytest_configure(config):
         required = config.getoption(f"--require-{name}")
         if disabled and required:
             raise pytest.UsageError(
-                f"--no-{name} and --require-{name} are mutually exclusive")
+                f"--no-{name} and --require-{name} are mutually exclusive"
+            )
         if disabled:
             os.environ[f"ALCHEMY_TESTS_NO_{name.upper()}"] = "1"
 
     config._alchemy_required_capabilities = tuple(
-        name for name in ("ccp4", "network")
-        if config.getoption(f"--require-{name}")
+        name for name in ("ccp4", "network") if config.getoption(f"--require-{name}")
     )
     if config.getoption("--require-entry-data"):
         config._alchemy_required_capabilities += ("entry_data",)
@@ -95,24 +95,51 @@ def pytest_configure(config):
 # --------------------------------------------------------------------------- #
 def pytest_addoption(parser):
     group = parser.getgroup("alchemy")
-    group.addoption("--skip-slow", action="store_true", default=False,
-                    help="skip tests marked slow (end-to-end pipeline runs)")
-    group.addoption("--no-ccp4", action="store_true", default=False,
-                    help="pretend CCP4 is unavailable; skip tests marked ccp4")
-    group.addoption("--no-network", action="store_true", default=False,
-                    help="pretend the network is down; skip tests marked network")
     group.addoption(
-        "--require-ccp4", action="store_true", default=False,
-        help=("require CCP4 and at least one non-skipped ccp4 test; fail instead "
-              "of silently passing a skipped capability lane"))
+        "--skip-slow",
+        action="store_true",
+        default=False,
+        help="skip tests marked slow (end-to-end pipeline runs)",
+    )
     group.addoption(
-        "--require-network", action="store_true", default=False,
-        help=("require live network access and at least one non-skipped network "
-              "test; fail instead of silently passing a skipped capability lane"))
+        "--no-ccp4",
+        action="store_true",
+        default=False,
+        help="pretend CCP4 is unavailable; skip tests marked ccp4",
+    )
     group.addoption(
-        "--require-entry-data", action="store_true", default=False,
-        help=("require at least one non-skipped test backed by the pinned "
-              "PDB-REDO entry snapshot"))
+        "--no-network",
+        action="store_true",
+        default=False,
+        help="pretend the network is down; skip tests marked network",
+    )
+    group.addoption(
+        "--require-ccp4",
+        action="store_true",
+        default=False,
+        help=(
+            "require CCP4 and at least one non-skipped ccp4 test; fail instead "
+            "of silently passing a skipped capability lane"
+        ),
+    )
+    group.addoption(
+        "--require-network",
+        action="store_true",
+        default=False,
+        help=(
+            "require live network access and at least one non-skipped network "
+            "test; fail instead of silently passing a skipped capability lane"
+        ),
+    )
+    group.addoption(
+        "--require-entry-data",
+        action="store_true",
+        default=False,
+        help=(
+            "require at least one non-skipped test backed by the pinned "
+            "PDB-REDO entry snapshot"
+        ),
+    )
 
 
 @pytest.hookimpl(trylast=True)
@@ -125,18 +152,18 @@ def pytest_collection_modifyitems(config, items):
     a surviving test carries the relevant marker.
     """
     probes = {
-        "ccp4": (helpers.ccp4_available,
-                 "CCP4 (mtzfix/fft/mapmask/edstats) is not available"),
-        "network": (helpers.network_available,
-                    "no network access to pdb-redo.eu"),
+        "ccp4": (
+            helpers.ccp4_available,
+            "CCP4 (mtzfix/fft/mapmask/edstats) is not available",
+        ),
+        "network": (helpers.network_available, "no network access to pdb-redo.eu"),
     }
     results = {}
     for name, (probe, reason) in probes.items():
         if any(item.get_closest_marker(name) for item in items):
             available = probe()
             if config.getoption(f"--require-{name}") and not available:
-                raise pytest.UsageError(
-                    f"--require-{name} was requested, but {reason}")
+                raise pytest.UsageError(f"--require-{name} was requested, but {reason}")
             results[name] = (available, reason)
 
     skip_slow = config.getoption("--skip-slow")
@@ -155,8 +182,8 @@ def pytest_collection_finish(session):
         if not any(item.get_closest_marker(name) for item in session.items):
             label = name.replace("_", "-")
             raise pytest.UsageError(
-                f"--require-{label} was requested, but no {label} tests were "
-                "selected")
+                f"--require-{label} was requested, but no {label} tests were selected"
+            )
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -177,15 +204,15 @@ def pytest_sessionfinish(session, exitstatus):
     if exitstatus != pytest.ExitCode.OK or session.config.getoption("collectonly"):
         return
     missing = [
-        name for name, ran in session.config._alchemy_capability_tests_ran.items()
+        name
+        for name, ran in session.config._alchemy_capability_tests_ran.items()
         if not ran
     ]
     if not missing:
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
-    message = (
-        "required capability lane ran no non-skipped tests: "
-        + ", ".join(name.replace("_", "-") for name in missing)
+    message = "required capability lane ran no non-skipped tests: " + ", ".join(
+        name.replace("_", "-") for name in missing
     )
     if reporter is not None:
         reporter.write_sep("=", f"ERROR: {message}")

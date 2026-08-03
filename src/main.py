@@ -32,6 +32,7 @@ Examples
   python src/main.py --max-pdbs 20 --workers 4 \
       --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
 """
+
 import argparse
 from collections import Counter
 import contextlib
@@ -110,8 +111,7 @@ from confidence_score import (
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
-DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
-    REPO_DIR, "confidence_reference")
+DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(REPO_DIR, "confidence_reference")
 METALS_SET = set(METAL_ELEMENTS)
 
 MODEL_POLICY = "first"
@@ -138,23 +138,43 @@ ENV_SENTINEL = "__ALCHEMY_CCP4_ENV__"
 # Human-readable text for each EDSTATS-join reason code, reported alongside the
 # machine-readable code in the manifest's error column.
 IDENTIFICATION_REASON_MESSAGES = {
-    "cofactor_coordinate_join_failed":
-        "cofactor EDSTATS row did not match a coordinate residue",
-    "ambiguous_coordinate_residue_join":
-        "EDSTATS row matched multiple coordinate residues",
-    "cofactor_without_selected_metal":
-        "matched cofactor has no selected configured metal site",
+    "cofactor_coordinate_join_failed": (
+        "cofactor EDSTATS row did not match a coordinate residue"
+    ),
+    "ambiguous_coordinate_residue_join": (
+        "EDSTATS row matched multiple coordinate residues"
+    ),
+    "cofactor_without_selected_metal": (
+        "matched cofactor has no selected configured metal site"
+    ),
 }
 
 MANIFEST_COLUMNS = [
-    "pdbID", "status", "retryable", "n_metals", "n_bonds", "n_candidates",
+    "pdbID",
+    "status",
+    "retryable",
+    "n_metals",
+    "n_bonds",
+    "n_candidates",
     "runtime_s",
-    "reason_codes", "warning_codes", "error", "alchemy_version", "alchemy_commit",
-    "gemmi_version", "ccp4_version", "refinement_state",
-    "source_coordinate_format", "analysis_coordinate_format",
-    "coordinate_conversion_performed", "source_coordinate_path",
-    "analysis_coordinate_path", "model_policy", "input_model_count",
-    "model_analyzed", "multi_model_structure", "altloc_policy",
+    "reason_codes",
+    "warning_codes",
+    "error",
+    "alchemy_version",
+    "alchemy_commit",
+    "gemmi_version",
+    "ccp4_version",
+    "refinement_state",
+    "source_coordinate_format",
+    "analysis_coordinate_format",
+    "coordinate_conversion_performed",
+    "source_coordinate_path",
+    "analysis_coordinate_path",
+    "model_policy",
+    "input_model_count",
+    "model_analyzed",
+    "multi_model_structure",
+    "altloc_policy",
     "symmetry_contact_policy",
 ]
 
@@ -164,8 +184,10 @@ MANIFEST_COLUMNS = [
 # it once keeps the written header and the --resume compatibility check from
 # disagreeing about the columns between them.
 STATS_COLUMNS = (
-    ["pdbID", "category"] + list(EDSTATS_COLUMNS) +
-    ["aa_geometry_coverage"] + list(STATS_EXTRA_COLUMNS)
+    ["pdbID", "category"]
+    + list(EDSTATS_COLUMNS)
+    + ["aa_geometry_coverage"]
+    + list(STATS_EXTRA_COLUMNS)
 )
 
 # config dict shared with worker processes (set once per worker by _init_worker)
@@ -221,12 +243,8 @@ def _resolve_env_windows(ccp4_setup):
     handle, script_path = tempfile.mkstemp(prefix="alchemy-ccp4-", suffix=".cmd")
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\r\n") as fh:
-            fh.write("@echo off\n"
-                     f'call "{ccp4_setup}"\n'
-                     f"echo {ENV_SENTINEL}\n"
-                     "set\n")
-        out = subprocess.run(["cmd", "/c", script_path],
-                             capture_output=True, text=True)
+            fh.write(f'@echo off\ncall "{ccp4_setup}"\necho {ENV_SENTINEL}\nset\n')
+        out = subprocess.run(["cmd", "/c", script_path], capture_output=True, text=True)
     finally:
         # A fixed name in %TEMP% left one file behind per run and let
         # concurrent runs overwrite each other's script.
@@ -236,13 +254,13 @@ def _resolve_env_windows(ccp4_setup):
             pass
 
     if out.returncode != 0:
-        raise SystemExit(
-            f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")
+        raise SystemExit(f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")
     env, seen_sentinel = _parse_windows_set_output(out.stdout)
     if not seen_sentinel:
         raise SystemExit(
             f"CCP4 setup {ccp4_setup} did not report its environment; "
-            f"expected `set` output after the marker.\n{out.stderr}")
+            f"expected `set` output after the marker.\n{out.stderr}"
+        )
     return _normalize_path_key({**os.environ.copy(), **env})
 
 
@@ -275,8 +293,9 @@ def resolve_env(ccp4_setup):
 
 
 def verify_ccp4(env):
-    missing = [t for t in REQUIRED_CCP4_TOOLS
-               if shutil.which(t, path=env.get("PATH")) is None]
+    missing = [
+        t for t in REQUIRED_CCP4_TOOLS if shutil.which(t, path=env.get("PATH")) is None
+    ]
     if missing:
         raise SystemExit(
             f"Required CCP4 tools were not found on PATH: {', '.join(missing)}. "
@@ -313,7 +332,9 @@ def resolve_ccp4_environment(args):
         saved = save_ccp4_setup(setup_path, config_files=config_files)
         print(
             f"Verified {', '.join(REQUIRED_CCP4_TOOLS)} are available; saved "
-            f"CCP4 setup path to {', '.join(saved)}", flush=True)
+            f"CCP4 setup path to {', '.join(saved)}",
+            flush=True,
+        )
         return None, None
 
     environment = os.environ.copy()
@@ -334,8 +355,8 @@ def resolve_ccp4_environment(args):
             verify_ccp4(env)
         except SystemExit as exc:
             raise SystemExit(
-                f"Ran {setup_path}, but CCP4 tools are still not available. "
-                f"{exc}") from None
+                f"Ran {setup_path}, but CCP4 tools are still not available. {exc}"
+            ) from None
         return env, setup_path
 
     if ccp4_tools_available(environment):
@@ -392,15 +413,15 @@ def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
             atom_blocks.append((block, atom_ids))
     if len(atom_blocks) != 1:
         raise ValueError(
-            "mmCIF conversion requires exactly one block with atom_site records")
+            "mmCIF conversion requires exactly one block with atom_site records"
+        )
 
     block, atom_ids = atom_blocks[0]
     occupancies = list(block.find_values("_atom_site.occupancy"))
     if not occupancies:
         occupancies = ["?"] * len(atom_ids)
     elif len(occupancies) != len(atom_ids):
-        raise ValueError(
-            "mmCIF atom_site occupancy count does not match atom count")
+        raise ValueError("mmCIF atom_site occupancy count does not match atom count")
 
     by_serial: Dict[int, str] = {}
     for atom_id, occupancy in zip(atom_ids, occupancies):
@@ -408,7 +429,8 @@ def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
             serial = int(atom_id)
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(
-                f"mmCIF atom_site id is not an integer: {atom_id!r}") from exc
+                f"mmCIF atom_site id is not an integer: {atom_id!r}"
+            ) from exc
         if serial in by_serial:
             raise ValueError(f"duplicate mmCIF atom_site id: {serial}")
         by_serial[serial] = occupancy
@@ -430,24 +452,28 @@ def _residue_index_by_author(structure, label):
                 number = residue.seqid.num
                 if number is None:
                     raise ValueError(
-                        f"{label} residue {residue.name!r} has no author number")
+                        f"{label} residue {residue.name!r} has no author number"
+                    )
                 insertion = blank_if_missing(str(residue.seqid.icode))
                 key = (model_index, str(chain.name), f"{number}{insertion}")
                 order.append(key)
-                by_author.setdefault(key, []).append((
-                    str(residue.name),
-                    tuple((str(atom.name), str(atom.element.name))
-                          for atom in residue),
-                ))
+                by_author.setdefault(key, []).append(
+                    (
+                        str(residue.name),
+                        tuple(
+                            (str(atom.name), str(atom.element.name)) for atom in residue
+                        ),
+                    )
+                )
     return by_author, order
 
 
 def _residue_conversion_records(structure, converted_structure):
     """Pair source mmCIF residue names with names written to legacy PDB."""
-    source_by_author, source_order = _residue_index_by_author(
-        structure, "mmCIF")
+    source_by_author, source_order = _residue_index_by_author(structure, "mmCIF")
     converted_by_author, converted_order = _residue_index_by_author(
-        converted_structure, "converted")
+        converted_structure, "converted"
+    )
 
     records = []
     if converted_order != source_order:
@@ -457,30 +483,29 @@ def _residue_conversion_records(structure, converted_structure):
     for key, source_residues in source_by_author.items():
         converted_residues = converted_by_author[key]
         if len(converted_residues) != len(source_residues):
-            raise ValueError(
-                "PDB conversion changed duplicate residue multiplicity")
+            raise ValueError("PDB conversion changed duplicate residue multiplicity")
         model_index, converted_chain, converted_resnum = key
         for source, converted in zip(source_residues, converted_residues):
             source_name, source_atoms = source
             converted_name, converted_atoms = converted
             if source_atoms != converted_atoms:
-                raise ValueError(
-                    "PDB conversion changed residue atom membership")
+                raise ValueError("PDB conversion changed residue atom membership")
             if converted_name != source_name:
-                records.append((
-                    model_index + 1,
-                    converted_chain,
-                    converted_resnum,
-                    converted_name,
-                    source_name,
-                ))
+                records.append(
+                    (
+                        model_index + 1,
+                        converted_chain,
+                        converted_resnum,
+                        converted_name,
+                        source_name,
+                    )
+                )
     return records
 
 
 # The traditional PDB chain field is one column wide.  These are the portable
 # identifiers accepted by both Gemmi and the CCP4 tools used by Alchemy.
-LEGACY_PDB_CHAIN_IDS = (
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 LEGACY_PDB_MAX_RESIDUE_NUMBER = 9999
 
 
@@ -495,34 +520,42 @@ def _source_residue_records(structure):
             for residue_index, residue in enumerate(chain):
                 if residue.entity_type == gemmi.EntityType.Polymer:
                     polymer_indices_by_subchain.setdefault(
-                        str(residue.subchain), []).append(residue_index)
+                        str(residue.subchain), []
+                    ).append(residue_index)
             for residue_index, residue in enumerate(chain):
                 number = residue.seqid.num
                 if number is None:
                     raise ValueError(
-                        f"mmCIF residue {residue.name!r} has no author number")
+                        f"mmCIF residue {residue.name!r} has no author number"
+                    )
                 polymer_indices = polymer_indices_by_subchain.get(
-                    str(residue.subchain), [])
+                    str(residue.subchain), []
+                )
                 if not polymer_indices:
                     polymer_position = "-"
                 else:
                     is_first = residue_index == polymer_indices[0]
                     is_last = residue_index == polymer_indices[-1]
                     polymer_position = (
-                        "NC" if is_first and is_last else
-                        ("N" if is_first else ("C" if is_last else "M")))
-                records.append((
-                    model_index,
-                    str(chain.name),
-                    int(number),
-                    blank_if_missing(str(residue.seqid.icode)),
-                    str(residue.name),
-                    tuple((str(atom.name), str(atom.element.name))
-                          for atom in residue),
-                    source_chain_index,
-                    residue_index,
-                    polymer_position,
-                ))
+                        "NC"
+                        if is_first and is_last
+                        else ("N" if is_first else ("C" if is_last else "M"))
+                    )
+                records.append(
+                    (
+                        model_index,
+                        str(chain.name),
+                        int(number),
+                        blank_if_missing(str(residue.seqid.icode)),
+                        str(residue.name),
+                        tuple(
+                            (str(atom.name), str(atom.element.name)) for atom in residue
+                        ),
+                        source_chain_index,
+                        residue_index,
+                        polymer_position,
+                    )
+                )
     return records
 
 
@@ -530,7 +563,8 @@ def _legacy_identifiers_need_packing(structure):
     """Whether Gemmi could not shorten every chain to a portable PDB id."""
     return any(
         bool(str(chain.name)) and str(chain.name) not in LEGACY_PDB_CHAIN_IDS
-        for model in structure for chain in model
+        for model in structure
+        for chain in model
     )
 
 
@@ -552,15 +586,16 @@ def _pack_legacy_pdb_residue_ids(structure):
             if residue_count > LEGACY_PDB_MAX_RESIDUE_NUMBER:
                 raise ValueError(
                     "one mmCIF chain contains more residues than a portable "
-                    "PDB chain can represent")
-            if (next_residue_number + residue_count - 1 >
-                    LEGACY_PDB_MAX_RESIDUE_NUMBER):
+                    "PDB chain can represent"
+                )
+            if next_residue_number + residue_count - 1 > LEGACY_PDB_MAX_RESIDUE_NUMBER:
                 chain_slot += 1
                 next_residue_number = 1
             if chain_slot >= len(LEGACY_PDB_CHAIN_IDS):
                 raise ValueError(
                     "mmCIF model contains more residues than the portable "
-                    "PDB surrogate namespace can represent")
+                    "PDB surrogate namespace can represent"
+                )
             chain.name = LEGACY_PDB_CHAIN_IDS[chain_slot]
             for residue in chain:
                 residue.seqid = gemmi.SeqId(next_residue_number, " ")
@@ -576,66 +611,88 @@ def _residue_identity_records(source_records, converted_structure):
                 number = residue.seqid.num
                 if number is None:
                     raise ValueError(
-                        f"converted residue {residue.name!r} has no number")
-                converted_records.append((
-                    model_index,
-                    str(chain.name),
-                    f"{number}{blank_if_missing(str(residue.seqid.icode))}",
-                    str(residue.name),
-                    tuple((str(atom.name), str(atom.element.name))
-                          for atom in residue),
-                ))
+                        f"converted residue {residue.name!r} has no number"
+                    )
+                converted_records.append(
+                    (
+                        model_index,
+                        str(chain.name),
+                        f"{number}{blank_if_missing(str(residue.seqid.icode))}",
+                        str(residue.name),
+                        tuple(
+                            (str(atom.name), str(atom.element.name)) for atom in residue
+                        ),
+                    )
+                )
     if len(source_records) != len(converted_records):
         raise ValueError("PDB conversion changed residue count")
 
     records = []
     for source, converted in zip(source_records, converted_records):
-        (source_model, source_chain, source_number, source_insertion,
-         source_name, source_atoms, source_chain_index,
-         source_residue_index, source_polymer_position) = source
-        (converted_model, converted_chain, converted_resnum,
-         converted_name, converted_atoms) = converted
+        (
+            source_model,
+            source_chain,
+            source_number,
+            source_insertion,
+            source_name,
+            source_atoms,
+            source_chain_index,
+            source_residue_index,
+            source_polymer_position,
+        ) = source
+        (
+            converted_model,
+            converted_chain,
+            converted_resnum,
+            converted_name,
+            converted_atoms,
+        ) = converted
         if source_model != converted_model:
             raise ValueError("PDB conversion changed residue model ordering")
         if source_atoms != converted_atoms:
             raise ValueError("PDB conversion changed residue atom membership")
         source_resnum = f"{source_number}{source_insertion}"
-        if ((source_chain, source_resnum, source_name) ==
-                (converted_chain, converted_resnum, converted_name)):
-            continue
-        records.append((
-            converted_model,
+        if (source_chain, source_resnum, source_name) == (
             converted_chain,
             converted_resnum,
             converted_name,
-            source_chain,
-            source_number,
-            source_insertion,
-            source_name,
-            source_chain_index,
-            source_residue_index,
-            source_polymer_position,
-        ))
+        ):
+            continue
+        records.append(
+            (
+                converted_model,
+                converted_chain,
+                converted_resnum,
+                converted_name,
+                source_chain,
+                source_number,
+                source_insertion,
+                source_name,
+                source_chain_index,
+                source_residue_index,
+                source_polymer_position,
+            )
+        )
     return records
 
 
 def _write_cif_conversion_provenance(
-        dst: str,
-        missing_occupancies: List[bool],
-        residue_records: List[Tuple[int, str, str, str, str]],
-        identity_records=None,
-        ) -> None:
+    dst: str,
+    missing_occupancies: List[bool],
+    residue_records: List[Tuple[int, str, str, str, str]],
+    identity_records=None,
+) -> None:
     """Blank unknown occupancies and embed reversible residue mappings."""
     with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
         lines = handle.readlines()
 
     atom_line_indices = [
-        index for index, line in enumerate(lines)
+        index
+        for index, line in enumerate(lines)
         if line[:6].strip().upper() in ("ATOM", "HETATM")
     ]
     if len(atom_line_indices) != len(missing_occupancies):
-        raise ValueError(
-            "PDB conversion output atom count does not match mmCIF input")
+        raise ValueError("PDB conversion output atom count does not match mmCIF input")
     for line_index, missing in zip(atom_line_indices, missing_occupancies):
         if not missing:
             continue
@@ -650,8 +707,7 @@ def _write_cif_conversion_provenance(
             f"{RESNAME_REMARK_PREFIX} {model_index} "
             f"{chain or '_'} {resnum} {converted_name} {source_name}\n"
         )
-        for (model_index, chain, resnum, converted_name,
-             source_name) in residue_records
+        for (model_index, chain, resnum, converted_name, source_name) in residue_records
     ]
     remarks.extend(
         (
@@ -662,10 +718,19 @@ def _write_cif_conversion_provenance(
             f"{source_chain_index} {source_residue_index} "
             f"{source_polymer_position}\n"
         )
-        for (model_index, converted_chain, converted_resnum, converted_name,
-             source_chain, source_number, source_insertion,
-             source_name, source_chain_index, source_residue_index,
-             source_polymer_position) in (identity_records or ())
+        for (
+            model_index,
+            converted_chain,
+            converted_resnum,
+            converted_name,
+            source_chain,
+            source_number,
+            source_insertion,
+            source_name,
+            source_chain_index,
+            source_residue_index,
+            source_polymer_position,
+        ) in (identity_records or ())
     )
     with open(dst, "w", encoding="utf-8", newline="") as handle:
         handle.writelines(remarks)
@@ -681,20 +746,24 @@ def _cif_to_pdb(cif_path, dst):
     occupancy_by_serial = _cif_occupancy_by_serial(cif_path)
     structure = gemmi.read_structure(cif_path)
     structure_atoms = [
-        atom for model in structure for chain in model
-        for residue in chain for atom in residue
+        atom
+        for model in structure
+        for chain in model
+        for residue in chain
+        for atom in residue
     ]
     if len(structure_atoms) != len(occupancy_by_serial):
         raise ValueError(
-            "Gemmi structure atom count does not match mmCIF atom_site records")
+            "Gemmi structure atom count does not match mmCIF atom_site records"
+        )
     missing_occupancies = []
     for atom in structure_atoms:
         serial = atom.serial
         if serial is None or int(serial) not in occupancy_by_serial:
             raise ValueError(
-                "Gemmi atom serial could not be matched to mmCIF atom_site id")
-        missing_occupancies.append(
-            occupancy_by_serial[int(serial)] in (".", "?"))
+                "Gemmi atom serial could not be matched to mmCIF atom_site id"
+            )
+        missing_occupancies.append(occupancy_by_serial[int(serial)] in (".", "?"))
 
     structure.setup_entities()
     source_residues = _source_residue_records(structure)
@@ -708,13 +777,15 @@ def _cif_to_pdb(cif_path, dst):
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     structure.write_pdb(dst)
     converted_structure = gemmi.read_structure(dst)
-    residue_records = _residue_conversion_records(
-        structure, converted_structure)
+    residue_records = _residue_conversion_records(structure, converted_structure)
     identity_records = (
         _residue_identity_records(source_residues, converted_structure)
-        if identifiers_packed else [])
+        if identifiers_packed
+        else []
+    )
     _write_cif_conversion_provenance(
-        dst, missing_occupancies, residue_records, identity_records)
+        dst, missing_occupancies, residue_records, identity_records
+    )
     return dst
 
 
@@ -736,36 +807,37 @@ def _first_model_pdb(pdb_path, dst):
     with open(pdb_path, encoding="utf-8", errors="replace", newline="") as fh:
         lines = fh.readlines()
     model_starts = [
-        index for index, line in enumerate(lines)
-        if line[:6].strip().upper() == "MODEL"
+        index for index, line in enumerate(lines) if line[:6].strip().upper() == "MODEL"
     ]
     if not model_starts:
         if model_count == 1:
             return pdb_path, model_count
         raise ValueError(
-            "Gemmi found multiple models but the PDB contains no MODEL records")
+            "Gemmi found multiple models but the PDB contains no MODEL records"
+        )
     if len(model_starts) != model_count:
-        raise ValueError(
-            "Gemmi model count does not match the PDB MODEL records")
+        raise ValueError("Gemmi model count does not match the PDB MODEL records")
 
     first_start = model_starts[0]
     next_start = model_starts[1] if len(model_starts) > 1 else len(lines)
     first_end = next(
-        (index for index in range(first_start + 1, next_start)
-         if lines[index][:6].strip().upper() == "ENDMDL"),
+        (
+            index
+            for index in range(first_start + 1, next_start)
+            if lines[index][:6].strip().upper() == "ENDMDL"
+        ),
         None,
     )
     if first_end is None:
         raise ValueError("the first PDB MODEL record has no matching ENDMDL")
     else:
-        first_block = lines[first_start + 1:first_end]
+        first_block = lines[first_start + 1 : first_end]
 
     # NUMMDL describes the source ensemble and would be false in this
     # first-model-only analysis file. Other crystallographic header records are
     # retained because EDSTATS needs the same cell and symmetry metadata.
     header = [
-        line for line in lines[:first_start]
-        if line[:6].strip().upper() != "NUMMDL"
+        line for line in lines[:first_start] if line[:6].strip().upper() != "NUMMDL"
     ]
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     with open(dst, "w", encoding="utf-8", newline="") as fh:
@@ -799,19 +871,16 @@ def prepare_inputs(pdbID, entry_dir, work_dir):
         os.path.join(entry_dir, f"{pdbID}_final.mtz.gz"),
     )
     if mtz is None:
-        raise FileNotFoundError(
-            os.path.join(entry_dir, f"{pdbID}_final.mtz"))
+        raise FileNotFoundError(os.path.join(entry_dir, f"{pdbID}_final.mtz"))
     if mtz.endswith(".gz"):
-        mtz = _gunzip_to(
-            mtz, os.path.join(work_dir, f"{pdbID}_final.mtz"))
+        mtz = _gunzip_to(mtz, os.path.join(work_dir, f"{pdbID}_final.mtz"))
 
     cif = _first_existing(
         os.path.join(entry_dir, f"{pdbID}_final.cif"),
         os.path.join(entry_dir, f"{pdbID}_final.cif.gz"),
     )
     if cif is not None:
-        pdb = _cif_to_pdb(
-            cif, os.path.join(work_dir, f"{pdbID}_final_from_cif.pdb"))
+        pdb = _cif_to_pdb(cif, os.path.join(work_dir, f"{pdbID}_final_from_cif.pdb"))
         return mtz, pdb
 
     pdb = _first_existing(
@@ -819,11 +888,9 @@ def prepare_inputs(pdbID, entry_dir, work_dir):
         os.path.join(entry_dir, f"{pdbID}_final.pdb.gz"),
     )
     if pdb is None:
-        raise FileNotFoundError(
-            f"{pdbID}_final.cif or {pdbID}_final.pdb")
+        raise FileNotFoundError(f"{pdbID}_final.cif or {pdbID}_final.pdb")
     if pdb.endswith(".gz"):
-        pdb = _gunzip_to(
-            pdb, os.path.join(work_dir, f"{pdbID}_final.pdb"))
+        pdb = _gunzip_to(pdb, os.path.join(work_dir, f"{pdbID}_final.pdb"))
     return mtz, pdb
 
 
@@ -848,6 +915,7 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
         except (ValueError, KeyError, OSError):
             pass
     import gemmi
+
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
@@ -889,14 +957,15 @@ def read_map_column_resolution(mtz_path):
             columns.append(column)
     if missing:
         raise ValueError(
-            "MTZ is missing required map coefficient column(s): "
-            + ", ".join(missing))
+            "MTZ is missing required map coefficient column(s): " + ", ".join(missing)
+        )
 
     d_values = mtz.make_d_array()
     row_count = len(d_values)
     if any(len(column) != row_count for column in columns):
         raise ValueError(
-            "MTZ map coefficient columns do not match the reflection count")
+            "MTZ map coefficient columns do not match the reflection count"
+        )
 
     # A reflection counts only where its d-spacing and all four map
     # coefficients are finite, so the mask is built across whole rows.
@@ -906,7 +975,8 @@ def read_map_column_resolution(mtz_path):
     usable_d = d_values[usable]
     if usable_d.size == 0:
         raise ValueError(
-            "MTZ map coefficient columns have no common finite reflections")
+            "MTZ map coefficient columns have no common finite reflections"
+        )
     return float(usable_d.max()), float(usable_d.min())
 
 
@@ -967,9 +1037,12 @@ def download_entry_to_cache(pdbID, cache_root):
             return False
 
     def fetch_variant(name):
-        if (_first_existing(
-                os.path.join(entry, name),
-                os.path.join(entry, name + ".gz")) is not None):
+        if (
+            _first_existing(
+                os.path.join(entry, name), os.path.join(entry, name + ".gz")
+            )
+            is not None
+        ):
             return True
         return try_fetch(name) or try_fetch(name + ".gz")
 
@@ -980,8 +1053,7 @@ def download_entry_to_cache(pdbID, cache_root):
         try_fetch("data.json")
 
     if not has_final_files(entry, pdbID):
-        raise FileNotFoundError(
-            f"PDB-REDO entry {pdbID} is missing final model files")
+        raise FileNotFoundError(f"PDB-REDO entry {pdbID} is missing final model files")
 
 
 def ensure_entry_available(pdbID, mirror_root, cache_root):
@@ -1005,8 +1077,9 @@ def ensure_entry_available(pdbID, mirror_root, cache_root):
     raise FileNotFoundError(pdbID)
 
 
-def resolve_manual_inputs(pdbID, pdb_file=None, mtz_file=None,
-                          cif_file=None, work_dir=None):
+def resolve_manual_inputs(
+    pdbID, pdb_file=None, mtz_file=None, cif_file=None, work_dir=None
+):
     """Return (mtz_path, pdb_path) for a manually supplied local input set."""
     if not mtz_file:
         raise ValueError("manual mode requires --mtz-file")
@@ -1063,8 +1136,9 @@ def enumerate_entries(root, limit=None):
                 if limit is not None and len(ids) >= limit:
                     return ids
     if skipped:
-        print(f"  note: skipped {skipped} unreadable hashdir(s) under {root}",
-              flush=True)
+        print(
+            f"  note: skipped {skipped} unreadable hashdir(s) under {root}", flush=True
+        )
     return ids
 
 
@@ -1085,23 +1159,34 @@ def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
     manual = cfg.get("manual_inputs")
     if manual:
         return manual.get("cif_file") or manual.get("pdb_file") or ""
-    return _first_existing(
-        os.path.join(entry, f"{pdb_id}_final.cif"),
-        os.path.join(entry, f"{pdb_id}_final.cif.gz"),
-        os.path.join(entry, f"{pdb_id}_final.pdb"),
-        os.path.join(entry, f"{pdb_id}_final.pdb.gz"),
-    ) or analysis_path
+    return (
+        _first_existing(
+            os.path.join(entry, f"{pdb_id}_final.cif"),
+            os.path.join(entry, f"{pdb_id}_final.cif.gz"),
+            os.path.join(entry, f"{pdb_id}_final.pdb"),
+            os.path.join(entry, f"{pdb_id}_final.pdb.gz"),
+        )
+        or analysis_path
+    )
 
 
 def _alchemy_commit():
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "--short=12", "HEAD"], cwd=REPO_DIR,
-            capture_output=True, text=True, check=True)
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         commit = completed.stdout.strip()
         dirty = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=REPO_DIR, capture_output=True, text=True, check=True)
+            cwd=REPO_DIR,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         return commit + ("+dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
         return "unknown"
@@ -1110,6 +1195,7 @@ def _alchemy_commit():
 def _gemmi_version():
     try:
         import gemmi
+
         return str(getattr(gemmi, "__version__", "unknown"))
     except Exception:
         return "unknown"
@@ -1163,30 +1249,43 @@ def _initial_result(pdbID, cfg, manual_inputs):
     a non-blank count as proof the stage completed and would skip the entry
     permanently.
     """
-    return {"pdbID": pdbID, "status": "error", "n": 0,
-            "runtime": 0.0, "error": "", "rows": [],
-            "bond_rows": [], "candidate_rows": [],
-            "n_bonds": "", "n_candidates": "", "no_metals": False,
-            "timings": {},
-            "density_map_scope_used": "",
-            "density_full_map_bytes": 0,
-            "density_edstats_map_bytes": 0,
-            "retryable": True,
-            "reason_codes": [], "warning_codes": [],
-            "confidence_inputs_missing_reason": "",
-            "alchemy_version": ALCHEMY_VERSION,
-            "alchemy_commit": cfg["alchemy_commit"],
-            "gemmi_version": cfg["gemmi_version"],
-            "ccp4_version": cfg["ccp4_version"],
-            "refinement_state": "manual" if manual_inputs else "final",
-            "source_coordinate_format": "",
-            "analysis_coordinate_format": "pdb",
-            "coordinate_conversion_performed": False,
-            "source_coordinate_path": "", "analysis_coordinate_path": "",
-            "model_policy": MODEL_POLICY, "input_model_count": "",
-            "model_analyzed": "", "multi_model_structure": "",
-            "altloc_policy": ALTLOC_POLICY,
-            "symmetry_contact_policy": SYMMETRY_POLICY}
+    return {
+        "pdbID": pdbID,
+        "status": "error",
+        "n": 0,
+        "runtime": 0.0,
+        "error": "",
+        "rows": [],
+        "bond_rows": [],
+        "candidate_rows": [],
+        "n_bonds": "",
+        "n_candidates": "",
+        "no_metals": False,
+        "timings": {},
+        "density_map_scope_used": "",
+        "density_full_map_bytes": 0,
+        "density_edstats_map_bytes": 0,
+        "retryable": True,
+        "reason_codes": [],
+        "warning_codes": [],
+        "confidence_inputs_missing_reason": "",
+        "alchemy_version": ALCHEMY_VERSION,
+        "alchemy_commit": cfg["alchemy_commit"],
+        "gemmi_version": cfg["gemmi_version"],
+        "ccp4_version": cfg["ccp4_version"],
+        "refinement_state": "manual" if manual_inputs else "final",
+        "source_coordinate_format": "",
+        "analysis_coordinate_format": "pdb",
+        "coordinate_conversion_performed": False,
+        "source_coordinate_path": "",
+        "analysis_coordinate_path": "",
+        "model_policy": MODEL_POLICY,
+        "input_model_count": "",
+        "model_analyzed": "",
+        "multi_model_structure": "",
+        "altloc_policy": ALTLOC_POLICY,
+        "symmetry_contact_policy": SYMMETRY_POLICY,
+    }
 
 
 def _drain_inflight(inflight, assignments):
@@ -1211,7 +1310,8 @@ def _dead_worker_pids(pool, known_pids):
     roster is the only signal that its task will never produce a result.
     """
     current = {
-        process.pid for process in getattr(pool, "_pool", ()) or ()
+        process.pid
+        for process in getattr(pool, "_pool", ()) or ()
         if process.pid is not None
     }
     if not current:
@@ -1236,6 +1336,7 @@ def _install_termination_handler():
     Returns the previous handler, or ``None`` where SIGTERM cannot be trapped
     (a non-main thread, or a platform without it).
     """
+
     def _raise_interrupt(signum, frame):  # noqa: ARG001 - signal API
         raise KeyboardInterrupt
 
@@ -1294,8 +1395,11 @@ def _shutdown_pool(pool):
 
     Returns ``True`` when shutdown had to be forced.
     """
-    children = [process for process in getattr(pool, "_pool", ()) or ()
-                if getattr(process, "pid", None)]
+    children = [
+        process
+        for process in getattr(pool, "_pool", ()) or ()
+        if getattr(process, "pid", None)
+    ]
     closer = threading.Thread(target=pool.terminate, daemon=True)
     closer.start()
     closer.join(WORKER_SHUTDOWN_GRACE_S)
@@ -1328,8 +1432,10 @@ def _worker_death_result(pdbID, cfg, pid):
         status="error",
         retryable=True,
         reason_codes=["worker_process_died"],
-        error=(f"worker process {pid} terminated without returning a result "
-               f"(out-of-memory kill or crash); {pdbID} was not analyzed"),
+        error=(
+            f"worker process {pid} terminated without returning a result "
+            f"(out-of-memory kill or crash); {pdbID} was not analyzed"
+        ),
     )
     return result
 
@@ -1337,8 +1443,7 @@ def _worker_death_result(pdbID, cfg, pid):
 def _resolve_entry_dir(pdbID, cfg):
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
     if cfg["allow_download"]:
-        used_root = ensure_entry_available(
-            pdbID, cfg["mirror_root"], cfg["cache_root"])
+        used_root = ensure_entry_available(pdbID, cfg["mirror_root"], cfg["cache_root"])
         return entry_dir_for(used_root, pdbID)
     return entry_dir_for(cfg["root"], pdbID)
 
@@ -1376,7 +1481,8 @@ def _check_row_schema(row, columns, name):
     if unexpected:
         details.append("unexpected " + ", ".join(unexpected))
     raise RuntimeError(
-        f"{name} row does not match its column schema: " + "; ".join(details))
+        f"{name} row does not match its column schema: " + "; ".join(details)
+    )
 
 
 def _append_site_fields(rows, site_summaries, structure):
@@ -1384,54 +1490,67 @@ def _append_site_fields(rows, site_summaries, structure):
     for index, row in enumerate(rows):
         summary = dict(site_summaries.get(row.get("site_key"), {}))
         for name in (
-            "density_observation_id", "density_scope",
-            "density_shared_site_count", "density_is_shared",
+            "density_observation_id",
+            "density_scope",
+            "density_shared_site_count",
+            "density_is_shared",
         ):
             summary[name] = row.get(name, "")
-        summary["coordinate_mapping_status"] = row.get(
-            "coordinate_mapping_status", "")
+        summary["coordinate_mapping_status"] = row.get("coordinate_mapping_status", "")
         summary["selected_metal_site_status"] = row.get(
-            "selected_metal_site_status", "")
+            "selected_metal_site_status", ""
+        )
         coverage = summary.get("geometry_coverage_image_inclusive", NAN)
         if isinstance(coverage, float) and not math.isfinite(coverage):
             coverage = summary.get("geometry_coverage_explicit", NAN)
         extra = stats_extra_values(structure, row.get("site"), summary)
         if index == 0:
-            _check_row_schema(extra, STATS_EXTRA_COLUMNS,
-                              "metal_stats_all.csv")
-        row["fields"] = (row["fields"] + [coverage] +
-                         [extra[column] for column in STATS_EXTRA_COLUMNS])
+            _check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_stats_all.csv")
+        row["fields"] = (
+            row["fields"]
+            + [coverage]
+            + [extra[column] for column in STATS_EXTRA_COLUMNS]
+        )
 
 
-def _finalize_result(result, identification_codes, bond_meta, structure,
-                     rows, bond_rows, candidate_rows):
+def _finalize_result(
+    result, identification_codes, bond_meta, structure, rows, bond_rows, candidate_rows
+):
     """Merge the stage outcomes into the final status, codes, and counts."""
-    result["reason_codes"] = list(dict.fromkeys(
-        result["reason_codes"] + identification_codes +
-        list(bond_meta["partial_reason_codes"])))
-    messages = [IDENTIFICATION_REASON_MESSAGES[code]
-                for code in identification_codes]
+    result["reason_codes"] = list(
+        dict.fromkeys(
+            result["reason_codes"]
+            + identification_codes
+            + list(bond_meta["partial_reason_codes"])
+        )
+    )
+    messages = [IDENTIFICATION_REASON_MESSAGES[code] for code in identification_codes]
     messages.extend(bond_meta["messages"])
     if messages:
         existing_error = result["error"]
         result["error"] = "; ".join(
-            ([existing_error] if existing_error else []) + messages)[:300]
+            ([existing_error] if existing_error else []) + messages
+        )[:300]
     if bond_meta.get("retryable", False):
         result["retryable"] = True
-    result["warning_codes"] = list(dict.fromkeys(
-        result["warning_codes"] + bond_meta.get("warning_codes", [])))
+    result["warning_codes"] = list(
+        dict.fromkeys(result["warning_codes"] + bond_meta.get("warning_codes", []))
+    )
     status = "partial" if result["reason_codes"] else "ok"
     if status == "ok":
         result["retryable"] = False
     # Count coordinate-model metal sites, not emitted statistics rows. A failed
     # EDSTATS join can leave a diagnostic row without a site even though bond
     # analysis still found and evaluated the deposited metal.
-    result.update(status=status,
-                  n=len(structure.metal_atoms(METALS_SET, canonical=True)),
-                  rows=rows, bond_rows=bond_rows,
-                  candidate_rows=candidate_rows,
-                  n_bonds=len(bond_rows),
-                  n_candidates=len(candidate_rows))
+    result.update(
+        status=status,
+        n=len(structure.metal_atoms(METALS_SET, canonical=True)),
+        rows=rows,
+        bond_rows=bond_rows,
+        candidate_rows=candidate_rows,
+        n_bonds=len(bond_rows),
+        n_candidates=len(candidate_rows),
+    )
 
 
 def process(pdbID):
@@ -1450,7 +1569,8 @@ def process(pdbID):
     try:
         if manual_inputs:
             work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
+                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"]
+            )
             mtz, pdb = resolve_manual_inputs(
                 pdbID,
                 pdb_file=manual_inputs.get("pdb_file"),
@@ -1460,8 +1580,7 @@ def process(pdbID):
             )
             entry = os.path.dirname(pdb) or work_dir
             data_json = manual_inputs.get("data_json")
-            data_reshi = read_resolution(
-                entry, mtz, data_json_path=data_json)
+            data_reshi = read_resolution(entry, mtz, data_json_path=data_json)
         else:
             # Resolved before any scratch space is created, so a missing entry
             # never leaves a temporary directory behind.
@@ -1470,22 +1589,23 @@ def process(pdbID):
                 result.update(status="skip", error="entry dir missing")
                 return result
             work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"])
+                prefix=f".alchemy-{pdbID}-", dir=cfg["output_dir"]
+            )
             mtz, pdb = prepare_inputs(pdbID, entry, work_dir)
             data_reshi = read_resolution(entry, mtz)
         density_data_json = (
-            data_json if manual_inputs else os.path.join(entry, "data.json"))
+            data_json if manual_inputs else os.path.join(entry, "data.json")
+        )
         pdb_redo_is_twin = read_pdb_redo_is_twin(density_data_json)
         map_reslo, map_reshi = read_map_column_resolution(mtz)
         source_pdb = pdb
-        source_coordinate_path = _source_coordinate_path(
-            cfg, pdbID, entry, source_pdb)
+        source_coordinate_path = _source_coordinate_path(cfg, pdbID, entry, source_pdb)
         source_format, analysis_format, converted = _coordinate_provenance(
-            cfg, source_coordinate_path)
+            cfg, source_coordinate_path
+        )
         model1_pdb = os.path.join(work_dir, f"{pdbID}_model1.pdb")
         if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
-            model1_pdb = os.path.join(
-                work_dir, f"{pdbID}_analysis_model1.pdb")
+            model1_pdb = os.path.join(work_dir, f"{pdbID}_analysis_model1.pdb")
         pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
         result.update(
             source_coordinate_format=source_format,
@@ -1494,10 +1614,8 @@ def process(pdbID):
             source_coordinate_path=source_coordinate_path,
             analysis_coordinate_path=pdb,
         )
-        structure = load_structure(
-            pdbID, pdb, source_model_count=input_model_count)
-        result["timings"]["input_structure_s"] = round(
-            time.monotonic() - t0, 3)
+        structure = load_structure(pdbID, pdb, source_model_count=input_model_count)
+        result["timings"]["input_structure_s"] = round(time.monotonic() - t0, 3)
         result.update(
             analysis_coordinate_format=structure.analysis_coordinate_format,
             input_model_count=structure.input_model_count,
@@ -1524,10 +1642,17 @@ def process(pdbID):
         density_started = time.monotonic()
         try:
             res = run_density_analysis(
-                pdbID, mtz, pdb, work_dir, map_reslo, map_reshi,
-                env=cfg["env"], map_scope=cfg["density_map_scope"],
+                pdbID,
+                mtz,
+                pdb,
+                work_dir,
+                map_reslo,
+                map_reshi,
+                env=cfg["env"],
+                map_scope=cfg["density_map_scope"],
                 keep_full_maps=cfg["keep"],
-                pdb_redo_is_twin=pdb_redo_is_twin)
+                pdb_redo_is_twin=pdb_redo_is_twin,
+            )
         except MtzfixValidationError as exc:
             # The input is readable, but MTZFIX could not make its Fourier
             # coefficients internally consistent. Do not use those maps or
@@ -1537,8 +1662,7 @@ def process(pdbID):
                 retryable=False,
                 reason_codes=["mtzfix_validation_failure"],
                 error=f"density unavailable: {exc}"[:300],
-                confidence_inputs_missing_reason=(
-                    "mtzfix_validation_failure"),
+                confidence_inputs_missing_reason=("mtzfix_validation_failure"),
             )
             result["timings"].update(exc.timings)
         else:
@@ -1549,69 +1673,108 @@ def process(pdbID):
                 density_edstats_map_bytes=res["edstats_map_bytes"],
             )
             if res.get("twin_coefficient_normalization_applied"):
-                result["warning_codes"] = list(dict.fromkeys(
-                    result["warning_codes"] +
-                    ["twin_refmac_coefficients_normalized"]))
+                result["warning_codes"] = list(
+                    dict.fromkeys(
+                        result["warning_codes"]
+                        + ["twin_refmac_coefficients_normalized"]
+                    )
+                )
             statistics_started = time.monotonic()
             rows, header = extract_metal_statistics(
-                pdbID, res["stats_out"], METALS_SET, cfg["cofactors"],
-                structure=structure)
+                pdbID,
+                res["stats_out"],
+                METALS_SET,
+                cfg["cofactors"],
+                structure=structure,
+            )
             result["timings"]["statistics_extraction_s"] = round(
-                time.monotonic() - statistics_started, 3)
+                time.monotonic() - statistics_started, 3
+            )
             # Reaching this point means the entry's core inputs and density
             # stage succeeded. Later deterministic limitations remain terminal.
             result["retryable"] = False
         finally:
             result["timings"]["density_total_s"] = round(
-                time.monotonic() - density_started, 3)
+                time.monotonic() - density_started, 3
+            )
 
         identification_reason_codes = _identification_reason_codes(rows)
 
         bond_rows = []
         candidate_rows = []
         site_summaries = {}
-        bond_meta = {"partial_reason_codes": [],
-                     "warning_codes": list(structure.warning_codes),
-                     "messages": [], "retryable": False}
+        bond_meta = {
+            "partial_reason_codes": [],
+            "warning_codes": list(structure.warning_codes),
+            "messages": [],
+            "retryable": False,
+        }
 
         if cfg["bonds"]:
             # A bond-stage failure must not lose the edstats rows already computed.
             bond_started = time.monotonic()
             try:
-                (bond_rows, candidate_rows, site_summaries,
-                 bond_meta) = run_bond_analysis(
-                    pdbID, pdb, rows, header,
-                    {"data_json": (data_json if manual_inputs
-                                   else os.path.join(entry, "data.json")),
-                     "pdb_path": pdb, "mtz_path": mtz,
-                     "resolution": data_reshi}, structure=structure,
-                    connection_path=source_coordinate_path)
+                (bond_rows, candidate_rows, site_summaries, bond_meta) = (
+                    run_bond_analysis(
+                        pdbID,
+                        pdb,
+                        rows,
+                        header,
+                        {
+                            "data_json": (
+                                data_json
+                                if manual_inputs
+                                else os.path.join(entry, "data.json")
+                            ),
+                            "pdb_path": pdb,
+                            "mtz_path": mtz,
+                            "resolution": data_reshi,
+                        },
+                        structure=structure,
+                        connection_path=source_coordinate_path,
+                    )
+                )
             except Exception as e:  # noqa: BLE001
                 result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
-                result["reason_codes"] = list(dict.fromkeys(
-                    result["reason_codes"] + ["bond_stage_failure"]))
+                result["reason_codes"] = list(
+                    dict.fromkeys(result["reason_codes"] + ["bond_stage_failure"])
+                )
                 result["retryable"] = True
             finally:
                 result["timings"]["bond_analysis_s"] = round(
-                    time.monotonic() - bond_started, 3)
+                    time.monotonic() - bond_started, 3
+                )
         _append_site_fields(rows, site_summaries, structure)
-        _finalize_result(result, identification_reason_codes, bond_meta,
-                         structure, rows, bond_rows, candidate_rows)
+        _finalize_result(
+            result,
+            identification_reason_codes,
+            bond_meta,
+            structure,
+            rows,
+            bond_rows,
+            candidate_rows,
+        )
     except FileNotFoundError as e:
-        result.update(status="skip", retryable=True,
-                      reason_codes=["missing_input"],
-                      error=f"missing input: {e}"[:300])
+        result.update(
+            status="skip",
+            retryable=True,
+            reason_codes=["missing_input"],
+            error=f"missing input: {e}"[:300],
+        )
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
-        result.update(status="error", retryable=True,
-                      reason_codes=["unexpected_processing_error"],
-                      error=f"{type(e).__name__}: {e}"[:300])
+        result.update(
+            status="error",
+            retryable=True,
+            reason_codes=["unexpected_processing_error"],
+            error=f"{type(e).__name__}: {e}"[:300],
+        )
     finally:
-        if (not cfg["keep"] and work_dir is not None and
-                os.path.isdir(work_dir)):
+        if not cfg["keep"] and work_dir is not None and os.path.isdir(work_dir):
             cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
             result["timings"]["cleanup_s"] = round(
-                time.monotonic() - cleanup_started, 3)
+                time.monotonic() - cleanup_started, 3
+            )
         result["runtime"] = round(time.monotonic() - t0, 2)
         _announce_inflight("end", pdbID)
     return result
@@ -1620,8 +1783,13 @@ def process(pdbID):
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-def load_done(manifest_path, bonds_required=False, bond_output_present=True,
-              candidate_output_present=True, retry_partial_ids=()):
+def load_done(
+    manifest_path,
+    bonds_required=False,
+    bond_output_present=True,
+    candidate_output_present=True,
+    retry_partial_ids=(),
+):
     """PDB IDs whose requested result is terminal in an existing manifest.
 
     Blank ``n_bonds`` and ``n_candidates`` values mean bond analysis was
@@ -1633,7 +1801,8 @@ def load_done(manifest_path, bonds_required=False, bond_output_present=True,
     successful ``ok`` rows remain protected from accidental reprocessing.
     """
     retry_partial_ids = {
-        str(pdb_id).strip().lower() for pdb_id in retry_partial_ids
+        str(pdb_id).strip().lower()
+        for pdb_id in retry_partial_ids
         if str(pdb_id).strip()
     }
     done = set()
@@ -1644,18 +1813,20 @@ def load_done(manifest_path, bonds_required=False, bond_output_present=True,
                 for row in reader:
                     status = row.get("status", "").strip().lower()
                     retryable = row.get("retryable", "").strip().lower()
-                    terminal_partial = (status == "partial" and
-                                        retryable in ("false", "0", "no"))
-                    pdbID = row.get("pdbID", "").strip().lower()
-                    bonds_complete = (
-                        not bonds_required or
-                        (bond_output_present and candidate_output_present and
-                         row.get("n_bonds", "").strip() != "" and
-                         row.get("n_candidates", "").strip() != "")
+                    terminal_partial = status == "partial" and retryable in (
+                        "false",
+                        "0",
+                        "no",
                     )
-                    protected_terminal = (
-                        status == "ok" or
-                        (terminal_partial and pdbID not in retry_partial_ids)
+                    pdbID = row.get("pdbID", "").strip().lower()
+                    bonds_complete = not bonds_required or (
+                        bond_output_present
+                        and candidate_output_present
+                        and row.get("n_bonds", "").strip() != ""
+                        and row.get("n_candidates", "").strip() != ""
+                    )
+                    protected_terminal = status == "ok" or (
+                        terminal_partial and pdbID not in retry_partial_ids
                     )
                     if protected_terminal and bonds_complete and pdbID:
                         done.add(pdbID)
@@ -1681,9 +1852,8 @@ def resolve_confidence_reference_dir(output_dir, configured_dir=None):
 def _resume_replacement_succeeded(result):
     """Whether a retry produced a terminal result suitable for replacement."""
     status = str(result.get("status", "")).strip().lower()
-    return (
-        status == "ok" or
-        (status == "partial" and not bool(result.get("retryable", True)))
+    return status == "ok" or (
+        status == "partial" and not bool(result.get("retryable", True))
     )
 
 
@@ -1713,8 +1883,9 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
 
     directory = os.path.dirname(os.path.abspath(path))
     original_mode = os.stat(path).st_mode if os.path.exists(path) else None
-    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.",
-                                    suffix=".tmp", dir=directory, text=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory, text=True
+    )
     try:
         # os.fdopen takes ownership of the descriptor and closes it on exit, so
         # it is closed here only if the wrapping itself failed. Closing it again
@@ -1734,8 +1905,7 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
                     if destination_header is not None:
                         writer.writerow(destination_header)
                     for row in reader:
-                        if (row and
-                                row[0].strip().lower() in replacement_ids):
+                        if row and row[0].strip().lower() in replacement_ids:
                             continue
                         writer.writerow(row)
 
@@ -1746,13 +1916,13 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
                     if destination_header is None and staged_header is not None:
                         destination_header = staged_header
                         writer.writerow(staged_header)
-                    elif (staged_header is not None and
-                          staged_header != destination_header):
-                        raise ValueError(
-                            f"staged CSV schema does not match {path}")
+                    elif (
+                        staged_header is not None
+                        and staged_header != destination_header
+                    ):
+                        raise ValueError(f"staged CSV schema does not match {path}")
                     for row in reader:
-                        if (row and
-                                row[0].strip().lower() in replacement_ids):
+                        if row and row[0].strip().lower() in replacement_ids:
                             writer.writerow(row)
             dst.flush()
             os.fsync(dst.fileno())
@@ -1778,16 +1948,20 @@ def _csv_header(path):
 def _batch_exit_code(counts, retryable_partial_count):
     """Return failure when one or more entries remain operationally incomplete."""
     incomplete = (
-        counts.get("error", 0) +
-        counts.get("skip", 0) +
-        retryable_partial_count
+        counts.get("error", 0) + counts.get("skip", 0) + retryable_partial_count
     )
     return 1 if incomplete else 0
 
 
-def validate_resume_schemas(manifest_path, stats_path, bonds_path,
-                            candidates_path, bonds_enabled=True,
-                            confidence_path=None, confidence_columns=None):
+def validate_resume_schemas(
+    manifest_path,
+    stats_path,
+    bonds_path,
+    candidates_path,
+    bonds_enabled=True,
+    confidence_path=None,
+    confidence_columns=None,
+):
     """Refuse to append migration rows beneath an incompatible old header.
 
     Whole headers are compared, including the EDSTATS block of
@@ -1797,12 +1971,12 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
     """
     checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
-        checks.extend(((bonds_path, BOND_COLUMNS),
-                       (candidates_path, CANDIDATE_COLUMNS)))
+        checks.extend(
+            ((bonds_path, BOND_COLUMNS), (candidates_path, CANDIDATE_COLUMNS))
+        )
     if confidence_path is not None:
         if confidence_columns is None:
-            raise ValueError(
-                "confidence columns are required with a confidence output")
+            raise ValueError("confidence columns are required with a confidence output")
         checks.append((confidence_path, list(confidence_columns)))
     for path, expected in checks:
         header = _csv_header(path)
@@ -1810,7 +1984,8 @@ def validate_resume_schemas(manifest_path, stats_path, bonds_path,
             raise ValueError(
                 f"Existing {os.path.basename(path)} uses an incompatible "
                 "schema; choose a new --output-dir for this Gemmi migration "
-                "run.")
+                "run."
+            )
 
 
 def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
@@ -1894,8 +2069,7 @@ def available_memory_bytes():
 
             status = MemoryStatus()
             status.dwLength = ctypes.sizeof(status)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(
-                    ctypes.byref(status)):
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
                 return int(status.ullAvailPhys)
         except (AttributeError, OSError, ValueError):
             pass
@@ -1924,7 +2098,8 @@ def automatic_worker_limits():
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
-            "PDB ID must contain exactly four alphanumeric characters")
+            "PDB ID must contain exactly four alphanumeric characters"
+        )
     return value.lower()
 
 
@@ -1933,8 +2108,7 @@ def positive_int(value):
     try:
         parsed = int(value)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise argparse.ArgumentTypeError(
-            "must be a positive integer") from exc
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return parsed
@@ -1963,71 +2137,107 @@ def load_ids_from_file(path):
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--id", type=parse_pdb_id,
-                    help="process a single PDB id (else batch the root)")
-    ap.add_argument("--id-file",
-                    help="path to a file of PDB ids (comma- and/or "
-                         "newline-separated)")
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument(
+        "--id", type=parse_pdb_id, help="process a single PDB id (else batch the root)"
+    )
+    ap.add_argument(
+        "--id-file", help="path to a file of PDB ids (comma- and/or newline-separated)"
+    )
     ap.add_argument("--pdb-file", help="path to a local PDB file for manual input mode")
     ap.add_argument("--mtz-file", help="path to a local MTZ file for manual input mode")
-    ap.add_argument("--cif-file",
-                    help="path to a local mmCIF file for manual input mode")
-    ap.add_argument("--data-json",
-                    help="optional path to a local data.json for manual "
-                         "input mode")
-    ap.add_argument("--pdb-redo-root", default=DEFAULT_ROOT,
-                    help="root of the PDB-REDO mirror")
-    ap.add_argument("--pdb-redo-cache",
-                    default=os.path.join(REPO_DIR, "pdb-redo-cache"),
-                    help="root of local cache for auto-downloaded PDB-REDO entries")
-    ap.add_argument("--max-pdbs", type=positive_int, default=None,
-                    help="process only the first N entries (minimum: 1)")
     ap.add_argument(
-        "--workers", type=positive_int, default=None,
-        help=("number of worker processes (minimum: 1); by default Alchemy "
-              "uses the lower CPU or available-memory limit"),
+        "--cif-file", help="path to a local mmCIF file for manual input mode"
+    )
+    ap.add_argument(
+        "--data-json", help="optional path to a local data.json for manual input mode"
+    )
+    ap.add_argument(
+        "--pdb-redo-root", default=DEFAULT_ROOT, help="root of the PDB-REDO mirror"
+    )
+    ap.add_argument(
+        "--pdb-redo-cache",
+        default=os.path.join(REPO_DIR, "pdb-redo-cache"),
+        help="root of local cache for auto-downloaded PDB-REDO entries",
+    )
+    ap.add_argument(
+        "--max-pdbs",
+        type=positive_int,
+        default=None,
+        help="process only the first N entries (minimum: 1)",
+    )
+    ap.add_argument(
+        "--workers",
+        type=positive_int,
+        default=None,
+        help=(
+            "number of worker processes (minimum: 1); by default Alchemy "
+            "uses the lower CPU or available-memory limit"
+        ),
     )
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
     ap.add_argument(
-        "--density-map-scope", choices=DENSITY_MAP_SCOPES,
+        "--density-map-scope",
+        choices=DENSITY_MAP_SCOPES,
         default="model-envelope",
-        help=("map extent supplied to EDSTATS; model-envelope retains every "
-              f"coordinate plus a {MODEL_ENVELOPE_BORDER_ANGSTROM} Angstrom "
-              "border and falls back to full when cropping would be unsafe or "
-              "larger"),
+        help=(
+            "map extent supplied to EDSTATS; model-envelope retains every "
+            f"coordinate plus a {MODEL_ENVELOPE_BORDER_ANGSTROM} Angstrom "
+            "border and falls back to full when cropping would be unsafe or "
+            "larger"
+        ),
     )
     ap.add_argument(
         "--confidence-reference-dir",
         default=None,
-        help=("explicit frozen full-database confidence reference for single, "
-              "ID-file, manual, and capped runs; otherwise Alchemy searches "
-              "the output directory and repository default"),
+        help=(
+            "explicit frozen full-database confidence reference for single, "
+            "ID-file, manual, and capped runs; otherwise Alchemy searches "
+            "the output directory and repository default"
+        ),
     )
-    ap.add_argument("--ccp4-setup", default=None,
-                    help="optional CCP4 setup script override "
-                         "(e.g. .../bin/ccp4.setup-sh)")
-    ap.add_argument("--configure-ccp4", default=None,
-                    help="save a CCP4 setup script path for future runs")
-    ap.add_argument("--keep-intermediates", action="store_true",
-                    help="keep per-entry maps/logs (default: delete after extract)")
-    ap.add_argument("--resume", action="store_true",
-                    help="skip terminal ok/partial results; retry "
-                         "retryable incomplete ids")
     ap.add_argument(
-        "--retry-partials", action="store_true",
-        help=("with --resume, reprocess non-retryable partial entries from "
-              "the manifest while still skipping successful entries; --id "
-              "or --id-file may restrict the retry set"),
+        "--ccp4-setup",
+        default=None,
+        help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)",
+    )
+    ap.add_argument(
+        "--configure-ccp4",
+        default=None,
+        help="save a CCP4 setup script path for future runs",
+    )
+    ap.add_argument(
+        "--keep-intermediates",
+        action="store_true",
+        help="keep per-entry maps/logs (default: delete after extract)",
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip terminal ok/partial results; retry retryable incomplete ids",
+    )
+    ap.add_argument(
+        "--retry-partials",
+        action="store_true",
+        help=(
+            "with --resume, reprocess non-retryable partial entries from "
+            "the manifest while still skipping successful entries; --id "
+            "or --id-file may restrict the retry set"
+        ),
     )
     # ArgumentDefaultsHelpFormatter appends the default of ``bonds``, not of
     # the flag, so an unqualified help string renders "(default: True)" -- the
     # negation of what --no-bonds does. Naming %(default)s explicitly suppresses
     # that append and lets the value be labelled with the setting it belongs to.
-    ap.add_argument("--no-bonds", dest="bonds", action="store_false",
-                    help="skip the metal-ligand bond-distance stage (edstats "
-                         "stats only); bond analysis is enabled by default "
-                         "(bonds=%(default)s)")
+    ap.add_argument(
+        "--no-bonds",
+        dest="bonds",
+        action="store_false",
+        help="skip the metal-ligand bond-distance stage (edstats "
+        "stats only); bond analysis is enabled by default "
+        "(bonds=%(default)s)",
+    )
     ap.set_defaults(bonds=True)
 
     args = ap.parse_args(argv)
@@ -2052,27 +2262,31 @@ def _select_entry_ids(args, cache_root):
     root = args.pdb_redo_root
     if args.pdb_file or args.mtz_file or args.cif_file:
         pdbID = (
-            args.id or
-            infer_pdb_id_from_path(args.cif_file) or
-            infer_pdb_id_from_path(args.pdb_file) or
-            infer_pdb_id_from_path(args.mtz_file)
+            args.id
+            or infer_pdb_id_from_path(args.cif_file)
+            or infer_pdb_id_from_path(args.pdb_file)
+            or infer_pdb_id_from_path(args.mtz_file)
         )
         if not pdbID:
             raise _DriverError(
                 "Manual input mode requires --id or a file name that contains "
-                "a 4-character PDB id.")
-        return [pdbID], root, {
-            "pdb_file": args.pdb_file,
-            "mtz_file": args.mtz_file,
-            "cif_file": args.cif_file,
-            "data_json": args.data_json,
-        }
+                "a 4-character PDB id."
+            )
+        return (
+            [pdbID],
+            root,
+            {
+                "pdb_file": args.pdb_file,
+                "mtz_file": args.mtz_file,
+                "cif_file": args.cif_file,
+                "data_json": args.data_json,
+            },
+        )
 
     if args.id:
         # Ensure requested single entry is available locally (mirror or cache).
         try:
-            used_root = ensure_entry_available(
-                args.id, args.pdb_redo_root, cache_root)
+            used_root = ensure_entry_available(args.id, args.pdb_redo_root, cache_root)
         except FileNotFoundError:
             raise _DriverError(
                 f"Entry {args.id} not found locally and download failed."
@@ -2095,23 +2309,21 @@ def _select_entry_ids(args, cache_root):
     return enumerate_entries(root, limit=limit), root, None
 
 
-def _manifest_row(result, resume, bonds_enabled, prior_bond_counts,
-                  prior_candidate_counts):
+def _manifest_row(
+    result, resume, bonds_enabled, prior_bond_counts, prior_candidate_counts
+):
     """Project one worker result onto the manifest schema."""
     row = {column: result.get(column, "") for column in MANIFEST_COLUMNS}
     n_bonds = result["n_bonds"]
     n_candidates = result["n_candidates"]
     if not bonds_enabled:
-        n_bonds = (
-            prior_bond_counts.get(result["pdbID"].lower(), "")
-            if resume else ""
-        )
+        n_bonds = prior_bond_counts.get(result["pdbID"].lower(), "") if resume else ""
         n_candidates = (
-            prior_candidate_counts.get(result["pdbID"].lower(), "")
-            if resume else ""
+            prior_candidate_counts.get(result["pdbID"].lower(), "") if resume else ""
         )
     row.update(
-        n_metals=result["n"], n_bonds=n_bonds,
+        n_metals=result["n"],
+        n_bonds=n_bonds,
         n_candidates=n_candidates,
         runtime_s=result["runtime"],
         reason_codes="|".join(result.get("reason_codes", [])),
@@ -2131,8 +2343,9 @@ class _ResumeStaging:
     def __init__(self, output_dir, targets):
         self.targets = targets
         self.dir = tempfile.mkdtemp(prefix=".alchemy-resume-", dir=output_dir)
-        self.staged = tuple(os.path.join(self.dir, os.path.basename(path))
-                            for path in targets)
+        self.staged = tuple(
+            os.path.join(self.dir, os.path.basename(path)) for path in targets
+        )
         self.replacement_ids = set()
 
     def commit(self, bonds_enabled, confidence_enabled=False):
@@ -2140,23 +2353,22 @@ class _ResumeStaging:
         if not self.replacement_ids:
             return
         manifest_path, stats_path, bonds_path, candidates_path = self.targets[:4]
-        (staged_manifest, staged_stats, staged_bonds,
-         staged_candidates) = self.staged[:4]
+        (staged_manifest, staged_stats, staged_bonds, staged_candidates) = self.staged[
+            :4
+        ]
         # Data files are committed before the manifest completion marker. If an
         # interruption occurs between replacements, the old manifest causes the
         # entry to be retried safely.
         _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
         if bonds_enabled:
-            _merge_csv_replacements(bonds_path, staged_bonds,
-                                    self.replacement_ids)
-            _merge_csv_replacements(candidates_path, staged_candidates,
-                                    self.replacement_ids)
+            _merge_csv_replacements(bonds_path, staged_bonds, self.replacement_ids)
+            _merge_csv_replacements(
+                candidates_path, staged_candidates, self.replacement_ids
+            )
         if confidence_enabled:
             for target, staged in zip(self.targets[4:], self.staged[4:]):
-                _merge_csv_replacements(
-                    target, staged, self.replacement_ids)
-        _merge_csv_replacements(manifest_path, staged_manifest,
-                                self.replacement_ids)
+                _merge_csv_replacements(target, staged, self.replacement_ids)
+        _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
 
     def discard(self):
         if os.path.isdir(self.dir):
@@ -2170,35 +2382,44 @@ class _OutputWriters:
     retains the results it already completed. Headers are written on creation.
     """
 
-    def __init__(self, manifest_fh, stats_fh, bonds_fh, candidates_fh,
-                 confidence_fh=None, confidence_columns=None,
-                 confidence_inputs_fh=None):
+    def __init__(
+        self,
+        manifest_fh,
+        stats_fh,
+        bonds_fh,
+        candidates_fh,
+        confidence_fh=None,
+        confidence_columns=None,
+        confidence_inputs_fh=None,
+    ):
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
         self._bonds_fh = bonds_fh
         self._candidates_fh = candidates_fh
         self._confidence_fh = confidence_fh
         self._confidence_inputs_fh = confidence_inputs_fh
-        self._manifest = csv.DictWriter(manifest_fh,
-                                        fieldnames=MANIFEST_COLUMNS)
+        self._manifest = csv.DictWriter(manifest_fh, fieldnames=MANIFEST_COLUMNS)
         self._stats = csv.writer(stats_fh)
         self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
         self._candidates = (
-            csv.writer(candidates_fh) if candidates_fh is not None else None)
+            csv.writer(candidates_fh) if candidates_fh is not None else None
+        )
         if confidence_fh is not None and confidence_columns is None:
-            raise ValueError(
-                "confidence columns are required with a confidence output")
+            raise ValueError("confidence columns are required with a confidence output")
         self._confidence = None
         self._confidence_inputs = None
         if confidence_fh is not None and confidence_columns is not None:
             self._confidence = csv.DictWriter(
-                confidence_fh, fieldnames=confidence_columns)
+                confidence_fh, fieldnames=confidence_columns
+            )
         if confidence_inputs_fh is not None:
             if confidence_fh is None:
                 raise ValueError(
-                    "confidence inputs synchronization requires scored output")
+                    "confidence inputs synchronization requires scored output"
+                )
             self._confidence_inputs = csv.DictWriter(
-                confidence_inputs_fh, fieldnames=CONFIDENCE_INPUT_COLUMNS)
+                confidence_inputs_fh, fieldnames=CONFIDENCE_INPUT_COLUMNS
+            )
         self._confidence_columns = confidence_columns
         self.n_rows = 0
         self.n_bonds = 0
@@ -2219,8 +2440,7 @@ class _OutputWriters:
         if not rows:
             return
         for row in rows:
-            self._stats.writerow(
-                [row["pdbID"], row["category"]] + row["fields"])
+            self._stats.writerow([row["pdbID"], row["category"]] + row["fields"])
             self.n_rows += 1
         self._stats_fh.flush()
 
@@ -2236,11 +2456,13 @@ class _OutputWriters:
     def write_candidate_rows(self, candidate_rows):
         if self._candidates is None or not candidate_rows:
             return
-        _check_row_schema(candidate_rows[0], CANDIDATE_COLUMNS,
-                          "metal_candidates_all.csv")
+        _check_row_schema(
+            candidate_rows[0], CANDIDATE_COLUMNS, "metal_candidates_all.csv"
+        )
         for candidate in candidate_rows:
             self._candidates.writerow(
-                [candidate[column] for column in CANDIDATE_COLUMNS])
+                [candidate[column] for column in CANDIDATE_COLUMNS]
+            )
             self.n_candidates += 1
         self._candidates_fh.flush()
 
@@ -2255,13 +2477,13 @@ class _OutputWriters:
             raise RuntimeError("confidence output is not fully configured")
         expected = set(self._confidence_columns)
         if rows[0].keys() != expected:
-            raise RuntimeError(
-                "confidence row does not match its output schema")
+            raise RuntimeError("confidence row does not match its output schema")
         self._confidence.writerows(rows)
         if self._confidence_inputs is not None:
-            self._confidence_inputs.writerows({
-                column: row[column] for column in CONFIDENCE_INPUT_COLUMNS
-            } for row in rows)
+            self._confidence_inputs.writerows(
+                {column: row[column] for column in CONFIDENCE_INPUT_COLUMNS}
+                for row in rows
+            )
         self.n_confidence += len(rows)
         self._confidence_fh.flush()
         if self._confidence_inputs_fh is not None:
@@ -2293,11 +2515,11 @@ class _ProgressReporter:
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes:02d}:{seconds:02d}"
 
-    def render(self, completed, counts, no_metal_count, force=False,
-               final=False):
+    def render(self, completed, counts, no_metal_count, force=False, final=False):
         now = self.clock()
-        interval = (self.TERMINAL_INTERVAL_S if self.terminal else
-                    self.REDIRECTED_INTERVAL_S)
+        interval = (
+            self.TERMINAL_INTERVAL_S if self.terminal else self.REDIRECTED_INTERVAL_S
+        )
         if not force and now - self.last_rendered < interval:
             return
         percent = 100.0 * completed / self.total if self.total else 100.0
@@ -2310,8 +2532,9 @@ class _ProgressReporter:
         )
         if self.terminal:
             padded = line.ljust(self.last_width)
-            print(f"\r{padded}", end="\n" if final else "",
-                  file=self.stream, flush=True)
+            print(
+                f"\r{padded}", end="\n" if final else "", file=self.stream, flush=True
+            )
             self.last_width = len(line)
             self.line_open = not final
         else:
@@ -2342,26 +2565,25 @@ class _RunLog:
 
     def record_entry(self, result):
         """Retain diagnostic fields without keeping large result-row payloads."""
-        self.entries.append({
-            "pdbID": result.get("pdbID", ""),
-            "status": result.get("status", "unknown"),
-            "retryable": bool(result.get("retryable", False)),
-            "no_metals": bool(result.get("no_metals", False)),
-            "n_metals": result.get("n", 0),
-            "n_bonds": result.get("n_bonds", 0),
-            "n_candidates": result.get("n_candidates", 0),
-            "runtime_s": float(result.get("runtime", 0.0)),
-            "timings": dict(result.get("timings", {})),
-            "reason_codes": list(result.get("reason_codes", [])),
-            "warning_codes": list(result.get("warning_codes", [])),
-            "error": str(result.get("error", "")),
-            "density_map_scope_used": result.get(
-                "density_map_scope_used", ""),
-            "density_full_map_bytes": result.get(
-                "density_full_map_bytes", 0),
-            "density_edstats_map_bytes": result.get(
-                "density_edstats_map_bytes", 0),
-        })
+        self.entries.append(
+            {
+                "pdbID": result.get("pdbID", ""),
+                "status": result.get("status", "unknown"),
+                "retryable": bool(result.get("retryable", False)),
+                "no_metals": bool(result.get("no_metals", False)),
+                "n_metals": result.get("n", 0),
+                "n_bonds": result.get("n_bonds", 0),
+                "n_candidates": result.get("n_candidates", 0),
+                "runtime_s": float(result.get("runtime", 0.0)),
+                "timings": dict(result.get("timings", {})),
+                "reason_codes": list(result.get("reason_codes", [])),
+                "warning_codes": list(result.get("warning_codes", [])),
+                "error": str(result.get("error", "")),
+                "density_map_scope_used": result.get("density_map_scope_used", ""),
+                "density_full_map_bytes": result.get("density_full_map_bytes", 0),
+                "density_edstats_map_bytes": result.get("density_edstats_map_bytes", 0),
+            }
+        )
 
     @staticmethod
     def _clean(value):
@@ -2376,8 +2598,11 @@ class _RunLog:
         if not counter:
             return "none"
         return ", ".join(
-            f"{name}={count}" for name, count in
-            sorted(counter.items(), key=lambda item: (-item[1], item[0])))
+            f"{name}={count}"
+            for name, count in sorted(
+                counter.items(), key=lambda item: (-item[1], item[0])
+            )
+        )
 
     def _render(self, exit_code, finished_at, elapsed_s):
         lines = [
@@ -2400,13 +2625,17 @@ class _RunLog:
             lines.append("Available memory at startup: unknown")
         else:
             lines.append(
-                "Available memory at startup: "
-                f"{initial_memory / (1024 ** 3):.2f} GiB")
+                f"Available memory at startup: {initial_memory / (1024**3):.2f} GiB"
+            )
         final_memory = available_memory_bytes()
         lines.append(
-            "Available memory at finish: " +
-            (f"{final_memory / (1024 ** 3):.2f} GiB"
-             if final_memory is not None else "unknown"))
+            "Available memory at finish: "
+            + (
+                f"{final_memory / (1024**3):.2f} GiB"
+                if final_memory is not None
+                else "unknown"
+            )
+        )
 
         lines.extend(["", "Configuration", "-------------"])
         for name, value in sorted(vars(self.args).items()):
@@ -2416,40 +2645,39 @@ class _RunLog:
                 continue
             lines.append(f"{name}: {self._clean(value)}")
 
-        status_counts = Counter(
-            entry["status"] for entry in self.entries)
+        status_counts = Counter(entry["status"] for entry in self.entries)
         reason_counts = Counter(
-            reason for entry in self.entries
-            for reason in entry["reason_codes"])
+            reason for entry in self.entries for reason in entry["reason_codes"]
+        )
         warning_counts = Counter(
-            warning for entry in self.entries
-            for warning in entry["warning_codes"])
-        retryable_count = sum(
-            entry["retryable"] for entry in self.entries)
-        no_metal_count = sum(
-            entry["no_metals"] for entry in self.entries)
+            warning for entry in self.entries for warning in entry["warning_codes"]
+        )
+        retryable_count = sum(entry["retryable"] for entry in self.entries)
+        no_metal_count = sum(entry["no_metals"] for entry in self.entries)
         map_scope_counts = Counter(
-            entry["density_map_scope_used"] for entry in self.entries
-            if entry["density_map_scope_used"])
-        total_entry_s = sum(
-            entry["runtime_s"] for entry in self.entries)
-        throughput = (
-            len(self.entries) * 60.0 / elapsed_s if elapsed_s > 0 else 0.0)
+            entry["density_map_scope_used"]
+            for entry in self.entries
+            if entry["density_map_scope_used"]
+        )
+        total_entry_s = sum(entry["runtime_s"] for entry in self.entries)
+        throughput = len(self.entries) * 60.0 / elapsed_s if elapsed_s > 0 else 0.0
 
-        lines.extend([
-            "",
-            "Summary",
-            "-------",
-            f"Entries returned: {len(self.entries)}",
-            f"Status counts: {self._counter_text(status_counts)}",
-            f"Retryable entries: {retryable_count}",
-            f"Metal-free entries: {no_metal_count}",
-            f"Summed entry runtime: {total_entry_s:.3f} s",
-            f"Throughput: {throughput:.2f} entries/minute",
-            f"Reason codes: {self._counter_text(reason_counts)}",
-            f"Warning codes: {self._counter_text(warning_counts)}",
-            f"Density map scopes used: {self._counter_text(map_scope_counts)}",
-        ])
+        lines.extend(
+            [
+                "",
+                "Summary",
+                "-------",
+                f"Entries returned: {len(self.entries)}",
+                f"Status counts: {self._counter_text(status_counts)}",
+                f"Retryable entries: {retryable_count}",
+                f"Metal-free entries: {no_metal_count}",
+                f"Summed entry runtime: {total_entry_s:.3f} s",
+                f"Throughput: {throughput:.2f} entries/minute",
+                f"Reason codes: {self._counter_text(reason_counts)}",
+                f"Warning codes: {self._counter_text(warning_counts)}",
+                f"Density map scopes used: {self._counter_text(map_scope_counts)}",
+            ]
+        )
         for name, value in sorted(self.summary.items()):
             lines.append(f"{name}: {self._clean(value)}")
         if self.driver_error:
@@ -2468,24 +2696,26 @@ class _RunLog:
         else:
             lines.append(
                 "Totals sum per-entry measurements; density_total_s contains "
-                "its subprocess stages, and parallel totals are not wall time.")
-            lines.append(
-                "stage | entries | total_s | mean_s | max_s | max_entry")
+                "its subprocess stages, and parallel totals are not wall time."
+            )
+            lines.append("stage | entries | total_s | mean_s | max_s | max_entry")
             for name in sorted(stage_values):
                 values = stage_values[name]
                 stage_entries = [
-                    entry for entry in self.entries
-                    if name in entry["timings"]]
+                    entry for entry in self.entries if name in entry["timings"]
+                ]
                 max_entry = max(
-                    stage_entries,
-                    key=lambda entry: float(entry["timings"][name]))
+                    stage_entries, key=lambda entry: float(entry["timings"][name])
+                )
                 lines.append(
                     f"{name} | {len(values)} | {sum(values):.3f} | "
                     f"{sum(values) / len(values):.3f} | {max(values):.3f} | "
-                    f"{max_entry['pdbID']}")
+                    f"{max_entry['pdbID']}"
+                )
 
         incomplete_entries = [
-            entry for entry in self.entries if entry["status"] != "ok"]
+            entry for entry in self.entries if entry["status"] != "ok"
+        ]
         lines.extend(["", "Incomplete entries", "------------------"])
         if not incomplete_entries:
             lines.append("None.")
@@ -2496,31 +2726,37 @@ class _RunLog:
                     f"{entry['pdbID']} | {entry['status']} | "
                     f"{self._clean(entry['retryable'])} | "
                     f"{'|'.join(entry['reason_codes']) or '-'} | "
-                    f"{self._clean(entry['error']) or '-'}")
+                    f"{self._clean(entry['error']) or '-'}"
+                )
 
         lines.extend(["", "Slowest entries", "---------------"])
         if not self.entries:
             lines.append("No entries were processed.")
         else:
             lines.append(
-                "pdbID | status | runtime_s | metals | bonds | candidates | "
-                "reasons")
+                "pdbID | status | runtime_s | metals | bonds | candidates | reasons"
+            )
             for entry in sorted(
-                    self.entries, key=lambda item: item["runtime_s"],
-                    reverse=True)[:20]:
+                self.entries, key=lambda item: item["runtime_s"], reverse=True
+            )[:20]:
                 lines.append(
                     f"{entry['pdbID']} | {entry['status']} | "
                     f"{entry['runtime_s']:.2f} | {entry['n_metals']} | "
                     f"{entry['n_bonds']} | {entry['n_candidates']} | "
-                    f"{'|'.join(entry['reason_codes']) or '-'}")
+                    f"{'|'.join(entry['reason_codes']) or '-'}"
+                )
 
         lines.extend(["", "Per-entry results", "-----------------"])
         if not self.entries:
             lines.append("No entries were processed.")
         for entry in self.entries:
-            timing_text = ",".join(
-                f"{name}={float(value):.3f}"
-                for name, value in sorted(entry["timings"].items())) or "-"
+            timing_text = (
+                ",".join(
+                    f"{name}={float(value):.3f}"
+                    for name, value in sorted(entry["timings"].items())
+                )
+                or "-"
+            )
             lines.append(
                 f"{entry['pdbID']} | status={entry['status']} | "
                 f"retryable={self._clean(entry['retryable'])} | "
@@ -2533,7 +2769,8 @@ class _RunLog:
                 f"edstats_map_bytes={entry['density_edstats_map_bytes']} | "
                 f"reasons={'|'.join(entry['reason_codes']) or '-'} | "
                 f"warnings={'|'.join(entry['warning_codes']) or '-'} | "
-                f"error={self._clean(entry['error']) or '-'}")
+                f"error={self._clean(entry['error']) or '-'}"
+            )
         lines.append("")
         return "\n".join(lines)
 
@@ -2547,11 +2784,11 @@ class _RunLog:
         path = os.path.join(self.args.output_dir, f"{log_stem}.log")
         suffix = 2
         while os.path.lexists(path):
-            path = os.path.join(
-                self.args.output_dir, f"{log_stem}_{suffix}.log")
+            path = os.path.join(self.args.output_dir, f"{log_stem}_{suffix}.log")
             suffix += 1
         handle, temporary_path = tempfile.mkstemp(
-            prefix=".alchemy-run-log-", dir=self.args.output_dir, text=True)
+            prefix=".alchemy-run-log-", dir=self.args.output_dir, text=True
+        )
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:
                 log.write(self._render(exit_code, finished_at, elapsed_s))
@@ -2593,25 +2830,29 @@ def _run(args, run_log):
     manifest_path = os.path.join(args.output_dir, "manifest.csv")
     stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
     bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
-    candidates_path = os.path.join(
-        args.output_dir, "metal_candidates_all.csv")
-    confidence_inputs_path = os.path.join(
-        args.output_dir, "confidence_inputs_all.csv")
-    confidence_scores_path = os.path.join(
-        args.output_dir, "confidence_scores_all.csv")
-    database_reference_dir = os.path.join(
-        args.output_dir, "confidence_reference")
+    candidates_path = os.path.join(args.output_dir, "metal_candidates_all.csv")
+    confidence_inputs_path = os.path.join(args.output_dir, "confidence_inputs_all.csv")
+    confidence_scores_path = os.path.join(args.output_dir, "confidence_scores_all.csv")
+    database_reference_dir = os.path.join(args.output_dir, "confidence_reference")
 
     manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
     database_run = (
-        not args.id and not args.id_file and not manual_requested and
-        args.max_pdbs is None
+        not args.id
+        and not args.id_file
+        and not manual_requested
+        and args.max_pdbs is None
     )
     run_log.details["run_mode"] = (
-        "manual" if manual_requested else
-        "single" if args.id else
-        "id_file" if args.id_file else
-        "database" if database_run else "capped_database")
+        "manual"
+        if manual_requested
+        else "single"
+        if args.id
+        else "id_file"
+        if args.id_file
+        else "database"
+        if database_run
+        else "capped_database"
+    )
     confidence_mode = None
     confidence_reference = None
     confidence_stream_path = None
@@ -2624,23 +2865,26 @@ def _run(args, run_log):
     elif args.bonds:
         confidence_reference_dir, searched_reference_dirs = (
             resolve_confidence_reference_dir(
-                args.output_dir, args.confidence_reference_dir)
+                args.output_dir, args.confidence_reference_dir
+            )
         )
         if confidence_reference_dir is not None:
             try:
                 confidence_reference = load_confidence_reference(
-                    confidence_reference_dir)
+                    confidence_reference_dir
+                )
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 message = f"Invalid confidence reference: {exc}"
                 run_log.driver_error = message
                 print(message, flush=True)
                 return 1
-            run_log.details["confidence_reference_dir"] = (
-                confidence_reference_dir)
+            run_log.details["confidence_reference_dir"] = confidence_reference_dir
             confidence_mode = "reference"
             confidence_stream_path = confidence_scores_path
             confidence_columns = (
-                *CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
+                *CONFIDENCE_INPUT_COLUMNS,
+                *CONFIDENCE_ANALYSIS_COLUMNS,
+            )
         else:
             # Expected on a fresh checkout: no reference is distributed with
             # Alchemy because the confidence score is not finalized. Say so
@@ -2656,40 +2900,48 @@ def _run(args, run_log):
                 flush=True,
             )
     if args.resume:
-        if (confidence_mode is not None and
-                (confidence_stream_path is None or
-                 not os.path.isfile(confidence_stream_path))):
+        if confidence_mode is not None and (
+            confidence_stream_path is None or not os.path.isfile(confidence_stream_path)
+        ):
             message = (
                 "Cannot resume confidence-aware output because "
                 f"{confidence_stream_path} is missing; use a fresh output "
-                "directory.")
+                "directory."
+            )
             run_log.driver_error = message
             print(message, flush=True)
             return 1
         try:
             validate_resume_schemas(
-                manifest_path, stats_path, bonds_path, candidates_path,
+                manifest_path,
+                stats_path,
+                bonds_path,
+                candidates_path,
                 bonds_enabled=args.bonds,
                 confidence_path=confidence_stream_path,
-                confidence_columns=confidence_columns)
+                confidence_columns=confidence_columns,
+            )
             synchronize_confidence_inputs = (
-                confidence_mode == "reference" and
-                os.path.isfile(confidence_inputs_path)
+                confidence_mode == "reference"
+                and os.path.isfile(confidence_inputs_path)
             )
             if synchronize_confidence_inputs:
                 validate_resume_schemas(
-                    manifest_path, stats_path, bonds_path, candidates_path,
+                    manifest_path,
+                    stats_path,
+                    bonds_path,
+                    candidates_path,
                     bonds_enabled=args.bonds,
                     confidence_path=confidence_inputs_path,
-                    confidence_columns=CONFIDENCE_INPUT_COLUMNS)
+                    confidence_columns=CONFIDENCE_INPUT_COLUMNS,
+                )
         except ValueError as exc:
             run_log.driver_error = str(exc)
             print(str(exc), flush=True)
             return 1
         if confidence_mode == "reference":
             try:
-                validate_scored_reference(
-                    confidence_stream_path, confidence_reference)
+                validate_scored_reference(confidence_stream_path, confidence_reference)
             except (OSError, ValueError) as exc:
                 message = f"Cannot resume confidence output: {exc}"
                 run_log.driver_error = message
@@ -2714,8 +2966,7 @@ def _run(args, run_log):
         }
         normally_done = load_done(manifest_path, **done_kwargs)
         if args.retry_partials:
-            done = load_done(
-                manifest_path, retry_partial_ids=ids, **done_kwargs)
+            done = load_done(manifest_path, retry_partial_ids=ids, **done_kwargs)
             reselected = normally_done - done
             run_log.details["terminal_partials_reselected"] = len(reselected)
             print(
@@ -2727,12 +2978,15 @@ def _run(args, run_log):
             done = normally_done
         ids = [i for i in ids if i not in done]
     if args.max_pdbs is not None:
-        ids = ids[:args.max_pdbs]
+        ids = ids[: args.max_pdbs]
     run_log.details["entries_scheduled"] = len(ids)
 
     if not ids:
-        if (args.resume and confidence_mode == "database" and
-                os.path.isfile(confidence_inputs_path)):
+        if (
+            args.resume
+            and confidence_mode == "database"
+            and os.path.isfile(confidence_inputs_path)
+        ):
             try:
                 total, scored, cohort = finalize_database_confidence(
                     confidence_inputs_path,
@@ -2750,16 +3004,15 @@ def _run(args, run_log):
                 f"{cohort}) -> {confidence_scores_path}",
                 flush=True,
             )
-            print(f"Confidence reference -> {database_reference_dir}",
-                  flush=True)
+            print(f"Confidence reference -> {database_reference_dir}", flush=True)
             return 0
         print("No entries to process.", flush=True)
         return 0
 
     try:
         removed_stale_bond_outputs = remove_stale_disabled_bond_outputs(
-            (bonds_path, candidates_path), resume=args.resume,
-            bonds_enabled=args.bonds)
+            (bonds_path, candidates_path), resume=args.resume, bonds_enabled=args.bonds
+        )
     except OSError as exc:
         message = f"Could not remove stale bond-stage output: {exc}"
         run_log.driver_error = message
@@ -2805,7 +3058,8 @@ def _run(args, run_log):
         run_log.details["worker_selection"] = "automatic"
         run_log.details["CPU worker limit"] = cpu_limit
         run_log.details["Memory worker limit"] = (
-            memory_limit if memory_limit is not None else "unavailable")
+            memory_limit if memory_limit is not None else "unavailable"
+        )
         run_log.details["Selected workers"] = workers
         print("Automatic worker selection:", flush=True)
         print(f"  CPU worker limit: {cpu_limit}", flush=True)
@@ -2819,19 +3073,28 @@ def _run(args, run_log):
         workers = min(args.workers, len(ids))
         run_log.details["worker_selection"] = "explicit"
         run_log.details["Selected workers"] = workers
-    print(f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
-          f"with {workers} worker(s) ...", flush=True)
+    print(
+        f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
+        f"with {workers} worker(s) ...",
+        flush=True,
+    )
 
-    cfg = {"root": root, "mirror_root": args.pdb_redo_root,
-           "cache_root": cache_root, "env": env,
-           "output_dir": args.output_dir, "cofactors": cofactors,
-           "keep": args.keep_intermediates, "bonds": args.bonds,
-           "density_map_scope": args.density_map_scope,
-           "allow_download": bool(args.id or args.id_file),
-           "manual_inputs": manual_inputs,
-           "alchemy_commit": _alchemy_commit(),
-           "gemmi_version": _gemmi_version(),
-           "ccp4_version": _ccp4_version(env)}
+    cfg = {
+        "root": root,
+        "mirror_root": args.pdb_redo_root,
+        "cache_root": cache_root,
+        "env": env,
+        "output_dir": args.output_dir,
+        "cofactors": cofactors,
+        "keep": args.keep_intermediates,
+        "bonds": args.bonds,
+        "density_map_scope": args.density_map_scope,
+        "allow_download": bool(args.id or args.id_file),
+        "manual_inputs": manual_inputs,
+        "alchemy_commit": _alchemy_commit(),
+        "gemmi_version": _gemmi_version(),
+        "ccp4_version": _ccp4_version(env),
+    }
     run_log.details.update(
         alchemy_version=ALCHEMY_VERSION,
         gemmi_version=cfg["gemmi_version"],
@@ -2841,11 +3104,13 @@ def _run(args, run_log):
 
     prior_bond_counts = (
         _manifest_values_by_id(manifest_path, "n_bonds")
-        if args.resume and not args.bonds else {}
+        if args.resume and not args.bonds
+        else {}
     )
     prior_candidate_counts = (
         _manifest_values_by_id(manifest_path, "n_candidates")
-        if args.resume and not args.bonds else {}
+        if args.resume and not args.bonds
+        else {}
     )
     output_paths = [manifest_path, stats_path, bonds_path, candidates_path]
     if confidence_mode is not None:
@@ -2855,15 +3120,15 @@ def _run(args, run_log):
     if synchronize_confidence_inputs:
         output_paths.append(confidence_inputs_path)
     output_paths = tuple(output_paths)
-    staging = (_ResumeStaging(args.output_dir, output_paths)
-               if args.resume else None)
+    staging = _ResumeStaging(args.output_dir, output_paths) if args.resume else None
     write_paths = staging.staged if staging is not None else output_paths
-    (write_manifest_path, write_stats_path, write_bonds_path,
-     write_candidates_path) = write_paths[:4]
-    write_confidence_path = (
-        write_paths[4] if confidence_mode is not None else None)
+    (write_manifest_path, write_stats_path, write_bonds_path, write_candidates_path) = (
+        write_paths[:4]
+    )
+    write_confidence_path = write_paths[4] if confidence_mode is not None else None
     write_confidence_inputs_path = (
-        write_paths[5] if synchronize_confidence_inputs else None)
+        write_paths[5] if synchronize_confidence_inputs else None
+    )
 
     counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
     no_metal_count = 0
@@ -2876,23 +3141,23 @@ def _run(args, run_log):
         # through opening them cannot leak the earlier ones.
         with contextlib.ExitStack() as handles:
             writers = _OutputWriters(
-                handles.enter_context(
-                    open(write_manifest_path, "w", newline="")),
-                handles.enter_context(
-                    open(write_stats_path, "w", newline="")),
-                handles.enter_context(
-                    open(write_bonds_path, "w", newline=""))
-                if args.bonds else None,
-                handles.enter_context(
-                    open(write_candidates_path, "w", newline=""))
-                if args.bonds else None,
-                handles.enter_context(
-                    open(write_confidence_path, "w", newline=""))
-                if write_confidence_path is not None else None,
+                handles.enter_context(open(write_manifest_path, "w", newline="")),
+                handles.enter_context(open(write_stats_path, "w", newline="")),
+                handles.enter_context(open(write_bonds_path, "w", newline=""))
+                if args.bonds
+                else None,
+                handles.enter_context(open(write_candidates_path, "w", newline=""))
+                if args.bonds
+                else None,
+                handles.enter_context(open(write_confidence_path, "w", newline=""))
+                if write_confidence_path is not None
+                else None,
                 confidence_columns,
                 handles.enter_context(
-                    open(write_confidence_inputs_path, "w", newline=""))
-                if write_confidence_inputs_path is not None else None,
+                    open(write_confidence_inputs_path, "w", newline="")
+                )
+                if write_confidence_inputs_path is not None
+                else None,
             )
             inflight = SimpleQueue()
             assignments: Dict[int, str] = {}
@@ -2904,13 +3169,11 @@ def _run(args, run_log):
             # Not a ``with`` block: ``Pool.__exit__`` calls the same
             # ``terminate`` that a killed idle worker can wedge forever, so
             # shutdown is bounded explicitly in the ``finally`` below.
-            pool = Pool(workers, initializer=_init_worker,
-                        initargs=(cfg, inflight))
+            pool = Pool(workers, initializer=_init_worker, initargs=(cfg, inflight))
             try:
                 results = pool.imap_unordered(process, ids, chunksize=1)
                 completed = 0
-                progress.render(
-                    completed, counts, no_metal_count, force=True)
+                progress.render(completed, counts, no_metal_count, force=True)
                 while completed < len(ids):
                     batch = []
                     try:
@@ -2926,14 +3189,15 @@ def _run(args, run_log):
                             unattributed_deaths += 1
                         elif dead_id not in lost_ids:
                             lost_ids.add(dead_id)
-                            batch.append(_worker_death_result(
-                                dead_id, cfg, dead_pid))
+                            batch.append(_worker_death_result(dead_id, cfg, dead_pid))
                     if not batch:
                         stalled = time.monotonic() - last_progress
                         remaining = len(ids) - completed
-                        if (unattributed_deaths
-                                and stalled > WORKER_STALL_GRACE_S
-                                and remaining <= unattributed_deaths):
+                        if (
+                            unattributed_deaths
+                            and stalled > WORKER_STALL_GRACE_S
+                            and remaining <= unattributed_deaths
+                        ):
                             # Every entry still outstanding can only be held by
                             # a process that died before naming its entry.
                             # Entries that already returned a result are not
@@ -2941,22 +3205,20 @@ def _run(args, run_log):
                             # second, failed row for an entry that succeeded and
                             # leave the entry that actually died unreported.
                             for stuck_id in ids:
-                                if (stuck_id in lost_ids
-                                        or stuck_id in completed_ids):
+                                if stuck_id in lost_ids or stuck_id in completed_ids:
                                     continue
                                 lost_ids.add(stuck_id)
-                                batch.append(_worker_death_result(
-                                    stuck_id, cfg, 0))
+                                batch.append(_worker_death_result(stuck_id, cfg, 0))
                                 if len(batch) >= remaining:
                                     break
                         else:
-                            progress.render(
-                                completed, counts, no_metal_count)
+                            progress.render(completed, counts, no_metal_count)
                             continue
                     last_progress = time.monotonic()
                     for r in batch:
-                        if (r["pdbID"] in lost_ids and r.get("reason_codes")
-                                != ["worker_process_died"]):
+                        if r["pdbID"] in lost_ids and r.get("reason_codes") != [
+                            "worker_process_died"
+                        ]:
                             # A real result arrived for an entry already
                             # declared lost. The synthesized row stands, so
                             # this one is dropped rather than written twice.
@@ -2964,52 +3226,61 @@ def _run(args, run_log):
                         completed += 1
                         completed_ids.add(r["pdbID"])
                         run_log.record_entry(r)
-                        if (not args.resume
-                                or _resume_replacement_succeeded(r)):
+                        if not args.resume or _resume_replacement_succeeded(r):
                             writers.write_stats_rows(r["rows"])
                             writers.write_bond_rows(r["bond_rows"])
                             writers.write_candidate_rows(r["candidate_rows"])
                             confidence_rows = []
                             if confidence_mode is not None:
-                                confidence_rows = (
-                                    prepare_result_confidence_inputs(
-                                        r["rows"], r["bond_rows"],
-                                        STATS_COLUMNS))
-                                confidence_rows = (
-                                    complete_confidence_site_count(
-                                        confidence_rows, r["pdbID"], r["n"],
-                                        r.get(
-                                            "confidence_inputs_missing_reason",
-                                            "")))
+                                confidence_rows = prepare_result_confidence_inputs(
+                                    r["rows"], r["bond_rows"], STATS_COLUMNS
+                                )
+                                confidence_rows = complete_confidence_site_count(
+                                    confidence_rows,
+                                    r["pdbID"],
+                                    r["n"],
+                                    r.get("confidence_inputs_missing_reason", ""),
+                                )
                                 if confidence_mode == "reference":
                                     confidence_rows = score_against_reference(
-                                        confidence_rows, confidence_reference)
+                                        confidence_rows, confidence_reference
+                                    )
                                 writers.write_confidence_rows(confidence_rows)
                             # The manifest is the completion marker, so write
                             # it only after this entry's rows have flushed.
-                            writers.write_manifest_row(_manifest_row(
-                                r, args.resume, args.bonds, prior_bond_counts,
-                                prior_candidate_counts))
+                            writers.write_manifest_row(
+                                _manifest_row(
+                                    r,
+                                    args.resume,
+                                    args.bonds,
+                                    prior_bond_counts,
+                                    prior_candidate_counts,
+                                )
+                            )
                             if staging is not None:
-                                staging.replacement_ids.add(
-                                    r["pdbID"].lower())
+                                staging.replacement_ids.add(r["pdbID"].lower())
                         counts[r["status"]] = counts.get(r["status"], 0) + 1
                         if r.get("no_metals", False):
                             no_metal_count += 1
-                        if (r["status"] == "partial"
-                                and r.get("retryable", False)):
+                        if r["status"] == "partial" and r.get("retryable", False):
                             retryable_partial_count += 1
                         finished = completed == len(ids)
                         progress.render(
-                            completed, counts, no_metal_count,
+                            completed,
+                            counts,
+                            no_metal_count,
                             force=progress.terminal or finished,
-                            final=finished)
+                            final=finished,
+                        )
             finally:
                 if _shutdown_pool(pool):
                     run_log.summary["worker_pool_forced_shutdown"] = True
-                    print("Warning: a worker pool shutdown had to be forced "
-                          "after a worker died holding the task-queue lock; "
-                          "results above are complete.", flush=True)
+                    print(
+                        "Warning: a worker pool shutdown had to be forced "
+                        "after a worker died holding the task-queue lock; "
+                        "results above are complete.",
+                        flush=True,
+                    )
             processing_completed = True
     finally:
         progress.close()
@@ -3023,8 +3294,7 @@ def _run(args, run_log):
         metal_rows_written=n_rows,
         bond_rows_written=n_bonds,
         candidate_rows_written=n_candidates,
-        confidence_rows_written=(
-            writers.n_confidence if writers is not None else 0),
+        confidence_rows_written=(writers.n_confidence if writers is not None else 0),
         manifest_path=manifest_path,
         metal_stats_path=stats_path,
         metal_bonds_path=bonds_path if args.bonds else "disabled",
@@ -3033,19 +3303,20 @@ def _run(args, run_log):
 
     if staging is not None:
         try:
-            staging.commit(
-                args.bonds, confidence_enabled=confidence_mode is not None)
+            staging.commit(args.bonds, confidence_enabled=confidence_mode is not None)
         finally:
             staging.discard()
 
-    print(f"Done. ok={counts['ok']} partial={counts['partial']} "
-          f"skip={counts['skip']} error={counts['error']} "
-          f"no_metals={no_metal_count}; "
-          f"{n_rows} metal/cofactor rows -> {stats_path}", flush=True)
+    print(
+        f"Done. ok={counts['ok']} partial={counts['partial']} "
+        f"skip={counts['skip']} error={counts['error']} "
+        f"no_metals={no_metal_count}; "
+        f"{n_rows} metal/cofactor rows -> {stats_path}",
+        flush=True,
+    )
     if args.bonds:
         print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
-        print(f"      {n_candidates} candidate rows -> {candidates_path}",
-              flush=True)
+        print(f"      {n_candidates} candidate rows -> {candidates_path}", flush=True)
     exit_code = _batch_exit_code(counts, retryable_partial_count)
     if confidence_mode == "database":
         if exit_code == 0:
@@ -3073,11 +3344,9 @@ def _run(args, run_log):
                 f"reference cohort {cohort}) -> {confidence_scores_path}",
                 flush=True,
             )
-            print(f"      confidence reference -> {database_reference_dir}",
-                  flush=True)
+            print(f"      confidence reference -> {database_reference_dir}", flush=True)
         else:
-            run_log.summary["confidence_status"] = (
-                "not_finalized_incomplete_run")
+            run_log.summary["confidence_status"] = "not_finalized_incomplete_run"
             print(
                 "      confidence inputs were retained, but the database "
                 "reference was not finalized because the run is incomplete.",
@@ -3112,8 +3381,7 @@ def main(argv=None):
     """Parse arguments, execute the driver, and always emit a run log."""
     raw_args = None if argv is None else list(argv)
     args = parse_args(raw_args)
-    command_parts = (
-        list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args])
+    command_parts = list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args]
     run_log = _RunLog(args, shlex.join(command_parts))
     exit_code = 1
     previous_term = _install_termination_handler()
@@ -3126,8 +3394,12 @@ def main(argv=None):
         # conventional interrupt status and one line, rather than a traceback
         # that looks like a crash.
         run_log.driver_error = "interrupted before completion"
-        print("\nInterrupted: workers stopped; rows already flushed are kept "
-              "and --resume will continue.", file=sys.stderr, flush=True)
+        print(
+            "\nInterrupted: workers stopped; rows already flushed are kept "
+            "and --resume will continue.",
+            file=sys.stderr,
+            flush=True,
+        )
         exit_code = 130
         return exit_code
     except BaseException as exc:
@@ -3140,8 +3412,9 @@ def main(argv=None):
         try:
             log_path = run_log.write(exit_code)
         except OSError as exc:
-            print(f"Could not write detailed run log: {exc}",
-                  file=sys.stderr, flush=True)
+            print(
+                f"Could not write detailed run log: {exc}", file=sys.stderr, flush=True
+            )
         else:
             print(f"Detailed run log -> {log_path}", flush=True)
 

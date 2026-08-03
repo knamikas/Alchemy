@@ -25,9 +25,7 @@ def load_cofactor_ids():
     """Load component IDs from Alchemy's fixed bundled catalog."""
     with open(COFACTOR_CATALOG_PATH, encoding="utf-8") as handle:
         cofactor_ids = {
-            line.partition("\t")[0].strip()
-            for line in handle
-            if line.strip()
+            line.partition("\t")[0].strip() for line in handle if line.strip()
         }
     if not cofactor_ids:
         raise ValueError("bundled metallocofactor catalog is empty")
@@ -38,8 +36,18 @@ def load_cofactor_ids():
 # for main-chain, side-chain, and all atoms. ``n/a`` is EDSTATS' documented
 # null marker when a statistic cannot be calculated for an atom group.
 _EDSTATS_METRIC_STEMS = (
-    "BA", "NP", "R", "RG", "SRG", "CCS", "CCP", "ZCCP", "ZO", "ZD",
-    "ZD-", "ZD+",
+    "BA",
+    "NP",
+    "R",
+    "RG",
+    "SRG",
+    "CCS",
+    "CCP",
+    "ZCCP",
+    "ZO",
+    "ZD",
+    "ZD-",
+    "ZD+",
 )
 EDSTATS_METRIC_COLUMNS = tuple(
     f"{stem}{atom_group}"
@@ -47,9 +55,13 @@ EDSTATS_METRIC_COLUMNS = tuple(
     for stem in _EDSTATS_METRIC_STEMS
 )
 EDSTATS_COLUMNS = (
-    "RT", "CI", "RN",
+    "RT",
+    "CI",
+    "RN",
     *EDSTATS_METRIC_COLUMNS,
-    "MN", "CP", "NR",
+    "MN",
+    "CP",
+    "NR",
 )
 EDSTATS_NULL_VALUE = "n/a"
 EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
@@ -71,8 +83,10 @@ def _is_edstats_separator(fields):
     return (
         len(fields) == metric_count + 3
         and fields[0] == "_"
-        and all(value.lower() == EDSTATS_NULL_VALUE
-                for value in fields[1:metric_count + 1])
+        and all(
+            value.lower() == EDSTATS_NULL_VALUE
+            for value in fields[1 : metric_count + 1]
+        )
         and all(value.isdigit() for value in fields[-2:])
     )
 
@@ -118,13 +132,11 @@ def _normalize_edstats_row(fields, header, indices):
 
 def _validated_edstats_header(fields):
     """Return column indices after validating the standard EDSTATS schema."""
-    duplicates = sorted({
-        name for name in fields if fields.count(name) > 1
-    })
+    duplicates = sorted({name for name in fields if fields.count(name) > 1})
     if duplicates:
         raise ValueError(
-            "EDSTATS header contains duplicate columns: "
-            + ", ".join(duplicates))
+            "EDSTATS header contains duplicate columns: " + ", ".join(duplicates)
+        )
 
     missing = [name for name in EDSTATS_COLUMNS if name not in fields]
     unexpected = [name for name in fields if name not in EDSTATS_COLUMNS]
@@ -146,7 +158,8 @@ def _validate_edstats_row(fields, header, indices, line_number):
     if len(fields) != len(header):
         raise ValueError(
             f"EDSTATS row {line_number} has {len(fields)} columns; "
-            f"expected {len(header)}")
+            f"expected {len(header)}"
+        )
 
     for name in EDSTATS_METRIC_COLUMNS:
         value = fields[indices[name]]
@@ -156,20 +169,20 @@ def _validate_edstats_row(fields, header, indices, line_number):
             number = float(value)
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(
-                f"EDSTATS row {line_number} has a nonnumeric {name} "
-                f"value: {value!r}") from exc
+                f"EDSTATS row {line_number} has a nonnumeric {name} value: {value!r}"
+            ) from exc
         if not math.isfinite(number):
             raise ValueError(
-                f"EDSTATS row {line_number} has a non-finite {name} "
-                f"value: {value!r}")
+                f"EDSTATS row {line_number} has a non-finite {name} value: {value!r}"
+            )
 
     model_value = fields[indices["MN"]]
     try:
         return int(model_value)
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
-            f"invalid EDSTATS MN model value on row {line_number}: "
-            f"{model_value!r}") from exc
+            f"invalid EDSTATS MN model value on row {line_number}: {model_value!r}"
+        ) from exc
 
 
 def _classify_residue(residue, metals_upper, cofactor_set):
@@ -180,8 +193,11 @@ def _classify_residue(residue, metals_upper, cofactor_set):
     derive from this single rule, so the set of sites Alchemy demands EDSTATS
     report cannot drift away from the set it actually emits.
     """
-    metal_sites = [atom for atom in residue.contact_atoms
-                   if atom.element_known and atom.element in metals_upper]
+    metal_sites = [
+        atom
+        for atom in residue.contact_atoms
+        if atom.element_known and atom.element in metals_upper
+    ]
     if residue.residue_name in cofactor_set:
         return "cofactor", metal_sites
     if residue.chemical_atom_site_count == 1 and len(metal_sites) == 1:
@@ -208,18 +224,21 @@ def _density_observation_id(pdb_id, fields, indices):
     author residue identifiers within the selected model.
     """
     chain = fields[indices["CI"]] or "_"
-    return "/".join((
-        str(pdb_id).lower(),
-        f"model={fields[indices['MN']]}",
-        f"chain={chain}",
-        f"residue={fields[indices['RN']]}",
-        f"component={fields[indices['RT']]}",
-        f"edstats_row={fields[indices['NR']]}",
-    ))
+    return "/".join(
+        (
+            str(pdb_id).lower(),
+            f"model={fields[indices['MN']]}",
+            f"chain={chain}",
+            f"residue={fields[indices['RN']]}",
+            f"component={fields[indices['RT']]}",
+            f"edstats_row={fields[indices['NR']]}",
+        )
+    )
 
 
-def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
-                             structure=None):
+def extract_metal_statistics(
+    pdbID, stats_out, metals_set, cofactor_set, structure=None
+):
     """Parse an edstats stats.out file, returning (rows, header).
     `structure` is the shared first-model Gemmi context used by bond analysis.
 
@@ -254,7 +273,8 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
 
     if structure is None:
         raise ValueError(
-            "A parsed structure is required for element-based metal identification")
+            "A parsed structure is required for element-based metal identification"
+        )
     metals_upper = {element.upper() for element in metals_set}
 
     rows = []
@@ -280,19 +300,19 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
             if indices is None:  # defensive; header validation sets this
                 raise ValueError("EDSTATS header was not validated")
             fields = _normalize_edstats_row(fields, header, indices)
-            row_model = _validate_edstats_row(
-                fields, header, indices, line_number)
+            row_model = _validate_edstats_row(fields, header, indices, line_number)
             if row_model != structure.model_analyzed:
                 raise ValueError(
                     f"EDSTATS returned model {row_model}, but Alchemy's "
-                    f"model policy selected model {structure.model_analyzed}")
+                    f"model policy selected model {structure.model_analyzed}"
+                )
             try:
-                fields[indices["RN"]] = canonical_pdb_residue_id(
-                    fields[indices["RN"]])
+                fields[indices["RN"]] = canonical_pdb_residue_id(fields[indices["RN"]])
             except ValueError as exc:
                 raise ValueError(
                     f"invalid EDSTATS RN residue identifier on row "
-                    f"{line_number}: {fields[indices['RN']]!r}") from exc
+                    f"{line_number}: {fields[indices['RN']]!r}"
+                ) from exc
 
             residue_row_count += 1
             coordinate_resname = fields[indices["RT"]]
@@ -300,10 +320,11 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
             resnum = fields[indices["RN"]]
             observed_residues.add((coordinate_resname, chain, resnum))
             coordinate_lookup = getattr(
-                structure, "residues_for_coordinate_author",
-                structure.residues_for_author)
-            matched_residues = coordinate_lookup(
-                coordinate_resname, chain, resnum)
+                structure,
+                "residues_for_coordinate_author",
+                structure.residues_for_author,
+            )
+            matched_residues = coordinate_lookup(coordinate_resname, chain, resnum)
             if not matched_residues:
                 mapping_status = "coordinate_residue_not_found"
             elif len(matched_residues) == 1:
@@ -317,7 +338,8 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
             for residue in matched_residues:
                 resname = residue.residue_name
                 category, metal_sites = _classify_residue(
-                    residue, metals_upper, cofactor_set)
+                    residue, metals_upper, cofactor_set
+                )
                 if category == "cofactor":
                     matched_cofactor_names.append(resname)
                 if not category:
@@ -334,65 +356,78 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
                     output_fields[indices["CI"]] = residue.chain_id
                     output_fields[indices["RN"]] = residue.resnum
                 density_observation_id = _density_observation_id(
-                    pdbID, output_fields, indices)
+                    pdbID, output_fields, indices
+                )
                 output_chain = output_fields[indices["CI"]]
                 output_resnum = output_fields[indices["RN"]]
-                rows.append({
-                    "pdbID": pdbID,
-                    "category": category,
-                    "resname": resname,
-                    "chain": output_chain,
-                    "resnum": output_resnum,
-                    "fields": output_fields,
-                    "density_observation_id": density_observation_id,
-                    "density_scope": ("cofactor_residue"
-                                      if category == "cofactor"
-                                      else "metal_residue"),
-                    "density_shared_site_count": density_shared_site_count,
-                    "density_is_shared": density_is_shared,
-                    "coordinate_mapping_status": mapping_status,
-                    "selected_metal_site_status": "selected",
-                    "site": site,
-                    "site_key": site.source_key,
-                    "residue_key": residue.key,
-                })
+                rows.append(
+                    {
+                        "pdbID": pdbID,
+                        "category": category,
+                        "resname": resname,
+                        "chain": output_chain,
+                        "resnum": output_resnum,
+                        "fields": output_fields,
+                        "density_observation_id": density_observation_id,
+                        "density_scope": (
+                            "cofactor_residue"
+                            if category == "cofactor"
+                            else "metal_residue"
+                        ),
+                        "density_shared_site_count": density_shared_site_count,
+                        "density_is_shared": density_is_shared,
+                        "coordinate_mapping_status": mapping_status,
+                        "selected_metal_site_status": "selected",
+                        "site": site,
+                        "site_key": site.source_key,
+                        "residue_key": residue.key,
+                    }
+                )
 
-            if ((coordinate_name_is_cofactor or matched_cofactor_names) and
-                    not selected_sites):
+            if (
+                coordinate_name_is_cofactor or matched_cofactor_names
+            ) and not selected_sites:
                 resname = (
                     matched_cofactor_names[0]
-                    if matched_cofactor_names else coordinate_resname
+                    if matched_cofactor_names
+                    else coordinate_resname
                 )
                 output_fields = list(fields)
                 output_fields[indices["RT"]] = resname
                 matched_residue = (
-                    matched_residues[0]
-                    if len(matched_residues) == 1 else None)
+                    matched_residues[0] if len(matched_residues) == 1 else None
+                )
                 if matched_residue is not None:
                     output_fields[indices["CI"]] = matched_residue.chain_id
                     output_fields[indices["RN"]] = matched_residue.resnum
                 output_chain = output_fields[indices["CI"]]
                 output_resnum = output_fields[indices["RN"]]
                 density_observation_id = _density_observation_id(
-                    pdbID, output_fields, indices)
-                rows.append({
-                    "pdbID": pdbID,
-                    "category": "cofactor",
-                    "resname": resname,
-                    "chain": output_chain,
-                    "resnum": output_resnum,
-                    "fields": output_fields,
-                    "density_observation_id": density_observation_id,
-                    "density_scope": "cofactor_residue",
-                    "density_shared_site_count": 0,
-                    "density_is_shared": False,
-                    "coordinate_mapping_status": mapping_status,
-                    "selected_metal_site_status": "no_selected_metal",
-                    "site": None,
-                    "site_key": None,
-                    "residue_key": (matched_residues[0].key
-                                    if len(matched_residues) == 1 else None),
-                })
+                    pdbID, output_fields, indices
+                )
+                rows.append(
+                    {
+                        "pdbID": pdbID,
+                        "category": "cofactor",
+                        "resname": resname,
+                        "chain": output_chain,
+                        "resnum": output_resnum,
+                        "fields": output_fields,
+                        "density_observation_id": density_observation_id,
+                        "density_scope": "cofactor_residue",
+                        "density_shared_site_count": 0,
+                        "density_is_shared": False,
+                        "coordinate_mapping_status": mapping_status,
+                        "selected_metal_site_status": "no_selected_metal",
+                        "site": None,
+                        "site_key": None,
+                        "residue_key": (
+                            matched_residues[0].key
+                            if len(matched_residues) == 1
+                            else None
+                        ),
+                    }
+                )
 
     if header is None:
         raise ValueError("EDSTATS output is empty")
@@ -400,8 +435,8 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
         raise ValueError("EDSTATS output contains no residue rows")
 
     missing_residues = sorted(
-        _expected_edstats_residues(
-            structure, metals_upper, cofactor_set) - observed_residues
+        _expected_edstats_residues(structure, metals_upper, cofactor_set)
+        - observed_residues
     )
     if missing_residues:
         preview = ", ".join(
@@ -410,10 +445,12 @@ def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
         )
         suffix = (
             f" (and {len(missing_residues) - 5} more)"
-            if len(missing_residues) > 5 else ""
+            if len(missing_residues) > 5
+            else ""
         )
         raise ValueError(
             "EDSTATS output is incomplete; missing expected residue"
             f"{'s' if len(missing_residues) != 1 else ''}: "
-            f"{preview}{suffix}")
+            f"{preview}{suffix}"
+        )
     return rows, header

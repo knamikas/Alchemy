@@ -32,7 +32,7 @@ def _option_help(option: str) -> str:
     # the last occurrence.
     start = text.rindex(option)
     end = text.find("\n  --", start)
-    return text[start:end if end != -1 else len(text)]
+    return text[start : end if end != -1 else len(text)]
 
 
 # --------------------------------------------------------------------------- #
@@ -82,7 +82,8 @@ def test_max_pdbs_rejects_non_positive_caps(value):
     assert excinfo.value.code not in (0, None)
     message = f"{stderr.getvalue()}\n{excinfo.value}"
     assert "max-pdbs" in message, (
-        f"--max-pdbs {value} was rejected, but not by name:\n" + message)
+        f"--max-pdbs {value} was rejected, but not by name:\n" + message
+    )
 
 
 def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
@@ -110,11 +111,25 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
 # --------------------------------------------------------------------------- #
 # Terminal-partial retries must be resume-safe
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("arguments,fragment", [
-    (["--id", "109m", "--retry-partials"], "requires --resume"),
-    (["--id", "109m", "--pdb-file", "109m.pdb", "--mtz-file", "109m.mtz",
-      "--resume", "--retry-partials"], "manual structure inputs"),
-])
+@pytest.mark.parametrize(
+    "arguments,fragment",
+    [
+        (["--id", "109m", "--retry-partials"], "requires --resume"),
+        (
+            [
+                "--id",
+                "109m",
+                "--pdb-file",
+                "109m.pdb",
+                "--mtz-file",
+                "109m.mtz",
+                "--resume",
+                "--retry-partials",
+            ],
+            "manual structure inputs",
+        ),
+    ],
+)
 def test_retry_partials_rejects_unsafe_invocations(arguments, fragment):
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
@@ -124,11 +139,14 @@ def test_retry_partials_rejects_unsafe_invocations(arguments, fragment):
     assert fragment in stderr.getvalue()
 
 
-@pytest.mark.parametrize("selector", [
-    [],
-    ["--id", "109m"],
-    ["--id-file", "ids.txt"],
-])
+@pytest.mark.parametrize(
+    "selector",
+    [
+        [],
+        ["--id", "109m"],
+        ["--id-file", "ids.txt"],
+    ],
+)
 def test_retry_partials_accepts_optional_resume_selectors(selector):
     args = main.parse_args([*selector, "--resume", "--retry-partials"])
     assert args.resume is True
@@ -139,7 +157,8 @@ def test_retry_partials_accepts_optional_resume_selectors(selector):
 # Confidence references are discovered beside the current output
 # --------------------------------------------------------------------------- #
 def test_confidence_reference_is_discovered_in_output_before_repo_default(
-        tmp_path, monkeypatch):
+    tmp_path, monkeypatch
+):
     output_dir = tmp_path / "output"
     output_reference = output_dir / "confidence_reference"
     output_reference.mkdir(parents=True)
@@ -148,7 +167,8 @@ def test_confidence_reference_is_discovered_in_output_before_repo_default(
     repository_reference.mkdir()
     (repository_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
     monkeypatch.setattr(
-        main, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference))
+        main, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference)
+    )
 
     selected, searched = main.resolve_confidence_reference_dir(str(output_dir))
 
@@ -164,7 +184,8 @@ def test_explicit_confidence_reference_is_authoritative(tmp_path):
     explicit_reference = tmp_path / "explicit-reference"
 
     selected, searched = main.resolve_confidence_reference_dir(
-        str(output_dir), str(explicit_reference))
+        str(output_dir), str(explicit_reference)
+    )
 
     assert selected is None
     assert searched == (str(explicit_reference),)
@@ -187,8 +208,9 @@ def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
     primary = tmp_path / "user" / "ccp4.json"
     shadowing = tmp_path / "repo" / "ccp4.json"
     shadowing.parent.mkdir(parents=True)
-    shadowing.write_text('{"ccp4_setup": "/stale/repo/ccp4.setup-sh"}\n',
-                         encoding="utf-8")
+    shadowing.write_text(
+        '{"ccp4_setup": "/stale/repo/ccp4.setup-sh"}\n', encoding="utf-8"
+    )
     config_files = [str(primary), str(shadowing)]
 
     chosen = "/the/path/the/user/configured/ccp4.setup-sh"
@@ -207,16 +229,16 @@ def test_later_config_files_still_supply_keys_the_primary_omits(tmp_path):
     """
     primary = tmp_path / "user" / "ccp4.json"
     primary.parent.mkdir(parents=True)
-    primary.write_text('{"ccp4_setup": "/user/ccp4.setup-sh"}\n',
-                       encoding="utf-8")
+    primary.write_text('{"ccp4_setup": "/user/ccp4.setup-sh"}\n', encoding="utf-8")
     secondary = tmp_path / "repo" / "ccp4.json"
     secondary.parent.mkdir(parents=True)
     secondary.write_text(
-        '{"ccp4_setup": "/repo/ccp4.setup-sh", "other_key": "kept"}\n',
-        encoding="utf-8")
+        '{"ccp4_setup": "/repo/ccp4.setup-sh", "other_key": "kept"}\n', encoding="utf-8"
+    )
 
     loaded = ccp4_setup.load_ccp4_setup_config(
-        config_files=[str(primary), str(secondary)])
+        config_files=[str(primary), str(secondary)]
+    )
 
     assert loaded["ccp4_setup"] == "/user/ccp4.setup-sh"
     assert loaded["other_key"] == "kept"
@@ -235,12 +257,14 @@ def _stub_ccp4_dir(root, marker):
         script.chmod(0o755)
         if sys.platform == "win32":  # pragma: no cover - POSIX dev host
             (bindir / f"{tool}.bat").write_text(
-                f"@echo off\r\necho {marker}\r\n", encoding="utf-8")
+                f"@echo off\r\necho {marker}\r\n", encoding="utf-8"
+            )
     return bindir
 
 
 def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
-        monkeypatch, tmp_path):
+    monkeypatch, tmp_path
+):
     """A typo'd ``--ccp4-setup`` must fail, not fall through to ``PATH``.
 
     Regression: ``resolve_ccp4_environment`` returned as soon as
@@ -252,18 +276,20 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
     on_path = _stub_ccp4_dir(tmp_path, "ambient")
     monkeypatch.setenv("PATH", str(on_path))
     assert ccp4_setup.ccp4_tools_available(os.environ), (
-        "the stub must satisfy the PATH probe, or this test proves nothing")
+        "the stub must satisfy the PATH probe, or this test proves nothing"
+    )
 
-    args = argparse.Namespace(configure_ccp4=None,
-                              ccp4_setup="/nonexistent/ccp4.setup-sh")
+    args = argparse.Namespace(
+        configure_ccp4=None, ccp4_setup="/nonexistent/ccp4.setup-sh"
+    )
     with pytest.raises(SystemExit, match="not found"):
         main.resolve_ccp4_environment(args)
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="writes a POSIX sh setup script")
+@pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
 def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
-        monkeypatch, tmp_path):
+    monkeypatch, tmp_path
+):
     """The requested installation is used, not the one the shell had sourced.
 
     This is the reason the option exists: a user passes ``--ccp4-setup``
@@ -279,7 +305,8 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     monkeypatch.setenv("PATH", f"{ambient}{os.pathsep}{os.defpath}")
     assert ccp4_setup.ccp4_tools_available(os.environ), (
         "the ambient stub must satisfy the PATH probe, or the override this "
-        "test checks would never have been bypassed in the first place")
+        "test checks would never have been bypassed in the first place"
+    )
 
     setup = tmp_path / "ccp4.setup-sh"
     setup.write_text(f'export PATH="{requested}:$PATH"\n', encoding="utf-8")
@@ -292,4 +319,5 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     resolved = shutil.which("edstats", path=env.get("PATH"))
     assert resolved is not None
     assert str(requested) in resolved, (
-        f"the ambient PATH installation won over the requested one: {resolved}")
+        f"the ambient PATH installation won over the requested one: {resolved}"
+    )

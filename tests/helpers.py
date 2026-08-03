@@ -47,7 +47,13 @@ Vec3 = Tuple[float, float, float]
 #: ``StructureContext.symmetry_search_available`` is true and image searches and
 #: ``crystallographic_operation_count`` are exercised.
 DEFAULT_CELL: Tuple[float, float, float, float, float, float] = (
-    60.0, 70.0, 80.0, 90.0, 90.0, 90.0)
+    60.0,
+    70.0,
+    80.0,
+    90.0,
+    90.0,
+    90.0,
+)
 DEFAULT_SPACEGROUP = "P 21 21 21"
 
 #: Where a residue's schematic skeleton is placed when the caller does not say.
@@ -58,15 +64,38 @@ DEFAULT_RESIDUE_ORIGIN: Vec3 = (20.0, 20.0, 20.0)
 #: Unit directions used by :func:`simple_metal_site` to spread donors around a
 #: metal, ordered so the first six are octahedral.
 DONOR_DIRECTIONS: Tuple[Vec3, ...] = (
-    (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
-    (0.0, 1.0, 0.0), (0.0, -1.0, 0.0),
-    (0.0, 0.0, 1.0), (0.0, 0.0, -1.0),
+    (1.0, 0.0, 0.0),
+    (-1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (0.0, -1.0, 0.0),
+    (0.0, 0.0, 1.0),
+    (0.0, 0.0, -1.0),
 )
 
-STANDARD_AMINO_ACIDS = frozenset((
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-))
+STANDARD_AMINO_ACIDS = frozenset(
+    (
+        "ALA",
+        "ARG",
+        "ASN",
+        "ASP",
+        "CYS",
+        "GLN",
+        "GLU",
+        "GLY",
+        "HIS",
+        "ILE",
+        "LEU",
+        "LYS",
+        "MET",
+        "PHE",
+        "PRO",
+        "SER",
+        "THR",
+        "TRP",
+        "TYR",
+        "VAL",
+    )
+)
 
 WATER_NAMES = frozenset(("HOH", "WAT", "DOD", "H2O"))
 
@@ -120,21 +149,21 @@ def element_for_atom_name(atom_name: str) -> str:
     if name[0] in ("C", "N", "O", "S"):
         return name[0]
     raise ValueError(
-        f"cannot infer an element for atom name {atom_name!r}; "
-        "pass an explicit element")
+        f"cannot infer an element for atom name {atom_name!r}; pass an explicit element"
+    )
 
 
 def _side_chain_offset(index: int) -> Vec3:
     """Schematic position of the ``index``-th side-chain atom, from N."""
-    return (2.010 + 1.220 * index,
-            -0.773 - 0.500 * index,
-            -1.199 - 0.700 * index)
+    return (2.010 + 1.220 * index, -0.773 - 0.500 * index, -1.199 - 0.700 * index)
 
 
 def _translate(offset: Vec3, origin: Sequence[float]) -> Vec3:
-    return (float(origin[0]) + offset[0],
-            float(origin[1]) + offset[1],
-            float(origin[2]) + offset[2])
+    return (
+        float(origin[0]) + offset[0],
+        float(origin[1]) + offset[1],
+        float(origin[2]) + offset[2],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -189,9 +218,16 @@ class ResidueSpec:
         if not any(atom.name == atom_name for atom in self.atoms):
             raise KeyError(
                 f"residue {self.name}/{self.chain}/{self.resnum} has no atom "
-                f"{atom_name!r}")
-        return AtomRef(chain=self.chain, resname=self.name, seqid=self.seqid,
-                       icode=self.icode, atom_name=atom_name, altloc=altloc)
+                f"{atom_name!r}"
+            )
+        return AtomRef(
+            chain=self.chain,
+            resname=self.name,
+            seqid=self.seqid,
+            icode=self.icode,
+            atom_name=atom_name,
+            altloc=altloc,
+        )
 
     def atom(self, atom_name: str, altloc: str = "") -> AtomSpec:
         for spec in self.atoms:
@@ -199,7 +235,8 @@ class ResidueSpec:
                 return spec
         raise KeyError(
             f"residue {self.name}/{self.chain}/{self.resnum} has no atom "
-            f"{atom_name!r} with altloc {altloc!r}")
+            f"{atom_name!r} with altloc {altloc!r}"
+        )
 
 
 @dataclass
@@ -245,12 +282,15 @@ class StructureBuilder:
     insertion order when a test needs it.
     """
 
-    def __init__(self, name: str = "TEST",
-                 cell: Optional[Sequence[float]] = DEFAULT_CELL,
-                 spacegroup: Optional[str] = DEFAULT_SPACEGROUP,
-                 resolution: float = 1.50,
-                 group_het: bool = True,
-                 setup_entities: bool = True) -> None:
+    def __init__(
+        self,
+        name: str = "TEST",
+        cell: Optional[Sequence[float]] = DEFAULT_CELL,
+        spacegroup: Optional[str] = DEFAULT_SPACEGROUP,
+        resolution: float = 1.50,
+        group_het: bool = True,
+        setup_entities: bool = True,
+    ) -> None:
         self.name = name
         self.cell = tuple(cell) if cell is not None else None
         self.spacegroup = spacegroup
@@ -275,16 +315,20 @@ class StructureBuilder:
         return tuple(self._residues)
 
     # -- residue constructors ----------------------------------------------- #
-    def add_amino_acid(self, resname: str, seqid: int, *,
-                       chain: str = "A",
-                       positions: Optional[Mapping[str, Sequence[float]]] = None,
-                       origin: Sequence[float] = DEFAULT_RESIDUE_ORIGIN,
-                       occupancy: float = 1.0,
-                       altloc: str = "",
-                       icode: str = "",
-                       b_iso: float = 20.0,
-                       atoms: Optional[Sequence[AtomSpec]] = None,
-                       ) -> ResidueSpec:
+    def add_amino_acid(
+        self,
+        resname: str,
+        seqid: int,
+        *,
+        chain: str = "A",
+        positions: Optional[Mapping[str, Sequence[float]]] = None,
+        origin: Sequence[float] = DEFAULT_RESIDUE_ORIGIN,
+        occupancy: float = 1.0,
+        altloc: str = "",
+        icode: str = "",
+        b_iso: float = 20.0,
+        atoms: Optional[Sequence[AtomSpec]] = None,
+    ) -> ResidueSpec:
         """Add a standard amino-acid residue.
 
         ``positions`` maps atom name to an absolute ``(x, y, z)``; listed atoms
@@ -300,24 +344,33 @@ class StructureBuilder:
         if atoms is not None and positions:
             raise ValueError("pass either atoms= or positions=, not both")
         if atoms is None:
-            atoms = self._amino_acid_skeleton(
-                resname, origin, occupancy, altloc, b_iso)
+            atoms = self._amino_acid_skeleton(resname, origin, occupancy, altloc, b_iso)
             atoms = _apply_positions(atoms, positions, occupancy, altloc, b_iso)
         return self.add_residue(
-            ResidueSpec(name=resname, seqid=int(seqid), atoms=list(atoms),
-                        het=False, icode=str(icode)),
-            chain=chain)
+            ResidueSpec(
+                name=resname,
+                seqid=int(seqid),
+                atoms=list(atoms),
+                het=False,
+                icode=str(icode),
+            ),
+            chain=chain,
+        )
 
-    def add_metal(self, element: str = "ZN", seqid: int = 1, *,
-                  chain: str = "B",
-                  pos: Sequence[float] = (0.0, 0.0, 0.0),
-                  occupancy: float = 1.0,
-                  resname: Optional[str] = None,
-                  atom_name: Optional[str] = None,
-                  altloc: str = "",
-                  icode: str = "",
-                  b_iso: float = 20.0,
-                  ) -> ResidueSpec:
+    def add_metal(
+        self,
+        element: str = "ZN",
+        seqid: int = 1,
+        *,
+        chain: str = "B",
+        pos: Sequence[float] = (0.0, 0.0, 0.0),
+        occupancy: float = 1.0,
+        resname: Optional[str] = None,
+        atom_name: Optional[str] = None,
+        altloc: str = "",
+        icode: str = "",
+        b_iso: float = 20.0,
+    ) -> ResidueSpec:
         """Add a single-atom hetero metal ion.
 
         ``resname`` and ``atom_name`` both default to the upper-cased element,
@@ -327,47 +380,82 @@ class StructureBuilder:
         element = str(element).upper()
         resname = element if resname is None else str(resname).upper()
         atom_name = element if atom_name is None else str(atom_name)
-        atom = AtomSpec(name=atom_name, element=element,
-                        pos=(float(pos[0]), float(pos[1]), float(pos[2])),
-                        occupancy=occupancy, altloc=altloc, b_iso=b_iso)
+        atom = AtomSpec(
+            name=atom_name,
+            element=element,
+            pos=(float(pos[0]), float(pos[1]), float(pos[2])),
+            occupancy=occupancy,
+            altloc=altloc,
+            b_iso=b_iso,
+        )
         return self.add_residue(
-            ResidueSpec(name=resname, seqid=int(seqid), atoms=[atom],
-                        het=True, icode=str(icode)),
-            chain=chain)
+            ResidueSpec(
+                name=resname, seqid=int(seqid), atoms=[atom], het=True, icode=str(icode)
+            ),
+            chain=chain,
+        )
 
-    def add_water(self, seqid: int, pos: Sequence[float], *,
-                  chain: str = "B",
-                  occupancy: float = 1.0,
-                  altloc: str = "",
-                  icode: str = "",
-                  resname: str = "HOH",
-                  b_iso: float = 20.0,
-                  ) -> ResidueSpec:
+    def add_water(
+        self,
+        seqid: int,
+        pos: Sequence[float],
+        *,
+        chain: str = "B",
+        occupancy: float = 1.0,
+        altloc: str = "",
+        icode: str = "",
+        resname: str = "HOH",
+        b_iso: float = 20.0,
+    ) -> ResidueSpec:
         """Add a single-oxygen water residue at ``pos``."""
-        atom = AtomSpec(name="O", element="O",
-                        pos=(float(pos[0]), float(pos[1]), float(pos[2])),
-                        occupancy=occupancy, altloc=altloc, b_iso=b_iso)
+        atom = AtomSpec(
+            name="O",
+            element="O",
+            pos=(float(pos[0]), float(pos[1]), float(pos[2])),
+            occupancy=occupancy,
+            altloc=altloc,
+            b_iso=b_iso,
+        )
         return self.add_residue(
-            ResidueSpec(name=str(resname).upper(), seqid=int(seqid),
-                        atoms=[atom], het=True, icode=str(icode)),
-            chain=chain)
+            ResidueSpec(
+                name=str(resname).upper(),
+                seqid=int(seqid),
+                atoms=[atom],
+                het=True,
+                icode=str(icode),
+            ),
+            chain=chain,
+        )
 
-    def add_hetero_residue(self, resname: str, seqid: int,
-                           atoms: Sequence[AtomSpec], *,
-                           chain: str = "B",
-                           icode: str = "") -> ResidueSpec:
+    def add_hetero_residue(
+        self,
+        resname: str,
+        seqid: int,
+        atoms: Sequence[AtomSpec],
+        *,
+        chain: str = "B",
+        icode: str = "",
+    ) -> ResidueSpec:
         """Add an arbitrary hetero component, e.g. a multi-metal cofactor."""
         return self.add_residue(
-            ResidueSpec(name=str(resname).upper(), seqid=int(seqid),
-                        atoms=list(atoms), het=True, icode=str(icode)),
-            chain=chain)
+            ResidueSpec(
+                name=str(resname).upper(),
+                seqid=int(seqid),
+                atoms=list(atoms),
+                het=True,
+                icode=str(icode),
+            ),
+            chain=chain,
+        )
 
     # -- conformers --------------------------------------------------------- #
-    def add_conformers(self, residue: ResidueSpec,
-                       conformers: Sequence[
-                           Tuple[str, float, Mapping[str, Sequence[float]]]],
-                       *, atom_names: Optional[Iterable[str]] = None,
-                       ) -> ResidueSpec:
+    def add_conformers(
+        self,
+        residue: ResidueSpec,
+        conformers: Sequence[Tuple[str, float, Mapping[str, Sequence[float]]]],
+        *,
+        atom_names: Optional[Iterable[str]] = None,
+    ) -> ResidueSpec:
         """Split atoms of ``residue`` into alternate conformers.
 
         ``conformers`` is a sequence of ``(altloc, occupancy, positions)``.
@@ -383,28 +471,40 @@ class StructureBuilder:
         """
         if not conformers:
             raise ValueError("at least one conformer is required")
-        selected = (set(atom_names) if atom_names is not None
-                    else {atom.name for atom in residue.atoms
-                          if not atom.altloc})
+        selected = (
+            set(atom_names)
+            if atom_names is not None
+            else {atom.name for atom in residue.atoms if not atom.altloc}
+        )
         kept = [atom for atom in residue.atoms if atom.name not in selected]
         originals = [atom for atom in residue.atoms if atom.name in selected]
         expanded: List[AtomSpec] = []
         for altloc, occupancy, positions in conformers:
             for atom in originals:
                 pos = (positions or {}).get(atom.name, atom.pos)
-                expanded.append(replace(
-                    atom, altloc=str(altloc), occupancy=float(occupancy),
-                    pos=(float(pos[0]), float(pos[1]), float(pos[2]))))
+                expanded.append(
+                    replace(
+                        atom,
+                        altloc=str(altloc),
+                        occupancy=float(occupancy),
+                        pos=(float(pos[0]), float(pos[1]), float(pos[2])),
+                    )
+                )
         residue.atoms = kept + expanded
         return residue
 
     # -- connections -------------------------------------------------------- #
-    def add_connection(self, partner1: AtomRef, partner2: AtomRef, *,
-                       name: str = "",
-                       type: str = "metalc",
-                       asu: str = "same",
-                       reported_distance: float = 0.0,
-                       link_id: str = "") -> ConnectionSpec:
+    def add_connection(
+        self,
+        partner1: AtomRef,
+        partner2: AtomRef,
+        *,
+        name: str = "",
+        type: str = "metalc",
+        asu: str = "same",
+        reported_distance: float = 0.0,
+        link_id: str = "",
+    ) -> ConnectionSpec:
         """Declare a connection between two atoms.
 
         Written as ``_struct_conn`` in mmCIF and as a ``LINK`` record in PDB, so
@@ -417,10 +517,14 @@ class StructureBuilder:
         if str(asu).lower() not in _ASU_VALUES:
             raise ValueError(f"unknown asu {asu!r}")
         spec = ConnectionSpec(
-            partner1=partner1, partner2=partner2,
+            partner1=partner1,
+            partner2=partner2,
             name=name or f"conn{len(self.connections) + 1}",
-            type=str(type).lower(), asu=str(asu).lower(),
-            reported_distance=float(reported_distance), link_id=link_id)
+            type=str(type).lower(),
+            asu=str(asu).lower(),
+            reported_distance=float(reported_distance),
+            link_id=link_id,
+        )
         self.connections.append(spec)
         return spec
 
@@ -429,8 +533,7 @@ class StructureBuilder:
         residues = [r for r in self._residues if r.chain == chain]
         if not self.group_het:
             return residues
-        return ([r for r in residues if not r.het] +
-                [r for r in residues if r.het])
+        return [r for r in residues if not r.het] + [r for r in residues if r.het]
 
     def to_gemmi(self) -> gemmi.Structure:
         """Materialize the gemmi structure. Called fresh by every writer."""
@@ -472,8 +575,11 @@ class StructureBuilder:
         """Write PDB or mmCIF, choosing the format from ``path``'s suffix."""
         path = str(path)
         if fmt is None:
-            fmt = ("cif" if os.path.splitext(path)[1].lower() in (".cif", ".mmcif")
-                   else "pdb")
+            fmt = (
+                "cif"
+                if os.path.splitext(path)[1].lower() in (".cif", ".mmcif")
+                else "pdb"
+            )
         if fmt == "cif":
             return self.write_cif(path)
         if fmt == "pdb":
@@ -481,30 +587,50 @@ class StructureBuilder:
         raise ValueError(f"unknown coordinate format {fmt!r}")
 
     # -- convenience -------------------------------------------------------- #
-    def _amino_acid_skeleton(self, resname: str, origin: Sequence[float],
-                             occupancy: float, altloc: str,
-                             b_iso: float) -> List[AtomSpec]:
+    def _amino_acid_skeleton(
+        self,
+        resname: str,
+        origin: Sequence[float],
+        occupancy: float,
+        altloc: str,
+        b_iso: float,
+    ) -> List[AtomSpec]:
         if resname not in _SIDE_CHAIN_ATOMS:
             raise ValueError(
-                f"{resname!r} has no bundled skeleton; pass atoms= explicitly")
+                f"{resname!r} has no bundled skeleton; pass atoms= explicitly"
+            )
         specs = [
-            AtomSpec(name=name, element=element_for_atom_name(name),
-                     pos=_translate(_BACKBONE_OFFSETS[name], origin),
-                     occupancy=occupancy, altloc=altloc, b_iso=b_iso)
+            AtomSpec(
+                name=name,
+                element=element_for_atom_name(name),
+                pos=_translate(_BACKBONE_OFFSETS[name], origin),
+                occupancy=occupancy,
+                altloc=altloc,
+                b_iso=b_iso,
+            )
             for name in _BACKBONE_ATOMS
         ]
         for index, name in enumerate(_SIDE_CHAIN_ATOMS[resname]):
-            specs.append(AtomSpec(
-                name=name, element=element_for_atom_name(name),
-                pos=_translate(_side_chain_offset(index), origin),
-                occupancy=occupancy, altloc=altloc, b_iso=b_iso))
+            specs.append(
+                AtomSpec(
+                    name=name,
+                    element=element_for_atom_name(name),
+                    pos=_translate(_side_chain_offset(index), origin),
+                    occupancy=occupancy,
+                    altloc=altloc,
+                    b_iso=b_iso,
+                )
+            )
         return specs
 
 
-def _apply_positions(atoms: Sequence[AtomSpec],
-                     positions: Optional[Mapping[str, Sequence[float]]],
-                     occupancy: float, altloc: str,
-                     b_iso: float) -> List[AtomSpec]:
+def _apply_positions(
+    atoms: Sequence[AtomSpec],
+    positions: Optional[Mapping[str, Sequence[float]]],
+    occupancy: float,
+    altloc: str,
+    b_iso: float,
+) -> List[AtomSpec]:
     result = list(atoms)
     for name, pos in (positions or {}).items():
         pos = (float(pos[0]), float(pos[1]), float(pos[2]))
@@ -513,9 +639,16 @@ def _apply_positions(atoms: Sequence[AtomSpec],
                 result[index] = atom.moved(pos)
                 break
         else:
-            result.append(AtomSpec(
-                name=name, element=element_for_atom_name(name), pos=pos,
-                occupancy=occupancy, altloc=altloc, b_iso=b_iso))
+            result.append(
+                AtomSpec(
+                    name=name,
+                    element=element_for_atom_name(name),
+                    pos=pos,
+                    occupancy=occupancy,
+                    altloc=altloc,
+                    b_iso=b_iso,
+                )
+            )
     return result
 
 
@@ -563,20 +696,22 @@ def _gemmi_address(ref: AtomRef) -> gemmi.AtomAddress:
 # --------------------------------------------------------------------------- #
 # High-level structure recipes
 # --------------------------------------------------------------------------- #
-def simple_metal_site(metal: str = "ZN",
-                      donors: Sequence[Tuple[str, str, float]] = (
-                          ("HIS", "NE2", 2.03),
-                          ("ASP", "OD1", 1.99),
-                          ("HOH", "O", 2.09),
-                      ),
-                      *,
-                      metal_pos: Vec3 = (0.0, 0.0, 0.0),
-                      metal_occupancy: float = 1.0,
-                      protein_chain: str = "A",
-                      hetero_chain: str = "B",
-                      first_seqid: int = 10,
-                      directions: Sequence[Vec3] = DONOR_DIRECTIONS,
-                      **builder_kwargs) -> StructureBuilder:
+def simple_metal_site(
+    metal: str = "ZN",
+    donors: Sequence[Tuple[str, str, float]] = (
+        ("HIS", "NE2", 2.03),
+        ("ASP", "OD1", 1.99),
+        ("HOH", "O", 2.09),
+    ),
+    *,
+    metal_pos: Vec3 = (0.0, 0.0, 0.0),
+    metal_occupancy: float = 1.0,
+    protein_chain: str = "A",
+    hetero_chain: str = "B",
+    first_seqid: int = 10,
+    directions: Sequence[Vec3] = DONOR_DIRECTIONS,
+    **builder_kwargs,
+) -> StructureBuilder:
     """One metal ion surrounded by donors at exactly the requested distances.
 
     ``donors`` is a sequence of ``(resname, atom_name, distance)``. Each donor
@@ -594,34 +729,44 @@ def simple_metal_site(metal: str = "ZN",
     >>> path = builder.write_pdb(tmp_path / "zn.pdb")           # doctest: +SKIP
     """
     if len(donors) > len(directions):
-        raise ValueError(
-            f"{len(donors)} donors need at least as many directions")
+        raise ValueError(f"{len(donors)} donors need at least as many directions")
     builder = StructureBuilder(**builder_kwargs)
-    builder.add_metal(metal, seqid=1, chain=hetero_chain, pos=metal_pos,
-                      occupancy=metal_occupancy)
+    builder.add_metal(
+        metal, seqid=1, chain=hetero_chain, pos=metal_pos, occupancy=metal_occupancy
+    )
     seqid = int(first_seqid)
     water_seqid = 100
     for index, (resname, atom_name, distance) in enumerate(donors):
         direction = directions[index]
         norm = math.sqrt(sum(value * value for value in direction))
-        pos = tuple(metal_pos[axis] + direction[axis] / norm * float(distance)
-                    for axis in range(3))
+        pos = tuple(
+            metal_pos[axis] + direction[axis] / norm * float(distance)
+            for axis in range(3)
+        )
         if resname.upper() in WATER_NAMES:
-            builder.add_water(water_seqid, pos, chain=hetero_chain,
-                              resname=resname.upper())
+            builder.add_water(
+                water_seqid, pos, chain=hetero_chain, resname=resname.upper()
+            )
             water_seqid += 1
         else:
             builder.add_amino_acid(
-                resname, seqid, chain=protein_chain,
+                resname,
+                seqid,
+                chain=protein_chain,
                 positions={atom_name: pos},
-                origin=(20.0 + 12.0 * index, 20.0, 20.0))
+                origin=(20.0 + 12.0 * index, 20.0, 20.0),
+            )
             seqid += 1
     return builder
 
 
-def write_data_json(path, *, nrefcnt: object = 50000,
-                    rffin: object = 0.20,
-                    properties: Optional[Mapping[str, object]] = None) -> str:
+def write_data_json(
+    path,
+    *,
+    nrefcnt: object = 50000,
+    rffin: object = 0.20,
+    properties: Optional[Mapping[str, object]] = None,
+) -> str:
     """Write a PDB-REDO-style ``data.json`` for the DPI calculation.
 
     ``NREFCNT`` is the reflection count and ``RFFIN`` the final R-free; pass
@@ -646,8 +791,9 @@ def write_data_json(path, *, nrefcnt: object = 50000,
     return path
 
 
-def dpi_inputs(pdb_path=None, mtz_path=None, data_json=None,
-               resolution: float = 1.50) -> Dict[str, object]:
+def dpi_inputs(
+    pdb_path=None, mtz_path=None, data_json=None, resolution: float = 1.50
+) -> Dict[str, object]:
     """Build the ``dpi_inputs`` mapping ``run_bond_analysis`` expects.
 
     With no ``data_json`` the DPI is unavailable by construction and
@@ -670,33 +816,77 @@ def dpi_inputs(pdb_path=None, mtz_path=None, data_json=None,
 #: production constant means an accidental reorder in production cannot update
 #: both the generated test input and its expected schema at once.
 EDSTATS_HEADER: Tuple[str, ...] = (
-    "RT", "CI", "RN",
-    "BAm", "NPm", "Rm", "RGm", "SRGm", "CCSm", "CCPm", "ZCCPm", "ZOm",
-    "ZDm", "ZD-m", "ZD+m",
-    "BAs", "NPs", "Rs", "RGs", "SRGs", "CCSs", "CCPs", "ZCCPs", "ZOs",
-    "ZDs", "ZD-s", "ZD+s",
-    "BAa", "NPa", "Ra", "RGa", "SRGa", "CCSa", "CCPa", "ZCCPa", "ZOa",
-    "ZDa", "ZD-a", "ZD+a",
-    "MN", "CP", "NR",
+    "RT",
+    "CI",
+    "RN",
+    "BAm",
+    "NPm",
+    "Rm",
+    "RGm",
+    "SRGm",
+    "CCSm",
+    "CCPm",
+    "ZCCPm",
+    "ZOm",
+    "ZDm",
+    "ZD-m",
+    "ZD+m",
+    "BAs",
+    "NPs",
+    "Rs",
+    "RGs",
+    "SRGs",
+    "CCSs",
+    "CCPs",
+    "ZCCPs",
+    "ZOs",
+    "ZDs",
+    "ZD-s",
+    "ZD+s",
+    "BAa",
+    "NPa",
+    "Ra",
+    "RGa",
+    "SRGa",
+    "CCSa",
+    "CCPa",
+    "ZCCPa",
+    "ZOa",
+    "ZDa",
+    "ZD-a",
+    "ZD+a",
+    "MN",
+    "CP",
+    "NR",
 )
 EDSTATS_METRICS: Tuple[str, ...] = EDSTATS_HEADER[3:39]
 EDSTATS_NULL = "n/a"
+
 
 #: The synthetic row EDSTATS emits between MODEL/ENDMDL blocks: ``_`` followed
 #: by 36 null metrics and the model and row numbers (39 whitespace fields).
 def edstats_separator_row(model: int = 1, row_number: int = 1) -> List[str]:
     """Return EDSTATS' model-separator row as a field list."""
-    return ["_", *([EDSTATS_NULL] * len(EDSTATS_METRICS)),
-            str(int(model)), str(int(row_number))]
+    return [
+        "_",
+        *([EDSTATS_NULL] * len(EDSTATS_METRICS)),
+        str(int(model)),
+        str(int(row_number)),
+    ]
 
 
-def edstats_row(rt: str, ci: str, rn, *,
-                mn: int = 1,
-                cp: Optional[str] = None,
-                nr: int = 1,
-                metrics: Optional[Mapping[str, object]] = None,
-                default: object = 0.0,
-                omit_cp: bool = False) -> List[str]:
+def edstats_row(
+    rt: str,
+    ci: str,
+    rn,
+    *,
+    mn: int = 1,
+    cp: Optional[str] = None,
+    nr: int = 1,
+    metrics: Optional[Mapping[str, object]] = None,
+    default: object = 0.0,
+    omit_cp: bool = False,
+) -> List[str]:
     """Build one 42-field EDSTATS residue row as a list of strings.
 
     ``rt``/``ci``/``rn`` are the residue name, EDSTATS chain group and residue
@@ -728,9 +918,12 @@ def edstats_row(rt: str, ci: str, rn, *,
     return fields
 
 
-def edstats_text(rows: Sequence[Sequence[str]], *,
-                 header: Sequence[str] = EDSTATS_HEADER,
-                 trailing_newline: bool = True) -> str:
+def edstats_text(
+    rows: Sequence[Sequence[str]],
+    *,
+    header: Sequence[str] = EDSTATS_HEADER,
+    trailing_newline: bool = True,
+) -> str:
     """Render a header line plus rows as the whitespace table EDSTATS writes."""
     lines = [" ".join(str(name) for name in header)]
     lines.extend(" ".join(str(field) for field in row) for row in rows)
@@ -745,15 +938,15 @@ def write_edstats(path, rows: Sequence[Sequence[str]], **kwargs) -> str:
     return path
 
 
-def edstats_rows_for_structure(context, *,
-                               metrics: Optional[Mapping[str, object]] = None,
-                               per_residue: Optional[
-                                   Mapping[Tuple[str, str, str],
-                                           Mapping[str, object]]] = None,
-                               default: object = 0.0,
-                               model: int = 1,
-                               blank_chain_form: bool = False,
-                               ) -> List[List[str]]:
+def edstats_rows_for_structure(
+    context,
+    *,
+    metrics: Optional[Mapping[str, object]] = None,
+    per_residue: Optional[Mapping[Tuple[str, str, str], Mapping[str, object]]] = None,
+    default: object = 0.0,
+    model: int = 1,
+    blank_chain_form: bool = False,
+) -> List[List[str]]:
     """One EDSTATS row per residue of a loaded :class:`StructureContext`.
 
     Rows use each residue's *coordinate* name, chain and author residue number,
@@ -774,9 +967,19 @@ def edstats_rows_for_structure(context, *,
         ci = chain
         if blank:
             ci = "0" if residue.is_water else "_"
-        rows.append(edstats_row(rt, ci, resnum, mn=model, cp=chain, nr=index,
-                                metrics=row_metrics, default=default,
-                                omit_cp=blank))
+        rows.append(
+            edstats_row(
+                rt,
+                ci,
+                resnum,
+                mn=model,
+                cp=chain,
+                nr=index,
+                metrics=row_metrics,
+                default=default,
+                omit_cp=blank,
+            )
+        )
     return rows
 
 
@@ -790,10 +993,15 @@ def write_edstats_for_structure(path, context, **kwargs) -> str:
     return write_edstats(path, edstats_rows_for_structure(context, **kwargs))
 
 
-def stats_rows_for_structure(context, path, *, pdb_id: Optional[str] = None,
-                             metals: Optional[Iterable[str]] = None,
-                             cofactors: Optional[Iterable[str]] = None,
-                             **kwargs):
+def stats_rows_for_structure(
+    context,
+    path,
+    *,
+    pdb_id: Optional[str] = None,
+    metals: Optional[Iterable[str]] = None,
+    cofactors: Optional[Iterable[str]] = None,
+    **kwargs,
+):
     """Write a synthetic ``stats.out`` then parse it back with the real code.
 
     Returns ``(rows, header, stats_path)`` where ``rows``/``header`` are exactly
@@ -855,8 +1063,9 @@ def ccp4_available() -> bool:
     return ccp4_env() is not None
 
 
-def network_available(host: str = "pdb-redo.eu", port: int = 443,
-                      timeout: float = 5.0) -> bool:
+def network_available(
+    host: str = "pdb-redo.eu", port: int = 443, timeout: float = 5.0
+) -> bool:
     """Whether a TCP connection to ``host:port`` succeeds. Memoized per process.
 
     Set ``ALCHEMY_TESTS_NO_NETWORK=1`` to force this to ``False``.
@@ -885,8 +1094,7 @@ def which(program: str, env: Optional[Mapping[str, str]] = None) -> Optional[str
 CACHE_ENV_VARS = ("ALCHEMY_TESTS_CACHE", "ALCHEMY_TEST_CACHE")
 
 
-def cache_dir_from_env(
-        env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+def cache_dir_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """The configured PDB-REDO cache directory, or ``None`` if unset.
 
     Reads :data:`CACHE_ENV_VARS` in order, so the canonical
@@ -903,14 +1111,39 @@ def cache_dir_from_env(
 
 
 __all__ = [
-    "CACHE_ENV_VARS", "cache_dir_from_env",
-    "AtomRef", "AtomSpec", "ConnectionSpec", "ResidueSpec", "StructureBuilder",
-    "CCP4_TOOLS", "DEFAULT_CELL", "DEFAULT_RESIDUE_ORIGIN", "DEFAULT_SPACEGROUP",
-    "DONOR_DIRECTIONS", "EDSTATS_HEADER", "EDSTATS_METRICS", "EDSTATS_NULL",
-    "REPO_ROOT", "SRC_DIR", "STANDARD_AMINO_ACIDS", "TESTS_DIR", "WATER_NAMES",
-    "ccp4_available", "ccp4_env", "dpi_inputs", "edstats_row",
-    "edstats_rows_for_structure", "edstats_separator_row", "edstats_text",
-    "element_for_atom_name", "network_available", "simple_metal_site",
-    "stats_rows_for_structure", "which", "write_data_json", "write_edstats",
+    "CACHE_ENV_VARS",
+    "cache_dir_from_env",
+    "AtomRef",
+    "AtomSpec",
+    "ConnectionSpec",
+    "ResidueSpec",
+    "StructureBuilder",
+    "CCP4_TOOLS",
+    "DEFAULT_CELL",
+    "DEFAULT_RESIDUE_ORIGIN",
+    "DEFAULT_SPACEGROUP",
+    "DONOR_DIRECTIONS",
+    "EDSTATS_HEADER",
+    "EDSTATS_METRICS",
+    "EDSTATS_NULL",
+    "REPO_ROOT",
+    "SRC_DIR",
+    "STANDARD_AMINO_ACIDS",
+    "TESTS_DIR",
+    "WATER_NAMES",
+    "ccp4_available",
+    "ccp4_env",
+    "dpi_inputs",
+    "edstats_row",
+    "edstats_rows_for_structure",
+    "edstats_separator_row",
+    "edstats_text",
+    "element_for_atom_name",
+    "network_available",
+    "simple_metal_site",
+    "stats_rows_for_structure",
+    "which",
+    "write_data_json",
+    "write_edstats",
     "write_edstats_for_structure",
 ]

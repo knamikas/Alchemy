@@ -24,6 +24,7 @@ cell and symmetry with gemmi. Missing inputs produce NaN derived values without
 discarding measured bond geometry. ``main.py`` calls ``run_bond_analysis`` from
 its per-entry worker and supplies edstats rows in memory for the sigma join.
 """
+
 import json
 import math
 import os
@@ -45,9 +46,28 @@ DONOR_DISTANCE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
 
 # Recognized amino-acid donors. Waters are recognized separately with Gemmi's
 # Residue.is_water(), which also handles WAT, H2O, and DOD.
-AA = {"ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-      "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-      }
+AA = {
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "CYS",
+    "GLN",
+    "GLU",
+    "GLY",
+    "HIS",
+    "ILE",
+    "LEU",
+    "LYS",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "VAL",
+}
 
 # Typical protein donors that Alchemy may infer from geometry alone. Every
 # standard amino acid can donate through its backbone carbonyl O. The listed
@@ -105,6 +125,7 @@ ZSCORE_OUTLIER_CUTOFF = 6.0
 
 NAN = float("nan")
 
+
 def _load_cofactor_classes(path):
     """Return ``(cluster_ids, heme_ids)`` from the bundled catalog.
 
@@ -129,7 +150,8 @@ def _load_cofactor_classes(path):
     if not cluster or not heme:
         raise ValueError(
             f"{os.path.basename(path)} carries no structural classes; rebuild "
-            "it with tools/build_metallocofactor_catalog.py")
+            "it with tools/build_metallocofactor_catalog.py"
+        )
     return frozenset(cluster), frozenset(heme)
 
 
@@ -139,38 +161,93 @@ CLUSTER, HEMES = _load_cofactor_classes(COFACTOR_CATALOG_PATH)
 # drift. Legacy "candidate" field names are retained for CSV compatibility,
 # but now describe inferred first-sphere or source-declared contacts.
 BOND_COLUMNS = [
-    "pdbID", "metal_resname", "metal_chain", "metal_resnum", "metal_element",
-    "neighbor_resname", "neighbor_atom", "neighbor_element", "distance",
-    "coordination_status", "coordination_source", "declared_connection",
-    "connection_id", "connection_type", "connection_link_id",
-    "connection_asu", "connection_reported_distance",
-    "inferred_donor_allowed", "inferred_donor_rule", "donor_rule_override",
-    "context_warning", "context_warning_reasons",
-    "literature_distance", "literature_stdev", "zscore", "dpi", "resolution",
-    "sigma_mag", "sigma_neg", "sigma_pos", "parent_type", "bonded_to",
-    "model_id", "metal_model_index", "metal_chain_index",
-    "metal_residue_index", "metal_atom_index", "metal_atom", "metal_icode",
-    "metal_altloc", "metal_occupancy", "metal_occupancy_valid",
-    "metal_occupancy_status", "metal_conformer_mean_occupancy",
-    "metal_altloc_options", "metal_altloc_selection_fallback",
-    "neighbor_chain", "neighbor_resnum", "neighbor_icode",
-    "neighbor_model_index", "neighbor_chain_index", "neighbor_residue_index",
-    "neighbor_atom_index", "neighbor_altloc", "neighbor_occupancy",
-    "neighbor_occupancy_valid", "neighbor_occupancy_status",
-    "neighbor_conformer_mean_occupancy", "neighbor_altloc_options",
-    "neighbor_altloc_selection_fallback", "alternative_conformers_present",
-    "altloc_selection_fallback", "neighbor_class", "candidate_contact",
-    "reference_covered", "geometry_outlier", "geometry_consistent",
-    "multi_donor_detected", "multi_donor_contact_count",
-    "multi_donor_geometry_status", "multi_donor_contains_suspect_bond",
+    "pdbID",
+    "metal_resname",
+    "metal_chain",
+    "metal_resnum",
+    "metal_element",
+    "neighbor_resname",
+    "neighbor_atom",
+    "neighbor_element",
+    "distance",
+    "coordination_status",
+    "coordination_source",
+    "declared_connection",
+    "connection_id",
+    "connection_type",
+    "connection_link_id",
+    "connection_asu",
+    "connection_reported_distance",
+    "inferred_donor_allowed",
+    "inferred_donor_rule",
+    "donor_rule_override",
+    "context_warning",
+    "context_warning_reasons",
+    "literature_distance",
+    "literature_stdev",
+    "zscore",
+    "dpi",
+    "resolution",
+    "sigma_mag",
+    "sigma_neg",
+    "sigma_pos",
+    "parent_type",
+    "bonded_to",
+    "model_id",
+    "metal_model_index",
+    "metal_chain_index",
+    "metal_residue_index",
+    "metal_atom_index",
+    "metal_atom",
+    "metal_icode",
+    "metal_altloc",
+    "metal_occupancy",
+    "metal_occupancy_valid",
+    "metal_occupancy_status",
+    "metal_conformer_mean_occupancy",
+    "metal_altloc_options",
+    "metal_altloc_selection_fallback",
+    "neighbor_chain",
+    "neighbor_resnum",
+    "neighbor_icode",
+    "neighbor_model_index",
+    "neighbor_chain_index",
+    "neighbor_residue_index",
+    "neighbor_atom_index",
+    "neighbor_altloc",
+    "neighbor_occupancy",
+    "neighbor_occupancy_valid",
+    "neighbor_occupancy_status",
+    "neighbor_conformer_mean_occupancy",
+    "neighbor_altloc_options",
+    "neighbor_altloc_selection_fallback",
+    "alternative_conformers_present",
+    "altloc_selection_fallback",
+    "neighbor_class",
+    "candidate_contact",
+    "reference_covered",
+    "geometry_outlier",
+    "geometry_consistent",
+    "multi_donor_detected",
+    "multi_donor_contact_count",
+    "multi_donor_geometry_status",
+    "multi_donor_contains_suspect_bond",
     "score_eligible",
     "score_exclusion_reason",
-    "zscore_outlier_cutoff", "contact_scope", "symmetry_contact",
-    "crystallographic_contact", "strict_ncs_contact",
+    "zscore_outlier_cutoff",
+    "contact_scope",
+    "symmetry_contact",
+    "crystallographic_contact",
+    "strict_ncs_contact",
     "strict_ncs_operation_id",
-    "symmetry_image_index", "symmetry_operation", "cell_translation_x",
-    "cell_translation_y", "cell_translation_z", "transformed_neighbor_x",
-    "transformed_neighbor_y", "transformed_neighbor_z",
+    "symmetry_image_index",
+    "symmetry_operation",
+    "cell_translation_x",
+    "cell_translation_y",
+    "cell_translation_z",
+    "transformed_neighbor_x",
+    "transformed_neighbor_y",
+    "transformed_neighbor_z",
 ]
 
 
@@ -179,81 +256,160 @@ BOND_COLUMNS = [
 # first-sphere eligibility does not establish that an atom is chemically
 # nonbonded, and a source declaration may supersede the proximity-only result.
 CANDIDATE_COLUMNS = [
-    "pdbID", "candidate_source", "eligibility_status", "eligibility_reason",
-    "first_sphere_eligible", "candidate_distance", "assignment_target",
-    "assignment_tolerance", "first_sphere_cutoff",
-    "assignment_reference_kind", "assignment_reference",
-    "inferred_contact_eligible", "inferred_donor_allowed",
-    "inferred_donor_rule", "donor_rule_override",
-    "context_warning", "context_warning_reasons",
-    "coordination_status", "coordination_source", "declared_connection",
-    "connection_id", "connection_type", "connection_link_id",
-    "connection_asu", "connection_reported_distance",
-    "metal_resname", "metal_chain", "metal_resnum", "metal_element",
-    "metal_atom", "metal_icode", "metal_altloc", "metal_occupancy",
-    "model_id", "metal_model_index", "metal_chain_index",
-    "metal_residue_index", "metal_atom_index",
-    "neighbor_resname", "neighbor_chain", "neighbor_resnum",
-    "neighbor_atom", "neighbor_element", "neighbor_icode",
-    "neighbor_altloc", "neighbor_occupancy", "neighbor_class",
-    "neighbor_model_index", "neighbor_chain_index",
-    "neighbor_residue_index", "neighbor_atom_index",
-    "contact_scope", "symmetry_contact", "crystallographic_contact",
-    "strict_ncs_contact", "strict_ncs_operation_id", "symmetry_image_index",
-    "symmetry_operation", "cell_translation_x", "cell_translation_y",
-    "cell_translation_z", "transformed_neighbor_x",
-    "transformed_neighbor_y", "transformed_neighbor_z",
+    "pdbID",
+    "candidate_source",
+    "eligibility_status",
+    "eligibility_reason",
+    "first_sphere_eligible",
+    "candidate_distance",
+    "assignment_target",
+    "assignment_tolerance",
+    "first_sphere_cutoff",
+    "assignment_reference_kind",
+    "assignment_reference",
+    "inferred_contact_eligible",
+    "inferred_donor_allowed",
+    "inferred_donor_rule",
+    "donor_rule_override",
+    "context_warning",
+    "context_warning_reasons",
+    "coordination_status",
+    "coordination_source",
+    "declared_connection",
+    "connection_id",
+    "connection_type",
+    "connection_link_id",
+    "connection_asu",
+    "connection_reported_distance",
+    "metal_resname",
+    "metal_chain",
+    "metal_resnum",
+    "metal_element",
+    "metal_atom",
+    "metal_icode",
+    "metal_altloc",
+    "metal_occupancy",
+    "model_id",
+    "metal_model_index",
+    "metal_chain_index",
+    "metal_residue_index",
+    "metal_atom_index",
+    "neighbor_resname",
+    "neighbor_chain",
+    "neighbor_resnum",
+    "neighbor_atom",
+    "neighbor_element",
+    "neighbor_icode",
+    "neighbor_altloc",
+    "neighbor_occupancy",
+    "neighbor_class",
+    "neighbor_model_index",
+    "neighbor_chain_index",
+    "neighbor_residue_index",
+    "neighbor_atom_index",
+    "contact_scope",
+    "symmetry_contact",
+    "crystallographic_contact",
+    "strict_ncs_contact",
+    "strict_ncs_operation_id",
+    "symmetry_image_index",
+    "symmetry_operation",
+    "cell_translation_x",
+    "cell_translation_y",
+    "cell_translation_z",
+    "transformed_neighbor_x",
+    "transformed_neighbor_y",
+    "transformed_neighbor_z",
 ]
 
 
 # Appended after the dynamic EDSTATS header in metal_stats_all.csv.
 STATS_EXTRA_COLUMNS = [
-    "model_policy", "input_model_count", "model_analyzed", "model_id",
-    "multi_model_structure", "metal_model_index", "metal_chain_index",
-    "metal_residue_index", "metal_atom_index", "metal_resname", "metal_chain",
-    "metal_resnum", "metal_atom", "metal_element", "metal_icode",
-    "metal_altloc", "metal_occupancy", "metal_occupancy_valid",
+    "model_policy",
+    "input_model_count",
+    "model_analyzed",
+    "model_id",
+    "multi_model_structure",
+    "metal_model_index",
+    "metal_chain_index",
+    "metal_residue_index",
+    "metal_atom_index",
+    "metal_resname",
+    "metal_chain",
+    "metal_resnum",
+    "metal_atom",
+    "metal_element",
+    "metal_icode",
+    "metal_altloc",
+    "metal_occupancy",
+    "metal_occupancy_valid",
     "metal_occupancy_status",
-    "metal_conformer_mean_occupancy", "metal_altloc_options",
-    "alternative_conformers_present", "altloc_selection_fallback",
-    "density_observation_id", "density_scope", "density_shared_site_count",
+    "metal_conformer_mean_occupancy",
+    "metal_altloc_options",
+    "alternative_conformers_present",
+    "altloc_selection_fallback",
+    "density_observation_id",
+    "density_scope",
+    "density_shared_site_count",
     "density_is_shared",
-    "coordinate_mapping_status", "selected_metal_site_status",
-    "dpi", "resolution", "occupancy_weighted_atom_count",
-    "deposited_occupancy_weighted_atom_count", "dpi_atom_count_multiplier",
-    "strict_ncs_operation_count", "crystallographic_operation_count",
+    "coordinate_mapping_status",
+    "selected_metal_site_status",
+    "dpi",
+    "resolution",
+    "occupancy_weighted_atom_count",
+    "deposited_occupancy_weighted_atom_count",
+    "dpi_atom_count_multiplier",
+    "strict_ncs_operation_count",
+    "crystallographic_operation_count",
     "dpi_unavailable_reason",
-    "candidate_contact_count", "reference_covered_contact_count",
-    "geometry_outlier_contact_count", "geometry_consistent_contact_count",
-    "score_eligible_contact_count", "score_excluded_contact_count",
+    "candidate_contact_count",
+    "reference_covered_contact_count",
+    "geometry_outlier_contact_count",
+    "geometry_consistent_contact_count",
+    "score_eligible_contact_count",
+    "score_excluded_contact_count",
     "scored_geometry_outlier_contact_count",
     "scored_geometry_consistent_contact_count",
-    "multi_donor_residue_group_count", "multi_donor_contact_count",
+    "multi_donor_residue_group_count",
+    "multi_donor_contact_count",
     "suspect_multi_donor_residue_group_count",
     "indeterminate_multi_donor_residue_group_count",
-    "context_warning", "context_warning_reasons",
+    "context_warning",
+    "context_warning_reasons",
     "non_typical_first_sphere_candidate_count",
     "declared_donor_override_contact_count",
-    "explicit_contact_count", "symmetry_contact_count",
-    "image_inclusive_contact_count", "crystallographic_contact_count",
-    "strict_ncs_contact_count", "combined_ncs_crystallographic_contact_count",
+    "explicit_contact_count",
+    "symmetry_contact_count",
+    "image_inclusive_contact_count",
+    "crystallographic_contact_count",
+    "strict_ncs_contact_count",
+    "combined_ncs_crystallographic_contact_count",
     "geometry_outlier_count_explicit",
     "geometry_outlier_count_image_inclusive",
-    "geometry_coverage_explicit", "geometry_coverage_image_inclusive",
-    "explicit_geometry_status", "image_inclusive_geometry_status",
+    "geometry_coverage_explicit",
+    "geometry_coverage_image_inclusive",
+    "explicit_geometry_status",
+    "image_inclusive_geometry_status",
     "generated_contact_scope",
     "geometry_classification_changes_with_generated_images",
     "coordination_depends_on_crystallographic_symmetry",
     "coordination_depends_on_strict_ncs",
-    "symmetry_search_available", "symmetry_search_failure_reason",
-    "occupancy_validation_failed", "missing_occupancy_count",
-    "invalid_occupancy_count", "zero_occupancy_atom_count",
-    "metal_zero_occupancy", "geometry_not_assessed_reason",
-    "duplicate_atom_records_present", "duplicate_atom_record_count",
+    "symmetry_search_available",
+    "symmetry_search_failure_reason",
+    "occupancy_validation_failed",
+    "missing_occupancy_count",
+    "invalid_occupancy_count",
+    "zero_occupancy_atom_count",
+    "metal_zero_occupancy",
+    "geometry_not_assessed_reason",
+    "duplicate_atom_records_present",
+    "duplicate_atom_record_count",
     "duplicate_atom_coordinate_conflict_count",
-    "malformed_duplicate_atom_name_count", "raw_occupancy_mapping_failed",
+    "malformed_duplicate_atom_name_count",
+    "raw_occupancy_mapping_failed",
     "raw_occupancy_mapping_failure_reason",
-    "unknown_element_atom_count", "element_validation_warning",
+    "unknown_element_atom_count",
+    "element_validation_warning",
     "zscore_outlier_cutoff",
 ]
 
@@ -283,8 +439,7 @@ LIT = _load_literature(DONOR_DISTANCE_PATH)
 FIRST_SPHERE_TARGETS = {}
 for (_, donor, metal_element), (target, _) in LIT.items():
     key = (metal_element, donor)
-    FIRST_SPHERE_TARGETS[key] = max(
-        target, FIRST_SPHERE_TARGETS.get(key, -math.inf))
+    FIRST_SPHERE_TARGETS[key] = max(target, FIRST_SPHERE_TARGETS.get(key, -math.inf))
 
 
 # --------------------------------------------------------------------------- #
@@ -315,22 +470,21 @@ def _asu_volume(mtz_path, pdb_path):
     CRYST1 metadata.
     """
     import gemmi
+
     cell = sg = None
     try:
         mtz = gemmi.read_mtz_file(mtz_path)
         cell, sg = mtz.cell, mtz.spacegroup
     except Exception:
         cell = sg = None
-    if (cell is None or sg is None or cell.volume <= 0
-            or _is_placeholder_cell(cell)):
+    if cell is None or sg is None or cell.volume <= 0 or _is_placeholder_cell(cell):
         try:
             st = gemmi.read_structure(pdb_path)
             cell = st.cell
             sg = gemmi.find_spacegroup_by_name(st.spacegroup_hm)
         except Exception:
             return NAN
-    if (cell is None or sg is None or cell.volume <= 0
-            or _is_placeholder_cell(cell)):
+    if cell is None or sg is None or cell.volume <= 0 or _is_placeholder_cell(cell):
         return NAN
     nops = len(list(sg.operations()))
     return cell.volume / nops if nops > 0 else NAN
@@ -341,8 +495,12 @@ def _rfree_from_pdb(pdb_path):
     try:
         with open(pdb_path) as f:
             for line in f:
-                if ("FREE R VALUE" in line and "TEST" not in line
-                        and "ESTIMATED" not in line and "BIN" not in line):
+                if (
+                    "FREE R VALUE" in line
+                    and "TEST" not in line
+                    and "ESTIMATED" not in line
+                    and "BIN" not in line
+                ):
                     m = re.search(r"FREE R VALUE\s*:\s*(\d+\.\d+)", line)
                     if m:
                         return float(m.group(1))
@@ -384,17 +542,26 @@ def _calculate_dpi_details(structure, dpi_inputs):
 
         nobs = props.get("NREFCNT")
         rfree = props.get("RFFIN")
-        rfree = (float(rfree) if rfree not in (None, "")
-                 else _rfree_from_pdb(dpi_inputs["pdb_path"]))
+        rfree = (
+            float(rfree)
+            if rfree not in (None, "")
+            else _rfree_from_pdb(dpi_inputs["pdb_path"])
+        )
         nobs = float(nobs) if nobs not in (None, "") else NAN
         va = _asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
         ni = count_ni(structure)
 
-        if not all(isinstance(x, (float, int))
-                   for x in (nobs, rfree, va)):
+        if not all(isinstance(x, (float, int)) for x in (nobs, rfree, va)):
             return NAN, resolution, "invalid_dpi_metadata"
-        if not (math.isfinite(nobs) and math.isfinite(rfree) and math.isfinite(va)
-                and nobs > 0 and rfree > 0 and va > 0 and ni > 0):
+        if not (
+            math.isfinite(nobs)
+            and math.isfinite(rfree)
+            and math.isfinite(va)
+            and nobs > 0
+            and rfree > 0
+            and va > 0
+            and ni > 0
+        ):
             if structure.occupancy_validation_failed:
                 reason = "invalid_occupancy"
             elif not math.isfinite(nobs) or nobs <= 0:
@@ -406,7 +573,7 @@ def _calculate_dpi_details(structure, dpi_inputs):
             else:
                 reason = "invalid_dpi_atom_count"
             return NAN, resolution, reason
-        dpi = 1.28 * (ni ** 0.5) * (va ** (1 / 3)) * (nobs ** (-5 / 6)) * rfree
+        dpi = 1.28 * (ni**0.5) * (va ** (1 / 3)) * (nobs ** (-5 / 6)) * rfree
         return round(dpi, 4), resolution, ""
     except Exception:
         return NAN, resolution, "dpi_calculation_failed"
@@ -425,9 +592,9 @@ def _bonding_key(neighbor, nb_res, metal_el):
         # chemically typical donors eligible through the element fallback, but
         # do not misrepresent a residue side-chain reference as exact.
         return ("CTERM", "O", metal_el)
-    if name == "O":               # backbone carbonyl O -> literal "CA" row
+    if name == "O":  # backbone carbonyl O -> literal "CA" row
         return ("CA", "O", metal_el)
-    if name.startswith("O"):      # side-chain O (OD1/OE1/OG/OH/...)
+    if name.startswith("O"):  # side-chain O (OD1/OE1/OG/OH/...)
         return (nb_res, "O", metal_el)
     return (nb_res, neighbor.element, metal_el)  # His N, Cys S, ...
 
@@ -462,16 +629,21 @@ def _zscore(dist, mu, stdev, dpi):
     """
     if not (math.isfinite(dpi) and math.isfinite(mu) and math.isfinite(stdev)):
         return NAN
-    denom = math.sqrt(dpi ** 2 + stdev ** 2)
+    denom = math.sqrt(dpi**2 + stdev**2)
     return round((dist - mu) / denom, 4) if denom > 0 else NAN
 
 
 def _sigma_index(stats_rows):
     """Map (resname, chain, resnum) -> edstats fields, for the sigma join."""
-    return {(r["resname"], str(r["chain"]), str(r["resnum"])): r["fields"]
-            for r in stats_rows}
+    return {
+        (r["resname"], str(r["chain"]), str(r["resnum"])): r["fields"]
+        for r in stats_rows
+    }
+
 
 ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
+
+
 def _zd_indices(header):
     """Return column indices for ZDm/ZD-m/ZD+m, or None
     if the header is missing or doesn't contain all three names."""
@@ -488,27 +660,37 @@ def _sigma_for(sig, resname, chain, resnum, zd_idx):
     if fields is None or zd_idx is None:
         return NAN, NAN, NAN
     try:
-        return (float(fields[zd_idx[0]]), float(fields[zd_idx[1]]),
-                float(fields[zd_idx[2]]))
+        return (
+            float(fields[zd_idx[0]]),
+            float(fields[zd_idx[1]]),
+            float(fields[zd_idx[2]]),
+        )
     except (IndexError, ValueError):
         return NAN, NAN, NAN
 
 
 def _contact_sort_key(contact):
     neighbor = contact["neighbor"]
-    return (neighbor.chain_index, neighbor.residue_index, neighbor.atom_index,
-            contact["symmetry_operation"], contact["translation"],
-            contact["transformed_position"])
+    return (
+        neighbor.chain_index,
+        neighbor.residue_index,
+        neighbor.atom_index,
+        contact["symmetry_operation"],
+        contact["translation"],
+        contact["transformed_position"],
+    )
 
 
 def _merge_candidate_provenance(target, source):
     """Add discovery and declaration provenance without duplicating records."""
     target.setdefault("candidate_sources", set()).update(
-        source.get("candidate_sources", ()))
+        source.get("candidate_sources", ())
+    )
     target.setdefault("declared_connections", [])
     known_connections = {
         (record["source"], record["connection_id"])
-        for record in target["declared_connections"]}
+        for record in target["declared_connections"]
+    }
     for record in source.get("declared_connections", ()):
         connection_key = (record["source"], record["connection_id"])
         if connection_key not in known_connections:
@@ -524,9 +706,14 @@ def _special_position_preference(contact):
     Within the same scope, retain the shortest contact and then use stable
     symmetry provenance to break any remaining tie.
     """
-    return (contact["symmetry_contact"], contact["distance_raw"],
-            contact["symmetry_image_index"], contact["symmetry_operation"],
-            contact["translation"], contact["transformed_position"])
+    return (
+        contact["symmetry_contact"],
+        contact["distance_raw"],
+        contact["symmetry_image_index"],
+        contact["symmetry_operation"],
+        contact["translation"],
+        contact["transformed_position"],
+    )
 
 
 def _deduplicate_special_position_contacts(candidates):
@@ -543,15 +730,21 @@ def _deduplicate_special_position_contacts(candidates):
     contacts = []
     for source_key in sorted(by_source):
         retained = []
-        for candidate in sorted(by_source[source_key],
-                                key=_special_position_preference):
-            duplicate = next((
-                current for current in retained
-                if position_distance(
-                    current["transformed_position"],
-                    candidate["transformed_position"],
-                ) <= SPECIAL_POSITION_DEDUP_CUTOFF
-            ), None)
+        for candidate in sorted(
+            by_source[source_key], key=_special_position_preference
+        ):
+            duplicate = next(
+                (
+                    current
+                    for current in retained
+                    if position_distance(
+                        current["transformed_position"],
+                        candidate["transformed_position"],
+                    )
+                    <= SPECIAL_POSITION_DEDUP_CUTOFF
+                ),
+                None,
+            )
             if duplicate is not None:
                 _merge_candidate_provenance(duplicate, candidate)
                 continue
@@ -574,8 +767,7 @@ def _first_sphere_rule(metal, neighbor):
         # defining the same donor element for this metal. Use the largest such
         # target only for sphere membership; exact references remain mandatory
         # for z-score calculation.
-        target = FIRST_SPHERE_TARGETS.get(
-            (metal.element, neighbor.element))
+        target = FIRST_SPHERE_TARGETS.get((metal.element, neighbor.element))
         if target is None:
             return NAN, NAN, "missing", ""
         reference_kind = "element_fallback"
@@ -598,9 +790,12 @@ def _polymer_terminal_position(structure, atom):
         if residue.entity_type != gemmi.EntityType.Polymer:
             return False, False
         indices = [
-            index for index, current in enumerate(chain)
-            if (current.entity_type == gemmi.EntityType.Polymer and
-                current.subchain == residue.subchain)
+            index
+            for index, current in enumerate(chain)
+            if (
+                current.entity_type == gemmi.EntityType.Polymer
+                and current.subchain == residue.subchain
+            )
         ]
         if not indices:
             return False, False
@@ -621,8 +816,12 @@ def _inferred_donor_rule(structure, atom):
     if residue_name not in INFERRED_DONOR_ATOMS:
         return False, "outside_typical_donor_list"
     if atom_name in INFERRED_DONOR_ATOMS[residue_name]:
-        return (True, "backbone_carbonyl_oxygen"
-                if atom_name == "O" else "typical_sidechain_donor")
+        return (
+            True,
+            "backbone_carbonyl_oxygen"
+            if atom_name == "O"
+            else "typical_sidechain_donor",
+        )
 
     is_n_terminal, is_c_terminal = _polymer_terminal_position(structure, atom)
     if is_n_terminal and atom_name in N_TERMINAL_DONOR_ATOMS:
@@ -635,8 +834,7 @@ def _inferred_donor_rule(structure, atom):
 def _annotate_donor_policy(structure, candidates):
     """Annotate candidates with inference permission and declaration override."""
     for candidate in candidates:
-        allowed, rule = _inferred_donor_rule(
-            structure, candidate["neighbor"])
+        allowed, rule = _inferred_donor_rule(structure, candidate["neighbor"])
         declared = bool(candidate.get("declared_connections"))
         # A declaration overrides the donor-atom rule only inside a residue
         # class Alchemy can assess. Claiming the override for a donor whose
@@ -647,8 +845,8 @@ def _annotate_donor_policy(structure, candidates):
             inferred_donor_allowed=allowed,
             inferred_donor_rule=rule,
             donor_rule_override=(
-                "declared_connection"
-                if declared and not allowed and supported else ""),
+                "declared_connection" if declared and not allowed and supported else ""
+            ),
         )
 
 
@@ -667,7 +865,8 @@ def _identify_first_sphere_candidates(candidates, metal):
         neighbor = candidate["neighbor"]
         donor_allowed = candidate.get("inferred_donor_allowed", True)
         target, cutoff, reference_kind, reference_key = _first_sphere_rule(
-            metal, neighbor)
+            metal, neighbor
+        )
         if not math.isfinite(cutoff):
             declared = bool(candidate.get("declared_connections"))
             if donor_allowed or declared:
@@ -675,11 +874,14 @@ def _identify_first_sphere_candidates(candidates, metal):
             candidate.update(
                 eligibility_status=(
                     "missing_assignment_reference"
-                    if donor_allowed or declared else "non_typical_donor"),
+                    if donor_allowed or declared
+                    else "non_typical_donor"
+                ),
                 eligibility_reason=(
                     "no_metal_donor_assignment_reference"
-                    if donor_allowed or declared else
-                    "atom_not_in_typical_inferred_donor_list"),
+                    if donor_allowed or declared
+                    else "atom_not_in_typical_inferred_donor_list"
+                ),
                 first_sphere_eligible=False,
                 inferred_contact_eligible=False,
                 assignment_target=NAN,
@@ -693,13 +895,19 @@ def _identify_first_sphere_candidates(candidates, metal):
         inferred_eligible = is_eligible and donor_allowed
         candidate.update(
             eligibility_status=(
-                "first_sphere_eligible" if inferred_eligible else
-                ("non_typical_donor" if is_eligible
-                 else "outside_first_sphere")),
+                "first_sphere_eligible"
+                if inferred_eligible
+                else ("non_typical_donor" if is_eligible else "outside_first_sphere")
+            ),
             eligibility_reason=(
-                "distance_within_target_plus_0.75" if inferred_eligible else
-                ("atom_not_in_typical_inferred_donor_list" if is_eligible
-                 else "distance_exceeds_target_plus_0.75")),
+                "distance_within_target_plus_0.75"
+                if inferred_eligible
+                else (
+                    "atom_not_in_typical_inferred_donor_list"
+                    if is_eligible
+                    else "distance_exceeds_target_plus_0.75"
+                )
+            ),
             first_sphere_eligible=is_eligible,
             inferred_contact_eligible=inferred_eligible,
             assignment_target=target,
@@ -710,8 +918,7 @@ def _identify_first_sphere_candidates(candidates, metal):
         )
         if inferred_eligible:
             eligible.append(candidate)
-    return (_deduplicate_special_position_contacts(eligible),
-            unsupported_pairs)
+    return (_deduplicate_special_position_contacts(eligible), unsupported_pairs)
 
 
 def _collect_proximal_candidates(structure, search, metal, include_symmetry):
@@ -723,8 +930,9 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
     ``_identify_first_sphere_candidates`` and future donor-group logic.
     """
     candidates = []
-    marks = search.find_atoms(metal.pos, "\x00", min_dist=0.0,
-                              radius=CUTOFF + SEARCH_EPSILON)
+    marks = search.find_atoms(
+        metal.pos, "\x00", min_dist=0.0, radius=CUTOFF + SEARCH_EPSILON
+    )
     for mark in marks:
         neighbor = structure.atom_for_mark(mark)
         if neighbor is None:
@@ -741,9 +949,11 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
 
         if include_symmetry:
             nearest = structure.structure.cell.find_nearest_pbc_image(
-                metal.pos, neighbor.pos, mark.image_idx)
+                metal.pos, neighbor.pos, mark.image_idx
+            )
             transformed = structure.structure.cell.find_nearest_pbc_position(
-                metal.pos, neighbor.pos, mark.image_idx)
+                metal.pos, neighbor.pos, mark.image_idx
+            )
             translation = tuple(int(value) for value in nearest.pbc_shift)
             image_index = int(nearest.sym_idx)
             (
@@ -752,8 +962,7 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
                 strict_ncs_operation_id,
                 contact_scope,
             ) = structure.image_provenance(image_index, translation)
-            symmetry_contact = (
-                crystallographic_contact or strict_ncs_contact)
+            symmetry_contact = crystallographic_contact or strict_ncs_contact
             operation = nearest.symmetry_code()
             distance = float(nearest.dist())
         else:
@@ -776,21 +985,23 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
             continue
 
         position = (float(transformed.x), float(transformed.y), float(transformed.z))
-        candidates.append({
-            "neighbor": neighbor,
-            "distance_raw": distance,
-            "transformed_position": position,
-            "symmetry_contact": symmetry_contact,
-            "crystallographic_contact": crystallographic_contact,
-            "strict_ncs_contact": strict_ncs_contact,
-            "strict_ncs_operation_id": strict_ncs_operation_id,
-            "contact_scope": contact_scope,
-            "symmetry_image_index": image_index,
-            "symmetry_operation": operation,
-            "translation": translation,
-            "candidate_sources": {"proximity_4A"},
-            "declared_connections": [],
-        })
+        candidates.append(
+            {
+                "neighbor": neighbor,
+                "distance_raw": distance,
+                "transformed_position": position,
+                "symmetry_contact": symmetry_contact,
+                "crystallographic_contact": crystallographic_contact,
+                "strict_ncs_contact": strict_ncs_contact,
+                "strict_ncs_operation_id": strict_ncs_operation_id,
+                "contact_scope": contact_scope,
+                "symmetry_image_index": image_index,
+                "symmetry_operation": operation,
+                "translation": translation,
+                "candidate_sources": {"proximity_4A"},
+                "declared_connections": [],
+            }
+        )
 
     candidates.sort(key=_contact_sort_key)
     return candidates
@@ -827,9 +1038,11 @@ def _analysis_chain_names(connection_path):
     source_names = [str(chain.name) for chain in copy[0]]
     copy.setup_entities()
     copy.shorten_chain_names()
-    return {source: str(chain.name)
-            for source, chain in zip(source_names, copy[0])
-            if source != str(chain.name)}
+    return {
+        source: str(chain.name)
+        for source, chain in zip(source_names, copy[0])
+        if source != str(chain.name)
+    }
 
 
 def _analysis_atom_for_partner(structure, cra, chain_names):
@@ -852,9 +1065,9 @@ def _analysis_atom_for_partner(structure, cra, chain_names):
     source_lookup = (
         structure.residues_for_source_author
         if hasattr(type(structure), "residues_for_source_author")
-        else structure.residues_for_author)
-    matches = source_lookup(
-        str(residue.name), source_chain_id, resnum)
+        else structure.residues_for_author
+    )
+    matches = source_lookup(str(residue.name), source_chain_id, resnum)
     if len(matches) != 1:
         # Older analysis PDBs retain only Gemmi's chain-name shortening.  New
         # packed PDBs embed full residue provenance, so the source lookup above
@@ -865,15 +1078,13 @@ def _analysis_atom_for_partner(structure, cra, chain_names):
             # while using Gemmi's shortened chain name.  Packed structures do
             # not need this fallback because their full source identity is
             # indexed above.
-            matches = structure.residues_for_author(
-                str(residue.name), chain_id, resnum)
+            matches = structure.residues_for_author(str(residue.name), chain_id, resnum)
     if len(matches) != 1:
         return None
 
     atom_name = str(atom.name).strip()
     altloc = blank_if_missing(atom.altloc)
-    named = [site for site in matches[0].source_atoms
-             if site.atom_name == atom_name]
+    named = [site for site in matches[0].source_atoms if site.atom_name == atom_name]
     if altloc:
         named = [site for site in named if site.altloc == altloc]
     return named[0] if named else None
@@ -893,12 +1104,12 @@ def _selected_conformer_atom(structure, atom):
     if atom is None:
         return None
     selected = structure.atom_for_indices(
-        atom.chain_index, atom.residue_index, atom.atom_index)
+        atom.chain_index, atom.residue_index, atom.atom_index
+    )
     if selected is not None:
         return selected
     for candidate in structure.residue_for_atom(atom).contact_atoms:
-        if (candidate.atom_name == atom.atom_name and
-                candidate.element == atom.element):
+        if candidate.atom_name == atom.atom_name and candidate.element == atom.element:
             return candidate
     return None
 
@@ -930,9 +1141,9 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
     import gemmi
 
     asu = connection.asu
-    if (asu == gemmi.Asu.Same or
-            (asu == gemmi.Asu.Any and
-             not structure.symmetry_search_available)):
+    if asu == gemmi.Asu.Same or (
+        asu == gemmi.Asu.Any and not structure.symmetry_search_available
+    ):
         return {
             "distance_raw": position_distance(metal.xyz, neighbor.xyz),
             "transformed_position": neighbor.xyz,
@@ -948,12 +1159,11 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
 
     if not structure.symmetry_search_available:
         raise ValueError(
-            structure.symmetry_search_failure_reason or
-            "symmetry metadata unavailable")
+            structure.symmetry_search_failure_reason or "symmetry metadata unavailable"
+        )
     cell = structure.structure.cell
     nearest = cell.find_nearest_image(metal.pos, neighbor.pos, asu)
-    transformed_fractional = cell.fract_image(
-        nearest, cell.fractionalize(neighbor.pos))
+    transformed_fractional = cell.fract_image(nearest, cell.fractionalize(neighbor.pos))
     transformed = cell.orthogonalize(transformed_fractional)
     translation = tuple(int(value) for value in nearest.pbc_shift)
     image_index = int(nearest.sym_idx)
@@ -971,7 +1181,10 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
     return {
         "distance_raw": float(nearest.dist()),
         "transformed_position": (
-            float(transformed.x), float(transformed.y), float(transformed.z)),
+            float(transformed.x),
+            float(transformed.y),
+            float(transformed.z),
+        ),
         "symmetry_contact": crystallographic_contact or strict_ncs_contact,
         "crystallographic_contact": crystallographic_contact,
         "strict_ncs_contact": strict_ncs_contact,
@@ -1012,8 +1225,7 @@ def _collect_declared_candidates(structure, connection_path, metals):
     try:
         declared_structure = gemmi.read_structure(connection_path)
     except Exception as exc:
-        return [], [
-            f"{source} parse failed: {type(exc).__name__}: {exc}"], []
+        return [], [f"{source} parse failed: {type(exc).__name__}: {exc}"], []
     if len(declared_structure) == 0:
         return [], [f"{source} contains no coordinate model"], []
 
@@ -1027,8 +1239,8 @@ def _collect_declared_candidates(structure, connection_path, metals):
         connection_id = str(connection.name).strip() or f"{source}_{index}"
         addresses = (connection.partner1, connection.partner2)
         declared_metal_partner = any(
-            _declared_partner_is_metal(address, None)
-            for address in addresses)
+            _declared_partner_is_metal(address, None) for address in addresses
+        )
         try:
             source_cras = [
                 source_model.find_cra(address, ignore_segment=True)
@@ -1036,15 +1248,14 @@ def _collect_declared_candidates(structure, connection_path, metals):
             ]
             declared_metal_partner = declared_metal_partner or any(
                 _declared_partner_is_metal(address, cra)
-                for address, cra in zip(addresses, source_cras))
+                for address, cra in zip(addresses, source_cras)
+            )
             source_atoms = []
             deselected_partner = False
             substituted_partner = False
             for cra in source_cras:
-                declared_atom = _analysis_atom_for_partner(
-                    structure, cra, chain_names)
-                selected_atom = _selected_conformer_atom(
-                    structure, declared_atom)
+                declared_atom = _analysis_atom_for_partner(structure, cra, chain_names)
+                selected_atom = _selected_conformer_atom(structure, declared_atom)
                 if declared_atom is not None:
                     if selected_atom is None:
                         deselected_partner = True
@@ -1054,29 +1265,30 @@ def _collect_declared_candidates(structure, connection_path, metals):
         except Exception as exc:
             if declared_metal_partner:
                 issues.append(
-                    f"{source} {connection_id} resolution failed: "
-                    f"{type(exc).__name__}")
+                    f"{source} {connection_id} resolution failed: {type(exc).__name__}"
+                )
             continue
 
         if deselected_partner:
             if declared_metal_partner:
                 issues.append(
                     f"{source} {connection_id} partner names a conformer whose "
-                    f"selected alternative has no matching atom")
+                    f"selected alternative has no matching atom"
+                )
             continue
         first, second = source_atoms
-        first_is_metal = (
-            first is not None and first.source_key in selected_metal_keys)
+        first_is_metal = first is not None and first.source_key in selected_metal_keys
         second_is_metal = (
-            second is not None and second.source_key in selected_metal_keys)
+            second is not None and second.source_key in selected_metal_keys
+        )
         connection_involves_metal = (
-            declared_metal_partner or first_is_metal or second_is_metal)
+            declared_metal_partner or first_is_metal or second_is_metal
+        )
         if substituted_partner and connection_involves_metal:
             warnings.append("declared_connection_conformer_substituted")
         if first is None and second is None:
             if connection_involves_metal:
-                issues.append(
-                    f"{source} {connection_id} neither partner resolved")
+                issues.append(f"{source} {connection_id} neither partner resolved")
             continue
         if not (first_is_metal or second_is_metal):
             if connection_involves_metal and (first is None or second is None):
@@ -1087,8 +1299,7 @@ def _collect_declared_candidates(structure, connection_path, metals):
             continue
         if first_is_metal and second_is_metal:
             continue
-        metal, neighbor = ((first, second) if first_is_metal
-                           else (second, first))
+        metal, neighbor = (first, second) if first_is_metal else (second, first)
         residue = structure.residue_for_atom(neighbor)
         if neighbor.element not in DONOR_ELEMENTS:
             # Not a donor-like atom at all, so there is no coordination
@@ -1105,20 +1316,23 @@ def _collect_declared_candidates(structure, connection_path, metals):
         # to bond rows -- that would raise coordination counts and enlarge the
         # confidence geometry-coverage denominator on the strength of a contact
         # nothing can assess.
-        donor_class_supported = bool(
-            residue.is_water or residue.residue_name in AA)
+        donor_class_supported = bool(residue.is_water or residue.residue_name in AA)
         if not donor_class_supported:
             warnings.append("declared_donor_outside_supported_classes")
         try:
             geometry = _declared_candidate_geometry(
-                structure, metal, neighbor, connection)
+                structure, metal, neighbor, connection
+            )
         except Exception as exc:
             issues.append(
                 f"{source} {connection_id} geometry unresolved: "
-                f"{type(exc).__name__}: {exc}")
+                f"{type(exc).__name__}: {exc}"
+            )
             continue
-        if (neighbor.residue_key == metal.residue_key and
-                not geometry["symmetry_contact"]):
+        if (
+            neighbor.residue_key == metal.residue_key
+            and not geometry["symmetry_contact"]
+        ):
             continue
 
         reported_distance = float(connection.reported_distance)
@@ -1133,14 +1347,16 @@ def _collect_declared_candidates(structure, connection_path, metals):
             "connection_asu": _enum_name(connection.asu),
             "connection_reported_distance": reported_distance,
         }
-        candidates.append({
-            "metal": metal,
-            "neighbor": neighbor,
-            **geometry,
-            "candidate_sources": {source},
-            "declared_connections": [record],
-            "donor_class_supported": donor_class_supported,
-        })
+        candidates.append(
+            {
+                "metal": metal,
+                "neighbor": neighbor,
+                **geometry,
+                "candidate_sources": {source},
+                "declared_connections": [record],
+                "donor_class_supported": donor_class_supported,
+            }
+        )
     return candidates, issues, warnings
 
 
@@ -1149,8 +1365,7 @@ def _candidate_identity(candidate):
         candidate["neighbor"].source_key,
         candidate["symmetry_operation"],
         candidate["translation"],
-        tuple(round(value, 5)
-              for value in candidate["transformed_position"]),
+        tuple(round(value, 5) for value in candidate["transformed_position"]),
     )
 
 
@@ -1164,10 +1379,10 @@ def _merge_candidates(*candidate_groups):
             if existing is None:
                 merged[key] = {
                     **candidate,
-                    "candidate_sources": set(
-                        candidate.get("candidate_sources", ())),
+                    "candidate_sources": set(candidate.get("candidate_sources", ())),
                     "declared_connections": list(
-                        candidate.get("declared_connections", ())),
+                        candidate.get("declared_connections", ())
+                    ),
                 }
                 continue
             _merge_candidate_provenance(existing, candidate)
@@ -1178,19 +1393,21 @@ def _merge_candidates(*candidate_groups):
 
 def _current_contacts_from_candidates(candidates, metal):
     """Return typical inferred and explicitly declared contacts."""
-    eligible, unsupported_pairs = _identify_first_sphere_candidates(
-        candidates, metal)
+    eligible, unsupported_pairs = _identify_first_sphere_candidates(candidates, metal)
     declared_not_inferred = [
-        candidate for candidate in candidates
-        if candidate["declared_connections"] and
-        not candidate["inferred_contact_eligible"] and
+        candidate
+        for candidate in candidates
+        if candidate["declared_connections"]
+        and not candidate["inferred_contact_eligible"]
+        and
         # A donor class with no literature reference stays candidate evidence:
         # it is reported with its measured distance but never scored.
         candidate.get("donor_class_supported", True)
     ]
-    return (_deduplicate_special_position_contacts(
-                eligible + declared_not_inferred),
-            unsupported_pairs)
+    return (
+        _deduplicate_special_position_contacts(eligible + declared_not_inferred),
+        unsupported_pairs,
+    )
 
 
 def _connection_output_values(candidate):
@@ -1198,23 +1415,27 @@ def _connection_output_values(candidate):
     inferred = bool(candidate.get("inferred_contact_eligible", False))
 
     def joined(name):
-        return "|".join(dict.fromkeys(
-            str(record[name]) for record in records
-            if str(record.get(name, "")) not in ("", "nan")))
+        return "|".join(
+            dict.fromkeys(
+                str(record[name])
+                for record in records
+                if str(record.get(name, "")) not in ("", "nan")
+            )
+        )
+
     return {
         "coordination_status": (
-            "declared" if records else
-            ("inferred" if inferred else "unassigned")),
+            "declared" if records else ("inferred" if inferred else "unassigned")
+        ),
         "coordination_source": (
-            joined("source") if records else
-            ("proximity_rule" if inferred else "")),
+            joined("source") if records else ("proximity_rule" if inferred else "")
+        ),
         "declared_connection": bool(records),
         "connection_id": joined("connection_id"),
         "connection_type": joined("connection_type"),
         "connection_link_id": joined("connection_link_id"),
         "connection_asu": joined("connection_asu"),
-        "connection_reported_distance": joined(
-            "connection_reported_distance"),
+        "connection_reported_distance": joined("connection_reported_distance"),
     }
 
 
@@ -1249,8 +1470,9 @@ def _annotate_contacts(contacts, metal_element, dpi):
     for contact in contacts:
         neighbor = contact["neighbor"]
         reported_distance = round(contact["distance_raw"], 3)
-        literature = LIT.get(_bonding_key(neighbor, neighbor.residue_name,
-                                          metal_element))
+        literature = LIT.get(
+            _bonding_key(neighbor, neighbor.residue_name, metal_element)
+        )
         if literature is None:
             mu = stdev = zscore = NAN
         else:
@@ -1262,10 +1484,12 @@ def _annotate_contacts(contacts, metal_element, dpi):
             literature_stdev=stdev,
             zscore=zscore,
             reference_covered=literature is not None,
-            geometry_outlier=(abs(zscore) >= ZSCORE_OUTLIER_CUTOFF
-                              if math.isfinite(zscore) else ""),
-            geometry_consistent=(abs(zscore) < ZSCORE_OUTLIER_CUTOFF
-                                 if math.isfinite(zscore) else ""),
+            geometry_outlier=(
+                abs(zscore) >= ZSCORE_OUTLIER_CUTOFF if math.isfinite(zscore) else ""
+            ),
+            geometry_consistent=(
+                abs(zscore) < ZSCORE_OUTLIER_CUTOFF if math.isfinite(zscore) else ""
+            ),
         )
 
 
@@ -1299,23 +1523,23 @@ def _annotate_multi_donor_groups(contacts):
         if not multi_donor:
             contact = group[0]
             assessable = (
-                contact["geometry_outlier"] is True or
-                contact["geometry_consistent"] is True)
+                contact["geometry_outlier"] is True
+                or contact["geometry_consistent"] is True
+            )
             contact.update(
                 multi_donor_detected=False,
                 multi_donor_contact_count=1,
                 multi_donor_geometry_status="single_donor",
                 multi_donor_contains_suspect_bond=False,
                 score_eligible=assessable,
-                score_exclusion_reason=(
-                    "" if assessable else "zscore_unavailable"),
+                score_exclusion_reason=("" if assessable else "zscore_unavailable"),
             )
             continue
 
-        any_outlier = any(
-            contact["geometry_outlier"] is True for contact in group)
+        any_outlier = any(contact["geometry_outlier"] is True for contact in group)
         all_consistent = all(
-            contact["geometry_consistent"] is True for contact in group)
+            contact["geometry_consistent"] is True for contact in group
+        )
         if all_consistent:
             status = "consistent"
         elif any_outlier:
@@ -1324,58 +1548,69 @@ def _annotate_multi_donor_groups(contacts):
             status = "indeterminate"
         for contact in group:
             assessable = (
-                contact["geometry_outlier"] is True or
-                contact["geometry_consistent"] is True)
+                contact["geometry_outlier"] is True
+                or contact["geometry_consistent"] is True
+            )
             contact.update(
                 multi_donor_detected=True,
                 multi_donor_contact_count=count,
                 multi_donor_geometry_status=status,
                 multi_donor_contains_suspect_bond=any_outlier,
                 score_eligible=assessable,
-                score_exclusion_reason=(
-                    "" if assessable else "zscore_unavailable"),
+                score_exclusion_reason=("" if assessable else "zscore_unavailable"),
             )
 
 
 def _scope_summary(contacts, metal_zero_occupancy, unavailable=False):
     if unavailable:
         return {
-            "candidate": NAN, "covered": NAN, "outlier": NAN,
-            "consistent": NAN, "score_eligible": NAN,
-            "score_excluded": NAN, "scored_outlier": NAN,
-            "scored_consistent": NAN, "multi_donor_groups": NAN,
-            "multi_donor_contacts": NAN, "suspect_multi_donor_groups": NAN,
+            "candidate": NAN,
+            "covered": NAN,
+            "outlier": NAN,
+            "consistent": NAN,
+            "score_eligible": NAN,
+            "score_excluded": NAN,
+            "scored_outlier": NAN,
+            "scored_consistent": NAN,
+            "multi_donor_groups": NAN,
+            "multi_donor_contacts": NAN,
+            "suspect_multi_donor_groups": NAN,
             "indeterminate_multi_donor_groups": NAN,
-            "coverage": NAN, "status": "",
+            "coverage": NAN,
+            "status": "",
         }
     candidate = len(contacts)
     covered = sum(bool(contact["reference_covered"]) for contact in contacts)
     outlier = sum(contact["geometry_outlier"] is True for contact in contacts)
     consistent = sum(contact["geometry_consistent"] is True for contact in contacts)
-    score_eligible = sum(
-        contact["score_eligible"] is True for contact in contacts)
+    score_eligible = sum(contact["score_eligible"] is True for contact in contacts)
     score_excluded = candidate - score_eligible
     scored_outlier = sum(
-        contact["score_eligible"] is True and
-        contact["geometry_outlier"] is True
-        for contact in contacts)
+        contact["score_eligible"] is True and contact["geometry_outlier"] is True
+        for contact in contacts
+    )
     scored_consistent = sum(
-        contact["score_eligible"] is True and
-        contact["geometry_consistent"] is True
-        for contact in contacts)
+        contact["score_eligible"] is True and contact["geometry_consistent"] is True
+        for contact in contacts
+    )
     multi_donor_groups = {
         _residue_image_key(contact)
-        for contact in contacts if contact["multi_donor_detected"]}
+        for contact in contacts
+        if contact["multi_donor_detected"]
+    }
     suspect_multi_donor_groups = {
         _residue_image_key(contact)
         for contact in contacts
-        if contact["multi_donor_geometry_status"] == "suspect"}
+        if contact["multi_donor_geometry_status"] == "suspect"
+    }
     indeterminate_multi_donor_groups = {
         _residue_image_key(contact)
         for contact in contacts
-        if contact["multi_donor_geometry_status"] == "indeterminate"}
+        if contact["multi_donor_geometry_status"] == "indeterminate"
+    }
     multi_donor_contacts = sum(
-        contact["multi_donor_detected"] is True for contact in contacts)
+        contact["multi_donor_detected"] is True for contact in contacts
+    )
     scored_assessable = scored_outlier + scored_consistent
     if metal_zero_occupancy or scored_assessable == 0:
         status = "insufficient data"
@@ -1396,8 +1631,7 @@ def _scope_summary(contacts, metal_zero_occupancy, unavailable=False):
         "multi_donor_groups": len(multi_donor_groups),
         "multi_donor_contacts": multi_donor_contacts,
         "suspect_multi_donor_groups": len(suspect_multi_donor_groups),
-        "indeterminate_multi_donor_groups": len(
-            indeterminate_multi_donor_groups),
+        "indeterminate_multi_donor_groups": len(indeterminate_multi_donor_groups),
         "coverage": coverage,
         "status": status,
     }
@@ -1411,9 +1645,12 @@ def _site_context_values(contacts, candidates):
         if values["context_warning_reasons"]:
             reasons.extend(values["context_warning_reasons"].split("|"))
     non_typical_first_sphere = [
-        candidate for candidate in candidates
-        if (not candidate["inferred_donor_allowed"] and
-            candidate.get("first_sphere_eligible", False))
+        candidate
+        for candidate in candidates
+        if (
+            not candidate["inferred_donor_allowed"]
+            and candidate.get("first_sphere_eligible", False)
+        )
     ]
     if non_typical_first_sphere:
         reasons.append("non_typical_first_sphere_candidate")
@@ -1421,16 +1658,25 @@ def _site_context_values(contacts, candidates):
     return {
         "context_warning": bool(reasons),
         "context_warning_reasons": "|".join(reasons),
-        "non_typical_first_sphere_candidate_count": len(
-            non_typical_first_sphere),
+        "non_typical_first_sphere_candidate_count": len(non_typical_first_sphere),
         "declared_donor_override_contact_count": sum(
             contact["donor_rule_override"] == "declared_connection"
-            for contact in contacts),
+            for contact in contacts
+        ),
     }
 
 
-def _site_summary(metal, explicit_contacts, image_contacts,
-                  dpi, resolution, ni, deposited_ni, dpi_reason, structure):
+def _site_summary(
+    metal,
+    explicit_contacts,
+    image_contacts,
+    dpi,
+    resolution,
+    ni,
+    deposited_ni,
+    dpi_reason,
+    structure,
+):
     metal_zero = metal.occupancy_valid and metal.occupancy == 0.0
     explicit = _scope_summary(explicit_contacts, metal_zero)
     image_search_available = image_contacts is not None
@@ -1442,23 +1688,26 @@ def _site_summary(metal, explicit_contacts, image_contacts,
     primary = image_inclusive if image_search_available else explicit
     symmetry_count = (
         sum(contact["symmetry_contact"] for contact in image_contacts)
-        if image_search_available else NAN
+        if image_search_available
+        else NAN
     )
     crystallographic_count = (
         sum(contact["crystallographic_contact"] for contact in image_contacts)
-        if image_search_available else NAN
+        if image_search_available
+        else NAN
     )
     strict_ncs_count = (
         sum(contact["strict_ncs_contact"] for contact in image_contacts)
-        if image_search_available else NAN
+        if image_search_available
+        else NAN
     )
     combined_count = (
         sum(
-            contact["crystallographic_contact"] and
-            contact["strict_ncs_contact"]
+            contact["crystallographic_contact"] and contact["strict_ncs_contact"]
             for contact in image_contacts
         )
-        if image_search_available else NAN
+        if image_search_available
+        else NAN
     )
     if not image_search_available:
         generated_scope = ""
@@ -1498,15 +1747,15 @@ def _site_summary(metal, explicit_contacts, image_contacts,
     return {
         "dpi": dpi,
         "resolution": resolution,
-        "occupancy_weighted_atom_count": (
-            round(ni, 6) if math.isfinite(ni) else NAN),
+        "occupancy_weighted_atom_count": (round(ni, 6) if math.isfinite(ni) else NAN),
         "deposited_occupancy_weighted_atom_count": (
-            round(deposited_ni, 6)
-            if math.isfinite(deposited_ni) else NAN),
+            round(deposited_ni, 6) if math.isfinite(deposited_ni) else NAN
+        ),
         "dpi_atom_count_multiplier": structure.dpi_atom_count_multiplier,
         "strict_ncs_operation_count": structure.strict_ncs_operation_count,
         "crystallographic_operation_count": (
-            structure.crystallographic_operation_count),
+            structure.crystallographic_operation_count
+        ),
         "dpi_unavailable_reason": dpi_reason,
         "candidate_contact_count": primary["candidate"],
         "reference_covered_contact_count": primary["covered"],
@@ -1515,14 +1764,15 @@ def _site_summary(metal, explicit_contacts, image_contacts,
         "score_eligible_contact_count": primary["score_eligible"],
         "score_excluded_contact_count": primary["score_excluded"],
         "scored_geometry_outlier_contact_count": primary["scored_outlier"],
-        "scored_geometry_consistent_contact_count": (
-            primary["scored_consistent"]),
+        "scored_geometry_consistent_contact_count": (primary["scored_consistent"]),
         "multi_donor_residue_group_count": primary["multi_donor_groups"],
         "multi_donor_contact_count": primary["multi_donor_contacts"],
         "suspect_multi_donor_residue_group_count": (
-            primary["suspect_multi_donor_groups"]),
+            primary["suspect_multi_donor_groups"]
+        ),
         "indeterminate_multi_donor_residue_group_count": (
-            primary["indeterminate_multi_donor_groups"]),
+            primary["indeterminate_multi_donor_groups"]
+        ),
         "explicit_contact_count": explicit["candidate"],
         "symmetry_contact_count": symmetry_count,
         "image_inclusive_contact_count": image_inclusive["candidate"],
@@ -1537,8 +1787,7 @@ def _site_summary(metal, explicit_contacts, image_contacts,
         "image_inclusive_geometry_status": image_inclusive["status"],
         "generated_contact_scope": generated_scope,
         "geometry_classification_changes_with_generated_images": changed,
-        "coordination_depends_on_crystallographic_symmetry": (
-            depends_crystallographic),
+        "coordination_depends_on_crystallographic_symmetry": (depends_crystallographic),
         "coordination_depends_on_strict_ncs": depends_strict_ncs,
         "metal_zero_occupancy": metal_zero,
         "geometry_not_assessed_reason": "|".join(dict.fromkeys(reasons)),
@@ -1570,17 +1819,21 @@ def stats_extra_values(structure, metal=None, summary=None):
         "metal_occupancy_valid": metal.occupancy_valid if metal else "",
         "metal_occupancy_status": metal.occupancy_status if metal else "",
         "metal_conformer_mean_occupancy": (
-            residue.selected_conformer_mean_occupancy if residue else NAN),
+            residue.selected_conformer_mean_occupancy if residue else NAN
+        ),
         "metal_altloc_options": residue.altloc_options if residue else "",
         "alternative_conformers_present": (
-            residue.alternative_conformers_present if residue else ""),
+            residue.alternative_conformers_present if residue else ""
+        ),
         "altloc_selection_fallback": (
-            residue.altloc_selection_fallback if residue else ""),
+            residue.altloc_selection_fallback if residue else ""
+        ),
         "symmetry_search_available": structure.symmetry_search_available,
         "symmetry_search_failure_reason": structure.symmetry_search_failure_reason,
         "strict_ncs_operation_count": structure.strict_ncs_operation_count,
         "crystallographic_operation_count": (
-            structure.crystallographic_operation_count),
+            structure.crystallographic_operation_count
+        ),
         "dpi_atom_count_multiplier": structure.dpi_atom_count_multiplier,
         "occupancy_validation_failed": structure.occupancy_validation_failed,
         "missing_occupancy_count": structure.missing_occupancy_count,
@@ -1589,25 +1842,28 @@ def stats_extra_values(structure, metal=None, summary=None):
         "duplicate_atom_records_present": structure.duplicate_atom_records_present,
         "duplicate_atom_record_count": structure.duplicate_atom_record_count,
         "duplicate_atom_coordinate_conflict_count": (
-            structure.duplicate_coordinate_conflict_count),
+            structure.duplicate_coordinate_conflict_count
+        ),
         "malformed_duplicate_atom_name_count": (
-            structure.malformed_duplicate_atom_name_count),
+            structure.malformed_duplicate_atom_name_count
+        ),
         "raw_occupancy_mapping_failed": structure.raw_occupancy_mapping_failed,
         "raw_occupancy_mapping_failure_reason": (
-            structure.raw_occupancy_mapping_failure_reason),
+            structure.raw_occupancy_mapping_failure_reason
+        ),
         "unknown_element_atom_count": structure.unknown_element_atom_count,
         "element_validation_warning": structure.element_validation_warning,
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
     }
     for column in STATS_EXTRA_COLUMNS:
         values.setdefault(column, summary.get(column, ""))
-    values.update({key: value for key, value in summary.items()
-                   if key in STATS_EXTRA_COLUMNS})
+    values.update(
+        {key: value for key, value in summary.items() if key in STATS_EXTRA_COLUMNS}
+    )
     return values
 
 
-def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
-              sigma, parent_type):
+def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_type):
     neighbor = contact["neighbor"]
     metal_residue = structure.residue_for_atom(metal)
     neighbor_residue = structure.residue_for_atom(neighbor)
@@ -1635,7 +1891,9 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "zscore": contact["zscore"],
         "dpi": dpi,
         "resolution": resolution,
-        "sigma_mag": mag, "sigma_neg": neg, "sigma_pos": pos,
+        "sigma_mag": mag,
+        "sigma_neg": neg,
+        "sigma_pos": pos,
         "parent_type": parent_type,
         "bonded_to": _bonded_to(neighbor.is_water),
         "model_id": structure.analyzed_model_id,
@@ -1650,10 +1908,10 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "metal_occupancy_valid": metal.occupancy_valid,
         "metal_occupancy_status": metal.occupancy_status,
         "metal_conformer_mean_occupancy": (
-            metal_residue.selected_conformer_mean_occupancy),
+            metal_residue.selected_conformer_mean_occupancy
+        ),
         "metal_altloc_options": metal_residue.altloc_options,
-        "metal_altloc_selection_fallback": (
-            metal_residue.altloc_selection_fallback),
+        "metal_altloc_selection_fallback": (metal_residue.altloc_selection_fallback),
         "neighbor_chain": neighbor.chain_id,
         "neighbor_resnum": neighbor.resnum,
         "neighbor_icode": neighbor.insertion_code,
@@ -1666,16 +1924,20 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "neighbor_occupancy_valid": neighbor.occupancy_valid,
         "neighbor_occupancy_status": neighbor.occupancy_status,
         "neighbor_conformer_mean_occupancy": (
-            neighbor_residue.selected_conformer_mean_occupancy),
+            neighbor_residue.selected_conformer_mean_occupancy
+        ),
         "neighbor_altloc_options": neighbor_residue.altloc_options,
         "neighbor_altloc_selection_fallback": (
-            neighbor_residue.altloc_selection_fallback),
+            neighbor_residue.altloc_selection_fallback
+        ),
         "alternative_conformers_present": (
-            metal_residue.alternative_conformers_present or
-            neighbor_residue.alternative_conformers_present),
+            metal_residue.alternative_conformers_present
+            or neighbor_residue.alternative_conformers_present
+        ),
         "altloc_selection_fallback": (
-            metal_residue.altloc_selection_fallback or
-            neighbor_residue.altloc_selection_fallback),
+            metal_residue.altloc_selection_fallback
+            or neighbor_residue.altloc_selection_fallback
+        ),
         "neighbor_class": "water" if neighbor.is_water else "amino_acid",
         "candidate_contact": True,
         "reference_covered": contact["reference_covered"],
@@ -1683,10 +1945,10 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "geometry_consistent": contact["geometry_consistent"],
         "multi_donor_detected": contact["multi_donor_detected"],
         "multi_donor_contact_count": contact["multi_donor_contact_count"],
-        "multi_donor_geometry_status": (
-            contact["multi_donor_geometry_status"]),
+        "multi_donor_geometry_status": (contact["multi_donor_geometry_status"]),
         "multi_donor_contains_suspect_bond": (
-            contact["multi_donor_contains_suspect_bond"]),
+            contact["multi_donor_contains_suspect_bond"]
+        ),
         "score_eligible": contact["score_eligible"],
         "score_exclusion_reason": contact["score_exclusion_reason"],
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
@@ -1697,7 +1959,8 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution,
         "strict_ncs_operation_id": contact["strict_ncs_operation_id"],
         "symmetry_image_index": contact["symmetry_image_index"],
         "symmetry_operation": contact["symmetry_operation"],
-        "cell_translation_x": tx, "cell_translation_y": ty,
+        "cell_translation_x": tx,
+        "cell_translation_y": ty,
         "cell_translation_z": tz,
         "transformed_neighbor_x": round(x, 6),
         "transformed_neighbor_y": round(y, 6),
@@ -1712,12 +1975,10 @@ def _candidate_row(pdb_id, structure, metal, candidate):
     tx, ty, tz = candidate["translation"]
     connection_values = _connection_output_values(candidate)
     donor_values = _donor_output_values(candidate)
-    context_values = _context_warning_values(
-        candidate, include_proximal=True)
+    context_values = _context_warning_values(candidate, include_proximal=True)
     return {
         "pdbID": pdb_id,
-        "candidate_source": "|".join(
-            sorted(candidate["candidate_sources"])),
+        "candidate_source": "|".join(sorted(candidate["candidate_sources"])),
         "eligibility_status": candidate["eligibility_status"],
         "eligibility_reason": candidate["eligibility_reason"],
         "first_sphere_eligible": candidate["first_sphere_eligible"],
@@ -1773,8 +2034,15 @@ def _candidate_row(pdb_id, structure, metal, candidate):
     }
 
 
-def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
-                      dpi_inputs, structure=None, connection_path=None):
+def run_bond_analysis(
+    pdbID,
+    pdb_path,
+    stats_rows,
+    header,
+    dpi_inputs,
+    structure=None,
+    connection_path=None,
+):
     """Return contact rows, candidate rows, site summaries, and metadata.
 
     Every external proximal candidate is retained in the candidate rows.
@@ -1800,18 +2068,22 @@ def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
     if not metals_in_model:
         return [], [], {}, metadata
 
-    (declared_candidates, declared_issues,
-     declared_warnings) = _collect_declared_candidates(
-        structure, connection_path or pdb_path, metals_in_model)
+    (declared_candidates, declared_issues, declared_warnings) = (
+        _collect_declared_candidates(
+            structure, connection_path or pdb_path, metals_in_model
+        )
+    )
     if declared_issues:
         metadata["partial_reason_codes"].append(
-            "declared_connection_resolution_incomplete")
+            "declared_connection_resolution_incomplete"
+        )
         metadata["messages"].extend(declared_issues)
     metadata["warning_codes"].extend(declared_warnings)
     declared_by_metal = {}
     for candidate in declared_candidates:
-        declared_by_metal.setdefault(
-            candidate["metal"].source_key, []).append(candidate)
+        declared_by_metal.setdefault(candidate["metal"].source_key, []).append(
+            candidate
+        )
 
     dpi, resolution, dpi_reason = _calculate_dpi_details(structure, dpi_inputs)
     ni = count_ni(structure)
@@ -1822,17 +2094,18 @@ def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
     if not structure.symmetry_search_available:
         metadata["partial_reason_codes"].append("symmetry_search_unavailable")
         metadata["messages"].append(
-            "symmetry search unavailable: " +
-            (structure.symmetry_search_failure_reason or "unknown reason"))
+            "symmetry search unavailable: "
+            + (structure.symmetry_search_failure_reason or "unknown reason")
+        )
 
     explicit_search = structure.make_neighbor_search(
-        CUTOFF + SEARCH_EPSILON, include_symmetry=False,
-        positive_occupancy_only=True)
+        CUTOFF + SEARCH_EPSILON, include_symmetry=False, positive_occupancy_only=True
+    )
     image_search = None
     if structure.symmetry_search_available:
         image_search = structure.make_neighbor_search(
-            CUTOFF + SEARCH_EPSILON, include_symmetry=True,
-            positive_occupancy_only=True)
+            CUTOFF + SEARCH_EPSILON, include_symmetry=True, positive_occupancy_only=True
+        )
     sig = _sigma_index(stats_rows)
     zd_idx = _zd_indices(header)
 
@@ -1842,45 +2115,47 @@ def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
     for metal in metals_in_model:
         metal_declarations = declared_by_metal.get(metal.source_key, ())
         explicit_declarations = [
-            candidate for candidate in metal_declarations
-            if not candidate["symmetry_contact"]]
+            candidate
+            for candidate in metal_declarations
+            if not candidate["symmetry_contact"]
+        ]
         explicit_candidates = _merge_candidates(
-            _collect_proximal_candidates(
-                structure, explicit_search, metal, False),
+            _collect_proximal_candidates(structure, explicit_search, metal, False),
             explicit_declarations,
         )
         _annotate_donor_policy(structure, explicit_candidates)
         explicit, unsupported_pairs = _current_contacts_from_candidates(
-            explicit_candidates, metal)
+            explicit_candidates, metal
+        )
         _annotate_contacts(explicit, metal.element, dpi)
         _annotate_multi_donor_groups(explicit)
         image_candidates = None
         image_contacts = None
         if image_search is not None:
             image_candidates = _merge_candidates(
-                _collect_proximal_candidates(
-                    structure, image_search, metal, True),
+                _collect_proximal_candidates(structure, image_search, metal, True),
                 metal_declarations,
             )
             _annotate_donor_policy(structure, image_candidates)
-            image_contacts, image_unsupported = (
-                _current_contacts_from_candidates(image_candidates, metal))
+            image_contacts, image_unsupported = _current_contacts_from_candidates(
+                image_candidates, metal
+            )
             unsupported_pairs.update(image_unsupported)
             _annotate_contacts(image_contacts, metal.element, dpi)
             _annotate_multi_donor_groups(image_contacts)
         if unsupported_pairs:
-            metadata["partial_reason_codes"].append(
-                "missing_first_sphere_reference")
+            metadata["partial_reason_codes"].append("missing_first_sphere_reference")
             pairs = ", ".join(
                 f"{metal_element}-{donor_element}"
-                for metal_element, donor_element in sorted(unsupported_pairs))
+                for metal_element, donor_element in sorted(unsupported_pairs)
+            )
             metadata["messages"].append(
-                f"first-sphere reference unavailable for {pairs}")
-        primary_contacts = (
-            image_contacts if image_contacts is not None else explicit)
+                f"first-sphere reference unavailable for {pairs}"
+            )
+        primary_contacts = image_contacts if image_contacts is not None else explicit
         primary_candidates = (
-            image_candidates if image_candidates is not None
-            else explicit_candidates)
+            image_candidates if image_candidates is not None else explicit_candidates
+        )
         summary = _site_summary(
             metal,
             explicit,
@@ -1892,28 +2167,33 @@ def run_bond_analysis(pdbID, pdb_path, stats_rows, header,
             dpi_reason,
             structure,
         )
-        summary.update(_site_context_values(
-            primary_contacts, primary_candidates))
+        summary.update(_site_context_values(primary_contacts, primary_candidates))
         summaries[metal.source_key] = summary
         if summary["metal_zero_occupancy"]:
             metadata["partial_reason_codes"].append("metal_zero_occupancy")
             metadata["messages"].append(
                 f"zero-occupancy metal: {metal.chain_id}/{metal.resnum}/"
-                f"{metal.atom_name}")
+                f"{metal.atom_name}"
+            )
 
-        sigma = _sigma_for(sig, metal.residue_name, metal.chain_id,
-                           metal.resnum, zd_idx)
-        parent_type = _parent_type(structure, metal, metal.residue_name,
-                                   metal.element)
-        rows.extend(_bond_row(pdbID, structure, metal, contact, dpi,
-                              resolution, sigma, parent_type)
-                    for contact in primary_contacts)
+        sigma = _sigma_for(
+            sig, metal.residue_name, metal.chain_id, metal.resnum, zd_idx
+        )
+        parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
+        rows.extend(
+            _bond_row(
+                pdbID, structure, metal, contact, dpi, resolution, sigma, parent_type
+            )
+            for contact in primary_contacts
+        )
         candidate_rows.extend(
             _candidate_row(pdbID, structure, metal, candidate)
-            for candidate in primary_candidates)
+            for candidate in primary_candidates
+        )
 
-    metadata["partial_reason_codes"] = list(dict.fromkeys(
-        metadata["partial_reason_codes"]))
+    metadata["partial_reason_codes"] = list(
+        dict.fromkeys(metadata["partial_reason_codes"])
+    )
     metadata["warning_codes"] = list(dict.fromkeys(metadata["warning_codes"]))
     metadata["messages"] = list(dict.fromkeys(metadata["messages"]))
     return rows, candidate_rows, summaries, metadata
