@@ -154,7 +154,7 @@ So there are only two real options:
    **This needs a trust boundary before it is switched on.** [.github/workflows/tests.yml:3-5](.github/workflows/tests.yml#L3-L5) triggers on `push` *and* `pull_request`. A persistent self-hosted runner executing checked-out pull-request code is arbitrary code execution on your machine, with access to whatever else that machine holds — including, on this box, a CCP4 install and any PDB-REDO mirror credentials. Either use an ephemeral isolated runner, or restrict the CCP4 job to trusted triggers (`push` to your own branches, `schedule`, `workflow_dispatch`) and leave `pull_request` on the hosted offline lane.
 
    **Pick the flags deliberately.** A cached, deterministic lane should run `--no-network --require-ccp4 --require-entry-data`, which selects 25 tests (`ccp4 or slow`). Reaching all 26 needs `--require-network` for the one live `pdb-redo.eu` smoke test, which imports an external dependency into your signal. The honest total for a deterministic lane is 878, not 879. Also decide the cold-cache behaviour: on a cache miss the snapshot must download, so a first run needs network even when steady-state runs do not.
-2. **Write genuinely CCP4-free entry-data tests** — integrity checks over the pinned snapshot (file presence, checksum, `data.json` schema, `read_resolution`/`read_map_column_resolution` against real files) marked `entry_data` but *not* `ccp4`. Cheaper, and worth doing regardless, but it does not cover the density arm.
+2. **Write genuinely CCP4-free entry-data tests** — integrity checks over the pinned snapshot, marked `entry_data` but not `ccp4`. **Tried and reverted.** Six such tests were written and did run, but keeping them honest meant provisioning the snapshot in CI: fetching from pdb-redo.eu on every run makes the lane fail whenever upstream is slow or revised, and a project-controlled archive means publishing and maintaining one. The infrastructure outweighed what the tests checked, so this was dropped by decision rather than oversight. The metadata readers involved stay covered by unit tests elsewhere.
 
 Option 1 is the one that matters. Option 2 is a useful supplement, not a substitute.
 
@@ -637,7 +637,7 @@ This is the roadmap. The commit-level breakdown that follows is what you actuall
 | 2 | `LICENSE`; `ruff` + `mypy` + `pytest-cov` in `pyproject.toml` and CI | 1.5 | S | drift control |
 | 3 | One definition of the version | 1.6 | S | — |
 | 4 | Separate timeout budgets for CCP4 tools, setup shells and provenance commands | 1.3 | S | — |
-| 5 | CCP4-free `entry_data` integrity tests | 1.7 | S | — |
+| 5 | ~~CCP4-free `entry_data` integrity tests~~ — **dropped**; see 1.7. Kept in place so later step numbers stay stable. | 1.7 | — | — |
 | 6 | `logging` per module; `print` only for progress and final summary | 1.4 | M | ops |
 | 7 | Offline `model-envelope` coverage via an extended `_fake_ccp4_run_factory` | 4.1 | M | 13 |
 | 8 | Direct unit tests for `validate_resume_schemas`, `_batch_exit_code`, and the indirectly-covered CLI surfaces | 4.2 | M | 13 |
@@ -649,13 +649,11 @@ This is the roadmap. The commit-level breakdown that follows is what you actuall
 | 14 | Tests for `tools/build_metallocofactor_catalog.py`; verify `catalog_sha256` at load and stamp it into the manifest | 2.5, 4.4 | M | reproducibility |
 | 15 | Split README into `docs/`; move run logs out of `--output-dir`; correct `tests/README.md` | Docs | S | — |
 
-**No CI safety net.** The CCP4 lane is knowingly skipped (1.7), so every step below is defended by the offline suite alone — 853 tests that never execute the real density or bond path. That makes steps 7 and 8 prerequisites rather than improvements, and it means the restructuring steps carry more risk than they otherwise would. Until it exists, steps 6, 8, 13 and 14 all modify code that nothing in CI executes — step 6 especially, since `density_analysis._run` has almost no offline coverage of its default path (4.1).
-
-Steps 1–6 are what it takes to call this production-ready. Steps 13–15 are what matters for the next person who has to change it.
+**No CI safety net.** The CCP4 lane is knowingly skipped (1.7), so every step below is defended by the offline suite alone — it never executes the real density or bond path. That made steps 7 and 8 prerequisites rather than improvements; both have now landed, taking `density_analysis` to 83% and `main.py` to 70%. The restructuring steps still carry more risk than they otherwise would: step 4 modified CCP4 subprocess handling, and steps 11–13 move the density and bond code, none of which CI exercises end to end.
 
 **Two caveats.** The Effort column is a guess, not an estimate — step 1 was written as "M" before it was measured and turned out to be a config file. And step 2 touches the `sys.path` wiring the test harness itself depends on, so it changes the tests and the code together — which is why it is split into three small commits below.
 
-**Nothing here requires a database re-run, and nothing here touches confidence scoring.** The two confidence findings (1.2, 1.8) are deferred until the score is finalized; the only confidence-related work in the plan is the documentation fix in commit 9. Your existing outputs, reference and `reference_id` are therefore untouched by every commit below.
+**Nothing here requires a database re-run, and nothing here touches confidence scoring.** The two confidence findings (1.2, 1.8) are deferred until the score is finalized; the only confidence-related work in the plan is the documentation fix in commit 1. Your existing outputs, reference and `reference_id` are therefore untouched by every commit below.
 
 Step 14 separately adds a manifest column, which makes the existing output directory unresumable, so defer it until you are planning a run anyway.
 
@@ -667,11 +665,11 @@ Step 14 separately adds a manifest column, which makes the existing output direc
 
 Each commit is a coherent unit of work, sized to be reviewed in one sitting — roughly 100–700 lines, with related tasks grouped rather than split. They are individually reviewable and leave both test lanes green, but they are *not* all independently revertible once downstream commits land; see the Rhythm note at the end. Messages follow the repo's existing style — imperative mood, describing the behaviour change rather than the mechanism.
 
-*Numbering note: commits are 1–26 and are unrelated to the roadmap's steps 1–15.*
+*Numbering note: commits are 1–26 and are unrelated to the roadmap's steps 1–15. Roadmap step 5 was dropped but kept in place, so its number is retired rather than reused.*
 
 ## Progress
 
-**Phases A and B are complete** — the production-readiness gate. Six of 26 commits.
+**Phases A, B and C are complete** — the production-readiness gate and the coverage work the restructuring depends on. Eight of 26 commits.
 
 | Commit | Landed as | Notes |
 |---|---|---|
@@ -683,14 +681,16 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 | 5 · `Bound every external process with a timeout` | `7888153` | Three budgets: CCP4 900 s (per program, `--ccp4-timeout`), setup shell 30 s, provenance 1 s — each with its own outcome. A stalled program becomes a retryable `ccp4_tool_timeout`, its partial log copied to `<output-dir>/ccp4_timeout_logs/`. |
 | — · `Annotate confidence scoring return values` | `bbad75f` | Landed outside the plan. |
 | 6 · `Route diagnostics through logging` | `6bda639` | `src/run_logging.py`; 35 of 46 prints converted, the rest being the progress line, final summary and interrupt message. Workers log over a queue the driver re-emits. `-v` / `--quiet` / `--log-file`. Scattered `[:300]` slices replaced by two named bounds. |
+| 7 · `Cover the model-envelope map path offline` | *pending* | The default map scope, previously exercised only in the `ccp4`+`slow` lane. All three fallback outcomes plus the 63/64 boundary, verified to catch a `>=` → `>` weakening. `density_analysis` 60% → 83%. |
+| 8 · `Unit-test the highest-risk CLI and resume surfaces` | *pending* | 59 tests in `tests/test_driver_surfaces.py` covering resume-schema validation, the exit-code contract, entry selection, input preparation including the legacy PDB fallback, `read_resolution`, and worker autoscaling. Eleven mutations confirmed caught. `main.py` 66% → 70%. |
 
-Suite: **924 passed, 26 skipped** offline, coverage **80.2%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
+Suite: **974 passed, 26 skipped** offline, coverage **83.0%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
 
 **Two decisions resolved since the review.** 1.8 was fixed rather than gated, because full-database runs finalize confidence automatically (see 1.8). The CCP4 integration lane is knowingly skipped for want of an always-on runner (see 1.7), which is why Phase C is a prerequisite rather than an improvement: nothing in CI exercises the density or bond path that Phases E–G restructure.
 
 **Still open:** the licence, and whether editing `metal_distances_info.txt` should invalidate frozen references (2.5).
 
-Next up is Phase C.
+Next up is Phase D: the mechanical `pdb_id` rename and dead-code removal, both wanted before the Phase E splits so the move diffs stay pure.
 
 ---
 
@@ -720,7 +720,7 @@ Commit 1 is the release blocker: it is what every new user hits before anything 
 
 | # | Commit | Contents | ~Size |
 |---|---|---|---|
-| 7 | `Cover the density and snapshot paths offline` | Extend `_fake_ccp4_run_factory` to `mapmask` and drive `model-envelope` through crop-succeeds, crop-unsafe and crop-larger-than-full — the largest single coverage hole (4.1). Plus CCP4-free `entry_data` integrity checks over the pinned snapshot: file presence, checksums, `data.json` schema, `read_resolution` against real files. | 270 |
+| 7 | `Cover the model-envelope map path offline` | Extend `_fake_ccp4_run_factory` to `mapmask` and drive `model-envelope` through crop-accepted, crop-larger-than-original and crop-past-the-cell-edge — the largest single coverage hole (4.1), and the *default* map scope, previously exercised only in the `ccp4`+`slow` lane that never runs. | 190 |
 | 8 | `Unit-test the highest-risk CLI and resume surfaces` | A deliberately selected subset of 4.2, not all fourteen: `validate_resume_schemas` and `_batch_exit_code` first (both govern data-destructive behaviour), then `parse_pdb_id`, `load_ids_from_file`, `enumerate_entries`, `automatic_worker_limits`, `remove_stale_disabled_bond_outputs`, `--keep-intermediates`. **Also `verify_ccp4`, `prepare_inputs`, `read_resolution` and `has_final_files`, because Phase F moves all four** — commit 11 relocates `verify_ccp4`, commit 12 relocates the other three — and moving untested code is how a regression gets attributed to the wrong commit. Only `resolve_manual_inputs`, `available_cpu_count` and `available_memory_bytes` stay indirectly covered, none of which Phase F touches. | 330 |
 
 ### Phase D — Mechanical cleanups *before* the splits
