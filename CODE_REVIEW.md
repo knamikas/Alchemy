@@ -669,7 +669,7 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 
 ## Progress
 
-**Phases A, B and C are complete** — the production-readiness gate and the coverage work the restructuring depends on. Eight of 26 commits.
+**Phases A–D are complete, and Phase E has begun** — the production-readiness gate, the coverage work the restructuring depends on, the mechanical cleanups, and the first `main.py` extraction. Eleven of 26 commits.
 
 | Commit | Landed as | Notes |
 |---|---|---|
@@ -681,16 +681,19 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 | 5 · `Bound every external process with a timeout` | `7888153` | Three budgets: CCP4 900 s (per program, `--ccp4-timeout`), setup shell 30 s, provenance 1 s — each with its own outcome. A stalled program becomes a retryable `ccp4_tool_timeout`, its partial log copied to `<output-dir>/ccp4_timeout_logs/`. |
 | — · `Annotate confidence scoring return values` | `bbad75f` | Landed outside the plan. |
 | 6 · `Route diagnostics through logging` | `6bda639` | `src/run_logging.py`; 35 of 46 prints converted, the rest being the progress line, final summary and interrupt message. Workers log over a queue the driver re-emits. `-v` / `--quiet` / `--log-file`. Scattered `[:300]` slices replaced by two named bounds. |
-| 7 · `Cover the model-envelope map path offline` | *pending* | The default map scope, previously exercised only in the `ccp4`+`slow` lane. All three fallback outcomes plus the 63/64 boundary, verified to catch a `>=` → `>` weakening. `density_analysis` 60% → 83%. |
-| 8 · `Unit-test the highest-risk CLI and resume surfaces` | *pending* | 59 tests in `tests/test_driver_surfaces.py` covering resume-schema validation, the exit-code contract, entry selection, input preparation including the legacy PDB fallback, `read_resolution`, and worker autoscaling. Eleven mutations confirmed caught. `main.py` 66% → 70%. |
+| 7 · `Cover the model-envelope map path offline` | `e5d1a6c` | The default map scope, previously exercised only in the `ccp4`+`slow` lane. All three fallback outcomes plus the 63/64 boundary, verified to catch a `>=` → `>` weakening. `density_analysis` 60% → 83%. |
+| 8 · `Unit-test the highest-risk CLI and resume surfaces` | `de8a36d` | 59 tests in `tests/test_driver_surfaces.py` covering resume-schema validation, the exit-code contract, entry selection, input preparation including the legacy PDB fallback, `read_resolution`, and worker autoscaling. Eleven mutations confirmed caught. `main.py` 66% → 70%. |
+| 9 · `Rename pdbID to pdb_id throughout` | `337310f` | Identifiers only, across five files; the `pdbID` CSV columns are untouched, so no output schema moved. |
+| 10 · `Remove dead code and annotate the public surfaces` | `81ddd05` | `_write_csv`, `COMMON_METALS`/`UNCOMMON_METALS` and `find_ccp4_setup`'s `common_candidates` deleted; the unreachable `metal_identification` branches removed by making the header/index pair one `Optional` state; PEP 585 annotations on the public functions. |
+| 11 · `Move CCP4 environment resolution into ccp4_setup` | *this commit* | `resolve_env`, its two Windows helpers, `_normalize_path_key` and `verify_ccp4` moved; one `DEFAULT_CONFIG_FILES` the driver no longer shadows; `ccp4_tools_available` and `verify_ccp4` reduced to one `missing_ccp4_tools` probe; `Ccp4SetupError` replaces `SystemExit` throughout the library, leaving `resolve_ccp4_environment` the only exit. Three mutations confirmed caught. |
 
-Suite: **974 passed, 26 skipped** offline, coverage **83.0%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
+Suite: **991 passed, 26 skipped** offline, coverage **84.2%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
 
 **Two decisions resolved since the review.** 1.8 was fixed rather than gated, because full-database runs finalize confidence automatically (see 1.8). The CCP4 integration lane is knowingly skipped for want of an always-on runner (see 1.7), which is why Phase C is a prerequisite rather than an improvement: nothing in CI exercises the density or bond path that Phases E–G restructure.
 
 **Still open:** the licence, and whether editing `metal_distances_info.txt` should invalidate frozen references (2.5).
 
-Next up is Phase D: the mechanical `pdb_id` rename and dead-code removal, both wanted before the Phase E splits so the move diffs stay pure.
+Next up is the rest of Phase E: commit 12 extracts `inputs.py` and `provenance.py`, the largest of the splits.
 
 ---
 

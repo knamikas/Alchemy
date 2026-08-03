@@ -103,10 +103,13 @@ from run_logging import (
 )
 from ccp4_setup import (
     REQUIRED_CCP4_TOOLS,
+    Ccp4SetupError,
     ccp4_tools_available,
     find_ccp4_setup,
     load_ccp4_setup_config,
+    resolve_env,
     save_ccp4_setup,
+    verify_ccp4,
 )
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
@@ -142,17 +145,6 @@ WORKER_STALL_GRACE_S = 600.0
 # idle, so a healthy pool finishes this in milliseconds and never approaches the
 # deadline; it exists only to bound the hang described in ``_shutdown_pool``.
 WORKER_SHUTDOWN_GRACE_S = 5.0
-
-# Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
-# is never mistaken for environment variables.
-ENV_SENTINEL = "__ALCHEMY_CCP4_ENV__"
-
-# Sourcing a CCP4 setup script should take well under a second. A budget this
-# small still leaves room for a slow network filesystem, and a setup script that
-# blocks past it is hung -- most often on an interactive prompt no one can
-# answer, since the shell has no terminal. Exceeding it aborts the run rather
-# than failing one entry: without CCP4 there is nothing to process.
-SETUP_SHELL_TIMEOUT_S = 30
 
 # Budget for the `git` probes that stamp run provenance. These read a local
 # repository and are expected to finish in milliseconds; a second is generous.
@@ -235,168 +227,45 @@ _INFLIGHT: Optional[Any] = None
 
 
 # --------------------------------------------------------------------------- #
-# CCP4 environment
+# CCP4 environment -- the CLI boundary over ccp4_setup
 # --------------------------------------------------------------------------- #
-def _normalize_path_key(env):
-    """Ensure the PATH variable is accessible under the exact key "PATH".
+def _verify_resolved_ccp4(env, setup_path):
+    """Verify ``env``, naming the script that was run when it comes up short.
 
-    Different platforms/shells report it with different casing (Windows'
-    `set` reports "Path"; Unix shells report "PATH"). Python dict lookups
-    are case-sensitive, so downstream code that does env.get("PATH") would
-    silently miss it if the key came back in a different case. This finds
-    any case-variant of "PATH" and consolidates it under the exact
-    all-caps key, leaving every other variable untouched.
+    Sourcing a setup script successfully and still not finding the programs is
+    a different diagnosis from never having found a script at all: the path is
+    real but points at an incomplete or wrong installation.
     """
-    for k in list(env):
-        if k.upper() == "PATH" and k != "PATH":
-            env["PATH"] = env.pop(k)
-    return env
-
-
-def _parse_windows_set_output(stdout):
-    """Return the ``set`` variables printed after ENV_SENTINEL.
-
-    The CCP4 batch launcher prints its own banner before the variables, and any
-    of those lines can contain "=". Everything before the sentinel is therefore
-    discarded rather than guessed at by prefix.
-    """
-    env = {}
-    seen_sentinel = False
-    for line in stdout.splitlines():
-        if not seen_sentinel:
-            # With `echo on` the sentinel command is echoed before its output;
-            # only the output line compares equal.
-            seen_sentinel = line.strip() == ENV_SENTINEL
-            continue
-        key, separator, value = line.partition("=")
-        if separator and key:
-            env[key] = value
-    return env, seen_sentinel
-
-
-def _resolve_env_windows(ccp4_setup):
-    """Capture the environment a Windows CCP4 batch launcher establishes."""
-    # Driving cmd.exe through a temporary script avoids its quoting rules,
-    # which differ from the ones subprocess applies when building a command
-    # line, and so would mis-handle an install path containing spaces.
-    handle, script_path = tempfile.mkstemp(prefix="alchemy-ccp4-", suffix=".cmd")
     try:
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\r\n") as fh:
-            fh.write(f'@echo off\ncall "{ccp4_setup}"\necho {ENV_SENTINEL}\nset\n')
-        try:
-            out = subprocess.run(
-                ["cmd", "/c", script_path],
-                capture_output=True,
-                text=True,
-                timeout=SETUP_SHELL_TIMEOUT_S,
-            )
-        except subprocess.TimeoutExpired:
-            raise SystemExit(
-                f"CCP4 setup {ccp4_setup} did not finish within "
-                f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script "
-                "that blocks usually waits on input the launcher cannot "
-                "provide. Alchemy cannot run without CCP4, so this stops the "
-                "run rather than failing one entry."
-            ) from None
-    finally:
-        # A fixed name in %TEMP% left one file behind per run and let
-        # concurrent runs overwrite each other's script.
-        try:
-            os.unlink(script_path)
-        except OSError:
-            pass
-
-    if out.returncode != 0:
-        raise SystemExit(f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")
-    env, seen_sentinel = _parse_windows_set_output(out.stdout)
-    if not seen_sentinel:
-        raise SystemExit(
-            f"CCP4 setup {ccp4_setup} did not report its environment; "
-            f"expected `set` output after the marker.\n{out.stderr}"
-        )
-    return _normalize_path_key({**os.environ.copy(), **env})
-
-
-def resolve_env(ccp4_setup):
-    """Return the environment dict to run CCP4 under.
-
-    If `ccp4_setup` is given and looks like a bash setup script, source it in a
-    bash subshell and capture the resulting environment. If it is a Windows batch
-    launcher, run it in a cmd shell and capture the resulting environment instead.
-    If no setup script is provided, fall back to the current environment.
-    """
-    if not ccp4_setup:
-        return os.environ.copy()
-    if not os.path.exists(ccp4_setup):
-        raise SystemExit(f"CCP4 setup file not found: {ccp4_setup}")
-
-    if os.path.splitext(ccp4_setup)[1].lower() in (".bat", ".cmd"):
-        return _resolve_env_windows(ccp4_setup)
-
-    cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null 2>&1 && env -0"
-    try:
-        out = subprocess.run(
-            ["bash", "-c", cmd],
-            capture_output=True,
-            text=True,
-            timeout=SETUP_SHELL_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        raise SystemExit(
-            f"CCP4 setup {ccp4_setup} did not finish within "
-            f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script that "
-            "blocks usually waits on input the shell cannot provide. Alchemy "
-            "cannot run without CCP4, so this stops the run rather than "
-            "failing one entry."
+        verify_ccp4(env)
+    except Ccp4SetupError as exc:
+        raise Ccp4SetupError(
+            f"Ran {setup_path}, but CCP4 tools are still not available. {exc}"
         ) from None
-    if out.returncode != 0:
-        raise SystemExit(f"Failed to source CCP4 setup {ccp4_setup}:\n{out.stderr}")
-    env = {}
-    for chunk in out.stdout.split("\0"):
-        if "=" in chunk:
-            k, v = chunk.split("=", 1)
-            env[k] = v
-    return _normalize_path_key({**os.environ.copy(), **env})
 
 
-def verify_ccp4(env):
-    missing = [
-        t for t in REQUIRED_CCP4_TOOLS if shutil.which(t, path=env.get("PATH")) is None
-    ]
-    if missing:
-        raise SystemExit(
-            f"Required CCP4 tools were not found on PATH: {', '.join(missing)}. "
-            "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in\n"
-            "your shell before running."
-        )
+def _resolve_ccp4_environment(args):
+    """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure.
 
+    Split from the ``SystemExit`` wrapper below so the whole decision -- the
+    configure branch, the explicit override, the ambient environment and
+    auto-detection -- reports failure the one way ``ccp4_setup`` does.
 
-def default_ccp4_config_files(repo_dir=REPO_DIR):
-    return [
-        os.path.expanduser("~/.config/alchemy/ccp4.json"),
-        os.path.expanduser("~/.alchemy/ccp4.json"),
-        os.path.join(repo_dir, ".alchemy", "ccp4.json"),
-    ]
-
-
-def resolve_ccp4_environment(args):
-    config_files = default_ccp4_config_files(REPO_DIR)
-    config = load_ccp4_setup_config(config_files=config_files)
+    Which files hold the saved setup path is deliberately not named here.
+    ``ccp4_setup.DEFAULT_CONFIG_FILES`` is the one definition, and a second
+    list in the driver is exactly the drift that made ``--configure-ccp4``
+    report success and then be ignored.
+    """
+    config = load_ccp4_setup_config()
     if args.configure_ccp4:
         setup_path = os.path.abspath(os.path.expanduser(args.configure_ccp4))
         if not os.path.exists(setup_path):
-            raise SystemExit(f"CCP4 setup file not found: {setup_path}")
+            raise Ccp4SetupError(f"CCP4 setup file not found: {setup_path}")
 
         env = resolve_env(setup_path)
-        try:
-            verify_ccp4(env)
-        except SystemExit as e:
-            raise SystemExit(
-                f"Ran {setup_path}, but CCP4 tools are still not available. {e}"
-            ) from None
+        _verify_resolved_ccp4(env, setup_path)
 
-        saved = save_ccp4_setup(setup_path, config_files=config_files)
+        saved = save_ccp4_setup(setup_path)
         logger.info(
             "verified %s are available; saved CCP4 setup path to %s",
             ", ".join(REQUIRED_CCP4_TOOLS),
@@ -416,27 +285,19 @@ def resolve_ccp4_environment(args):
     if args.ccp4_setup:
         setup_path = os.path.abspath(os.path.expanduser(args.ccp4_setup))
         if not os.path.exists(setup_path):
-            raise SystemExit(f"CCP4 setup file not found: {args.ccp4_setup}")
+            # The user's own spelling, not the expanded path, so the message
+            # shows the typo they can see in their command line.
+            raise Ccp4SetupError(f"CCP4 setup file not found: {args.ccp4_setup}")
         env = resolve_env(setup_path)
-        try:
-            verify_ccp4(env)
-        except SystemExit as exc:
-            raise SystemExit(
-                f"Ran {setup_path}, but CCP4 tools are still not available. {exc}"
-            ) from None
+        _verify_resolved_ccp4(env, setup_path)
         return env, setup_path
 
     if ccp4_tools_available(environment):
         return environment, None
 
-    ccp4_setup = find_ccp4_setup(
-        explicit_setup=None,
-        env=environment,
-        config=config,
-        config_files=config_files,
-    )
+    ccp4_setup = find_ccp4_setup(env=environment, config=config)
     if ccp4_setup is None:
-        raise SystemExit(
+        raise Ccp4SetupError(
             f"Required CCP4 tools ({', '.join(REQUIRED_CCP4_TOOLS)}) were not "
             "found on PATH and no setup file could be auto-detected. "
             "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
@@ -446,6 +307,19 @@ def resolve_ccp4_environment(args):
     env = resolve_env(ccp4_setup)
     verify_ccp4(env)
     return env, ccp4_setup
+
+
+def resolve_ccp4_environment(args):
+    """Return ``(env, setup_path)`` for this run, or exit with a diagnostic.
+
+    The CLI boundary. ``ccp4_setup`` raises ``Ccp4SetupError`` so that CCP4
+    resolution stays usable outside a command-line process; this is the single
+    place that turns one into the ``SystemExit`` a run expects.
+    """
+    try:
+        return _resolve_ccp4_environment(args)
+    except Ccp4SetupError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 # --------------------------------------------------------------------------- #

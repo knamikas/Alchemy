@@ -12,7 +12,9 @@ downstream failure or not at all.
 Four of them -- ``verify_ccp4``, ``prepare_inputs``, ``read_resolution`` and
 ``has_final_files`` -- are relocated by the Phase E split. Pinning them first
 means a regression there is attributed to the move rather than discovered later
-in unrelated work.
+in unrelated work. ``verify_ccp4`` has since moved to ``ccp4_setup``; the tests
+followed it here rather than being split off, since what they check is the
+driver's requirement that CCP4 be complete before a run starts.
 
 Out of scope here (owned elsewhere): argument *parsing* rules
 (``test_cli_and_config``), manifest row content (``test_driver_manifest``), and
@@ -472,13 +474,13 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
 def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
     """The message must say which tools are absent and how to fix it."""
     monkeypatch.setattr(
-        main.shutil,
+        ccp4_setup.shutil,
         "which",
         lambda tool, path=None: None if tool == "edstats" else "/x",
     )
 
-    with pytest.raises(SystemExit) as excinfo:
-        main.verify_ccp4({"PATH": "/x"})
+    with pytest.raises(ccp4_setup.Ccp4SetupError) as excinfo:
+        ccp4_setup.verify_ccp4({"PATH": "/x"})
 
     message = str(excinfo.value)
     assert "edstats" in message
@@ -486,20 +488,20 @@ def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
 
 
 def test_a_complete_ccp4_installation_passes(monkeypatch):
-    monkeypatch.setattr(main.shutil, "which", lambda tool, path=None: f"/opt/{tool}")
-    main.verify_ccp4({"PATH": "/opt"})
+    monkeypatch.setattr(
+        ccp4_setup.shutil, "which", lambda tool, path=None: f"/opt/{tool}"
+    )
+    ccp4_setup.verify_ccp4({"PATH": "/opt"})
 
 
 def test_tool_availability_agrees_with_verification(monkeypatch):
     """``ccp4_tools_available`` and ``verify_ccp4`` must not disagree.
 
-    They are separate implementations of the same question (finding 2.2); a
-    divergence would make the driver accept an installation the setup helper
-    rejects, or the reverse.
+    They were separate implementations of the same question (finding 2.2), and
+    a divergence would make the driver accept an installation the setup helper
+    rejects, or the reverse. They now share ``missing_ccp4_tools``; this pins
+    the agreement so a future edit cannot split them again.
     """
-    monkeypatch.setattr(
-        main.shutil, "which", lambda tool, path=None: None if tool == "fft" else "/x"
-    )
     monkeypatch.setattr(
         ccp4_setup.shutil,
         "which",
@@ -507,8 +509,23 @@ def test_tool_availability_agrees_with_verification(monkeypatch):
     )
 
     assert not ccp4_setup.ccp4_tools_available({"PATH": "/x"})
-    with pytest.raises(SystemExit):
-        main.verify_ccp4({"PATH": "/x"})
+    with pytest.raises(ccp4_setup.Ccp4SetupError):
+        ccp4_setup.verify_ccp4({"PATH": "/x"})
+
+
+def test_a_library_caller_never_has_to_catch_systemexit(monkeypatch):
+    """``ccp4_setup`` raises an ordinary exception, not ``SystemExit``.
+
+    ``SystemExit`` derives from ``BaseException``, so a caller reusing CCP4
+    resolution outside a CLI process -- a notebook, a service -- would have its
+    interpreter torn down by a bare ``except Exception``. The CLI's own
+    conversion to an exit is covered by ``test_cli_and_config``.
+    """
+    monkeypatch.setattr(ccp4_setup.shutil, "which", lambda tool, path=None: None)
+
+    with pytest.raises(Exception) as excinfo:
+        ccp4_setup.verify_ccp4({"PATH": "/x"})
+    assert not isinstance(excinfo.value, SystemExit)
 
 
 # --------------------------------------------------------------------------- #

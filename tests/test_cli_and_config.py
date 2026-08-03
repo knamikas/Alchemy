@@ -202,8 +202,8 @@ def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
     ``save_ccp4_setup`` writes the user-level file (``config_files[0]``).
 
     Regression: ``load_ccp4_setup_config`` merged every file in order and let
-    the *last* one win, while ``main.default_ccp4_config_files`` puts the
-    in-repo ``.alchemy/ccp4.json`` last. A user who ran ``--configure-ccp4``
+    the *last* one win, while ``DEFAULT_CONFIG_FILES`` puts the in-repo
+    ``.alchemy/ccp4.json`` last. A user who ran ``--configure-ccp4``
     was told the path had been saved and then kept getting the stale one, with
     no diagnostic. Save and load must agree on which file is authoritative.
     """
@@ -244,6 +244,43 @@ def test_later_config_files_still_supply_keys_the_primary_omits(tmp_path):
 
     assert loaded["ccp4_setup"] == "/user/ccp4.setup-sh"
     assert loaded["other_key"] == "kept"
+
+
+def test_the_driver_reads_the_setup_path_configuration_writes(monkeypatch, tmp_path):
+    """``--configure-ccp4`` and the next run must use the same file list.
+
+    Regression: the driver carried its own three-entry list while
+    ``ccp4_setup`` defined a two-entry one, so the application and the test
+    harness disagreed about where configuration lives (finding 2.2). There is
+    now a single ``DEFAULT_CONFIG_FILES``, and the driver names no list of its
+    own -- which is what redirecting that one constant here proves: if the
+    driver reintroduced its own, the saved path would land somewhere the run
+    never reads and this would fail.
+    """
+    primary = tmp_path / "user" / "ccp4.json"
+    monkeypatch.setattr(ccp4_setup, "DEFAULT_CONFIG_FILES", [str(primary)])
+
+    setup = tmp_path / "ccp4.setup-sh"
+    setup.write_text("# a setup script that changes nothing\n", encoding="utf-8")
+
+    # Sourcing and verification are exercised elsewhere; stubbing them keeps
+    # this test about which files the setup path travels through.
+    monkeypatch.setattr(main, "resolve_env", lambda path: {"PATH": str(path)})
+    monkeypatch.setattr(main, "verify_ccp4", lambda env: None)
+
+    configure = argparse.Namespace(configure_ccp4=str(setup), ccp4_setup=None)
+    assert main.resolve_ccp4_environment(configure) == (None, None)
+    assert primary.exists(), "--configure-ccp4 wrote outside the configured list"
+
+    # The next run must find that path back through the same list.
+    monkeypatch.setattr(ccp4_setup, "ccp4_tools_available", lambda env=None: False)
+    monkeypatch.setattr(main, "ccp4_tools_available", lambda env=None: False)
+    monkeypatch.delenv("CCP4_SETUP", raising=False)
+
+    run = argparse.Namespace(configure_ccp4=None, ccp4_setup=None)
+    _, used = main.resolve_ccp4_environment(run)
+
+    assert used == str(setup)
 
 
 # --------------------------------------------------------------------------- #
@@ -338,7 +375,7 @@ def test_the_three_timeout_budgets_are_distinct_and_ordered():
     """
     assert (
         main.PROVENANCE_COMMAND_TIMEOUT_S
-        < main.SETUP_SHELL_TIMEOUT_S
+        < ccp4_setup.SETUP_SHELL_TIMEOUT_S
         < density.CCP4_TOOL_TIMEOUT_S
     )
     # Observed maxima in the July 2026 database runs were EDSTATS 185.7 s and
@@ -362,16 +399,16 @@ def test_a_hanging_setup_script_aborts_the_run(
 
     def fake_run(cmd, **kwargs):
         timeout = kwargs.get("timeout")
-        assert timeout == main.SETUP_SHELL_TIMEOUT_S
+        assert timeout == ccp4_setup.SETUP_SHELL_TIMEOUT_S
         raise subprocess.TimeoutExpired(cmd, float(timeout))
 
-    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    monkeypatch.setattr(ccp4_setup.subprocess, "run", fake_run)
 
-    with pytest.raises(SystemExit) as excinfo:
-        main.resolve_env(str(setup))
+    with pytest.raises(ccp4_setup.Ccp4SetupError) as excinfo:
+        ccp4_setup.resolve_env(str(setup))
 
     message = str(excinfo.value)
-    assert str(main.SETUP_SHELL_TIMEOUT_S) in message
+    assert str(ccp4_setup.SETUP_SHELL_TIMEOUT_S) in message
     assert "stops the run" in message
 
 

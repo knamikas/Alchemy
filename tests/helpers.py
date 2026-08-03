@@ -1032,11 +1032,11 @@ _NETWORK_CACHE: Dict[Tuple[str, int], bool] = {}
 def ccp4_env() -> Optional[Dict[str, str]]:
     """Return an environment with the CCP4 tools on PATH, or ``None``.
 
-    Tries the current environment first, then ``ccp4_setup.find_ccp4_setup``
+    Tries the current environment first, then ``find_ccp4_setup``
     (``CCP4_SETUP``, the user config, and the usual install locations) sourced
-    through ``main.resolve_env``.
+    through ``resolve_env``.
     """
-    from ccp4_setup import ccp4_tools_available, find_ccp4_setup
+    from ccp4_setup import ccp4_tools_available, find_ccp4_setup, resolve_env
 
     if os.environ.get("ALCHEMY_TESTS_NO_CCP4"):
         return None
@@ -1050,10 +1050,8 @@ def ccp4_env() -> Optional[Dict[str, str]]:
     if not setup:
         return None
     try:
-        import main
-
-        env = main.resolve_env(setup)
-    except (Exception, SystemExit):  # a probe must never fail the run
+        env = resolve_env(setup)
+    except Exception:  # a probe must never fail the run
         return None
     return env if ccp4_tools_available(env) else None
 
