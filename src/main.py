@@ -91,6 +91,16 @@ from bond_analysis import (
     run_bond_analysis,
     stats_extra_values,
 )
+from run_logging import (
+    configure_driver_logging,
+    configure_worker_logging,
+    level_for_verbosity,
+    worker_level,
+    logger_for,
+    create_worker_log_queue,
+    start_worker_log_listener,
+    truncate,
+)
 from ccp4_setup import (
     REQUIRED_CCP4_TOOLS,
     ccp4_tools_available,
@@ -207,6 +217,14 @@ STATS_COLUMNS = (
 )
 
 # config dict shared with worker processes (set once per worker by _init_worker)
+logger = logger_for(__name__)
+
+#: Longest text the manifest's free-text ``error`` column carries. The column
+#: is a human-readable summary, not the full diagnostic: the complete message
+#: is logged, and ``truncate`` marks the cut so a shortened one is not mistaken
+#: for a complete one.
+MAX_MANIFEST_ERROR_CHARS = 300
+
 _CFG: Optional[Dict[str, Any]] = None
 _INFLIGHT: Optional[Any] = None
 
@@ -374,10 +392,10 @@ def resolve_ccp4_environment(args):
             ) from None
 
         saved = save_ccp4_setup(setup_path, config_files=config_files)
-        print(
-            f"Verified {', '.join(REQUIRED_CCP4_TOOLS)} are available; saved "
-            f"CCP4 setup path to {', '.join(saved)}",
-            flush=True,
+        logger.info(
+            "verified %s are available; saved CCP4 setup path to %s",
+            ", ".join(REQUIRED_CCP4_TOOLS),
+            ", ".join(saved),
         )
         return None, None
 
@@ -1171,7 +1189,7 @@ def enumerate_entries(root, limit=None):
             # Common with partially-synced/locked-down mirrors: skip rather than
             # aborting the whole enumeration on one unreadable hashdir.
             skipped += 1
-            print(f"  warning: skipping unreadable dir {hp}: {e}", flush=True)
+            logger.warning("skipping unreadable directory %s: %s", hp, e)
             continue
         for pid in entries:
             ep = os.path.join(hp, pid)
@@ -1180,9 +1198,7 @@ def enumerate_entries(root, limit=None):
                 if limit is not None and len(ids) >= limit:
                     return ids
     if skipped:
-        print(
-            f"  note: skipped {skipped} unreadable hashdir(s) under {root}", flush=True
-        )
+        logger.warning("skipped %d unreadable hashdir(s) under %s", skipped, root)
     return ids
 
 
@@ -1255,10 +1271,22 @@ def _ccp4_version(env):
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-def _init_worker(cfg: Dict[str, Any], inflight=None) -> None:
+def _init_worker(cfg: Dict[str, Any], inflight=None, log_queue=None) -> None:
     global _CFG, _INFLIGHT
     _CFG = cfg
     _INFLIGHT = inflight
+    # A forked worker inherits the driver's SIGTERM handler, which converts the
+    # signal into KeyboardInterrupt so the *driver* can unwind and write its run
+    # log. A worker has nothing to unwind: ``pool.terminate`` SIGTERMs it during
+    # normal shutdown, and raising there interrupts whatever it is doing --
+    # including the log queue's feeder-thread finalizer, which printed a
+    # spurious traceback on successful runs. Restore the default disposition so
+    # a terminated worker simply exits.
+    with contextlib.suppress(AttributeError, OSError, ValueError):
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    # Handlers inherited through fork would have several processes writing to
+    # one stream; the queue makes the driver the only writer.
+    configure_worker_logging(log_queue, level=(cfg or {}).get("log_level", 20))
 
 
 def _announce_inflight(state: str, pdbID: str) -> None:
@@ -1609,7 +1637,8 @@ def _finalize_result(
         existing_error = result["error"]
         result["error"] = "; ".join(
             ([existing_error] if existing_error else []) + messages
-        )[:300]
+        )
+        result["error"] = truncate(result["error"], MAX_MANIFEST_ERROR_CHARS)
     if bond_meta.get("retryable", False):
         result["retryable"] = True
     result["warning_codes"] = list(
@@ -1744,7 +1773,7 @@ def process(pdbID):
             result.update(
                 retryable=True,
                 reason_codes=["ccp4_tool_timeout"],
-                error=f"density unavailable: {exc}"[:300],
+                error=truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS),
                 confidence_inputs_missing_reason="ccp4_tool_timeout",
                 ccp4_timeout_log_path=kept_log,
             )
@@ -1757,7 +1786,7 @@ def process(pdbID):
             result.update(
                 retryable=False,
                 reason_codes=["mtzfix_validation_failure"],
-                error=f"density unavailable: {exc}"[:300],
+                error=truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS),
                 confidence_inputs_missing_reason=("mtzfix_validation_failure"),
             )
             result["timings"].update(exc.timings)
@@ -1831,7 +1860,9 @@ def process(pdbID):
                     )
                 )
             except Exception as e:  # noqa: BLE001
-                result["error"] = f"bond: {type(e).__name__}: {e}"[:300]
+                result["error"] = truncate(
+                    f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS
+                )
                 result["reason_codes"] = list(
                     dict.fromkeys(result["reason_codes"] + ["bond_stage_failure"])
                 )
@@ -1855,14 +1886,14 @@ def process(pdbID):
             status="skip",
             retryable=True,
             reason_codes=["missing_input"],
-            error=f"missing input: {e}"[:300],
+            error=truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS),
         )
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         result.update(
             status="error",
             retryable=True,
             reason_codes=["unexpected_processing_error"],
-            error=f"{type(e).__name__}: {e}"[:300],
+            error=truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS),
         )
     finally:
         if not cfg["keep"] and work_dir is not None and os.path.isdir(work_dir):
@@ -2285,6 +2316,29 @@ def parse_args(argv=None):
         ),
     )
     ap.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help=(
+            "increase diagnostic detail; -v adds per-entry and per-CCP4-program "
+            "records from inside the workers"
+        ),
+    )
+    ap.add_argument(
+        "--quiet",
+        action="store_true",
+        help="report warnings and errors only, suppressing the run narrative",
+    )
+    ap.add_argument(
+        "--log-file",
+        default=None,
+        help=(
+            "also write full debug-level diagnostics to this file, whatever "
+            "the console verbosity"
+        ),
+    )
+    ap.add_argument(
         "--ccp4-timeout",
         type=positive_int,
         default=CCP4_TOOL_TIMEOUT_S,
@@ -2398,7 +2452,7 @@ def _select_entry_ids(args, cache_root):
                 f"Entry {args.id} not found locally and download failed."
             ) from None
         if used_root != args.pdb_redo_root:
-            print(f"Auto-downloaded {args.id} into cache at {cache_root}", flush=True)
+            logger.info("auto-downloaded %s into cache at %s", args.id, cache_root)
         return [args.id], used_root, None
 
     if args.id_file:
@@ -2406,10 +2460,10 @@ def _select_entry_ids(args, cache_root):
             ids = load_ids_from_file(args.id_file)
         except (FileNotFoundError, ValueError) as exc:
             raise _DriverError(str(exc)) from None
-        print(f"Loaded {len(ids)} IDs from {args.id_file}", flush=True)
+        logger.info("loaded %d IDs from %s", len(ids), args.id_file)
         return ids, root, None
 
-    print(f"Enumerating final PDB-REDO entries under {root} ...", flush=True)
+    logger.info("enumerating final PDB-REDO entries under %s", root)
     # Early-stop only when capping and not resuming (resume needs the full set).
     limit = args.max_pdbs if (args.max_pdbs and not args.resume) else None
     return enumerate_entries(root, limit=limit), root, None
@@ -2915,7 +2969,7 @@ def _run(args, run_log):
     except (OSError, UnicodeError, ValueError) as exc:
         message = f"Invalid bundled metallocofactor catalog: {exc}"
         run_log.driver_error = message
-        print(message, flush=True)
+        logger.error("%s", message)
         return 1
 
     env, _ = resolve_ccp4_environment(args)
@@ -2982,7 +3036,7 @@ def _run(args, run_log):
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 message = f"Invalid confidence reference: {exc}"
                 run_log.driver_error = message
-                print(message, flush=True)
+                logger.error("%s", message)
                 return 1
             run_log.details["confidence_reference_dir"] = confidence_reference_dir
             confidence_mode = "reference"
@@ -2996,14 +3050,13 @@ def _run(args, run_log):
             # Alchemy because the confidence score is not finalized. Say so
             # plainly -- naming the searched directories alone read as a
             # misconfiguration the user was supposed to fix.
-            print(
-                "Confidence scoring is not enabled: no frozen reference is "
+            logger.info(
+                "confidence scoring is not enabled: no frozen reference is "
                 "distributed with Alchemy, because the score is not yet "
                 "finalized. All other outputs are unaffected. To enable it, "
                 "complete an uncapped full-database run or pass "
-                "--confidence-reference-dir. (Searched: "
-                f"{', '.join(searched_reference_dirs)}.)",
-                flush=True,
+                "--confidence-reference-dir. (searched: %s)",
+                ", ".join(searched_reference_dirs),
             )
     if args.resume:
         if confidence_mode is not None and (
@@ -3015,7 +3068,7 @@ def _run(args, run_log):
                 "directory."
             )
             run_log.driver_error = message
-            print(message, flush=True)
+            logger.error("%s", message)
             return 1
         try:
             validate_resume_schemas(
@@ -3043,7 +3096,7 @@ def _run(args, run_log):
                 )
         except ValueError as exc:
             run_log.driver_error = str(exc)
-            print(str(exc), flush=True)
+            logger.error("%s", exc)
             return 1
         if confidence_mode == "reference":
             try:
@@ -3051,14 +3104,14 @@ def _run(args, run_log):
             except (OSError, ValueError) as exc:
                 message = f"Cannot resume confidence output: {exc}"
                 run_log.driver_error = message
-                print(message, flush=True)
+                logger.error("%s", message)
                 return 1
 
     try:
         ids, root, manual_inputs = _select_entry_ids(args, cache_root)
     except _DriverError as exc:
         run_log.driver_error = str(exc)
-        print(str(exc), flush=True)
+        logger.error("%s", exc)
         return 1
 
     run_log.details["entries_selected_before_resume"] = len(ids)
@@ -3075,10 +3128,10 @@ def _run(args, run_log):
             done = load_done(manifest_path, retry_partial_ids=ids, **done_kwargs)
             reselected = normally_done - done
             run_log.details["terminal_partials_reselected"] = len(reselected)
-            print(
-                f"Selected {len(reselected)} terminal partial "
-                f"entr{'y' if len(reselected) == 1 else 'ies'} for retry.",
-                flush=True,
+            logger.info(
+                "selected %d terminal partial entr%s for retry",
+                len(reselected),
+                "y" if len(reselected) == 1 else "ies",
             )
         else:
             done = normally_done
@@ -3102,17 +3155,19 @@ def _run(args, run_log):
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 message = f"Confidence finalization failed: {exc}"
                 run_log.driver_error = message
-                print(message, file=sys.stderr, flush=True)
+                logger.error("%s", message)
                 return 1
-            print(
-                "No entries required retry; finalized "
-                f"{total} confidence rows ({scored} scored; database cohort "
-                f"{cohort}) -> {confidence_scores_path}",
-                flush=True,
+            logger.info(
+                "no entries required retry; finalized %d confidence rows "
+                "(%d scored; database cohort %d) -> %s",
+                total,
+                scored,
+                cohort,
+                confidence_scores_path,
             )
-            print(f"Confidence reference -> {database_reference_dir}", flush=True)
+            logger.info("confidence reference -> %s", database_reference_dir)
             return 0
-        print("No entries to process.", flush=True)
+        logger.info("no entries to process")
         return 0
 
     try:
@@ -3122,10 +3177,10 @@ def _run(args, run_log):
     except OSError as exc:
         message = f"Could not remove stale bond-stage output: {exc}"
         run_log.driver_error = message
-        print(message, flush=True)
+        logger.error("%s", message)
         return 1
     for removed_path in removed_stale_bond_outputs:
-        print(f"Removed stale bond-stage output: {removed_path}", flush=True)
+        logger.info("removed stale bond-stage output: %s", removed_path)
     if not args.resume:
         # Reference metadata is its completion marker. Fresh runs must not leave
         # incompatible confidence artifacts beside newly replaced core output.
@@ -3149,7 +3204,7 @@ def _run(args, run_log):
         except OSError as exc:
             message = f"Could not clear stale confidence output: {exc}"
             run_log.driver_error = message
-            print(message, flush=True)
+            logger.error("%s", message)
             return 1
 
     # A Pool creates every worker up front, so asking for more than there are
@@ -3167,22 +3222,22 @@ def _run(args, run_log):
             memory_limit if memory_limit is not None else "unavailable"
         )
         run_log.details["Selected workers"] = workers
-        print("Automatic worker selection:", flush=True)
-        print(f"  CPU worker limit: {cpu_limit}", flush=True)
-        print(
-            "  Memory worker limit: "
-            f"{memory_limit if memory_limit is not None else 'unavailable'}",
-            flush=True,
+        logger.info("automatic worker selection:")
+        logger.info("  CPU worker limit: %s", cpu_limit)
+        logger.info(
+            "  memory worker limit: %s",
+            memory_limit if memory_limit is not None else "unavailable",
         )
-        print(f"  Selected workers: {workers}", flush=True)
+        logger.info("  selected workers: %s", workers)
     else:
         workers = min(args.workers, len(ids))
         run_log.details["worker_selection"] = "explicit"
         run_log.details["Selected workers"] = workers
-    print(
-        f"Processing {len(ids)} entr{'y' if len(ids) == 1 else 'ies'} "
-        f"with {workers} worker(s) ...",
-        flush=True,
+    logger.info(
+        "processing %d entr%s with %d worker(s)",
+        len(ids),
+        "y" if len(ids) == 1 else "ies",
+        workers,
     )
 
     cfg = {
@@ -3196,6 +3251,9 @@ def _run(args, run_log):
         "bonds": args.bonds,
         "density_map_scope": args.density_map_scope,
         "ccp4_timeout_s": args.ccp4_timeout,
+        "log_level": worker_level(
+            level_for_verbosity(args.verbose, args.quiet), args.log_file
+        ),
         "allow_download": bool(args.id or args.id_file),
         "manual_inputs": manual_inputs,
         "alchemy_commit": _alchemy_commit(),
@@ -3276,7 +3334,18 @@ def _run(args, run_log):
             # Not a ``with`` block: ``Pool.__exit__`` calls the same
             # ``terminate`` that a killed idle worker can wedge forever, so
             # shutdown is bounded explicitly in the ``finally`` below.
-            pool = Pool(workers, initializer=_init_worker, initargs=(cfg, inflight))
+            # Worker records travel over this queue and are re-emitted by the
+            # driver, so only one process ever writes to a handler. The queue
+            # is created before the pool but the listener thread is started
+            # after it: forking a process that already has running threads
+            # risks the child deadlocking on a lock no thread there holds.
+            log_queue = create_worker_log_queue()
+            pool = Pool(
+                workers,
+                initializer=_init_worker,
+                initargs=(cfg, inflight, log_queue),
+            )
+            log_listener = start_worker_log_listener(log_queue)
             try:
                 results = pool.imap_unordered(process, ids, chunksize=1)
                 completed = 0
@@ -3380,13 +3449,17 @@ def _run(args, run_log):
                             final=finished,
                         )
             finally:
-                if _shutdown_pool(pool):
+                forced = _shutdown_pool(pool)
+                # Stopped only after the pool is gone, so records emitted
+                # during shutdown are still forwarded.
+                log_listener.stop()
+                log_queue.close()
+                if forced:
                     run_log.summary["worker_pool_forced_shutdown"] = True
-                    print(
-                        "Warning: a worker pool shutdown had to be forced "
-                        "after a worker died holding the task-queue lock; "
-                        "results above are complete.",
-                        flush=True,
+                    logger.warning(
+                        "a worker pool shutdown had to be forced after a "
+                        "worker died holding the task-queue lock; results "
+                        "above are complete"
                     )
             processing_completed = True
     finally:
@@ -3436,7 +3509,7 @@ def _run(args, run_log):
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 message = f"Confidence finalization failed: {exc}"
                 run_log.driver_error = message
-                print(message, file=sys.stderr, flush=True)
+                logger.error("%s", message)
                 return 1
             run_log.summary.update(
                 confidence_status="finalized",
@@ -3474,12 +3547,12 @@ def _run(args, run_log):
             confidence_scores_path=confidence_scores_path,
         )
     if exit_code:
-        print(
-            "Alchemy completed with incomplete entries: "
-            f"errors={counts['error']}, skips={counts['skip']}, "
-            f"retryable_partials={retryable_partial_count}.",
-            file=sys.stderr,
-            flush=True,
+        logger.warning(
+            "completed with incomplete entries: errors=%d, skips=%d, "
+            "retryable_partials=%d",
+            counts["error"],
+            counts["skip"],
+            retryable_partial_count,
         )
     return exit_code
 
@@ -3488,6 +3561,12 @@ def main(argv=None):
     """Parse arguments, execute the driver, and always emit a run log."""
     raw_args = None if argv is None else list(argv)
     args = parse_args(raw_args)
+    # Handlers are attached once, here, and nowhere else: the driver is the
+    # only process that writes them, and workers reach them over a queue.
+    configure_driver_logging(
+        level=level_for_verbosity(args.verbose, args.quiet),
+        log_file=args.log_file,
+    )
     command_parts = list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args]
     run_log = _RunLog(args, shlex.join(command_parts))
     exit_code = 1
@@ -3519,11 +3598,9 @@ def main(argv=None):
         try:
             log_path = run_log.write(exit_code)
         except OSError as exc:
-            print(
-                f"Could not write detailed run log: {exc}", file=sys.stderr, flush=True
-            )
+            logger.error("could not write detailed run log: %s", exc)
         else:
-            print(f"Detailed run log -> {log_path}", flush=True)
+            logger.info("detailed run log -> %s", log_path)
 
 
 if __name__ == "__main__":

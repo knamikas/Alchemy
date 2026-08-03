@@ -453,6 +453,9 @@ and atom serial rather than parser traversal order.
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
 | `--retry-partials` | With `--resume`, retry all `partial` entries recorded in the manifest. Successful `ok` entries remain skipped; `--id` or `--id-file` may restrict the retry set. |
 | `--no-bonds` | Skip bond-distance analysis. A fresh run removes previous `metal_bonds_all.csv` and `metal_candidates_all.csv` files in the output directory. |
+| `-v`, `--verbose` | Increase diagnostic detail. The default reports the run narrative; `-v` adds per-entry and per-CCP4-program records from inside the worker processes. |
+| `--quiet` | Report warnings and errors only. |
+| `--log-file <path>` | Also write full debug-level diagnostics to a file, whatever the console verbosity. Independent of the per-run report in `alchemy_run_*.log`. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
 | `--ccp4-setup <path>` | Source and verify a CCP4 setup script for this run. |
 | `--configure-ccp4 <path>` | Save a CCP4 setup script path for later runs. |
@@ -498,6 +501,14 @@ list or classification rules change.
 
 ## Operational notes
 
+- Alchemy separates three kinds of output. The progress line and the final
+  result summary go to **stdout**, so a redirected stdout remains a usable
+  record of what was produced. Diagnostics go to **stderr** as log records,
+  controlled by `-v`/`--quiet`/`--log-file`. The per-run report in
+  `output/alchemy_run_*.log` is written separately and is unaffected by
+  verbosity: it is a structured artifact, not a transcript. Worker processes
+  emit records through a queue that the driver re-emits, so per-entry
+  diagnostics from parallel workers never interleave mid-line.
 - Interactive runs redraw a single progress line after every completed
   structure. While waiting on a slow structure, the elapsed time refreshes
   approximately once per second. Redirected output is limited to one progress

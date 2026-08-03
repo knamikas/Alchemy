@@ -22,6 +22,10 @@ import time
 import gemmi
 import numpy as np
 
+from run_logging import logger_for, truncate
+
+logger = logger_for(__name__)
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
@@ -322,6 +326,8 @@ def run_density_analysis(
                 f"required CCP4 program {cmd[0]!r} was not found on PATH"
             )
         cmd = [resolved, *cmd[1:]]
+        program = os.path.basename(resolved)
+        logger.debug("%s: running %s (budget %gs)", pdbID, program, timeout_s)
         started = time.monotonic()
         try:
             # The budget is per program, not per entry: an entry running four
@@ -338,6 +344,13 @@ def run_density_analysis(
                     timeout=timeout_s,
                 )
         except subprocess.TimeoutExpired as exc:
+            logger.error(
+                "%s: %s exceeded its %gs budget; partial log kept at %s",
+                pdbID,
+                program,
+                timeout_s,
+                log_path,
+            )
             # subprocess.run has already killed the child and reaped it. The
             # log is left in place deliberately: whatever the program wrote
             # before it stalled is the only evidence of where it stalled.
@@ -352,9 +365,22 @@ def run_density_analysis(
             ) from exc
         finally:
             timings.setdefault(timing_name, round(time.monotonic() - started, 3))
+            # "ended after" rather than "finished": this runs on the timeout
+            # path too, where the program was killed rather than completing.
+            logger.debug(
+                "%s: %s ended after %.3fs", pdbID, program, timings[timing_name]
+            )
         if proc.returncode != 0:
-            detail = (proc.stderr or "").strip()[:500]
+            detail = truncate(proc.stderr or "")
             detail_suffix = f": {detail}" if detail else ""
+            logger.warning(
+                "%s: %s exited %d; see %s%s",
+                pdbID,
+                program,
+                proc.returncode,
+                log_path,
+                detail_suffix,
+            )
             if os.path.basename(cmd[0]).lower() == "mtzfix":
                 try:
                     with open(log_path, encoding="utf-8", errors="replace") as handle:

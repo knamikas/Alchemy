@@ -687,9 +687,7 @@ def finalize_database_confidence(
     return total, scored, reference.cohort_size
 
 
-def score_file_against_reference(
-    input_path, output_path, reference
-) -> tuple[int, int]:
+def score_file_against_reference(input_path, output_path, reference) -> tuple[int, int]:
     """Score a compact input CSV against a loaded frozen reference."""
     output_tmp = output_path + ".tmp"
     output_dir = os.path.dirname(os.path.abspath(output_path))
