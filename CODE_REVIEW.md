@@ -273,7 +273,7 @@ The heaviest single offender is [`_run`](src/main.py#L2551) at **534 lines**, wh
 ```
 src/ccp4_setup.py    ← absorbs main.py's env resolution (see 2.2)
 src/inputs.py        ← entry resolution, download/cache, conversion
-src/provenance.py    ← mmCIF↔PDB identity records, legacy packing
+src/coordinate_conversion.py  ← mmCIF↔PDB identity records, legacy packing
 src/worker.py        ← process(), worker config, in-flight protocol
 src/driver/          ← pool.py, resume.py, writers.py, progress.py, runlog.py
 src/cli.py           ← parse_args + main()
@@ -669,7 +669,7 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 
 ## Progress
 
-**Phases A–D are complete, and Phase E has begun** — the production-readiness gate, the coverage work the restructuring depends on, the mechanical cleanups, and the first `main.py` extraction. Eleven of 26 commits.
+**Phases A–D are complete, and Phase E is under way** — the production-readiness gate, the coverage work the restructuring depends on, the mechanical cleanups, and the first two `main.py` extractions. Twelve of 26 commits.
 
 | Commit | Landed as | Notes |
 |---|---|---|
@@ -685,15 +685,16 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 | 8 · `Unit-test the highest-risk CLI and resume surfaces` | `de8a36d` | 59 tests in `tests/test_driver_surfaces.py` covering resume-schema validation, the exit-code contract, entry selection, input preparation including the legacy PDB fallback, `read_resolution`, and worker autoscaling. Eleven mutations confirmed caught. `main.py` 66% → 70%. |
 | 9 · `Rename pdbID to pdb_id throughout` | `337310f` | Identifiers only, across five files; the `pdbID` CSV columns are untouched, so no output schema moved. |
 | 10 · `Remove dead code and annotate the public surfaces` | `81ddd05` | `_write_csv`, `COMMON_METALS`/`UNCOMMON_METALS` and `find_ccp4_setup`'s `common_candidates` deleted; the unreachable `metal_identification` branches removed by making the header/index pair one `Optional` state; PEP 585 annotations on the public functions. |
-| 11 · `Move CCP4 environment resolution into ccp4_setup` | *this commit* | `resolve_env`, its two Windows helpers, `_normalize_path_key` and `verify_ccp4` moved; one `DEFAULT_CONFIG_FILES` the driver no longer shadows; `ccp4_tools_available` and `verify_ccp4` reduced to one `missing_ccp4_tools` probe; `Ccp4SetupError` replaces `SystemExit` throughout the library, leaving `resolve_ccp4_environment` the only exit. Three mutations confirmed caught. |
+| 11 · `Move CCP4 environment resolution into ccp4_setup` | *pending* | `resolve_env`, its two Windows helpers, `_normalize_path_key` and `verify_ccp4` moved; one `DEFAULT_CONFIG_FILES` the driver no longer shadows; `ccp4_tools_available` and `verify_ccp4` reduced to one `missing_ccp4_tools` probe; `Ccp4SetupError` replaces `SystemExit` throughout the library, leaving `resolve_ccp4_environment` the only exit. Three mutations confirmed caught. |
+| 12 · `Extract input preparation and conversion provenance` | *pending* | 24 functions and 3 constants out of `main.py`, verified AST-identical to the originals: `coordinate_conversion.py` (mmCIF→legacy-PDB conversion and the residue-identity remarks that make it reversible) and `inputs.py` (mirror/cache resolution, decompression, resolution metadata). `main.py` 1,580 → 1,193 statements. Named `coordinate_conversion.py` rather than the plan's `provenance.py`: the repo already uses "provenance" for run, coordinate-format and `image_provenance` lineage, none of which this module holds. |
 
-Suite: **991 passed, 26 skipped** offline, coverage **84.2%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
+Suite: **991 passed, 26 skipped** offline, coverage **84.3%** (853 and untracked at review time). Lint, format and coverage are gates in CI.
 
 **Two decisions resolved since the review.** 1.8 was fixed rather than gated, because full-database runs finalize confidence automatically (see 1.8). The CCP4 integration lane is knowingly skipped for want of an always-on runner (see 1.7), which is why Phase C is a prerequisite rather than an improvement: nothing in CI exercises the density or bond path that Phases E–G restructure.
 
 **Still open:** the licence, and whether editing `metal_distances_info.txt` should invalidate frozen references (2.5).
 
-Next up is the rest of Phase E: commit 12 extracts `inputs.py` and `provenance.py`, the largest of the splits.
+Next up is the rest of Phase E: commit 13 extracts `worker.py`, then 14–16 take the driver's output machinery, resume handling and CLI.
 
 ---
 
@@ -742,7 +743,7 @@ Extract outward-in, leaving `_run` for last: every extraction shrinks it, so by 
 | # | Commit | Moves out of `main.py` | ~Size |
 |---|---|---|---|
 | 11 | `Move CCP4 environment resolution into ccp4_setup` | `resolve_env`, `_resolve_env_windows`, `_normalize_path_key`, `_parse_windows_set_output`, `verify_ccp4`. One `DEFAULT_CONFIG_FILES`; add `Ccp4SetupError`; delete the dead `explicit_setup` branch. Roadmap step 10. | 250 |
-| 12 | `Extract input preparation and conversion provenance` | → `inputs.py`: `entry_dir_for`, `prepare_inputs`, `_gunzip_to`, download/cache, `enumerate_entries`, `read_resolution`, `read_map_column_resolution`. → `provenance.py`: residue-identity records, legacy PDB packing, `_cif_to_pdb`, `_first_model_pdb`. Both are "getting an entry ready for analysis". | 700 |
+| 12 | `Extract input preparation and conversion provenance` | → `inputs.py`: `entry_dir_for`, `prepare_inputs`, `_gunzip_to`, download/cache, `enumerate_entries`, `read_resolution`, `read_map_column_resolution`. → `coordinate_conversion.py`: residue-identity records, legacy PDB packing, `_cif_to_pdb`, `_first_model_pdb`. Both are "getting an entry ready for analysis". | 700 |
 | 13 | `Extract the worker entry point` | → `worker.py`: `process`, `_initial_result`, `_init_worker`, `_announce_inflight`, `_finalize_result`. | 300 |
 | 14 | `Extract the driver's output machinery` | → `driver/writers.py`, `driver/progress.py`, `driver/runlog.py`. | 450 |
 | 15 | `Extract resume handling and decompose the driver` | → `driver/resume.py`: `load_done`, `_ResumeStaging`, `_merge_csv_replacements`, `validate_resume_schemas`. Then `_run` — by now ~250 lines — becomes a ~60-line orchestrator over named phases. The decomposition is the only part here that is not a pure move. | 550 |

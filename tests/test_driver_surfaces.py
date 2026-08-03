@@ -32,6 +32,7 @@ import os
 import pytest
 
 import ccp4_setup
+import inputs
 import main
 
 
@@ -250,9 +251,9 @@ def test_an_entry_is_final_only_with_both_inputs(tmp_path, compressed):
         tmp_path, "9nxl", cif=False, pdb=False, compressed=compressed
     )
 
-    assert main.has_final_files(complete, "9myr")
-    assert not main.has_final_files(no_mtz, "6nlr")
-    assert not main.has_final_files(no_coords, "9nxl")
+    assert inputs.has_final_files(complete, "9myr")
+    assert not inputs.has_final_files(no_mtz, "6nlr")
+    assert not inputs.has_final_files(no_coords, "9nxl")
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
@@ -267,7 +268,7 @@ def test_a_legacy_pdb_export_counts_as_usable_coordinates(tmp_path, compressed):
     entry_dir = _make_entry(
         tmp_path, "9myr", cif=False, pdb=True, compressed=compressed
     )
-    assert main.has_final_files(entry_dir, "9myr")
+    assert inputs.has_final_files(entry_dir, "9myr")
 
 
 def test_enumeration_returns_only_complete_entries(tmp_path):
@@ -361,7 +362,7 @@ def test_the_authoritative_mmcif_wins_over_the_legacy_export(tmp_path, monkeypat
             handle.write("FROM CIF\n")
         return destination
 
-    monkeypatch.setattr(main, "_cif_to_pdb", fake_cif_to_pdb)
+    monkeypatch.setattr(inputs, "_cif_to_pdb", fake_cif_to_pdb)
     _mtz, pdb = main.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert converted and converted[0].endswith("_final.cif")
@@ -393,7 +394,7 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
             handle.write("END\n")
         return destination
 
-    monkeypatch.setattr(main, "_cif_to_pdb", fake_cif_to_pdb)
+    monkeypatch.setattr(inputs, "_cif_to_pdb", fake_cif_to_pdb)
     mtz, pdb = main.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert os.path.dirname(mtz) == str(work_dir), "the mirror must not be written to"

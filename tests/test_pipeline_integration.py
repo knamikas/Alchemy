@@ -47,6 +47,7 @@ import pytest
 
 import confidence_score
 import helpers
+import inputs
 import main
 from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
 
@@ -1326,7 +1327,7 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
     def unavailable(pdb_id, cache_root):
         raise FileNotFoundError(pdb_id)
 
-    monkeypatch.setattr(main, "download_entry_to_cache", unavailable)
+    monkeypatch.setattr(inputs, "download_entry_to_cache", unavailable)
     output_dir = tmp_path / "output"
     result = run_alchemy(
         output_dir,
@@ -1387,7 +1388,7 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
     assert row["status"] == "error"
     assert row["retryable"] == "True"
     assert row["reason_codes"] == "unexpected_processing_error"
-    for column in main.MAP_COEFFICIENT_COLUMNS:
+    for column in inputs.MAP_COEFFICIENT_COLUMNS:
         assert column in row["error"], row["error"]
     assert row["n_bonds"] == "" and row["n_candidates"] == ""
 

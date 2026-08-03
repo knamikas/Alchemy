@@ -24,10 +24,12 @@ import pytest
 
 import helpers
 import bond_analysis
+import coordinate_conversion as conversion
 import density_analysis as density
 import main
 import metal_identification
 import structure_analysis
+from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 
 
 # --------------------------------------------------------------------------- #
@@ -1438,7 +1440,7 @@ class TestCifToPdb:
     def test_missing_occupancies_are_blank_not_one(self, tmp_path):
         """README: '.' and '?' become blank PDB occupancy, never 1.00."""
         cif = self._standard_cif(tmp_path)
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         lines = _pdb_atom_lines(out)
         assert len(lines) == 5
         occupancies = [_occupancy_field(line) for line in lines]
@@ -1451,7 +1453,7 @@ class TestCifToPdb:
     def test_blanking_occupancy_does_not_shift_the_other_columns(self, tmp_path):
         """Only columns 55-60 change; coordinates, B and element stay put."""
         cif = self._standard_cif(tmp_path)
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         blanked = _pdb_atom_lines(out)[1]
         assert blanked[30:38].strip() == "21.500"
         assert blanked[60:66].strip() == "20.00"
@@ -1496,26 +1498,26 @@ class TestCifToPdb:
             ],
             header=_CIF_HEADER_NO_OCCUPANCY,
         )
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         for line in _pdb_atom_lines(out):
             assert _occupancy_field(line).strip() == ""
 
     def test_type_symbol_is_written_into_the_pdb_element_field(self, tmp_path):
         """Alchemy reads the element column, never guesses from atom names."""
         cif = self._standard_cif(tmp_path)
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         elements = [_element_field(line) for line in _pdb_atom_lines(out)]
         assert elements == ["N", "C", "C", "ZN", "FE"]
 
     def test_long_component_ids_are_truncated_but_recorded(self, tmp_path):
         """A >3-character CCD id cannot fit the legacy field, so map it."""
         cif = self._standard_cif(tmp_path)
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
             remarks = [
                 line.split()
                 for line in handle
-                if line.startswith(main.RESNAME_REMARK_PREFIX)
+                if line.startswith(RESNAME_REMARK_PREFIX)
             ]
         assert len(remarks) == 1
         fields = remarks[0]
@@ -1549,11 +1551,9 @@ class TestCifToPdb:
                 ),
             ],
         )
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
-            assert not any(
-                line.startswith(main.RESNAME_REMARK_PREFIX) for line in handle
-            )
+            assert not any(line.startswith(RESNAME_REMARK_PREFIX) for line in handle)
 
     def test_conversion_round_trips_through_load_structure(self, tmp_path):
         """The mapping is reversible: the analysis load restores the CCD id.
@@ -1562,7 +1562,7 @@ class TestCifToPdb:
         what EDSTATS sees, while Alchemy's own output keeps the mmCIF identity.
         """
         cif = self._standard_cif(tmp_path)
-        out = main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         context = structure_analysis.load_structure("test", out)
         by_atom = {site.atom_name: site for site in context.source_atoms}
 
@@ -1602,13 +1602,13 @@ class TestCifToPdb:
             ],
         )
 
-        out = main._cif_to_pdb(cif, str(tmp_path / "many-chains.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "many-chains.pdb"))
         atom_lines = _pdb_atom_lines(out)
         assert len(atom_lines) == 63
         assert {line[21:22] for line in atom_lines} == {"A"}
         with open(out) as handle:
             identity_remarks = [
-                line for line in handle if line.startswith(main.RESIDUE_REMARK_PREFIX)
+                line for line in handle if line.startswith(RESIDUE_REMARK_PREFIX)
             ]
         assert len(identity_remarks) == 63
 
@@ -1663,7 +1663,9 @@ class TestCifToPdb:
     def test_missing_input_file_raises_file_not_found(self, tmp_path):
         """A vanished mirror file must not be reported as a conversion bug."""
         with pytest.raises(FileNotFoundError):
-            main._cif_to_pdb(str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb"))
+            conversion._cif_to_pdb(
+                str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb")
+            )
 
     def test_duplicate_atom_site_id_is_rejected(self, tmp_path):
         """Serials key the occupancy restoration; duplicates make it ambiguous."""
@@ -1690,7 +1692,7 @@ class TestCifToPdb:
             ],
         )
         with pytest.raises(ValueError, match="duplicate mmCIF atom_site id"):
-            main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+            conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
     def test_non_integer_atom_site_id_is_rejected(self, tmp_path):
         """gemmi exposes an integer serial; a non-integer id cannot be joined."""
@@ -1703,7 +1705,7 @@ class TestCifToPdb:
             ],
         )
         with pytest.raises(ValueError, match="not an integer"):
-            main._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+            conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
     def test_multiple_atom_site_blocks_are_rejected(self, tmp_path):
         """Ambiguous input must fail rather than silently convert one block."""
@@ -1720,20 +1722,20 @@ class TestCifToPdb:
         path = tmp_path / "two.cif"
         path.write_text(text)
         with pytest.raises(ValueError, match="exactly one block"):
-            main._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
+            conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
     def test_cif_without_atom_records_is_rejected(self, tmp_path):
         """A metadata-only mmCIF is not a coordinate file."""
         path = tmp_path / "meta.cif"
         path.write_text("data_TEST\n_cell.length_a 60.0\n")
         with pytest.raises(ValueError, match="exactly one block"):
-            main._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
+            conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
     def test_creates_the_destination_directory(self, tmp_path):
         """Work directories are created lazily around the converted file."""
         cif = self._standard_cif(tmp_path)
         dst = tmp_path / "nested" / "deeper" / "out.pdb"
-        out = main._cif_to_pdb(cif, str(dst))
+        out = conversion._cif_to_pdb(cif, str(dst))
         assert out == str(dst)
         assert os.path.isfile(out)
 
@@ -1745,7 +1747,7 @@ class TestResidueConversionRecords:
         """No renaming means no provenance remark is needed."""
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(_BASE_RESIDUES)
-        assert main._residue_conversion_records(source, converted) == []
+        assert conversion._residue_conversion_records(source, converted) == []
 
     def test_a_renamed_residue_is_recorded_with_its_author_identity(self):
         """The record must locate the residue the way the PDB reader will."""
@@ -1761,7 +1763,7 @@ class TestResidueConversionRecords:
                 ("B", 7, "SF4", [("FE1", "FE")]),
             ]
         )
-        assert main._residue_conversion_records(source, converted) == [
+        assert conversion._residue_conversion_records(source, converted) == [
             (1, "B", "7", "SF4", "SF4X")
         ]
 
@@ -1770,7 +1772,7 @@ class TestResidueConversionRecords:
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(list(reversed(_BASE_RESIDUES)))
         with pytest.raises(ValueError, match="changed residue ordering"):
-            main._residue_conversion_records(source, converted)
+            conversion._residue_conversion_records(source, converted)
 
     def test_changed_author_identifiers_are_rejected(self):
         """A renumbered or rechained residue would break every downstream join."""
@@ -1782,7 +1784,7 @@ class TestResidueConversionRecords:
             ]
         )
         with pytest.raises(ValueError, match="ordering|author identifiers"):
-            main._residue_conversion_records(source, converted)
+            conversion._residue_conversion_records(source, converted)
 
     def test_changed_atom_membership_is_rejected(self):
         """Dropping or renaming an atom silently would corrupt coordination."""
@@ -1794,7 +1796,7 @@ class TestResidueConversionRecords:
             ]
         )
         with pytest.raises(ValueError, match="atom membership"):
-            main._residue_conversion_records(source, converted)
+            conversion._residue_conversion_records(source, converted)
 
     def test_changed_duplicate_multiplicity_is_rejected(self):
         """Two residues sharing an author id must stay two after conversion."""
@@ -1810,12 +1812,12 @@ class TestResidueConversionRecords:
             ]
         )
         with pytest.raises(ValueError, match="ordering|multiplicity"):
-            main._residue_conversion_records(source, converted)
+            conversion._residue_conversion_records(source, converted)
 
     def test_the_index_keys_on_model_chain_and_author_resnum(self):
         """Residues are located by the identifiers EDSTATS also reports."""
         structure = _simple_structure(_BASE_RESIDUES)
-        index, order = main._residue_index_by_author(structure, "mmCIF")
+        index, order = conversion._residue_index_by_author(structure, "mmCIF")
         assert order == [(0, "A", "1"), (0, "B", "2")]
         assert index[(0, "B", "2")] == [("ZN", (("ZN", "Zn"),))]
 
@@ -1827,7 +1829,7 @@ class TestResidueConversionRecords:
                 ("A", 1, "ALA", [("N", "N")]),
             ]
         )
-        index, order = main._residue_index_by_author(structure, "mmCIF")
+        index, order = conversion._residue_index_by_author(structure, "mmCIF")
         assert order == [(0, "A", "1"), (0, "A", "1")]
         assert [name for name, _ in index[(0, "A", "1")]] == ["GLY", "ALA"]
 

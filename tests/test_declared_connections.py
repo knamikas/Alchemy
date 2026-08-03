@@ -35,7 +35,7 @@ import helpers
 from helpers import AtomRef, AtomSpec, StructureBuilder
 
 import bond_analysis
-import main
+import coordinate_conversion as conversion
 from structure_analysis import StructureContext, load_structure
 
 
@@ -70,13 +70,15 @@ def write_source_and_analysis(builder: StructureBuilder, directory, fmt: str) ->
     ``fmt="pdb"`` mirrors a PDB-sourced entry: Alchemy analyzes the deposited
     coordinates themselves, so both paths are the same file. ``fmt="cif"``
     mirrors an mmCIF-sourced entry: the analyzed coordinates are produced by the
-    real ``main._cif_to_pdb`` conversion, which is where every identifier
+    real ``conversion._cif_to_pdb`` conversion, which is where every identifier
     ambiguity this module cares about is introduced.
     """
     directory = str(directory)
     if fmt == "cif":
         source = builder.write_cif(os.path.join(directory, "source.cif"))
-        return source, main._cif_to_pdb(source, os.path.join(directory, "analysis.pdb"))
+        return source, conversion._cif_to_pdb(
+            source, os.path.join(directory, "analysis.pdb")
+        )
     if fmt == "pdb":
         source = builder.write_pdb(os.path.join(directory, "source.pdb"))
         return source, source
@@ -229,7 +231,7 @@ def test_connection_source_labels_reach_the_bond_row(tmp_path):
 def test_analysis_chain_names_reverses_conversion_shortening(tmp_path):
     """Long mmCIF chain names map onto the single-character analysis names.
 
-    The mapping must agree with what ``main._cif_to_pdb`` really wrote, so the
+    The mapping must agree with what ``conversion._cif_to_pdb`` really wrote, so the
     expectation is taken from the converted file rather than assumed.
     """
     builder = StructureBuilder()
