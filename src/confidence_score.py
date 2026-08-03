@@ -416,6 +416,31 @@ class ConfidenceReference:
         return 100.0 * (below + 0.5 * equal) / self.cohort_size
 
 
+#: How damaged geometry coverage is treated. Part of the scoring policy, and so
+#: part of ``reference_id``: a reference built before this policy existed may
+#: have scored corrupt sites into its cohort, and nothing in the artifact
+#: records whether it did. Bumping this makes ``load_reference`` refuse such a
+#: reference instead of silently accepting it.
+COVERAGE_POLICY = "invalid_coverage_excluded_v1"
+
+
+def coverage_is_valid(coverage):
+    """Whether ``coverage`` is usable geometry evidence.
+
+    A blank, non-numeric or out-of-range coverage is damaged input, not
+    evidence that geometry is irrelevant. Coercing it to zero removed the two
+    geometry terms from the score, so a corrupt cell scored *higher* than the
+    same site with real geometry evidence. Missing data must not move the score
+    in either direction: the site is reported unscorable instead.
+
+    Shared by scoring and reference building so the cohort can never contain a
+    site that scoring itself would refuse. Those two disagreed once: the fix
+    landed only in the scoring path, leaving `finalize_database_confidence`
+    coercing non-finite coverage to zero and applying no range check at all.
+    """
+    return math.isfinite(coverage) and 0.0 <= coverage <= 1.0
+
+
 def _scoring_metadata():
     return {
         "density_anchors": [list(anchor) for anchor in DENSITY_ANCHORS],
@@ -426,6 +451,7 @@ def _scoring_metadata():
             "interaction": 0.15,
         },
         "percentile_method": "average_rank_empirical_cdf",
+        "coverage_policy": COVERAGE_POLICY,
     }
 
 
@@ -484,7 +510,7 @@ def load_reference(reference_dir):
         metadata = json.load(handle)
     expected = _scoring_metadata()
     for key in ("density_anchors", "geometry_anchors", "weights",
-                "percentile_method"):
+                "percentile_method", "coverage_policy"):
         if metadata.get(key) != expected[key]:
             raise ValueError(
                 f"confidence reference {key} is incompatible with this code")
@@ -523,12 +549,7 @@ def _score_prepared_row(row, reference):
     rszd = _finite_float(row.get("rszd_magnitude", ""))
     zbond = _finite_float(row.get("max_abs_zbond", ""))
     coverage = _finite_float(row.get("geometry_coverage", ""))
-    # A blank, non-numeric or out-of-range coverage is damaged input, not
-    # evidence that geometry is irrelevant. Coercing it to zero removed the two
-    # geometry terms from the score, so a corrupt cell scored *higher* than the
-    # same site with real geometry evidence. Missing data must not move the
-    # score in either direction: the site is reported unscorable instead.
-    coverage_valid = math.isfinite(coverage) and 0.0 <= coverage <= 1.0
+    coverage_valid = coverage_is_valid(coverage)
     result = score_site(rszd, zbond, coverage) if coverage_valid else None
     output = dict(row)
     if result is None:
@@ -601,9 +622,10 @@ def finalize_database_confidence(input_path, output_path, reference_dir):
             rszd = _finite_float(row.get("rszd_magnitude", ""))
             zbond = _finite_float(row.get("max_abs_zbond", ""))
             coverage = _finite_float(row.get("geometry_coverage", ""))
-            if not math.isfinite(coverage):
-                coverage = 0.0
-            result = score_site(rszd, zbond, coverage)
+            # Same validity test the scoring path applies, so a site reported
+            # unscorable cannot also enter the cohort it is measured against.
+            result = (score_site(rszd, zbond, coverage)
+                      if coverage_is_valid(coverage) else None)
             if result is not None:
                 score_counts[result["confidence_score"]] += 1
     reference = write_reference(reference_dir, score_counts, input_row_count)

@@ -1113,3 +1113,87 @@ def test_validate_scored_reference_tolerates_an_empty_scored_file(tmp_path):
     populated = _write_input_csv(tmp_path / "one_row.csv", [foreign], columns)
     with pytest.raises(ValueError, match="different database reference"):
         cs.validate_scored_reference(populated, reference)
+
+
+# --------------------------------------------------------------------------- #
+# Reference building must apply the same coverage policy as scoring
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "coverage, label",
+    [("7.5", "out of range"), ("", "blank"), ("nan", "non-finite"),
+     ("-0.5", "negative"), ("abc", "non-numeric")],
+)
+def test_damaged_coverage_is_excluded_from_the_reference_cohort(
+        tmp_path, coverage, label):
+    """A site scoring refuses must not enter the cohort it is measured against.
+
+    Regression: ``_score_prepared_row`` refused damaged coverage, but
+    ``finalize_database_confidence`` coerced non-finite coverage to zero and
+    applied no range check at all. The same row was therefore reported
+    ``unscorable`` in ``confidence_scores_all.csv`` *and* scored into the frozen
+    distribution, silently contaminating every percentile derived from it.
+    """
+    rows = [
+        _input_row(pdbID="1aaa", metal_atom_index="1", geometry_coverage="1"),
+        _input_row(pdbID="2bbb", metal_atom_index="2",
+                   geometry_coverage=coverage),
+    ]
+    inputs = tmp_path / "inputs.csv"
+    _write_input_csv(inputs, rows)
+
+    total, scored, cohort = cs.finalize_database_confidence(
+        str(inputs), str(tmp_path / "scores.csv"), str(tmp_path / "ref"))
+
+    assert total == 2
+    assert scored == 1, f"{label} coverage was scored"
+    assert cohort == 1, (
+        f"{label} coverage entered the reference cohort; the frozen "
+        "distribution and every percentile from it are contaminated"
+    )
+
+    distribution = list(csv.DictReader(
+        open(tmp_path / "ref" / "score_distribution.csv", encoding="utf-8")))
+    assert sum(int(row["count"]) for row in distribution) == 1
+
+    scored_rows = {
+        row["pdbID"]: row for row in
+        csv.DictReader(open(tmp_path / "scores.csv", encoding="utf-8"))
+    }
+    assert scored_rows["2bbb"]["confidence_scoring_status"] == "unscorable"
+    assert scored_rows["2bbb"]["confidence_scoring_reason"] == (
+        "geometry_coverage_invalid")
+
+
+def test_scoring_and_reference_building_agree_on_coverage_validity():
+    """The two paths share one validity test rather than two copies of it.
+
+    They disagreed once; a shared helper is what stops them drifting again.
+    """
+    for value in (0.0, 0.5, 1.0):
+        assert cs.coverage_is_valid(value)
+    for value in (-0.001, 1.001, 7.5, float("nan"), float("inf")):
+        assert not cs.coverage_is_valid(value)
+
+
+def test_coverage_policy_is_part_of_the_reference_identity(tmp_path):
+    """A reference built under a different coverage policy is refused.
+
+    Without this, a reference produced before the fix -- whose cohort may
+    include sites the current code would refuse -- still validates, and nothing
+    in the artifact records that it was built under the older rule.
+    """
+    rows = [_input_row(metal_atom_index="1", geometry_coverage="1")]
+    inputs = tmp_path / "inputs.csv"
+    _write_input_csv(inputs, rows)
+    reference_dir = tmp_path / "ref"
+    cs.finalize_database_confidence(
+        str(inputs), str(tmp_path / "scores.csv"), str(reference_dir))
+
+    metadata_path = reference_dir / cs.REFERENCE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["coverage_policy"] == cs.COVERAGE_POLICY
+
+    metadata["coverage_policy"] = "coerce_invalid_coverage_to_zero"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="coverage_policy"):
+        cs.load_reference(str(reference_dir))
