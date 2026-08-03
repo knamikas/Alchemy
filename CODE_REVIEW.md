@@ -1,7 +1,7 @@
 # Alchemy — Production Readiness Code Review
 
 **Date:** 2026-07-31
-**Scope:** Architecture, code organization, naming, readability. Not a bug hunt or security audit — but one correctness defect surfaced while verifying a related claim, and is recorded as 1.8.
+**Scope:** Architecture, code organization, naming, readability. Not a bug hunt or security audit — but one correctness defect surfaced while verifying a related claim; it is recorded as 1.8 and has since been fixed.
 **Reviewed:** `src/` (7,929 lines), `tests/` (14,031 lines), `tools/`, `pyproject.toml`, `.github/workflows/tests.yml`, `README.md`.
 **Distribution model:** users obtain Alchemy by cloning the repository and running `python src/main.py`. It is not a package and is not installed, which shapes several findings below.
 
@@ -13,7 +13,7 @@ This is well above average scientific code. The domain reasoning is careful, the
 
 The gap to production is mostly **structure, setup documentation, and CI**, with one genuine correctness defect. Six things stand out:
 
-1. **Invalid geometry coverage contaminates the frozen confidence reference** (1.8). A fix that landed in the scoring path never reached the reference-building path, so a corrupt site is reported `unscorable` in the output and simultaneously scored into the cohort every percentile is measured against. Reproduced. Confidence scoring is unfinalized and excluded from the plan, but finalization still runs *automatically* on any full-database run — so this needs an explicit decision (gate it, fix it, or accept it) rather than deferral by silence.
+1. **Invalid geometry coverage contaminated the frozen confidence reference** (1.8) — **fixed in `36e5dbf`**. A fix that landed in the scoring path had never reached the reference-building path, so a corrupt site was reported `unscorable` in the output and simultaneously scored into the cohort every percentile is measured against. Reproduced, fixed, and verified byte-identical on the existing 24,365-row dataset.
 2. **A fresh clone cannot be set up from the README** (1.9). The documented `pip install "gemmi>=0.7.0"` omits numpy, so a new user's first command is a traceback — verified. Every Quick Start example also invokes `conda run -n metal`, a personal environment name that appears nowhere outside the docs. Since the repo is the artifact, this is the first thing every user hits.
 3. **`pyproject.toml` claims to be a distribution and isn't one.** Installing it publishes eight generic top-level modules into site-packages. Alchemy is not meant to be installed, so the fix is to declare that explicitly rather than to build a package.
 4. **CI never runs the pipeline.** The single workflow job excludes 26 tests — every end-to-end run and the entire real-CCP4 density arm. Those tests exist and are good; nothing executes them on push.
@@ -160,19 +160,15 @@ Option 1 is the one that matters. Option 2 is a useful supplement, not a substit
 
 ---
 
-### 1.8 Invalid geometry coverage still contaminates the frozen confidence reference
+### 1.8 Invalid geometry coverage contaminated the frozen confidence reference — FIXED
 
-> **Deferred, but NOT dormant — this needs a decision.** An earlier draft of this review called the defect "latent." That was wrong. `confidence_mode` is set to `"database"` automatically for any uncapped run with bonds enabled ([main.py:2603-2604](src/main.py#L2603-L2604)), and `finalize_database_confidence` is then called unconditionally on success ([main.py:3026-3033](src/main.py#L3026-L3033)). Nothing has to opt in. Your *next* full-database run rebuilds the reference through the defective path.
+> **Fixed in `36e5dbf`** (*Apply one coverage-validity rule to scoring and reference building*). The analysis below is retained because it is what a finalization pass needs to know; the defect itself is closed.
 >
-> So documentation alone does not isolate this. Three options, and it is your call:
+> `coverage_is_valid()` is now a shared public helper called by both `_score_prepared_row` and `finalize_database_confidence`, so a site scoring refuses can no longer enter the cohort it is measured against. `COVERAGE_POLICY` was added to `_scoring_metadata()` and to the `load_reference` compatibility gate, so a reference built under the old rule is refused rather than silently accepted.
 >
-> **(a) Gate finalization until the score is released.** Require an explicit `--confidence` opt-in instead of inferring `database` mode. This is a *driver* change in `main.py`, not a scoring change, so it respects "don't touch confidence scoring" while closing the exposure. Smallest option, and most consistent with the score being unfinalized — if it is not released, it should not run by default.
+> Verified three ways: the cohort now excludes damaged rows (out-of-range, blank, non-finite, negative, non-numeric — five parametrised cases, each confirmed to fail against the pre-fix loop); re-finalizing the real 24,365-row input reproduces a **byte-identical** distribution, so the fix changed nothing it should not; and `reference_id` moved from `…1f3b3916c29dfbb40c52` to `…0fcf30bc2ff40fba1551`, with the production reference re-finalized accordingly.
 >
-> **(b) Fix 1.8 now.** The `_coverage_is_valid` check is input validation, not formula logic, so it survives any redesign of the score. ~60 lines.
->
-> **(c) Accept knowingly** — fine if no database run is planned before finalization, but it should be a decision rather than an oversight.
->
-> Whichever you pick, read this section before finalizing: the validation belongs in the reference-building path from the start, not bolted on afterwards.
+> An earlier draft of this review called the defect "latent." That was wrong, and the correction is worth keeping: `confidence_mode` is set to `"database"` automatically for any uncapped run with bonds enabled ([main.py:2603-2604](src/main.py#L2603-L2604)) and finalization then runs unconditionally, so nothing had to opt in for the defect to be exercised.
 
 **This is the most severe item in this document, and the only outright correctness defect in it.**
 
@@ -559,7 +555,7 @@ The file is 52 lines of comments with no executable content — `pytest` collect
 
 **Do not resolve this by deleting the entry.** The obvious reading — that `f62af87` fixed the defect and the ledger simply went stale — is wrong. That commit fixed the *scoring* path only; the *reference-building* path still coerces invalid coverage and still contaminates the frozen cohort (1.8, reproduced there). The ledger is not describing a closed finding; it is describing an open one that lost its pin.
 
-**Fix — but the pin belongs with the confidence work, which is deferred.** Restoring an `xfail(strict=True)` test against `finalize_database_confidence` would mean touching `confidence_score.py`, which is out of scope until the score is finalized. So for now: correct the two stale sentences in `tests/README.md` and either leave `test_known_limitations.py` as an explicitly empty protocol stub or note in it that its one open finding (1.8) is tracked in this review pending finalization. Restore the real pin as part of the finalization pass, not before it.
+**Fix.** The finding this ledger names is now closed: 1.8 was fixed in `36e5dbf` and is covered by five parametrised regression tests in `test_confidence_score.py`, which is exactly the lifecycle [test_known_limitations.py:11](tests/test_known_limitations.py#L11) prescribes — pin it, fix it, move the test to the module that owns it. What remains is bookkeeping: correct the two stale sentences in `tests/README.md`, and either delete `test_known_limitations.py` or reduce it to an explicitly empty protocol stub, since it currently documents an `xfail` mechanism with no instances.
 
 The wider lesson is that a ledger whose contents cannot be executed provides no protection: nothing failed when the pin disappeared, and the finding survived a release as a comment.
 
@@ -673,17 +669,29 @@ Each commit is a coherent unit of work, sized to be reviewed in one sitting — 
 
 *Numbering note: commits are 1–26 and are unrelated to the roadmap's steps 1–15.*
 
+## Progress
+
+| Commit | Landed as | Notes |
+|---|---|---|
+| 1 · `Fix the setup documentation` | `02d3261` | numpy added to README and `main.py`; `conda run -n metal` removed from all six lines; confidence documented as unreleased and its runtime message reworded. Five tests in `tests/test_documentation.py`, each verified to fail on the original defect. |
+| 2 · `Make the repository configuration honest` | `10009fa` | `packages = []` / `py-modules = []`; inert `package-data` table deleted; `*.egg-info/` and `build/` ignored; redundant `sys.path` block removed from `helpers.py`; `DATA_DIR` single-sourced with both file paths derived from it. Two tests assert the built wheel carries only `alchemy-*.dist-info/` members. |
+| — · 1.8 coverage defect | `36e5dbf` | Out of plan by exception; see 1.8. Production reference re-finalized to `…0fcf30bc2ff40fba1551`, distribution byte-identical. |
+
+Suite: **867 passed, 26 skipped** offline (was 853 at review time). Next up is Phase B; commit 3 is blocked on choosing a licence.
+
+---
+
+
 **There is no CI safety net.** The CCP4 lane is knowingly skipped (1.7), so every commit below is defended by the offline suite alone. Commits 7 and 8 close the two coverage holes that sit directly under the code Phases E–G restructure; they are prerequisites, not improvements. And the 25 end-to-end tests should be run by hand before any significant merge — they are the only check that exercises real maps.* Where a phase replaces a roadmap step, the heading says so.*
 
 ### Phase A — Make setup honest
 
-**Excluded: confidence scoring.** The score is not finalized, so 1.2 and 1.8 have no commits here and `confidence_score.py` logic is not touched. Both stay documented above, flagged as deferred, because they are what a finalization pass needs to know. Nothing else in this plan depends on them, but 1.8 is **not** dormant — full-database runs finalize confidence automatically, so it needs the decision recorded in 1.8 rather than silent deferral. 1.2 only bites when a weight is edited. The one confidence-related item unconditionally in scope is documentation, in commit 1, because saying "this is not released yet" supports the decision rather than pre-empting it.
+**On confidence scoring.** The score is not finalized, so the plan does not tune it. Two exceptions were made deliberately: the correctness defect 1.8 was fixed (`36e5dbf`) because full-database runs finalize confidence automatically, so deferring it would have meant knowingly rebuilding the reference through a defective path; and commit 1 documents the feature as unreleased, which supports the decision rather than pre-empting it. **1.2 remains deferred** — duplicated scoring weights only bite when a weight is edited, and that edit belongs to the finalization pass.
 
-Commit 1 is the release blocker: it is what every new user hits before anything else.
+Commit 1 is the release blocker: it is what every new user hits before anything else. Both commits in this phase have landed — see Progress above.
 
 | # | Commit | Contents | ~Size |
 |---|---|---|---|
-| — | `Gate confidence finalization behind an opt-in` | **Conditional — only if you choose option (a) in 1.8.** Require an explicit `--confidence` flag instead of inferring `database` mode at [main.py:2603-2604](src/main.py#L2603-L2604). A driver change, not a scoring change. Do it before any further full-database run. | 60 |
 | 1 | `Fix the setup documentation` | Replace the hand-listed dependencies at README:82/:87 with `python -m pip install .`, which after commit 2 installs dependencies and no modules — so the README stops duplicating a list that can drift. Replace `conda run -n metal python src/main.py` with plain `python src/main.py` in the four README examples and the two in `main.py`'s docstring. State that no confidence reference ships and the score is unreleased, and reword the "No frozen confidence reference found" message so it reads as expected behaviour (1.9). **The regression test must exercise the documented command in a clean environment** — importing `main` with the *declared* dependencies would pass even today, since numpy is already in `pyproject.toml`; it is the README that is wrong. | 190 |
 | 2 | `Make the repository configuration honest` | `packages = []` / `py-modules = []` with a comment saying why; **delete the now-inert `[tool.setuptools.package-data] data = [...]` table** ([pyproject.toml:21-25](pyproject.toml#L21-L25)), which becomes misleading once nothing is installed, and verify the built wheel contains metadata and dependencies but no source modules or catalogs; `*.egg-info/` and `build/` in `.gitignore`; delete `helpers.py`'s redundant `sys.path` block (a single shared insertion point is impossible — `tools/` runs without pytest); unify `metal_identification.COFACTOR_CATALOG_PATH` and `bond_analysis.DATA_DIR`, leaving `density_analysis.BASE_DIR` alone since it is the debug CLI's `--out-dir` default, not a data path. | 110 |
 

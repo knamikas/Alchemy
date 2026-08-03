@@ -7,6 +7,10 @@ __pycache__/
 
 # Test artifacts
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
 
 # Packaging metadata left behind by `pip install .`
 *.egg-info/

@@ -384,12 +384,14 @@ def _calculate_dpi_details(structure, dpi_inputs):
 
         nobs = props.get("NREFCNT")
         rfree = props.get("RFFIN")
-        rfree = float(rfree) if rfree not in (None, "") else _rfree_from_pdb(dpi_inputs["pdb_path"])
+        rfree = (float(rfree) if rfree not in (None, "")
+                 else _rfree_from_pdb(dpi_inputs["pdb_path"]))
         nobs = float(nobs) if nobs not in (None, "") else NAN
         va = _asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
         ni = count_ni(structure)
 
-        if not all(isinstance(x, float) or isinstance(x, int) for x in (nobs, rfree, va)):
+        if not all(isinstance(x, (float, int))
+                   for x in (nobs, rfree, va)):
             return NAN, resolution, "invalid_dpi_metadata"
         if not (math.isfinite(nobs) and math.isfinite(rfree) and math.isfinite(va)
                 and nobs > 0 and rfree > 0 and va > 0 and ni > 0):
@@ -486,7 +488,8 @@ def _sigma_for(sig, resname, chain, resnum, zd_idx):
     if fields is None or zd_idx is None:
         return NAN, NAN, NAN
     try:
-        return float(fields[zd_idx[0]]), float(fields[zd_idx[1]]), float(fields[zd_idx[2]])
+        return (float(fields[zd_idx[0]]), float(fields[zd_idx[1]]),
+                float(fields[zd_idx[2]]))
     except (IndexError, ValueError):
         return NAN, NAN, NAN
 

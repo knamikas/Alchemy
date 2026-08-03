@@ -44,7 +44,7 @@ def test_src_modules_import():
     import density_analysis
     import main
     import metal_elements
-    import metal_identification
+    import metal_identification  # noqa: F401 - imported to prove it loads
     import structure_analysis
 
     assert "ZN" in metal_elements.METAL_ELEMENTS

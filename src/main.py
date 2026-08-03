@@ -61,6 +61,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
+from _version import __version__
 from density_analysis import (
     DENSITY_MAP_SCOPES,
     MODEL_ENVELOPE_BORDER_ANGSTROM,
@@ -119,7 +120,7 @@ SYMMETRY_POLICY = (
     "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
 )
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
-ALCHEMY_VERSION = "1.0.0"
+ALCHEMY_VERSION = __version__
 AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
 # Seconds of no completed entry, after a worker died without naming the entry
 # it held, before the remaining outstanding entries are failed retryably.
@@ -280,7 +281,8 @@ def verify_ccp4(env):
         raise SystemExit(
             f"Required CCP4 tools were not found on PATH: {', '.join(missing)}. "
             "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell before running."
+            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in\n"
+            "your shell before running."
         )
 
 
@@ -309,8 +311,9 @@ def resolve_ccp4_environment(args):
             ) from None
 
         saved = save_ccp4_setup(setup_path, config_files=config_files)
-        print(f"Verified {', '.join(REQUIRED_CCP4_TOOLS)} are available; saved CCP4 setup "
-              f"path to {', '.join(saved)}", flush=True)
+        print(
+            f"Verified {', '.join(REQUIRED_CCP4_TOOLS)} are available; saved "
+            f"CCP4 setup path to {', '.join(saved)}", flush=True)
         return None, None
 
     environment = os.environ.copy()
@@ -349,7 +352,8 @@ def resolve_ccp4_environment(args):
             f"Required CCP4 tools ({', '.join(REQUIRED_CCP4_TOOLS)}) were not "
             "found on PATH and no setup file could be auto-detected. "
             "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell before running."
+            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in\n"
+            "your shell before running."
         )
     env = resolve_env(ccp4_setup)
     verify_ccp4(env)
@@ -421,7 +425,7 @@ def _residue_index_by_author(structure, label):
     by_author = {}
     order = []
     for model_index, model in enumerate(structure):
-        for source_chain_index, chain in enumerate(model):
+        for chain in model:
             for residue in chain:
                 number = residue.seqid.num
                 if number is None:
@@ -1001,7 +1005,8 @@ def ensure_entry_available(pdbID, mirror_root, cache_root):
     raise FileNotFoundError(pdbID)
 
 
-def resolve_manual_inputs(pdbID, pdb_file=None, mtz_file=None, cif_file=None, work_dir=None):
+def resolve_manual_inputs(pdbID, pdb_file=None, mtz_file=None,
+                          cif_file=None, work_dir=None):
     """Return (mtz_path, pdb_path) for a manually supplied local input set."""
     if not mtz_file:
         raise ValueError("manual mode requires --mtz-file")
@@ -1576,7 +1581,8 @@ def process(pdbID):
                 (bond_rows, candidate_rows, site_summaries,
                  bond_meta) = run_bond_analysis(
                     pdbID, pdb, rows, header,
-                    {"data_json": data_json if manual_inputs else os.path.join(entry, "data.json"),
+                    {"data_json": (data_json if manual_inputs
+                                   else os.path.join(entry, "data.json")),
                      "pdb_path": pdb, "mtz_path": mtz,
                      "resolution": data_reshi}, structure=structure,
                     connection_path=source_coordinate_path)
@@ -1958,15 +1964,22 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--id", type=parse_pdb_id, help="process a single PDB id (else batch the root)")
-    ap.add_argument("--id-file", help="path to a file of PDB ids (comma- and/or newline-separated)")
+    ap.add_argument("--id", type=parse_pdb_id,
+                    help="process a single PDB id (else batch the root)")
+    ap.add_argument("--id-file",
+                    help="path to a file of PDB ids (comma- and/or "
+                         "newline-separated)")
     ap.add_argument("--pdb-file", help="path to a local PDB file for manual input mode")
     ap.add_argument("--mtz-file", help="path to a local MTZ file for manual input mode")
-    ap.add_argument("--cif-file", help="path to a local mmCIF file for manual input mode")
-    ap.add_argument("--data-json", help="optional path to a local data.json for manual input mode")
+    ap.add_argument("--cif-file",
+                    help="path to a local mmCIF file for manual input mode")
+    ap.add_argument("--data-json",
+                    help="optional path to a local data.json for manual "
+                         "input mode")
     ap.add_argument("--pdb-redo-root", default=DEFAULT_ROOT,
                     help="root of the PDB-REDO mirror")
-    ap.add_argument("--pdb-redo-cache", default=os.path.join(REPO_DIR, "pdb-redo-cache"),
+    ap.add_argument("--pdb-redo-cache",
+                    default=os.path.join(REPO_DIR, "pdb-redo-cache"),
                     help="root of local cache for auto-downloaded PDB-REDO entries")
     ap.add_argument("--max-pdbs", type=positive_int, default=None,
                     help="process only the first N entries (minimum: 1)")
@@ -1992,13 +2005,15 @@ def parse_args(argv=None):
               "the output directory and repository default"),
     )
     ap.add_argument("--ccp4-setup", default=None,
-                    help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)")
+                    help="optional CCP4 setup script override "
+                         "(e.g. .../bin/ccp4.setup-sh)")
     ap.add_argument("--configure-ccp4", default=None,
                     help="save a CCP4 setup script path for future runs")
     ap.add_argument("--keep-intermediates", action="store_true",
                     help="keep per-entry maps/logs (default: delete after extract)")
     ap.add_argument("--resume", action="store_true",
-                    help="skip terminal ok/partial results; retry retryable incomplete ids")
+                    help="skip terminal ok/partial results; retry "
+                         "retryable incomplete ids")
     ap.add_argument(
         "--retry-partials", action="store_true",
         help=("with --resume, reprocess non-retryable partial entries from "
@@ -2014,7 +2029,7 @@ def parse_args(argv=None):
                          "stats only); bond analysis is enabled by default "
                          "(bonds=%(default)s)")
     ap.set_defaults(bonds=True)
-    
+
     args = ap.parse_args(argv)
     if args.id and args.id_file:
         raise SystemExit("use either --id or --id-file, not both")
@@ -2060,7 +2075,8 @@ def _select_entry_ids(args, cache_root):
                 args.id, args.pdb_redo_root, cache_root)
         except FileNotFoundError:
             raise _DriverError(
-                f"Entry {args.id} not found locally and download failed.")
+                f"Entry {args.id} not found locally and download failed."
+            ) from None
         if used_root != args.pdb_redo_root:
             print(f"Auto-downloaded {args.id} into cache at {cache_root}", flush=True)
         return [args.id], used_root, None
@@ -2069,7 +2085,7 @@ def _select_entry_ids(args, cache_root):
         try:
             ids = load_ids_from_file(args.id_file)
         except (FileNotFoundError, ValueError) as exc:
-            raise _DriverError(str(exc))
+            raise _DriverError(str(exc)) from None
         print(f"Loaded {len(ids)} IDs from {args.id_file}", flush=True)
         return ids, root, None
 

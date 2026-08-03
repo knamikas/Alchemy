@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alchemy"
-version = "1.0.0"
+dynamic = ["version"]
 description = "PDB-wide crystallographic validation of modeled metal sites"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
+    "pytest-cov>=4.0",
 ]
 
 # Alchemy is run from a clone (`python src/main.py`), never imported as a
@@ -28,11 +29,24 @@ test = [
 [tool.setuptools]
 packages = []
 py-modules = []
+# Needed so the dynamic version below can resolve `_version` under src/. It
+# does not re-enable discovery: packages and py-modules stay empty.
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "_version.__version__"}
 
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+# Coverage is measured but not enforced by default, so a plain
+# `pytest` run stays fast. CI adds:
+#   --cov=src --cov-report=term-missing --cov-fail-under=75
+# 75 sits just below the current offline figure of 77%, making it a
+# ratchet rather than a tripwire. The gap is concentrated in
+# density_analysis (60%), main.py (60%) and ccp4_setup (55%) --
+# see findings 4.1 and 4.2.
 markers = [
     "ccp4: requires the CCP4 binaries (mtzfix, fft, mapmask, edstats) on PATH",
     "entry_data: requires the checksum-pinned PDB-REDO integration entries",
@@ -41,4 +55,25 @@ markers = [
 ]
 filterwarnings = [
     "error::pytest.PytestUnknownMarkWarning",
+]
+
+# Line length 88 rather than 79: the codebase is already written close to it
+# (19 lines exceed 88, against 571 exceeding 79), so this enforces existing
+# practice instead of mandating a reformat.
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# Deliberately narrow. E/W/F/B catch real defects -- undefined names, unused
+# bindings, exception-handling mistakes -- and the tree is clean under them.
+# Modernization rules (UP) are excluded on purpose: they would rewrite 221
+# annotations, which belongs with the typing work, not a lint gate.
+select = ["E", "W", "F", "B"]
+ignore = [
+    # zip(..., strict=) changes behaviour: length mismatches would begin
+    # raising where they are currently truncated silently. Several zips here
+    # pair records that are length-checked immediately beforehand, so this
+    # wants a deliberate audit rather than a sweep.
+    "B905",
 ]

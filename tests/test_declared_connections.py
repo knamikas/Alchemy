@@ -204,9 +204,9 @@ def test_analysis_chain_names_reverses_conversion_shortening(tmp_path):
     expectation is taken from the converted file rather than assumed.
     """
     builder = StructureBuilder()
-    his = builder.add_amino_acid("HIS", 10, chain="AAA",
-                                 positions={"NE2": (2.03, 0.0, 0.0)},
-                                 origin=(20.0, 20.0, 20.0))
+    builder.add_amino_acid("HIS", 10, chain="AAA",
+                             positions={"NE2": (2.03, 0.0, 0.0)},
+                             origin=(20.0, 20.0, 20.0))
     builder.add_metal("ZN", 1, chain="BBB", pos=(0.0, 0.0, 0.0))
     source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
 
@@ -833,9 +833,9 @@ def test_declaration_inside_a_cofactor_is_not_an_external_contact(tmp_path):
     external coordination.
     """
     builder = StructureBuilder()
-    his = builder.add_amino_acid("HIS", 10, chain="A",
-                                 positions={"NE2": (2.30, 0.0, 0.0)},
-                                 origin=(20.0, 20.0, 20.0))
+    builder.add_amino_acid("HIS", 10, chain="A",
+                             positions={"NE2": (2.30, 0.0, 0.0)},
+                             origin=(20.0, 20.0, 20.0))
     cluster = builder.add_hetero_residue("FES", 1, [
         AtomSpec("FE1", "FE", (0.0, 0.0, 0.0)),
         AtomSpec("FE2", "FE", (2.70, 0.0, 0.0)),

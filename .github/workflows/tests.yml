@@ -21,7 +21,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install Alchemy and its test dependency
-        run: python -m pip install -e '.[test]'
+      - name: Install Alchemy's dependencies
+        run: python -m pip install '.[test]'
+      - name: Lint
+        run: |
+          python -m pip install ruff
+          ruff check src tests tools
       - name: Run the fast offline suite
-        run: python -m pytest --no-ccp4 --no-network --skip-slow
+        run: |
+          python -m pytest --no-ccp4 --no-network --skip-slow \
+            --cov=src --cov-report=term-missing --cov-fail-under=75

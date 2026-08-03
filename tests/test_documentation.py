@@ -253,3 +253,34 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path):
         "wheel metadata dropped declared runtime dependencies: "
         f"declared {sorted(_declared_dependencies())}, wheel has {sorted(required)}"
     )
+
+
+def test_version_has_a_single_definition():
+    """``pyproject.toml`` derives the version from ``src/_version.py``.
+
+    The number is stamped into every manifest row as ``alchemy_version``, so a
+    second literal in ``pyproject.toml`` could drift and silently mislabel the
+    provenance of a whole database run.
+    """
+    import _version
+
+    with open(PYPROJECT_PATH, "rb") as handle:
+        config = tomllib.load(handle)
+    project = config["project"]
+
+    assert "version" not in project, (
+        "a literal version in [project] would be a second definition; "
+        'declare `dynamic = ["version"]` instead'
+    )
+    assert "version" in project.get("dynamic", []), (
+        "the version must be declared dynamic so it comes from _version.py"
+    )
+    assert config["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "_version.__version__"
+    }
+
+    import main
+
+    assert main.ALCHEMY_VERSION == _version.__version__, (
+        "main.ALCHEMY_VERSION must come from _version.py, not a second literal"
+    )

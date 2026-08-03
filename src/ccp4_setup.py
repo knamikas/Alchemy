@@ -96,7 +96,8 @@ def save_ccp4_setup(setup_path, config_files=None):
     return [str(path)]
 
 
-def find_ccp4_setup(explicit_setup=None, env=None, config=None, config_files=None, common_candidates=None):
+def find_ccp4_setup(explicit_setup=None, env=None, config=None,
+                    config_files=None, common_candidates=None):
     env = env or os.environ.copy()
     config = config or load_ccp4_setup_config(config_files=config_files)
     common_candidates = common_candidates or COMMON_CCP4_SETUP_CANDIDATES

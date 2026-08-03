@@ -218,7 +218,8 @@ def _density_observation_id(pdb_id, fields, indices):
     ))
 
 
-def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set, structure=None):
+def extract_metal_statistics(pdbID, stats_out, metals_set, cofactor_set,
+                             structure=None):
     """Parse an edstats stats.out file, returning (rows, header).
     `structure` is the shared first-model Gemmi context used by bond analysis.
 

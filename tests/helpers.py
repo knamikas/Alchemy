@@ -364,7 +364,8 @@ class StructureBuilder:
 
     # -- conformers --------------------------------------------------------- #
     def add_conformers(self, residue: ResidueSpec,
-                       conformers: Sequence[Tuple[str, float, Mapping[str, Sequence[float]]]],
+                       conformers: Sequence[
+                           Tuple[str, float, Mapping[str, Sequence[float]]]],
                        *, atom_names: Optional[Iterable[str]] = None,
                        ) -> ResidueSpec:
         """Split atoms of ``residue`` into alternate conformers.
@@ -746,8 +747,9 @@ def write_edstats(path, rows: Sequence[Sequence[str]], **kwargs) -> str:
 
 def edstats_rows_for_structure(context, *,
                                metrics: Optional[Mapping[str, object]] = None,
-                               per_residue: Optional[Mapping[Tuple[str, str, str],
-                                                            Mapping[str, object]]] = None,
+                               per_residue: Optional[
+                                   Mapping[Tuple[str, str, str],
+                                           Mapping[str, object]]] = None,
                                default: object = 0.0,
                                model: int = 1,
                                blank_chain_form: bool = False,
