@@ -9,7 +9,7 @@ over a ``SimpleQueue`` the workers write to), watches the pool roster
 entry (``_worker_death_result``).
 
 This module covers those three pieces individually, then drives the REAL
-``main._run`` -- with only the per-entry pipeline replaced by a scripted stub --
+``driver_pool._run`` -- with only the per-entry pipeline replaced by a scripted stub --
 for the behaviour they exist to produce: the loop terminates when a worker is
 SIGKILLed mid-entry, and every entry lands in the manifest exactly once even
 when a death is attributed to an entry whose real result is still on its way.
@@ -44,6 +44,9 @@ import main
 import worker
 from driver import runlog, writers
 from driver.writers import MANIFEST_COLUMNS
+import cli
+from driver import pool as driver_pool
+import metal_identification
 
 
 # Killing a worker outright, and forking the driver so the parent can time it
@@ -94,7 +97,7 @@ class _BrokenQueue:
 
 
 def _reference_cfg(output_dir, manual_inputs=None):
-    """Build the worker config dict exactly as ``main._run`` assembles it."""
+    """Build the worker config dict exactly as ``driver_pool._run`` assembles it."""
     env = dict(os.environ)
     return {
         "root": os.path.join(output_dir, "root"),
@@ -102,15 +105,15 @@ def _reference_cfg(output_dir, manual_inputs=None):
         "cache_root": os.path.join(output_dir, "cache"),
         "env": env,
         "output_dir": output_dir,
-        "cofactors": main.load_cofactor_ids(),
+        "cofactors": metal_identification.load_cofactor_ids(),
         "keep": False,
         "bonds": True,
         "density_map_scope": "model-envelope",
         "allow_download": False,
         "manual_inputs": manual_inputs,
-        "alchemy_commit": main._alchemy_commit(),
-        "gemmi_version": main._gemmi_version(),
-        "ccp4_version": main._ccp4_version(env),
+        "alchemy_commit": driver_pool._alchemy_commit(),
+        "gemmi_version": driver_pool._gemmi_version(),
+        "ccp4_version": driver_pool._ccp4_version(env),
     }
 
 
@@ -153,7 +156,7 @@ def test_drain_inflight_applies_notifications_in_order(notifications, expected, 
         for notification in notifications:
             inflight.put(notification)
         assignments = {}
-        main._drain_inflight(inflight, assignments)
+        driver_pool._drain_inflight(inflight, assignments)
         assert assignments == expected, label
     finally:
         inflight.close()
@@ -169,7 +172,7 @@ def test_drain_inflight_preserves_unrelated_existing_assignments():
     try:
         inflight.put(("start", 22, "2xyz"))
         assignments = {11: "1abc"}
-        main._drain_inflight(inflight, assignments)
+        driver_pool._drain_inflight(inflight, assignments)
         assert assignments == {11: "1abc", 22: "2xyz"}
     finally:
         inflight.close()
@@ -191,7 +194,7 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue():
     assignments = {}
 
     def drain():
-        main._drain_inflight(inflight, assignments)
+        driver_pool._drain_inflight(inflight, assignments)
         returned.set()
 
     drainer = threading.Thread(target=drain, daemon=True)
@@ -219,7 +222,7 @@ def test_drain_inflight_survives_a_torn_down_queue(error):
     driver finish the entries it already has.
     """
     assignments = {11: "1abc"}
-    main._drain_inflight(_BrokenQueue(error), assignments)
+    driver_pool._drain_inflight(_BrokenQueue(error), assignments)
     assert assignments == {11: "1abc"}
 
 
@@ -236,16 +239,16 @@ def test_dead_worker_pids_reports_only_newly_missing_workers():
     known = set()
     pool = _FakePool([101, 102])
 
-    assert main._dead_worker_pids(pool, known) == set()
+    assert driver_pool._dead_worker_pids(pool, known) == set()
     assert known == {101, 102}
 
     # 102 was killed and the pool repopulated with 103.
     pool.set_roster([101, 103])
-    assert main._dead_worker_pids(pool, known) == {102}
+    assert driver_pool._dead_worker_pids(pool, known) == {102}
     assert known == {101, 103}
 
     # The same roster on the next poll is not a second death.
-    assert main._dead_worker_pids(pool, known) == set()
+    assert driver_pool._dead_worker_pids(pool, known) == set()
     assert known == {101, 103}
 
 
@@ -257,7 +260,7 @@ def test_dead_worker_pids_reports_several_simultaneous_deaths():
     """
     known = {1, 2, 3}
     pool = _FakePool([1, 4, 5])
-    assert main._dead_worker_pids(pool, known) == {2, 3}
+    assert driver_pool._dead_worker_pids(pool, known) == {2, 3}
     assert known == {1, 4, 5}
 
 
@@ -278,7 +281,7 @@ def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(pool, label):
     for every worker that ever ran and corrupt the manifest.
     """
     known = {101, 102}
-    assert main._dead_worker_pids(pool, known) == set(), label
+    assert driver_pool._dead_worker_pids(pool, known) == set(), label
     assert known == {101, 102}, "the known set must be left alone"
 
 
@@ -385,9 +388,9 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
 # --------------------------------------------------------------------------- #
 # Driving the real dispatch loop  (regression, 3141593)
 # --------------------------------------------------------------------------- #
-# The tests below run ``main._run`` itself in a child process with only the
-# name it dispatches on -- ``main.process``, the driver's reference to
-# ``worker.process`` -- rebound to a stub, so the bookkeeping under test --
+# The tests below run ``driver_pool._run`` itself in a child process with only the
+# name it dispatches on -- ``driver.pool.process``, the driver's own reference
+# to ``worker.process`` -- rebound to a stub, so the bookkeeping under test --
 # drain the notifications, diff the roster, synthesize the lost row, drop a
 # late real result for an already-lost entry, count completions, pick the exit
 # code -- is the shipped code and not a re-implementation of it.
@@ -494,7 +497,7 @@ def _stub_process(pdb_id):
 
 
 def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready):
-    """Run the real ``main._run`` with the per-entry pipeline stubbed out.
+    """Run the real ``driver_pool._run`` with the per-entry pipeline stubbed out.
 
     Executed in its own process so the parent can impose a hard timeout: a
     driver that waits forever for a dead worker's result must fail the test
@@ -511,13 +514,13 @@ def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready)
     _STUB_SCRIPT = script
     _STUB_MARKER_DIR = marker_dir
     try:
-        main.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
-        main.process = _stub_process
+        driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+        driver_pool.process = _stub_process
         if stall_grace is not None:
-            main.WORKER_STALL_GRACE_S = stall_grace
-        args = main.parse_args(argv)
+            driver_pool.WORKER_STALL_GRACE_S = stall_grace
+        args = cli.parse_args(argv)
         run_log = runlog._RunLog(args, "pytest")
-        channel.put(("exit_code", main._run(args, run_log)))
+        channel.put(("exit_code", driver_pool._run(args, run_log)))
     except BaseException as exc:  # noqa: BLE001 - reported to the parent
         channel.put(("crash", f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
 
@@ -545,7 +548,7 @@ def _terminate_driver_tree(child, session_ready):
 
 
 def _run_driver(tmp_path, script, stall_grace=None, workers=None):
-    """Drive ``main._run`` over ``script`` in a child process, under a timeout."""
+    """Drive ``driver_pool._run`` over ``script`` in a child process, with a timeout."""
     ids = list(script)
     output_dir = tmp_path / "out"
     output_dir.mkdir()
@@ -769,7 +772,7 @@ _STALE_ATTRIBUTION_SCRIPT = {
 
 @pytest.fixture(scope="module")
 def stale_attribution_batch(tmp_path_factory):
-    """One real ``main._run`` over ``_STALE_ATTRIBUTION_SCRIPT``.
+    """One real ``driver_pool._run`` over ``_STALE_ATTRIBUTION_SCRIPT``.
 
     Module-scoped: the run takes a few seconds and the three tests below read
     different invariants out of the same manifest.
@@ -799,7 +802,7 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
 
     ``aaaa`` runs to completion in its own worker; the driver nevertheless
     declares it lost first, because the worker that died was holding a start
-    notification for it. Dropping the guard in ``main._run`` therefore writes
+    notification for it. Dropping the guard in ``driver_pool._run`` therefore writes
     ``aaaa`` twice and never writes ``bbbb``.
     """
     batch = stale_attribution_batch
@@ -904,7 +907,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
 
     with ctx.Pool(2, initializer=worker._init_worker, initargs=(cfg, inflight)) as pool:
         # Prime the roster, as the driver's first loop iteration does.
-        main._dead_worker_pids(pool, worker_pids)
+        driver_pool._dead_worker_pids(pool, worker_pids)
         results = pool.imap_unordered(
             _spawn_task, [("ok", "1abc"), ("die", "2xyz")], chunksize=1
         )
@@ -912,10 +915,10 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
         while time.monotonic() < deadline and not (finished and dead_pids):
             try:
                 finished.append(results.next(timeout=0.5))
-            except main.MultiprocessingTimeoutError:
+            except driver_pool.MultiprocessingTimeoutError:
                 pass
-            main._drain_inflight(inflight, assignments)
-            dead_pids |= main._dead_worker_pids(pool, worker_pids)
+            driver_pool._drain_inflight(inflight, assignments)
+            dead_pids |= driver_pool._dead_worker_pids(pool, worker_pids)
         pool.terminate()
 
     assert finished, "the healthy spawn worker returned no result"
@@ -980,8 +983,8 @@ def _sigterm_driver_child(argv, ready, channel):
     if hasattr(os, "setsid"):
         os.setsid()
 
-    main.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
-    main.process = _never_finishing_process
+    driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+    driver_pool.process = _never_finishing_process
     ready.set()
     try:
         channel.put(("exit_code", main.main(list(argv))))

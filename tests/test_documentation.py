@@ -32,6 +32,7 @@ from typing import Set
 import pytest
 
 from helpers import REPO_ROOT, SRC_DIR
+from driver import pool
 
 
 README_PATH = os.path.join(REPO_ROOT, "README.md")
@@ -165,6 +166,33 @@ def test_main_docstring_requirements_match_the_declaration():
     missing = [name for name in _declared_dependencies() if name not in requirements]
     assert not missing, (
         f"main.py's module docstring omits declared dependencies: {missing}"
+    )
+
+
+def test_default_paths_land_in_the_checkout_not_inside_src():
+    """``REPO_DIR`` names the checkout root from every module that reads it.
+
+    It is built by walking up from ``__file__``, so the number of ``dirname``
+    calls is correct only for a module sitting directly in ``src/``. A copy of
+    that expression in a sub-package -- ``driver/`` is one directory deeper --
+    silently resolves to ``src/`` instead, and every default built on it moves
+    with it: ``--output-dir``, ``--pdb-redo-cache``, the frozen confidence
+    reference, and the working directory the ``git`` provenance probes run in.
+    Nothing raises; the run just writes into the source tree.
+
+    So the constant has exactly one definition, and this pins its value.
+    """
+    import ccp4_setup
+    from driver import pool
+
+    assert ccp4_setup.REPO_DIR == REPO_ROOT
+    assert pool.REPO_DIR == REPO_ROOT, (
+        "driver.pool must import REPO_DIR rather than recompute it: two "
+        f"dirname calls from {os.path.join(SRC_DIR, 'driver')} name src/, "
+        "not the checkout"
+    )
+    assert pool.DEFAULT_CONFIDENCE_REFERENCE_DIR == os.path.join(
+        REPO_ROOT, "confidence_reference"
     )
 
 
@@ -310,8 +338,6 @@ def test_version_has_a_single_definition():
         "attr": "_version.__version__"
     }
 
-    import main
-
-    assert main.ALCHEMY_VERSION == _version.__version__, (
-        "main.ALCHEMY_VERSION must come from _version.py, not a second literal"
+    assert pool.ALCHEMY_VERSION == _version.__version__, (
+        "driver.pool.ALCHEMY_VERSION must come from _version.py, not a second literal"
     )

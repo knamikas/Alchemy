@@ -46,14 +46,17 @@ def test_src_modules_import():
     import main
     import metal_elements
     import metal_identification  # noqa: F401 - imported to prove it loads
+    import cli
     import structure_analysis
     import worker
-    from driver import progress, resources, runlog, writers
+    from driver import pool, progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert bond_analysis.CUTOFF == 4.0
     assert callable(structure_analysis.load_structure)
-    assert callable(main.main)
+    assert callable(main.main), "src/main.py must keep working as the entry point"
+    assert main.main is cli.main, "the entry point must delegate, not reimplement"
+    assert callable(pool._run)
     assert callable(worker.process)
     assert writers.MANIFEST_COLUMNS[0] == "pdbID"
     assert callable(progress._ProgressReporter)

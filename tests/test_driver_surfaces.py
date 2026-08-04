@@ -33,10 +33,13 @@ import pytest
 
 import bond_analysis
 import ccp4_setup
+import cli
 import inputs
-import main
 from driver import resources
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
+from driver import resume
+from driver import pool
+import confidence_score
 
 
 # --------------------------------------------------------------------------- #
@@ -62,12 +65,12 @@ def resume_outputs(tmp_path):
 
 
 def test_matching_headers_are_accepted(resume_outputs):
-    main.validate_resume_schemas(**resume_outputs)
+    resume.validate_resume_schemas(**resume_outputs)
 
 
 def test_absent_outputs_are_accepted(tmp_path):
     """A first run has nothing to be incompatible with."""
-    main.validate_resume_schemas(
+    resume.validate_resume_schemas(
         manifest_path=str(tmp_path / "manifest.csv"),
         stats_path=str(tmp_path / "stats.csv"),
         bonds_path=str(tmp_path / "bonds.csv"),
@@ -89,7 +92,7 @@ def test_an_incompatible_header_is_refused(resume_outputs, tmp_path, target):
     _write_header(tmp_path / os.path.basename(resume_outputs[target]), ["unexpected"])
 
     with pytest.raises(ValueError, match="incompatible schema"):
-        main.validate_resume_schemas(**resume_outputs)
+        resume.validate_resume_schemas(**resume_outputs)
 
 
 def test_a_truncated_stats_header_is_refused(resume_outputs, tmp_path):
@@ -102,7 +105,7 @@ def test_a_truncated_stats_header_is_refused(resume_outputs, tmp_path):
     _write_header(tmp_path / "stats.csv", list(STATS_COLUMNS)[:-1])
 
     with pytest.raises(ValueError, match="incompatible schema"):
-        main.validate_resume_schemas(**resume_outputs)
+        resume.validate_resume_schemas(**resume_outputs)
 
 
 def test_bond_headers_are_ignored_when_the_bond_stage_is_disabled(
@@ -112,13 +115,13 @@ def test_bond_headers_are_ignored_when_the_bond_stage_is_disabled(
     _write_header(tmp_path / "bonds.csv", ["stale"])
     _write_header(tmp_path / "candidates.csv", ["stale"])
 
-    main.validate_resume_schemas(**resume_outputs, bonds_enabled=False)
+    resume.validate_resume_schemas(**resume_outputs, bonds_enabled=False)
 
 
 def test_confidence_output_requires_its_columns(resume_outputs, tmp_path):
     """A confidence path without its schema cannot be validated at all."""
     with pytest.raises(ValueError, match="confidence columns are required"):
-        main.validate_resume_schemas(
+        resume.validate_resume_schemas(
             **resume_outputs,
             confidence_path=str(tmp_path / "confidence.csv"),
             confidence_columns=None,
@@ -126,11 +129,11 @@ def test_confidence_output_requires_its_columns(resume_outputs, tmp_path):
 
 
 def test_an_incompatible_confidence_header_is_refused(resume_outputs, tmp_path):
-    columns = list(main.CONFIDENCE_INPUT_COLUMNS)
+    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
     path = _write_header(tmp_path / "confidence.csv", columns[:-1])
 
     with pytest.raises(ValueError, match="incompatible schema"):
-        main.validate_resume_schemas(
+        resume.validate_resume_schemas(
             **resume_outputs, confidence_path=path, confidence_columns=columns
         )
 
@@ -161,13 +164,13 @@ def test_the_exit_code_reports_operational_incompleteness(
     Treating the first as failure would make every database run look broken;
     treating the second as success would hide work still outstanding.
     """
-    assert main._batch_exit_code(counts, retryable_partials) == expected
+    assert pool._batch_exit_code(counts, retryable_partials) == expected
 
 
 def test_a_missing_status_key_is_treated_as_zero():
     """Counts are accumulated per status, so an absent key means none seen."""
-    assert main._batch_exit_code({}, 0) == 0
-    assert main._batch_exit_code({"error": 2}, 0) == 1
+    assert pool._batch_exit_code({}, 0) == 0
+    assert pool._batch_exit_code({"error": 2}, 0) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -176,13 +179,13 @@ def test_a_missing_status_key_is_treated_as_zero():
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
 def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value):
     """IDs are lowercased so cache paths and manifest keys cannot diverge."""
-    assert main.parse_pdb_id(value) == value.lower()
+    assert cli.parse_pdb_id(value) == value.lower()
 
 
 @pytest.mark.parametrize("value", ["abc", "abcde", "ab-c", "ab c", "", "9my_"])
 def test_malformed_pdb_ids_are_rejected(value):
     with pytest.raises(argparse.ArgumentTypeError, match="four alphanumeric"):
-        main.parse_pdb_id(value)
+        cli.parse_pdb_id(value)
 
 
 def test_an_id_file_accepts_mixed_separators_and_comments(tmp_path):
@@ -192,7 +195,7 @@ def test_an_id_file_accepts_mixed_separators_and_comments(tmp_path):
         encoding="utf-8",
     )
 
-    assert main.load_ids_from_file(str(path)) == ["9myr", "6nlr", "9nxl", "1abc"]
+    assert pool.load_ids_from_file(str(path)) == ["9myr", "6nlr", "9nxl", "1abc"]
 
 
 def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path):
@@ -201,12 +204,12 @@ def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path):
     path.write_text("9myr\n6nlr\nnot-an-id\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"invalid PDB id .*ids\.txt:3"):
-        main.load_ids_from_file(str(path))
+        pool.load_ids_from_file(str(path))
 
 
 def test_a_missing_id_file_is_reported_clearly(tmp_path):
     with pytest.raises(FileNotFoundError, match="id file not found"):
-        main.load_ids_from_file(str(tmp_path / "absent.txt"))
+        pool.load_ids_from_file(str(tmp_path / "absent.txt"))
 
 
 def _make_entry(
@@ -284,7 +287,7 @@ def test_enumeration_returns_only_complete_entries(tmp_path):
     _make_entry(tmp_path, "6nlr")  # hashdir "nl"
     _make_entry(tmp_path, "9nxl", mtz=False)  # hashdir "nx", incomplete
 
-    assert main.enumerate_entries(str(tmp_path)) == ["9myr", "6nlr"]
+    assert inputs.enumerate_entries(str(tmp_path)) == ["9myr", "6nlr"]
 
 
 def test_enumeration_stops_at_the_requested_limit(tmp_path):
@@ -292,9 +295,9 @@ def test_enumeration_stops_at_the_requested_limit(tmp_path):
     for pdb_id in ("1aaa", "1bbb", "2ccc", "2ddd"):
         _make_entry(tmp_path, pdb_id)
 
-    limited = main.enumerate_entries(str(tmp_path), limit=2)
+    limited = inputs.enumerate_entries(str(tmp_path), limit=2)
     assert len(limited) == 2
-    assert limited == main.enumerate_entries(str(tmp_path))[:2]
+    assert limited == inputs.enumerate_entries(str(tmp_path))[:2]
 
 
 def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(tmp_path, monkeypatch):
@@ -308,8 +311,8 @@ def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(tmp_path, monkeypatc
             raise PermissionError("locked down")
         return real_listdir(path)
 
-    monkeypatch.setattr(main.os, "listdir", failing_listdir)
-    assert main.enumerate_entries(str(tmp_path)) == ["9myr"]
+    monkeypatch.setattr(pool.os, "listdir", failing_listdir)
+    assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
 
 
 # --------------------------------------------------------------------------- #
@@ -418,17 +421,21 @@ def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(tmp_path):
         open(path, "w", encoding="utf-8").close()
 
     assert (
-        main.remove_stale_disabled_bond_outputs(paths, resume=True, bonds_enabled=False)
+        resume.remove_stale_disabled_bond_outputs(
+            paths, resume=True, bonds_enabled=False
+        )
         == []
     )
     assert (
-        main.remove_stale_disabled_bond_outputs(paths, resume=False, bonds_enabled=True)
+        resume.remove_stale_disabled_bond_outputs(
+            paths, resume=False, bonds_enabled=True
+        )
         == []
     )
     assert all(os.path.exists(path) for path in paths)
 
     assert (
-        main.remove_stale_disabled_bond_outputs(
+        resume.remove_stale_disabled_bond_outputs(
             paths, resume=False, bonds_enabled=False
         )
         == paths
@@ -438,7 +445,7 @@ def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(tmp_path):
 
 def test_removing_absent_bond_outputs_is_not_an_error(tmp_path):
     paths = [str(tmp_path / "absent.csv")]
-    assert main.remove_stale_disabled_bond_outputs(paths, False, False) == []
+    assert resume.remove_stale_disabled_bond_outputs(paths, False, False) == []
 
 
 def test_worker_limits_leave_headroom_and_respect_memory(monkeypatch):
@@ -629,5 +636,5 @@ def test_intermediates_are_discarded_unless_asked_for():
     ``process`` keys its scratch cleanup off this flag; defaulting it to true
     would fill an output directory over a database run.
     """
-    assert main.parse_args([]).keep_intermediates is False
-    assert main.parse_args(["--keep-intermediates"]).keep_intermediates is True
+    assert cli.parse_args([]).keep_intermediates is False
+    assert cli.parse_args(["--keep-intermediates"]).keep_intermediates is True

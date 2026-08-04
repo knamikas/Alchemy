@@ -19,8 +19,10 @@ import sys
 import pytest
 
 import ccp4_setup
+import cli
 import density_analysis as density
-import main
+from driver import pool
+import confidence_score
 
 
 def _option_help(option: str) -> str:
@@ -28,7 +30,7 @@ def _option_help(option: str) -> str:
     captured = io.StringIO()
     with contextlib.suppress(SystemExit):
         with contextlib.redirect_stdout(captured):
-            main.parse_args(["--help"])
+            cli.parse_args(["--help"])
     text = captured.getvalue()
     # The option name also appears in the usage banner; the description block is
     # the last occurrence.
@@ -75,7 +77,7 @@ def test_max_pdbs_rejects_non_positive_caps(value):
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
         with pytest.raises(SystemExit) as excinfo:
-            main.parse_args(["--id", "109m", "--max-pdbs", value])
+            cli.parse_args(["--id", "109m", "--max-pdbs", value])
 
     # ``argparse.error`` exits 2 with the diagnostic on stderr and nothing but
     # the code on the exception (``str(SystemExit(2)) == "2"``, which is why
@@ -102,7 +104,7 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
         with pytest.raises(SystemExit) as excinfo:
-            main.parse_args(["--id-file", "ids.txt", "--max-pdbs", "-3"])
+            cli.parse_args(["--id-file", "ids.txt", "--max-pdbs", "-3"])
 
     assert excinfo.value.code not in (0, None)
     message = f"{stderr.getvalue()}\n{excinfo.value}"
@@ -136,7 +138,7 @@ def test_retry_partials_rejects_unsafe_invocations(arguments, fragment):
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
         with pytest.raises(SystemExit) as excinfo:
-            main.parse_args(arguments)
+            cli.parse_args(arguments)
     assert excinfo.value.code == 2
     assert fragment in stderr.getvalue()
 
@@ -150,7 +152,7 @@ def test_retry_partials_rejects_unsafe_invocations(arguments, fragment):
     ],
 )
 def test_retry_partials_accepts_optional_resume_selectors(selector):
-    args = main.parse_args([*selector, "--resume", "--retry-partials"])
+    args = cli.parse_args([*selector, "--resume", "--retry-partials"])
     assert args.resume is True
     assert args.retry_partials is True
 
@@ -164,15 +166,15 @@ def test_confidence_reference_is_discovered_in_output_before_repo_default(
     output_dir = tmp_path / "output"
     output_reference = output_dir / "confidence_reference"
     output_reference.mkdir(parents=True)
-    (output_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
+    (output_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
     repository_reference = tmp_path / "repository-reference"
     repository_reference.mkdir()
-    (repository_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
+    (repository_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
     monkeypatch.setattr(
-        main, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference)
+        pool, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference)
     )
 
-    selected, searched = main.resolve_confidence_reference_dir(str(output_dir))
+    selected, searched = pool.resolve_confidence_reference_dir(str(output_dir))
 
     assert selected == str(output_reference)
     assert searched == (str(output_reference), str(repository_reference))
@@ -182,10 +184,10 @@ def test_explicit_confidence_reference_is_authoritative(tmp_path):
     output_dir = tmp_path / "output"
     automatic_reference = output_dir / "confidence_reference"
     automatic_reference.mkdir(parents=True)
-    (automatic_reference / main.REFERENCE_METADATA_FILE).write_text("{}")
+    (automatic_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
     explicit_reference = tmp_path / "explicit-reference"
 
-    selected, searched = main.resolve_confidence_reference_dir(
+    selected, searched = pool.resolve_confidence_reference_dir(
         str(output_dir), str(explicit_reference)
     )
 
@@ -265,20 +267,20 @@ def test_the_driver_reads_the_setup_path_configuration_writes(monkeypatch, tmp_p
 
     # Sourcing and verification are exercised elsewhere; stubbing them keeps
     # this test about which files the setup path travels through.
-    monkeypatch.setattr(main, "resolve_env", lambda path: {"PATH": str(path)})
-    monkeypatch.setattr(main, "verify_ccp4", lambda env: None)
+    monkeypatch.setattr(pool, "resolve_env", lambda path: {"PATH": str(path)})
+    monkeypatch.setattr(pool, "verify_ccp4", lambda env: None)
 
     configure = argparse.Namespace(configure_ccp4=str(setup), ccp4_setup=None)
-    assert main.resolve_ccp4_environment(configure) == (None, None)
+    assert pool.resolve_ccp4_environment(configure) == (None, None)
     assert primary.exists(), "--configure-ccp4 wrote outside the configured list"
 
     # The next run must find that path back through the same list.
     monkeypatch.setattr(ccp4_setup, "ccp4_tools_available", lambda env=None: False)
-    monkeypatch.setattr(main, "ccp4_tools_available", lambda env=None: False)
+    monkeypatch.setattr(pool, "ccp4_tools_available", lambda env=None: False)
     monkeypatch.delenv("CCP4_SETUP", raising=False)
 
     run = argparse.Namespace(configure_ccp4=None, ccp4_setup=None)
-    _, used = main.resolve_ccp4_environment(run)
+    _, used = pool.resolve_ccp4_environment(run)
 
     assert used == str(setup)
 
@@ -322,7 +324,7 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
         configure_ccp4=None, ccp4_setup="/nonexistent/ccp4.setup-sh"
     )
     with pytest.raises(SystemExit, match="not found"):
-        main.resolve_ccp4_environment(args)
+        pool.resolve_ccp4_environment(args)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
@@ -351,7 +353,7 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     setup.write_text(f'export PATH="{requested}:$PATH"\n', encoding="utf-8")
 
     args = argparse.Namespace(configure_ccp4=None, ccp4_setup=str(setup))
-    env, used = main.resolve_ccp4_environment(args)
+    env, used = pool.resolve_ccp4_environment(args)
 
     assert env is not None
     assert used == str(setup)
@@ -374,7 +376,7 @@ def test_the_three_timeout_budgets_are_distinct_and_ordered():
     legitimate crystallographic work.
     """
     assert (
-        main.PROVENANCE_COMMAND_TIMEOUT_S
+        pool.PROVENANCE_COMMAND_TIMEOUT_S
         < ccp4_setup.SETUP_SHELL_TIMEOUT_S
         < density.CCP4_TOOL_TIMEOUT_S
     )
@@ -426,21 +428,21 @@ def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(monkeypatch):
         assert timeout is not None, "provenance probes must be bounded"
         raise subprocess.TimeoutExpired(cmd, float(timeout))
 
-    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    monkeypatch.setattr(pool.subprocess, "run", fake_run)
 
-    assert main._alchemy_commit() == "unknown"
-    assert calls and set(calls) == {main.PROVENANCE_COMMAND_TIMEOUT_S}
+    assert pool._alchemy_commit() == "unknown"
+    assert calls and set(calls) == {pool.PROVENANCE_COMMAND_TIMEOUT_S}
 
 
 def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense():
     """``--ccp4-timeout`` is settable, and its default is the module constant."""
-    assert main.parse_args([]).ccp4_timeout == density.CCP4_TOOL_TIMEOUT_S
-    assert main.parse_args(["--ccp4-timeout", "3600"]).ccp4_timeout == 3600
+    assert cli.parse_args([]).ccp4_timeout == density.CCP4_TOOL_TIMEOUT_S
+    assert cli.parse_args(["--ccp4-timeout", "3600"]).ccp4_timeout == 3600
 
     # positive_int rejects values that would make every entry fail immediately.
     for bad in ("0", "-1", "not-a-number"):
         with pytest.raises(SystemExit):
-            main.parse_args(["--ccp4-timeout", bad])
+            cli.parse_args(["--ccp4-timeout", bad])
 
 
 def test_ccp4_timeout_help_states_its_default():
