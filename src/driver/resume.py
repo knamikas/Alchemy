@@ -133,12 +133,30 @@ def validate_resume_schemas(
         checks.append((confidence_path, list(confidence_columns)))
     for path, expected in checks:
         header = _csv_header(path)
-        if header is not None and header != expected:
-            raise ValueError(
-                f"Existing {os.path.basename(path)} uses an incompatible "
-                "schema; choose a new --output-dir for this Gemmi migration "
-                "run."
+        if header is None or header == expected:
+            continue
+        # Name what differs. The old message blamed a Gemmi migration, which
+        # was one cause among several: an added provenance column does this
+        # too, and a user who upgraded mid-database has no way to guess which.
+        missing = [column for column in expected if column not in header]
+        unexpected = [column for column in header if column not in expected]
+        difference = (
+            "; ".join(
+                part
+                for part in (
+                    "missing " + ", ".join(missing) if missing else "",
+                    "unexpected " + ", ".join(unexpected) if unexpected else "",
+                )
+                if part
             )
+            or "the same columns in a different order"
+        )
+        raise ValueError(
+            f"Existing {os.path.basename(path)} uses an incompatible schema "
+            f"({difference}). Its rows were written by a different Alchemy "
+            "build, and resume can only append beneath a matching header; "
+            "choose a new --output-dir."
+        )
 
 
 def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):

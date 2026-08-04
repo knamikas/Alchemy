@@ -135,6 +135,8 @@ class WorkerConfig:
     alchemy_commit: str
     gemmi_version: str
     ccp4_version: str
+    #: Identity of the bundled reference data this run measured against.
+    reference_data_id: str
 
 
 #: The configuration a pool worker was initialized with, and the queue it
@@ -253,6 +255,11 @@ class EntryResult:
     alchemy_commit: str
     gemmi_version: str
     ccp4_version: str
+    #: Which bundled catalog and distance table produced this row. Two entries
+    #: are comparable only if they share it: the catalog decides what counts as
+    #: a metal cofactor, and the distance table sets every assignment cutoff
+    #: and every z-score.
+    reference_data_id: str
     refinement_state: str
 
     #: ``ok``, ``partial``, ``skip`` or ``error``. Starts at ``error`` so a
@@ -309,6 +316,7 @@ def _initial_result(pdb_id, cfg, manual_inputs):
         alchemy_commit=cfg.alchemy_commit,
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
+        reference_data_id=cfg.reference_data_id,
         refinement_state="manual" if manual_inputs else "final",
     )
 

@@ -36,6 +36,7 @@ import ccp4_setup
 import cli
 import inputs
 from driver import resources
+from driver import writers
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver import resume
 from driver import pool
@@ -92,6 +93,38 @@ def test_an_incompatible_header_is_refused(resume_outputs, tmp_path, target):
     _write_header(tmp_path / os.path.basename(resume_outputs[target]), ["unexpected"])
 
     with pytest.raises(ValueError, match="incompatible schema"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_a_manifest_without_the_reference_data_column_is_refused(
+    resume_outputs, tmp_path
+):
+    """A manifest written before the identity column cannot be resumed into.
+
+    This is the compatibility break the column costs, and it is deliberate:
+    the rows already in that file do not say which reference data produced
+    them, so appending rows that do would make one file two datasets with no
+    way to tell them apart.
+    """
+    older = [
+        column for column in writers.MANIFEST_COLUMNS if column != "reference_data_id"
+    ]
+    _write_header(tmp_path / "manifest.csv", older)
+
+    with pytest.raises(ValueError, match="missing reference_data_id"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_the_refusal_names_the_columns_that_differ(resume_outputs, tmp_path):
+    """The message has to be actionable: a header mismatch is not self-evident.
+
+    It previously blamed a Gemmi migration for every mismatch, which is one
+    cause among several -- an added provenance column reads the same way, and
+    the operator is left diffing two headers by hand.
+    """
+    _write_header(tmp_path / "manifest.csv", list(writers.MANIFEST_COLUMNS) + ["stray"])
+
+    with pytest.raises(ValueError, match="unexpected stray"):
         resume.validate_resume_schemas(**resume_outputs)
 
 

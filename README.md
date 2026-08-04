@@ -61,7 +61,12 @@ Results are written to (the column lists and row builders live in
   `output/confidence_reference/`. Later small runs write confidence scores
   directly when a compatible frozen database reference is installed.
 - `output/manifest.csv` — per-entry status and reason, runtime, input
-  provenance, and relevant software and analysis-policy versions. Its
+  provenance, and relevant software and analysis-policy versions.
+  `reference_data_id` identifies the bundled catalog and distance table the row
+  was measured against; rows are comparable only if it matches, and the run log
+  records the two file checksums it is composed from. Adding this column means
+  a manifest written by an earlier build cannot be resumed into — start a new
+  `--output-dir`. Its
   `n_metals` value counts distinct selected coordinate-model sites, not
   diagnostic or repeated EDSTATS rows; `n_bonds` and `n_candidates` distinguish
   assigned-output size from candidate-evidence size.

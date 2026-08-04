@@ -76,6 +76,7 @@ def _cfg(**overrides):
         "alchemy_commit": "abc123def456",
         "gemmi_version": "0.7.5",
         "ccp4_version": "9.0",
+        "reference_data_id": "0123456789ab",
     }
     fields.update(overrides)
     return worker.WorkerConfig(**fields)
@@ -711,6 +712,19 @@ class TestInitialResult:
         result = worker._initial_result("109m", CFG, None)
         assert result.status == "error"
         assert result.retryable is True
+
+    def test_carries_the_reference_data_identity(self):
+        """Every row says which catalog and distance table produced it.
+
+        Without it the manifest records the software that ran but not the data
+        it measured against, and two runs whose z-scores came from different
+        reference distances are indistinguishable in the output.
+        """
+        result = worker._initial_result("109m", CFG, None)
+        row = _manifest_row(result, False, True, {}, {})
+
+        assert result.reference_data_id == CFG.reference_data_id
+        assert row["reference_data_id"] == CFG.reference_data_id
 
     def test_carries_run_provenance_from_the_config(self):
         """Version provenance is stamped once and shared by every row."""

@@ -146,6 +146,44 @@ def _parse_cofactor_catalog(path):
 
 
 @lru_cache(maxsize=None)
+def reference_data_checksums():
+    """``{filename: sha256}`` for both bundled files, verified as it goes.
+
+    The full hashes, for a run log or anyone asking *which* file differs.
+    """
+    return MappingProxyType(
+        {os.path.basename(path): _verified_sha256(path) for path in CHECKSUM_SIDECARS}
+    )
+
+
+@lru_cache(maxsize=None)
+def reference_data_id():
+    """One short id for the reference data an entry was measured against.
+
+    Both bundled files decide results -- the catalog decides what counts as a
+    metal cofactor, the distance table sets every assignment cutoff and every
+    z-score -- so a row is comparable with another only if both matched. One
+    id makes that a grouping key rather than a two-column join, and the pieces
+    stay recoverable from the sidecars and from the run log.
+
+    Composed from the file hashes rather than from the sidecars' recorded
+    values: the id then describes what was actually read.
+    """
+    checksums = reference_data_checksums()
+    digest = hashlib.sha256()
+    for name in sorted(checksums):
+        digest.update(f"{name}:{checksums[name]}\n".encode())
+    # Twelve characters, matching the abbreviated ``alchemy_commit`` beside it
+    # in the manifest. This identifies a build, it does not authenticate one.
+    return digest.hexdigest()[:12]
+
+
+def _verified_sha256(path):
+    _verify_checksum(path)
+    return _sha256(path)
+
+
+@lru_cache(maxsize=None)
 def _catalog(path=COFACTOR_CATALOG_PATH):
     _verify_checksum(path)
     return _parse_cofactor_catalog(path)

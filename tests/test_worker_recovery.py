@@ -125,6 +125,7 @@ def _reference_cfg(output_dir, manual_inputs=None):
         alchemy_commit=driver_pool._alchemy_commit(),
         gemmi_version=driver_pool._gemmi_version(),
         ccp4_version=driver_pool._ccp4_version(env),
+        reference_data_id=reference_data.reference_data_id(),
     )
 
 
@@ -1030,6 +1031,18 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     )
 
     assert isinstance(cfg, worker.WorkerConfig)
+    # The identity is resolved once per run, and the log keeps the two hashes
+    # it was composed from so a changed id can be attributed to a file.
+    assert cfg.reference_data_id == reference_data.reference_data_id()
+    assert run_log.details["reference_data_id"] == cfg.reference_data_id
+    assert (
+        run_log.details["metallocofactors_id_sha256"]
+        == reference_data.reference_data_checksums()["metallocofactors_id.txt"]
+    )
+    assert (
+        run_log.details["metal_distances_info_sha256"]
+        == reference_data.reference_data_checksums()["metal_distances_info.txt"]
+    )
     assert cfg.root == str(tmp_path / "root")
     assert cfg.cache_root == str(tmp_path / "cache")
     assert cfg.output_dir == str(tmp_path)

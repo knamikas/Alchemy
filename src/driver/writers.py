@@ -41,6 +41,7 @@ MANIFEST_COLUMNS = [
     "alchemy_commit",
     "gemmi_version",
     "ccp4_version",
+    "reference_data_id",
     "refinement_state",
     "source_coordinate_format",
     "analysis_coordinate_format",

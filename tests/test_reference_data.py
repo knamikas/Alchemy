@@ -356,3 +356,90 @@ def test_a_table_with_no_distances_is_named_as_empty(tmp_path):
 
     with pytest.raises(ValueError, match="no reference distances"):
         reference_data._load_literature(str(table))
+
+
+# --------------------------------------------------------------------------- #
+# Reference-data identity
+# --------------------------------------------------------------------------- #
+def _stub_reference_data(tmp_path, monkeypatch, catalog_text, distance_text):
+    """Point the checksum map at a writable pair of files and their sidecars."""
+    paths = {}
+    for name, text, key in (
+        ("catalog.txt", catalog_text, "catalog_sha256"),
+        ("distances.txt", distance_text, "distance_table_sha256"),
+    ):
+        data = tmp_path / name
+        data.write_text(text, encoding="utf-8")
+        sidecar = tmp_path / f"{name}.meta.json"
+        sidecar.write_text(
+            json.dumps({key: reference_data._sha256(str(data))}), encoding="utf-8"
+        )
+        paths[str(data)] = (str(sidecar), key)
+    monkeypatch.setattr(reference_data, "CHECKSUM_SIDECARS", paths)
+    reference_data.reference_data_checksums.cache_clear()
+    reference_data.reference_data_id.cache_clear()
+    return paths
+
+
+def test_the_identity_covers_both_files(tmp_path, monkeypatch):
+    """Editing either file changes the id; both decide what a row means.
+
+    The catalog decides what counts as a metal cofactor and the distance table
+    sets every assignment cutoff and z-score, so an id derived from one of them
+    would report two incomparable runs as comparable.
+    """
+    _stub_reference_data(
+        tmp_path, monkeypatch, "ABC\tZn\tcluster\n", "HOH O ZN 2.09 0.11\n"
+    )
+    original = reference_data.reference_data_id()
+
+    for name, text in (
+        ("catalog.txt", "ABC\tZn\tcluster\nDEF\tFe\theme\n"),
+        ("distances.txt", "HOH O ZN 2.50 0.11\n"),
+    ):
+        _stub_reference_data(
+            tmp_path,
+            monkeypatch,
+            text if name == "catalog.txt" else "HOH O ZN 2.09 0.11\n",
+            text if name == "distances.txt" else "ABC\tZn\tcluster\n",
+        )
+        assert reference_data.reference_data_id() != original, (
+            f"editing {name} left the identity unchanged"
+        )
+
+
+def test_the_identity_is_stable_for_unchanged_data(tmp_path, monkeypatch):
+    """Same bytes, same id -- otherwise it cannot be a grouping key."""
+    args = (tmp_path, monkeypatch, "ABC\tZn\tcluster\n", "HOH O ZN 2.09 0.11\n")
+    _stub_reference_data(*args)
+    first = reference_data.reference_data_id()
+    _stub_reference_data(*args)
+
+    assert reference_data.reference_data_id() == first
+
+
+def test_the_identity_verifies_before_it_reports(tmp_path, monkeypatch):
+    """An id for data that failed its own checksum would be a false claim."""
+    paths = _stub_reference_data(
+        tmp_path, monkeypatch, "ABC\tZn\tcluster\n", "HOH O ZN 2.09 0.11\n"
+    )
+    catalog = next(path for path in paths if path.endswith("catalog.txt"))
+    with open(catalog, "a", encoding="utf-8") as handle:
+        handle.write("GHI\tCu\t\n")
+    reference_data.reference_data_checksums.cache_clear()
+    reference_data.reference_data_id.cache_clear()
+
+    with pytest.raises(reference_data.ReferenceDataError, match="does not match"):
+        reference_data.reference_data_id()
+
+
+def test_the_bundled_identity_is_short_and_hexadecimal():
+    """It sits beside ``alchemy_commit`` in the manifest and reads like one."""
+    identity = reference_data.reference_data_id()
+
+    assert len(identity) == 12
+    assert set(identity) <= set("0123456789abcdef")
+    assert set(reference_data.reference_data_checksums()) == {
+        "metallocofactors_id.txt",
+        "metal_distances_info.txt",
+    }

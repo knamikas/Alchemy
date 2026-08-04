@@ -31,7 +31,11 @@ from multiprocessing import (
 from typing import Dict, Optional, Sequence
 
 from _version import __version__
-from reference_data import cofactor_ids
+from reference_data import (
+    cofactor_ids,
+    reference_data_checksums,
+    reference_data_id,
+)
 from run_logging import (
     logger_for,
     worker_level,
@@ -854,12 +858,20 @@ def _worker_config(
         alchemy_commit=_alchemy_commit(),
         gemmi_version=_gemmi_version(),
         ccp4_version=_ccp4_version(env),
+        reference_data_id=reference_data_id(),
     )
     run_log.details.update(
         alchemy_version=ALCHEMY_VERSION,
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
         confidence_mode=plan.mode or "disabled",
+        reference_data_id=cfg.reference_data_id,
+        # The manifest column is one id for grouping; the log records which
+        # file each half of it came from, so a changed id can be attributed.
+        **{
+            f"{name.split('.')[0]}_sha256": digest
+            for name, digest in reference_data_checksums().items()
+        },
     )
     return cfg
 
