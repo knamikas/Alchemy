@@ -19,6 +19,7 @@ import io
 import logging
 import os
 from types import SimpleNamespace
+from typing import Any
 from typing import List
 
 import gemmi
@@ -60,7 +61,7 @@ def _cfg(**overrides):
     naming them here rather than in each test keeps the three provenance values
     the manifest actually asserts on visible.
     """
-    fields = {
+    fields: dict[str, Any] = {
         "root": "/nonexistent/root",
         "mirror_root": "/nonexistent/mirror",
         "cache_root": None,
@@ -1268,7 +1269,9 @@ class TestOutputWriters:
     """The streamed CSVs: headers on creation, running counts, schema guards."""
 
     @staticmethod
-    def _handles(tmp_path, bonds=True, candidates=True, confidence=None):
+    def _handles(
+        tmp_path, bonds=True, candidates=True, confidence=None
+    ) -> tuple[Any, Any, Any, Any, Any]:
         manifest = open(tmp_path / "manifest.csv", "w", newline="")
         stats = open(tmp_path / "stats.csv", "w", newline="")
         bonds_fh = open(tmp_path / "bonds.csv", "w", newline="") if bonds else None
@@ -1563,7 +1566,7 @@ class TestScheduleEntries:
     def _args(tmp_path, ids, **overrides):
         id_file = tmp_path / "ids.txt"
         id_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
-        fields = {
+        fields: dict[str, Any] = {
             "id": None,
             "id_file": str(id_file),
             "pdb_file": None,
@@ -2524,7 +2527,7 @@ class TestDensityResultReachesTheResult:
 
     @staticmethod
     def _density(**overrides):
-        fields = {
+        fields: dict[str, Any] = {
             "stats_out": "/nonexistent/stats.out",
             "rszd": "/nonexistent/rszd.pdb",
             "fo_map": "/nonexistent/fo.map",

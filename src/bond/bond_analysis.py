@@ -27,6 +27,7 @@ its per-entry worker and supplies edstats rows in memory for the sigma join.
 
 import math
 from dataclasses import replace
+from typing import Any, Union
 
 from bond.bond_schema import (
     ZSCORE_OUTLIER_CUTOFF,
@@ -178,13 +179,13 @@ def _deduplicate_special_position_contacts(candidates):
     result independent of Gemmi's NeighborSearch mark order.  Images farther
     apart than Gemmi's special-position cutoff remain distinct contacts.
     """
-    by_source = {}
+    by_source: dict[Any, list[Candidate]] = {}
     for candidate in candidates:
         by_source.setdefault(candidate.neighbor.source_key, []).append(candidate)
 
     contacts = []
     for source_key in sorted(by_source):
-        retained = []
+        retained: list[Candidate] = []
         for candidate in sorted(
             by_source[source_key], key=_special_position_preference
         ):
@@ -470,7 +471,7 @@ def _candidate_identity(candidate):
 
 def _merge_candidates(*candidate_groups):
     """Merge proximity and declaration provenance for the same atom image."""
-    merged = {}
+    merged: dict[Any, Candidate] = {}
     for candidates in candidate_groups:
         for candidate in candidates:
             key = _candidate_identity(candidate)
@@ -555,7 +556,7 @@ def _annotate_multi_donor_groups(contacts):
     any member is suspect, every member records that it belongs to a suspect
     multi-donor group, without weakening or excluding any individual result.
     """
-    groups = {}
+    groups: dict[Any, list[Candidate]] = {}
     for contact in contacts:
         groups.setdefault(_residue_image_key(contact), []).append(contact)
 
@@ -739,6 +740,13 @@ def _site_summary(
         if image_search_available
         else NAN
     )
+    # Blank where symmetry was never searched, boolean where it was: "not
+    # assessed" and "assessed false" are different answers, and the columns
+    # keep them apart. Declared because the first branch would otherwise fix
+    # the inferred type at ``str``.
+    changed: Union[str, bool]
+    depends_crystallographic: Union[str, bool]
+    depends_strict_ncs: Union[str, bool]
     if not image_search_available:
         generated_scope = ""
         changed = ""
@@ -849,7 +857,9 @@ def run_bond_analysis(
         structure = load_structure(pdb_id, pdb_path)
 
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
-    metadata = {
+    # Annotated because the values are three lists and a bool: inference
+    # settles on ``object``, and every ``append`` below then looks wrong.
+    metadata: dict[str, Any] = {
         "partial_reason_codes": [],
         "warning_codes": list(structure.warning_codes),
         "messages": [],
@@ -869,7 +879,7 @@ def run_bond_analysis(
         )
         metadata["messages"].extend(declared_issues)
     metadata["warning_codes"].extend(declared_warnings)
-    declared_by_metal = {}
+    declared_by_metal: dict[Any, list[Candidate]] = {}
     for candidate in declared_candidates:
         declared_by_metal.setdefault(candidate.metal.source_key, []).append(candidate)
 
@@ -897,8 +907,8 @@ def run_bond_analysis(
     sig = _sigma_index(stats_rows)
     zd_idx = _zd_indices(header)
 
-    rows = []
-    candidate_rows = []
+    rows: list[dict[str, Any]] = []
+    candidate_rows: list[dict[str, Any]] = []
     summaries = {}
     for metal in metals_in_model:
         metal_declarations = declared_by_metal.get(metal.source_key, ())

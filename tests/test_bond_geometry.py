@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import os
 from collections import defaultdict
+from typing import Any
 
 import gemmi
 import pytest
@@ -169,7 +170,7 @@ def _contact(neighbor, **fields):
     values rather than omitted: the record declares them, so a test that wants
     one field still has to say what the others are.
     """
-    defaults = {
+    defaults: dict[str, Any] = {
         "candidate_sources": {codes.CandidateSource.PROXIMITY_4A},
         "distance_raw": 0.0,
         "transformed_position": (0.0, 0.0, 0.0),
@@ -607,7 +608,7 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
 
 def test_first_sphere_targets_index_is_the_maximum_per_metal_and_donor_element():
     """``FIRST_SPHERE_TARGETS`` is exactly ``max`` over the reference table."""
-    expected = {}
+    expected: dict[tuple[str, str], float] = {}
     for (_residue, atom, metal), (
         mu,
         _sd,
@@ -2004,7 +2005,7 @@ def test_reference_table_has_no_duplicate_keys():
     runtime; the raw file is re-parsed here to catch one.
     """
     records = _parse_reference_table(REFERENCE_TABLE)
-    seen = {}
+    seen: dict[tuple[str, str, str], int] = {}
     duplicates = []
     for lineno, residue, atom, metal, _mu, _sd in records:
         key = (residue, atom, metal)
@@ -2052,7 +2053,9 @@ def test_reference_table_is_internally_consistent_by_donor_element():
     metal's oxygen references should cluster rather than scatter. Both would
     break if a row's metal or donor column were transposed.
     """
-    by_metal = defaultdict(lambda: defaultdict(list))
+    by_metal: defaultdict[str, defaultdict[str, list]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     for (_residue, atom, metal), (
         mu,
         _sd,

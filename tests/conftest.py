@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Callable
 
 import pytest
 
@@ -151,7 +152,10 @@ def pytest_collection_modifyitems(config, items):
     out to avoid. Availability is probed at most once per session, and only when
     a surviving test carries the relevant marker.
     """
-    probes = {
+    # Annotated because the two probes have different signatures --
+    # ``network_available`` takes three defaulted arguments, ``ccp4_available``
+    # none -- so the inferred value type is their join, which is not callable.
+    probes: dict[str, tuple[Callable[[], bool], str]] = {
         "ccp4": (
             helpers.ccp4_available,
             "CCP4 (mtzfix/fft/mapmask/edstats) is not available",

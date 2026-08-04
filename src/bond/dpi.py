@@ -119,12 +119,15 @@ def _calculate_dpi_details(structure, dpi_inputs):
 
         nobs = props.get("NREFCNT")
         rfree = props.get("RFFIN")
+        # ``rfree is not None`` rather than ``not in (None, "")``: the tuple
+        # test reads the same to a person and tells a type checker nothing, so
+        # the two branches below both looked like ``float(None)``.
         rfree = (
             float(rfree)
-            if rfree not in (None, "")
+            if rfree is not None and rfree != ""
             else _rfree_from_pdb(dpi_inputs["pdb_path"])
         )
-        nobs = float(nobs) if nobs not in (None, "") else NAN
+        nobs = float(nobs) if nobs is not None and nobs != "" else NAN
         va = _asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
         ni = count_ni(structure)
 

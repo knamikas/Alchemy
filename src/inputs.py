@@ -136,7 +136,7 @@ def read_map_column_resolution(mtz_path):
 
     mtz = gemmi.read_mtz_file(mtz_path)
     columns = []
-    missing = []
+    missing: list[str] = []
     for label in MAP_COEFFICIENT_COLUMNS:
         column = mtz.column_with_label(label)
         if column is None:

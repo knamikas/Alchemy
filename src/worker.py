@@ -530,6 +530,11 @@ def process(pdb_id):
             result.n_candidates = 0
             result.no_metals = True
             return result
+        # Declared before the branches that bind them: the density stage
+        # either produces EDSTATS rows or fails, and every failure path below
+        # continues with none.
+        rows: list[dict[str, Any]] = []
+        header: list[str] = []
         density_started = time.monotonic()
         try:
             res = run_density_analysis(

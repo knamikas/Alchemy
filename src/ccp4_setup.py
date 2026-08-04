@@ -15,13 +15,13 @@ into an exit.
 
 import json
 import os
-from pathlib import Path
-from typing import Mapping, Optional, Sequence
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
 
 
 class Ccp4SetupError(Exception):
@@ -139,7 +139,7 @@ def save_ccp4_setup(
     target = config_files[0]  # write only to the primary user-level location
     path = Path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
+    data: dict[str, Any] = {}
     if path.exists():
         try:
             with path.open("r", encoding="utf-8") as fh:

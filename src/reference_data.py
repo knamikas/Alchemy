@@ -270,7 +270,7 @@ def first_sphere_targets(path=DONOR_DISTANCE_PATH):
     Built inside a function rather than by a loop at module scope, which used
     to leave its four loop variables behind in the module namespace.
     """
-    targets = {}
+    targets: dict[tuple[str, str], float] = {}
     for (_, donor, metal_element), (target, _) in literature_distances(path).items():
         key = (metal_element, donor)
         targets[key] = max(target, targets.get(key, -math.inf))

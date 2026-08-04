@@ -80,7 +80,10 @@ def available_memory_bytes():
 
             status = MemoryStatus()
             status.dwLength = ctypes.sizeof(status)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            # ``windll`` exists only on Windows, where this branch runs.
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(  # type: ignore[attr-defined]
+                ctypes.byref(status)
+            ):
                 return int(status.ullAvailPhys)
         except (AttributeError, OSError, ValueError):
             pass

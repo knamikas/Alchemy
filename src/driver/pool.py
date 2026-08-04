@@ -28,7 +28,7 @@ from multiprocessing import (
     SimpleQueue,
     TimeoutError as MultiprocessingTimeoutError,
 )
-from typing import Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from _version import __version__
 from reference_data import (
@@ -378,6 +378,7 @@ def _shutdown_pool(pool):
 # --------------------------------------------------------------------------- #
 def resolve_confidence_reference_dir(output_dir, configured_dir=None):
     """Find a frozen confidence reference, honoring an explicit override."""
+    candidates: Tuple[str, ...]
     if configured_dir is not None:
         candidates = (configured_dir,)
     else:
@@ -516,8 +517,13 @@ class _OutputLayout:
         self.reference_dir = os.path.join(output_dir, "confidence_reference")
 
     @property
-    def core(self):
-        """The four always-written outputs, in resume-validation order."""
+    def core(self) -> Tuple[str, str, str, str]:
+        """The four always-written outputs, in resume-validation order.
+
+        Annotated to its exact width: as a bare tuple, ``*layout.core`` looks
+        to a type checker like it might supply any number of arguments, so the
+        keywords after it all read as possible duplicates.
+        """
         return (self.manifest, self.stats, self.bonds, self.candidates)
 
 
@@ -657,7 +663,7 @@ def _plan_confidence(args, layout, database_run, run_log):
     return plan
 
 
-def _check_resume_is_compatible(args, layout, plan):
+def _check_resume_is_compatible(args, layout: _OutputLayout, plan) -> None:
     """Refuse to resume onto output this run cannot safely extend.
 
     Every check here is about appending rows beneath a header that no longer
@@ -790,6 +796,7 @@ def _clear_stale_outputs(args, layout, plan):
     # Reference metadata is its completion marker. Fresh runs must not leave
     # incompatible confidence artifacts beside newly replaced core output.
     reference_marker = os.path.join(layout.reference_dir, REFERENCE_METADATA_FILE)
+    stale: Tuple[str, ...]
     if plan.mode == "database":
         stale = (layout.confidence_scores, reference_marker)
     elif plan.mode == "reference":
@@ -896,7 +903,7 @@ def _output_targets(args, layout, plan):
     return tuple(paths)
 
 
-def _open_writers(handles, args, plan, write_paths):
+def _open_writers(handles, args, plan, write_paths) -> _OutputWriters:
     """Open every output stream this run writes and give them their headers."""
     manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
     confidence_path = write_paths[4] if plan.enabled else None
@@ -970,7 +977,7 @@ def _dispatch_entries(
     """
     tally = _BatchTally()
     progress = _ProgressReporter(len(ids))
-    inflight = SimpleQueue()
+    inflight: SimpleQueue[Any] = SimpleQueue()
     assignments: Dict[int, str] = {}
     worker_pids: set = set()
     lost_ids: set = set()
@@ -1088,7 +1095,7 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
     staging = _ResumeStaging(args.output_dir, output_paths) if args.resume else None
     write_paths = staging.staged if staging is not None else output_paths
 
-    writers = None
+    writers: Optional[_OutputWriters] = None
     processing_completed = False
     try:
         # ExitStack closes whichever handles were opened, so a failure partway
@@ -1107,15 +1114,19 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
                 run_log,
             )
             processing_completed = True
+            # Bound inside the block that opened it: reaching the summary below
+            # with no writers is impossible, and saying so here is cheaper than
+            # four ``Optional`` accesses that a reader has to reason about.
+            opened_writers = writers
     finally:
         if staging is not None and not processing_completed:
             staging.discard()
 
     run_log.summary.update(
-        metal_rows_written=writers.n_rows,
-        bond_rows_written=writers.n_bonds,
-        candidate_rows_written=writers.n_candidates,
-        confidence_rows_written=writers.n_confidence,
+        metal_rows_written=opened_writers.n_rows,
+        bond_rows_written=opened_writers.n_bonds,
+        candidate_rows_written=opened_writers.n_candidates,
+        confidence_rows_written=opened_writers.n_confidence,
         manifest_path=layout.manifest,
         metal_stats_path=layout.stats,
         metal_bonds_path=layout.bonds if args.bonds else "disabled",
@@ -1126,7 +1137,7 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
             staging.commit(args.bonds, confidence_enabled=plan.enabled)
         finally:
             staging.discard()
-    return tally, writers
+    return tally, opened_writers
 
 
 def _report_batch(args, layout, plan, tally, writers, run_log):

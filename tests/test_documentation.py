@@ -108,7 +108,7 @@ def _local_module_names() -> Set[str]:
 
 def _source_files() -> list[str]:
     """Every ``.py`` file under ``src/``, sub-packages included."""
-    found = []
+    found: list[str] = []
     for directory, _subdirs, names in os.walk(SRC_DIR):
         found.extend(
             os.path.join(directory, name) for name in names if name.endswith(".py")

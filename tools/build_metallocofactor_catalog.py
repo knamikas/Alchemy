@@ -81,7 +81,7 @@ CANONICAL_CLASSES = {
 
 def element_counts(formula):
     """Return ``{ELEMENT: count}`` parsed from a CCD formula string."""
-    counts = {}
+    counts: dict[str, int] = {}
     for symbol, number in ELEMENT_PATTERN.findall(formula or ""):
         if symbol:
             key = symbol.upper()
@@ -100,7 +100,7 @@ def _component_graph(block):
             ]
         )
     }
-    adjacency = {atom_id: set() for atom_id in elements}
+    adjacency: dict[str, set[str]] = {atom_id: set() for atom_id in elements}
     for atom_1, atom_2 in block.find(
         [
             "_chem_comp_bond.atom_id_1",
@@ -135,7 +135,7 @@ def _biconnected_components(adjacency, allowed_atoms):
                 visit(neighbor)
                 low[atom] = min(low[atom], low[neighbor])
                 if low[neighbor] >= discovery[atom]:
-                    component = set()
+                    component: set[str] = set()
                     while edge_stack:
                         edge = edge_stack.pop()
                         component.update(edge)

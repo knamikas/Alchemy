@@ -173,7 +173,7 @@ def _orphan_bond_site_input(key, rows):
     """Preserve a bond-bearing site whose density row could not be joined."""
     first = rows[0]
     summary = _bond_summary(rows)
-    warning_reasons = []
+    warning_reasons: list[str] = []
     for row in rows:
         warning_reasons.extend(
             reason
@@ -571,7 +571,7 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         raise ValueError("confidence reference distribution has invalid columns")
     values = []
     counts = []
-    score_counts = Counter()
+    score_counts: Counter[Any] = Counter()
     for row in rows:
         score = _finite_float(row["confidence_score"])
         try:
@@ -683,7 +683,7 @@ def finalize_database_confidence(
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     if os.path.isfile(metadata_path):
         os.unlink(metadata_path)
-    score_counts = Counter()
+    score_counts: Counter[Any] = Counter()
     input_row_count = 0
     with open(input_path, newline="", encoding="utf-8") as handle:
         _, rows = _validated_input_reader(handle)

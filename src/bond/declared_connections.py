@@ -309,7 +309,7 @@ def _declared_candidate_for_connection(
     (a link between two amino acids is simply not Alchemy's subject).
     """
     issues = []
-    warnings = []
+    warnings: list[str] = []
     if resolved.failure is not None:
         if resolved.declares_metal:
             issues.append(

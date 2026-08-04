@@ -25,6 +25,7 @@ import csv
 import os
 import shutil
 import tempfile
+from typing import Optional, Sequence
 
 from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
@@ -88,7 +89,7 @@ def _resume_replacement_succeeded(result):
 
 def _manifest_values_by_id(path, column):
     """Return one manifest column keyed by normalized PDB ID."""
-    values = {}
+    values: dict[str, str] = {}
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return values
     with open(path, newline="") as handle:
@@ -107,14 +108,14 @@ def _csv_header(path):
 
 
 def validate_resume_schemas(
-    manifest_path,
-    stats_path,
-    bonds_path,
-    candidates_path,
-    bonds_enabled=True,
-    confidence_path=None,
-    confidence_columns=None,
-):
+    manifest_path: str,
+    stats_path: str,
+    bonds_path: str,
+    candidates_path: str,
+    bonds_enabled: bool = True,
+    confidence_path: Optional[str] = None,
+    confidence_columns: Optional[Sequence[str]] = None,
+) -> None:
     """Refuse to append migration rows beneath an incompatible old header.
 
     Whole headers are compared, including the EDSTATS block of

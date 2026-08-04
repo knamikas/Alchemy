@@ -18,7 +18,7 @@ The two entry points are ``_cif_to_pdb`` (mmCIF to analysis PDB) and
 """
 
 import os
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from structure_analysis import (
     RESIDUE_REMARK_PREFIX,
@@ -80,7 +80,7 @@ def _residue_index_by_author(structure, label):
     for reordering as well as for changed identifiers. ``label`` names the
     structure in any error raised here.
     """
-    by_author = {}
+    by_author: dict[tuple[int, str, str], list[Any]] = {}
     order = []
     for model_index, model in enumerate(structure):
         for chain in model:
@@ -146,7 +146,7 @@ def _source_residue_records(structure):
     records = []
     for model_index, model in enumerate(structure, start=1):
         for source_chain_index, chain in enumerate(model):
-            polymer_indices_by_subchain = {}
+            polymer_indices_by_subchain: dict[str, list[int]] = {}
             for residue_index, residue in enumerate(chain):
                 if residue.entity_type == gemmi.EntityType.Polymer:
                     polymer_indices_by_subchain.setdefault(

@@ -163,11 +163,11 @@ def test_drain_inflight_applies_notifications_in_order(notifications, expected, 
     stale or missing assignment either loses an entry or blames the wrong one.
     An ``end`` for a pid that is not in the map must be tolerated, not raise.
     """
-    inflight = multiprocessing.SimpleQueue()
+    inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
     try:
         for notification in notifications:
             inflight.put(notification)
-        assignments = {}
+        assignments: dict[int, str] = {}
         driver_pool._drain_inflight(inflight, assignments)
         assert assignments == expected, label
     finally:
@@ -180,7 +180,7 @@ def test_drain_inflight_preserves_unrelated_existing_assignments():
     Assignments accumulated over earlier iterations must survive a drain that
     carries news about other workers.
     """
-    inflight = multiprocessing.SimpleQueue()
+    inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
     try:
         inflight.put(("start", 22, "2xyz"))
         assignments = {11: "1abc"}
@@ -201,9 +201,9 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue():
     test rather than a hung CI job: ``SimpleQueue.get`` on an empty queue
     blocks forever, and nothing would ever interrupt it on the main thread.
     """
-    inflight = multiprocessing.SimpleQueue()
+    inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
     returned = threading.Event()
-    assignments = {}
+    assignments: dict[int, str] = {}
 
     def drain():
         driver_pool._drain_inflight(inflight, assignments)
@@ -248,7 +248,7 @@ def test_dead_worker_pids_reports_only_newly_missing_workers():
     successive rosters. Reporting the same death twice would fabricate a second
     lost entry; never reporting it hangs the batch.
     """
-    known = set()
+    known: set[int] = set()
     pool = _FakePool([101, 102])
 
     assert driver_pool._dead_worker_pids(pool, known) == set()
@@ -910,10 +910,10 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     ctx = multiprocessing.get_context("spawn")
     cfg = _reference_cfg(str(tmp_path))
     inflight = ctx.SimpleQueue()
-    assignments = {}
-    worker_pids = set()
-    dead_pids = set()
-    finished = []
+    assignments: dict[int, str] = {}
+    worker_pids: set[int] = set()
+    dead_pids: set[int] = set()
+    finished: list = []
 
     with ctx.Pool(2, initializer=worker._init_worker, initargs=(cfg, inflight)) as pool:
         # Prime the roster, as the driver's first loop iteration does.
@@ -1149,7 +1149,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
         # that precondition and keeps the signalling below unambiguous.
         driver_pid = child.pid
         assert driver_pid is not None
-        workers = []
+        workers: list[int] = []
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and len(workers) < 4:
             time.sleep(0.2)

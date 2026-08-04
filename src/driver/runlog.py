@@ -167,7 +167,7 @@ class _RunLog:
         if self.driver_error:
             lines.append(f"Driver error: {self._clean(self.driver_error)}")
 
-        stage_values = {}
+        stage_values: dict[str, list[float]] = {}
         for entry in self.entries:
             for name, value in entry["timings"].items():
                 try:

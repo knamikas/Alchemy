@@ -1039,21 +1039,21 @@ def load_structure(
     dedup: Dict[Tuple[object, ...], AtomSite] = {}
     duplicate_count = 0
     coordinate_conflicts = 0
-    for atom in all_sites:
-        current = dedup.get(atom.exact_identity)
+    for site in all_sites:
+        current = dedup.get(site.exact_identity)
         if current is None:
-            dedup[atom.exact_identity] = atom
+            dedup[site.exact_identity] = site
             continue
         duplicate_count += 1
-        if position_distance(atom.xyz, current.xyz) > DUPLICATE_ATOM_POSITION_TOLERANCE:
+        if position_distance(site.xyz, current.xyz) > DUPLICATE_ATOM_POSITION_TOLERANCE:
             coordinate_conflicts += 1
-        if _site_is_better(atom, current):
-            dedup[atom.exact_identity] = atom
-    source_atoms = tuple(sorted(dedup.values(), key=lambda atom: atom.source_order))
+        if _site_is_better(site, current):
+            dedup[site.exact_identity] = site
+    source_atoms = tuple(sorted(dedup.values(), key=lambda site: site.source_order))
 
     residue_groups: Dict[Tuple[int, int, int], List[AtomSite]] = defaultdict(list)
-    for atom in source_atoms:
-        residue_groups[atom.residue_key].append(atom)
+    for site in source_atoms:
+        residue_groups[site.residue_key].append(site)
     residues = tuple(
         _select_residue(residue_groups[key]) for key in sorted(residue_groups)
     )
@@ -1107,12 +1107,12 @@ def load_structure(
     by_coordinate_author_lists: Dict[Tuple[str, str, str], List[ResidueSelection]] = (
         defaultdict(list)
     )
-    for residue in residues:
-        by_source_author_lists[residue.author_key].append(residue)
-        by_coordinate_author_lists[residue.coordinate_author_key].append(residue)
-        by_author_lists[residue.author_key].append(residue)
-        if residue.coordinate_author_key != residue.author_key:
-            by_author_lists[residue.coordinate_author_key].append(residue)
+    for selection in residues:
+        by_source_author_lists[selection.author_key].append(selection)
+        by_coordinate_author_lists[selection.coordinate_author_key].append(selection)
+        by_author_lists[selection.author_key].append(selection)
+        if selection.coordinate_author_key != selection.author_key:
+            by_author_lists[selection.coordinate_author_key].append(selection)
     residues_by_author = {key: tuple(value) for key, value in by_author_lists.items()}
     residues_by_source_author = {
         key: tuple(value) for key, value in by_source_author_lists.items()
