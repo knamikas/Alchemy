@@ -1,27 +1,16 @@
 """Worker-death recovery in the batch driver (``src/main.py``).
 
 A worker felled by the OOM killer or by a segfault in a compiled extension runs
-no further Python: ``multiprocessing.Pool`` silently replaces it and never
-delivers a result for the task it was holding. The driver therefore cannot wait
-on the pool alone -- it tracks which entry each pid holds (``_drain_inflight``
-over a ``SimpleQueue`` the workers write to), watches the pool roster
-(``_dead_worker_pids``) and synthesizes a retryable result for the orphaned
-entry (``_worker_death_result``).
+no further Python, and ``multiprocessing.Pool`` never delivers a result for the
+task it was holding: it silently replaces the process. The driver therefore
+tracks which entry each pid holds (``_drain_inflight`` over a ``SimpleQueue``
+the workers write to), diffs the pool roster (``_dead_worker_pids``) and
+synthesizes a retryable result for the orphaned entry
+(``_worker_death_result``).
 
-This module covers those three pieces individually, then drives the REAL
-``driver_pool._run`` -- with only the per-entry pipeline replaced by a scripted stub --
-for the behaviour they exist to produce: the loop terminates when a worker is
-SIGKILLed mid-entry, and every entry lands in the manifest exactly once even
-when a death is attributed to an entry whose real result is still on its way.
-Finally it covers the portability requirements of the ``spawn`` start method
-(Windows), where both the config dict and the notification queue must survive
-being pickled into a fresh interpreter.
-
-Nothing here is marked ``slow``. These are the guarantees a regression would
-remove silently, so they have to run in the routine ``-m "not slow"`` loop too;
-the whole module costs about ten seconds. The end-to-end tests need POSIX
-(``fork`` and ``SIGKILL``) and skip elsewhere; everything else, including the
-``spawn`` coverage, runs anywhere.
+The end-to-end tests drive the real ``driver_pool._run``, with only the
+per-entry pipeline replaced by a scripted stub, and need POSIX (``fork`` and
+``SIGKILL``); the ``spawn`` coverage runs anywhere.
 """
 
 from __future__ import annotations
@@ -52,8 +41,6 @@ from driver import pool as driver_pool
 import reference_data
 
 
-# Killing a worker outright, and forking the driver so the parent can time it
-# out, are both POSIX-only. The rest of the module is portable.
 _POSIX_KILL = pytest.mark.skipif(
     sys.platform == "win32"
     or not hasattr(signal, "SIGKILL")
@@ -62,7 +49,6 @@ _POSIX_KILL = pytest.mark.skipif(
 )
 
 
-# Fakes for the pool roster
 class _FakeWorker:
     """Stand-in for a ``multiprocessing.Process`` in ``pool._pool``."""
 
@@ -98,13 +84,7 @@ class _BrokenQueue:
 
 
 def _reference_cfg(output_dir, manual_inputs=None):
-    """Build the worker config exactly as ``driver_pool._run`` assembles it.
-
-    Every field is named because ``WorkerConfig`` is frozen and requires them:
-    while this was a dict, it had silently drifted from the real one -- no
-    ``log_level``, no ``ccp4_timeout_s`` -- and a worker reading either here
-    would have raised ``KeyError`` where production works fine.
-    """
+    """Build the worker config exactly as ``driver_pool._run`` assembles it."""
     env = dict(os.environ)
     return worker.WorkerConfig(
         root=os.path.join(output_dir, "root"),
@@ -127,7 +107,6 @@ def _reference_cfg(output_dir, manual_inputs=None):
     )
 
 
-# _drain_inflight
 @pytest.mark.parametrize(
     "notifications, expected, label",
     [
@@ -155,9 +134,8 @@ def _reference_cfg(output_dir, manual_inputs=None):
 def test_drain_inflight_applies_notifications_in_order(notifications, expected, label):
     """Draining applies every queued start/end to the pid -> entry map.
 
-    The map is the only record of which entry a killed process held, so a
-    stale or missing assignment either loses an entry or blames the wrong one.
-    An ``end`` for a pid that is not in the map must be tolerated, not raise.
+    The map is the only record of which entry a killed process held, so a stale
+    or missing assignment either loses an entry or blames the wrong one.
     """
     inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
     try:
@@ -171,11 +149,7 @@ def test_drain_inflight_applies_notifications_in_order(notifications, expected, 
 
 
 def test_drain_inflight_preserves_unrelated_existing_assignments():
-    """Draining only touches the pids it has notifications for.
-
-    Assignments accumulated over earlier iterations must survive a drain that
-    carries news about other workers.
-    """
+    """Draining only touches the pids it has notifications for."""
     inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
     try:
         inflight.put(("start", 22, "2xyz"))
@@ -189,13 +163,8 @@ def test_drain_inflight_preserves_unrelated_existing_assignments():
 def test_drain_inflight_returns_promptly_on_an_empty_queue():
     """An empty queue must not block the driver's polling loop.
 
-    ``_drain_inflight`` is called on every iteration of the dispatch loop, most
-    of which have nothing pending; a blocking ``get`` there would stall the
-    roster check that is the whole point of the mechanism.
-
-    The drain runs in a daemon thread so that losing this property is a red
-    test rather than a hung CI job: ``SimpleQueue.get`` on an empty queue
-    blocks forever, and nothing would ever interrupt it on the main thread.
+    ``SimpleQueue.get`` on an empty queue blocks forever, so the drain runs in a
+    daemon thread: losing this property must be a red test, not a hung CI job.
     """
     inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
     returned = threading.Event()
@@ -216,8 +185,8 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue():
         assert assignments == {}
     finally:
         if returned.is_set():
-            # Only safe once nothing is reading it: closing the pipe under a
-            # blocked reader would just add noise to an already-failed test.
+            # Closing the pipe under a still-blocked reader only adds noise to
+            # an already-failed test.
             inflight.close()
 
 
@@ -225,16 +194,14 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue():
 def test_drain_inflight_survives_a_torn_down_queue(error):
     """A dead notification pipe must not propagate out of bookkeeping.
 
-    The queue's other end lives in worker processes that may all have exited;
-    a raised OSError/EOFError here would abort the batch instead of letting the
-    driver finish the entries it already has.
+    The queue's other end lives in worker processes that may all have exited; a
+    raised error here would abort a batch the driver could still finish.
     """
     assignments = {11: "1abc"}
     driver_pool._drain_inflight(_BrokenQueue(error), assignments)
     assert assignments == {11: "1abc"}
 
 
-# _dead_worker_pids
 def test_dead_worker_pids_reports_only_newly_missing_workers():
     """A pid leaving the roster is reported exactly once, then forgotten.
 
@@ -248,12 +215,10 @@ def test_dead_worker_pids_reports_only_newly_missing_workers():
     assert driver_pool._dead_worker_pids(pool, known) == set()
     assert known == {101, 102}
 
-    # 102 was killed and the pool repopulated with 103.
     pool.set_roster([101, 103])
     assert driver_pool._dead_worker_pids(pool, known) == {102}
     assert known == {101, 103}
 
-    # The same roster on the next poll is not a second death.
     assert driver_pool._dead_worker_pids(pool, known) == set()
     assert known == {101, 103}
 
@@ -261,8 +226,7 @@ def test_dead_worker_pids_reports_only_newly_missing_workers():
 def test_dead_worker_pids_reports_several_simultaneous_deaths():
     """Two workers lost between polls are both reported.
 
-    An out-of-memory event typically kills more than one worker at a time; each
-    of their entries has to be recovered.
+    An out-of-memory event typically kills more than one worker at a time.
     """
     known = {1, 2, 3}
     pool = _FakePool([1, 4, 5])
@@ -283,22 +247,20 @@ def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(pool, label):
     """An empty or absent roster must not declare every worker dead.
 
     The pool tears its roster down at shutdown and has not filled it in yet at
-    startup. Diffing against an empty roster would synthesize a lost-entry row
-    for every worker that ever ran and corrupt the manifest.
+    startup; diffing against either would synthesize a lost-entry row for every
+    worker that ever ran.
     """
     known = {101, 102}
     assert driver_pool._dead_worker_pids(pool, known) == set(), label
     assert known == {101, 102}, "the known set must be left alone"
 
 
-# _worker_death_result
 def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     """The synthesized result is a full, retryable, error-status entry row.
 
-    The driver writes it straight to the manifest, so every manifest column has
-    to be present and the entry has to be marked retryable with the
-    ``worker_process_died`` reason -- that is what makes ``--resume`` pick the
-    entry up again instead of treating it as terminally finished.
+    The driver writes it straight to the manifest, and the retryable
+    ``worker_process_died`` marking is what makes ``--resume`` pick the entry up
+    again instead of treating it as terminally finished.
     """
     cfg = _reference_cfg(str(tmp_path))
     result = worker._worker_death_result("1abc", cfg, 4321)
@@ -311,9 +273,7 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     assert result.rows == []
     assert result.bond_rows == []
     assert result.candidate_rows == []
-    # The message has to name both the entry and the process for triage.
     assert "4321" in result.error and "1abc" in result.error
-    # Provenance is carried over from the run config, not left blank.
     assert result.alchemy_commit == cfg.alchemy_commit
     assert result.gemmi_version == cfg.gemmi_version
     assert result.ccp4_version == cfg.ccp4_version
@@ -335,9 +295,8 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
 def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
     """A killed worker reports no bond counts, not a measured zero.
 
-    Blank means "the bond stage did not run"; ``0`` means "it ran and found
-    nothing". A ``0`` here would let a later ``--resume`` conclude the bond
-    stage had completed for an entry that was never analyzed.
+    Blank means "the bond stage did not run", ``0`` means "it ran and found
+    nothing", and ``--resume`` reads the difference.
     """
     cfg = _reference_cfg(str(tmp_path))
     result = worker._worker_death_result("1abc", cfg, 7)
@@ -362,11 +321,7 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
 def test_worker_death_result_reports_the_run_refinement_state(
     tmp_path, manual_inputs, expected_state
 ):
-    """Even a synthesized failure records which refinement the run targeted.
-
-    ``_worker_death_result`` reads ``manual_inputs`` out of the config because
-    the worker that knew it is gone.
-    """
+    """Even a synthesized failure records which refinement the run targeted."""
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
     result = worker._worker_death_result("1abc", cfg, 7)
     assert result.refinement_state == expected_state
@@ -375,10 +330,8 @@ def test_worker_death_result_reports_the_run_refinement_state(
 def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
     """``["worker_process_died"]`` alone identifies a synthesized result.
 
-    The dispatch loop uses that exact list to tell its own synthesized row
-    apart from a genuine worker result for the same entry. A real result never
-    carries it, and the synthesized one carries nothing else, so the test is
-    unambiguous in both directions.
+    The dispatch loop uses that exact list to tell its own synthesized row apart
+    from a genuine worker result for the same entry.
     """
     cfg = _reference_cfg(str(tmp_path))
     synthesized = worker._worker_death_result("1abc", cfg, 7)
@@ -389,17 +342,9 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
     assert genuine.reason_codes != synthesized.reason_codes
 
 
-# Driving the real dispatch loop (regression, 3141593). The tests below run
-# ``driver_pool._run`` itself in a child process with only the name it
-# dispatches on -- ``driver.pool.process``, the driver's own reference to
-# ``worker.process`` -- rebound to a stub, so the bookkeeping under test --
-# drain the notifications, diff the roster, synthesize the lost row, drop a
-# late real result for an already-lost entry, count completions, pick the exit
-# code -- is the shipped code and not a re-implementation of it.
-#
-# ``_STUB_SCRIPT`` maps a pdbID to what its worker should do. It is a module
-# global because the driver child sets it before creating the pool, and the
-# (forked) workers inherit it. Recognised keys:
+# ``_STUB_SCRIPT`` maps a pdbID to what its worker should do. A module global
+# because the driver child sets it before creating the pool and the (forked)
+# workers inherit it. Recognised keys:
 #
 #   runtime    seconds the entry "takes" before its result is returned
 #   die        "announced": name the entry, then SIGKILL mid-entry (an OOM kill)
@@ -415,11 +360,9 @@ _DRIVER_HARD_TIMEOUT_S = 60.0
 def _announce(state, pdb_id):
     """Announce like a real worker, on builds that have the mechanism.
 
-    Deliberately tolerant of a missing ``_announce_inflight``: on a build
-    without the worker-death fix the stub must behave like an ordinary worker so
-    that these tests fail on the driver's observable behaviour -- a batch that
-    never finishes -- instead of on an AttributeError raised inside the test's
-    own fake, which would prove nothing about the driver.
+    Without ``_announce_inflight`` the stub has to behave like an ordinary
+    worker, so that these tests fail on the driver's observable behaviour rather
+    than on an AttributeError raised inside the test's own fake.
     """
     getattr(worker, "_announce_inflight", lambda *args: None)(state, pdb_id)
 
@@ -437,9 +380,8 @@ def _first_visit(pdb_id):
 def _kill_self_after(delay):
     """SIGKILL this worker ``delay`` seconds from now, from a helper thread.
 
-    Used to kill a worker that has already returned a result, which no
-    in-band code path can do. The delay has to outlast the entry's own return
-    so that the death really lands after the result was delivered.
+    The delay has to outlast the entry's own return so the death lands after the
+    result was delivered, which no in-band code path can arrange.
     """
 
     def kill():
@@ -453,7 +395,7 @@ def _stub_process(pdb_id):
     """Stand in for ``worker.process``: no CCP4, no downloads, scripted deaths.
 
     Every entry announces itself exactly as the real worker does, so the driver
-    sees the same notification stream it would see in production.
+    sees the notification stream it would see in production.
     """
     cfg = worker._CFG
     if cfg is None:  # pragma: no cover - would mean the initializer never ran
@@ -466,10 +408,8 @@ def _stub_process(pdb_id):
     if die and _first_visit(pdb_id):
         if die == "announced":
             _announce("start", pdb_id)
-        # A "silent" worker dies without ever naming its entry, so the driver
-        # can only recover it from the stall fallback.
-        # The pause is long enough for the driver to have taken a roster
-        # snapshot that still contains this pid.
+        # The pause has to outlast the driver's first roster snapshot, so that
+        # the snapshot still contains this pid when the kill lands.
         time.sleep(runtime)
         os.kill(os.getpid(), signal.SIGKILL)
 
@@ -478,10 +418,6 @@ def _stub_process(pdb_id):
     _announce("end", pdb_id)
 
     if step.get("claim"):
-        # This worker finished its own entry and then, before dying, leaves the
-        # driver believing it holds another one. That is the shape of every
-        # stale attribution: a start notification the driver has, for an entry
-        # whose real result is still coming from somewhere else.
         _announce("start", step["claim"])
     if step.get("die_after") is not None:
         _kill_self_after(float(step["die_after"]))
@@ -503,9 +439,8 @@ def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready)
     driver that waits forever for a dead worker's result must fail the test
     quickly rather than hang the suite.
     """
-    # Give the driver and every Pool child its own process group.  If the
-    # watchdog regression hangs, the parent test can reap the whole tree rather
-    # than killing only the driver and leaking its workers into the test host.
+    # Its own process group, so a hung driver can be reaped whole rather than
+    # leaking its Pool children into the test host.
     if hasattr(os, "setsid"):
         os.setsid()
     session_ready.set()
@@ -535,9 +470,9 @@ def _terminate_driver_tree(child, session_ready):
         and hasattr(signal, "SIGKILL")
     ):
         try:
-            # _driver_child calls setsid() before setting the event, so its PID
-            # is also the process-group id.  Using that known id remains valid
-            # even if the driver died and left only Pool grandchildren behind.
+            # _driver_child calls setsid() before setting the event, so its pid
+            # is the process-group id, and stays valid even once the driver
+            # itself has died and left only Pool grandchildren behind.
             os.killpg(child.pid, signal.SIGKILL)
             killed_group = True
         except ProcessLookupError:
@@ -611,7 +546,6 @@ def _read_manifest(output_dir):
         return list(reader)
 
 
-# End-to-end: a SIGKILLed worker must not hang the driver
 @_POSIX_KILL
 @pytest.mark.parametrize(
     "script, stall_grace",
@@ -630,16 +564,11 @@ def _read_manifest(output_dir):
     ids=["worker_named_its_entry", "worker_died_before_naming_its_entry"],
 )
 def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
-    """A worker killed mid-entry must not hang the batch (regression).
+    """A worker killed mid-entry must not hang the batch.
 
     ``multiprocessing.Pool`` never yields a result for a task whose worker died
-    abnormally, so the driver's ``while completed < len(ids)`` loop used to spin
-    on TimeoutError forever: no manifest, no run log, and under ``--resume`` the
-    staging directory was discarded, destroying every entry that had succeeded.
-
-    The batch must instead finish, with the killed entry recorded as a
-    retryable ``worker_process_died`` error and every other entry written
-    normally exactly once.
+    abnormally, so a driver that waits on the pool alone spins on TimeoutError
+    forever and writes neither manifest nor run log.
     """
     ids = list(script)
     victim = ids[0]
@@ -665,11 +594,9 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
     for pdb_id in ids[1:]:
         assert by_id[pdb_id]["status"] == "ok"
 
-    # An incomplete entry must be reported to the caller.
     assert exit_code == 1
 
 
-# An idle worker's death must not wedge pool shutdown
 @_POSIX_KILL
 def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
     """The driver still exits when a worker is killed while awaiting a task.
@@ -677,14 +604,12 @@ def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
     A worker waiting for its next task blocks inside the pool task queue's
     ``get()`` holding that queue's lock, so a process killed there never
     releases it and ``Pool.terminate`` blocks acquiring the same lock. The
-    failure is invisible in the results: every entry is analysed and every row
-    written, and only then does teardown hang, so the run produces no run log
-    and no exit code.
+    failure is invisible in the results: every row is written and only teardown
+    hangs, leaving no run log and no exit code.
 
     ``aaaa`` finishes quickly and is killed 0.3 s later, by which time it is
     idle and holding the lock; ``bbbb`` is still working, so the driver has not
-    reached teardown yet. Reaching the assertions at all is the regression
-    signal -- before the shutdown deadline existed, this run never returned.
+    reached teardown yet. Reaching the assertions at all is the signal.
     """
     script = {
         "aaaa": {"runtime": 0.05, "die_after": 0.3},
@@ -695,26 +620,20 @@ def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
     assert elapsed < _DRIVER_HARD_TIMEOUT_S
     by_id = {row["pdbID"]: row for row in _read_manifest(output_dir)}
     assert set(by_id) == set(script)
-    # The work itself completed: the kill lands after both entries are done.
+    # The kill lands after both entries are done, so the work itself completed.
     assert by_id["aaaa"]["status"] == "ok"
     assert by_id["bbbb"]["status"] == "ok"
     assert exit_code == 0
 
 
-# The silent-death fallback must select an outstanding id
 @_POSIX_KILL
 def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     """A silent fourth-task death must not be blamed on a completed first task.
 
     One worker completes ``aaaa``, ``bbbb`` and ``cccc`` in order, then dies
-    during ``dddd`` before announcing it.  At fallback time exactly one id is
-    outstanding, so the manifest has an unambiguous desired result: three
-    successes and one retryable death row for ``dddd``, each appearing once.
-
-    Regression: the fallback used to pick the first id not already declared
-    lost, without excluding ids whose real results had already been written, so
-    it blamed ``aaaa`` -- writing a second, failed row for an entry that
-    succeeded -- and never reported ``dddd`` at all.
+    during ``dddd`` before announcing it. Exactly one id is outstanding at
+    fallback time, so a fallback that ignores the ids already written blames
+    ``aaaa`` -- a second, failed row for an entry that succeeded.
     """
     script = {
         "aaaa": {"runtime": 0.02},
@@ -736,22 +655,19 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     assert exit_code == 1
 
 
-# End-to-end: one row per entry when a death is attributed to the wrong one.
-# One driver run stages every composition rule the dispatch loop has to obey.
-# Two workers finish their own entry and then, while idle, leave the driver
-# holding a start notification for "aaaa" before being killed a second apart; a
-# third dies idle holding nothing. Meanwhile "aaaa" is really being processed
-# elsewhere and returns a genuine result long after the driver has given up on
-# it, and "bbbb" returns later still so that the loop is still running when it
-# does.
+# One run staging every composition rule the dispatch loop has to obey: two
+# workers finish their own entry and then, while idle, leave the driver holding
+# a start notification for "aaaa" before being killed a second apart; a third
+# dies idle holding nothing; "aaaa" is really processed elsewhere and returns a
+# genuine result long after the driver has given up on it, and "bbbb" later
+# still, so the loop is still running when it does.
 #
 # "ffff" is scaffolding, not a case: a worker SIGKILLed while blocked in
-# ``inqueue.get()`` holds the pool's task-queue read lock forever, and
-# ``Pool.terminate()`` then deadlocks in ``_help_stuff_finish`` -- an artefact
-# of killing an idle worker, nothing to do with the driver. That lock is held
-# by the first worker to run out of work, so "ffff" (far the quickest entry, and
-# never killed) owns it and the workers that do get killed are merely queued
-# behind it, which is harmless.
+# ``inqueue.get()`` holds the pool's task-queue read lock forever and
+# ``Pool.terminate()`` then deadlocks in ``_help_stuff_finish``. The lock is
+# held by the first worker to run out of work, so "ffff" (far the quickest
+# entry, and never killed) owns it and the workers that do get killed queue
+# harmlessly behind it.
 _STALE_ATTRIBUTION_SCRIPT = {
     "aaaa": {"runtime": 3.0},  # late, real
     "bbbb": {"runtime": 3.8},  # keeps it open
@@ -767,7 +683,7 @@ def stale_attribution_batch(tmp_path_factory):
     """One real ``driver_pool._run`` over ``_STALE_ATTRIBUTION_SCRIPT``.
 
     Module-scoped: the run takes a few seconds and the three tests below read
-    different invariants out of the same manifest.
+    different invariants out of the one manifest.
     """
     tmp_path = tmp_path_factory.mktemp("stale_attribution")
     exit_code, output_dir, elapsed = _run_driver(tmp_path, _STALE_ATTRIBUTION_SCRIPT)
@@ -786,16 +702,12 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
 ):
     """A genuine result for an already-declared-lost entry is dropped.
 
-    Once the driver has synthesized the retryable row for an entry, a late real
-    result for it must not be written as well: two manifest rows for one entry
-    would make ``--resume`` see a completed entry whose data rows were never
-    produced, and the extra completion would end the batch with another entry
-    still unwritten.
-
-    ``aaaa`` runs to completion in its own worker; the driver nevertheless
-    declares it lost first, because the worker that died was holding a start
-    notification for it. Dropping the guard in ``driver_pool._run`` therefore writes
-    ``aaaa`` twice and never writes ``bbbb``.
+    Two manifest rows for one entry would make ``--resume`` see a completed
+    entry whose data rows were never produced, and the extra completion would
+    end the batch with another entry still unwritten. ``aaaa`` runs to
+    completion in its own worker, yet is declared lost first because the worker
+    that died held a start notification for it, so dropping the guard in
+    ``driver_pool._run`` writes ``aaaa`` twice and never writes ``bbbb``.
     """
     batch = stale_attribution_batch
     ids = list(_STALE_ATTRIBUTION_SCRIPT)
@@ -815,7 +727,7 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
     assert lost["reason_codes"] == "worker_process_died", (
         "the real result overwrote the synthesized lost-entry row"
     )
-    # The synthesized row stands, so the real result's counts are not there.
+    # Blank counts: the synthesized row stands, the real result's do not.
     assert lost["n_bonds"] == ""
     assert lost["n_candidates"] == ""
     assert batch["exit_code"] == 1
@@ -826,9 +738,8 @@ def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(stale_attribution
     """An entry is declared lost once, however the roster churns.
 
     Two workers die a second apart, both holding a start notification for
-    ``aaaa``. The second death must not add a second lost-entry row: that would
-    both duplicate the entry in the manifest and inflate the completion count,
-    ending the batch before the remaining entries were written.
+    ``aaaa``. A second lost-entry row would both duplicate the entry and inflate
+    the completion count, ending the batch early.
     """
     batch = stale_attribution_batch
     lost_rows = [
@@ -845,11 +756,10 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
 ):
     """A worker that finished its entry before dying loses nothing.
 
-    Three of these workers were killed after announcing the end of their own
-    entry and returning a real result; ``eeee``'s death is therefore
-    unattributed altogether. None of them may fabricate a failure for an entry
-    that already returned successfully -- nor for any other entry that happens
-    to be outstanding when the death is noticed.
+    Three workers are killed after announcing the end of their own entry and
+    returning a real result, ``eeee``'s death being unattributed altogether.
+    None of them may fabricate a failure, for their own entry or for any other
+    that happens to be outstanding when the death is noticed.
     """
     batch = stale_attribution_batch
     for pdb_id in ("bbbb", "cccc", "dddd", "eeee", "ffff"):
@@ -861,16 +771,13 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
         assert row["reason_codes"] == ""
 
 
-# Portability: the spawn start method (Windows)
 def _spawn_task(payload):
     """Announce, then either finish or die abnormally, inside a spawn worker."""
     action, pdb_id = payload
     worker._announce_inflight("start", pdb_id)
     if action == "die":
-        # An abrupt exit with no result, the way a segfault or OOM kill ends a
-        # worker; SIGKILL is not portable, os._exit is. The pause keeps the
-        # death after the driver's first roster snapshot, exactly as a worker
-        # that runs for a while before being killed would.
+        # SIGKILL is not portable, os._exit is; the pause keeps the death after
+        # the driver's first roster snapshot.
         time.sleep(0.5)
         os._exit(9)
     worker._announce_inflight("end", pdb_id)
@@ -882,10 +789,9 @@ def _spawn_task(payload):
 def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     """The notification queue and config survive the spawn start method.
 
-    Windows has no fork: ``SimpleQueue`` and the config dict reach the worker
-    only by being pickled through ``Pool(initializer=..., initargs=...)``. If
-    that mechanism broke there, workers would silently stop announcing their
-    entries and every death would become unattributable.
+    Windows has no fork: ``SimpleQueue`` and the config reach the worker only by
+    being pickled through ``Pool(initializer=..., initargs=...)``, and without
+    that the workers stop announcing and every death is unattributable.
     """
     ctx = multiprocessing.get_context("spawn")
     cfg = _reference_cfg(str(tmp_path))
@@ -914,11 +820,9 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     assert finished, "the healthy spawn worker returned no result"
     pdb_id, output_dir, cofactor_sample = finished[0]
     assert pdb_id == "1abc"
-    # The config really crossed the interpreter boundary intact.
     assert output_dir == str(tmp_path)
     assert cofactor_sample == sorted(cfg.cofactors)[:1]
 
-    # The healthy entry was released; the dead one is still attributed.
     assert "1abc" not in assignments.values()
     assert dead_pids, "the death of a spawn worker went unnoticed"
     attributed = {assignments.get(pid) for pid in dead_pids}
@@ -938,9 +842,9 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
 def test_worker_config_is_picklable(tmp_path, manual_inputs):
     """The worker config must survive pickling, as spawn requires.
 
-    Under fork the config is inherited and any unpicklable member goes
-    unnoticed; under spawn the same config is pickled into ``Pool`` initargs,
-    so an unpicklable value there breaks every worker before it starts.
+    Under fork the config is inherited and an unpicklable member goes unnoticed;
+    under spawn it is pickled into ``Pool`` initargs, where the same member
+    breaks every worker before it starts.
     """
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
     restored = pickle.loads(pickle.dumps(cfg))
@@ -948,7 +852,6 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
     assert restored == cfg
     assert restored.cofactors == cfg.cofactors
     assert restored.cofactors, "the bundled cofactor catalog must be loaded"
-    # And it still drives the code that consumes it in the worker.
     assert worker._initial_result(
         "1abc", restored, restored.manual_inputs
     ) == worker._initial_result("1abc", cfg, cfg.manual_inputs)
@@ -957,15 +860,12 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
 def test_worker_config_cannot_be_edited_by_a_worker(tmp_path):
     """One run decides the config; no worker may change it for itself.
 
-    Each worker holds its own unpickled copy, so an edit here would not even
-    be visible to the driver or to the other workers -- it would just make one
-    process behave differently from the rest, for one entry, with nothing in
-    the manifest to say so. Frozen turns that into an immediate error.
+    Each worker holds its own unpickled copy, so an edit here is invisible to
+    the driver and the other workers: one process would behave differently for
+    one entry with nothing in the manifest to say so.
     """
     cfg = _reference_cfg(str(tmp_path))
 
-    # The type checker rejects both assignments statically, which is half the
-    # value; these assert the other half, that they also fail at runtime.
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.keep = True  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -977,10 +877,8 @@ def test_worker_config_cannot_be_edited_by_a_worker(tmp_path):
 def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     """The one hand-written mapping from CLI options to config fields.
 
-    ``WorkerConfig`` makes a missing or misspelled *field* impossible, but not
-    a field wired to the wrong option -- ``keep=args.bonds`` would type-check
-    perfectly. Only the entry-data lane exercised this function before, and
-    that lane does not run in CI.
+    ``WorkerConfig`` makes a missing or misspelled *field* impossible, but not a
+    field wired to the wrong option -- ``keep=args.bonds`` type-checks perfectly.
     """
     args = cli.parse_args(
         [
@@ -1011,8 +909,8 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     )
 
     assert isinstance(cfg, worker.WorkerConfig)
-    # The identity is resolved once per run, and the log keeps the two hashes
-    # it was composed from so a changed id can be attributed to a file.
+    # The log keeps the two hashes the id was composed from, so a changed id can
+    # be attributed to a file.
     assert cfg.reference_data_id == reference_data.reference_data_id()
     assert run_log.details["reference_data_id"] == cfg.reference_data_id
     assert (
@@ -1033,8 +931,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     assert cfg.density_map_scope == "full"
     assert cfg.ccp4_timeout_s == 42
     assert cfg.manual_inputs is None
-    # ``--id`` means an entry may be fetched; a manual run may not, and that
-    # asymmetry is the field's whole purpose.
+    # ``--id`` means an entry may be fetched; a manual run may not.
     assert cfg.allow_download is True
     manual = cli.parse_args(
         [
@@ -1058,12 +955,10 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     )
     assert manual_cfg.allow_download is False
     assert manual_cfg.manual_inputs is not None
-    # Provenance is stamped into the run log as well as into every row.
     assert run_log.details["gemmi_version"] == cfg.gemmi_version
     assert run_log.details["ccp4_version"] == cfg.ccp4_version
 
 
-# SIGTERM to the driver must stop its workers, not orphan them
 def _never_finishing_process(pdb_id):
     """A per-entry stub that outlives the signal, so workers are busy.
 
@@ -1093,13 +988,11 @@ def _sigterm_driver_child(argv, ready, channel):
 def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
     """SIGTERM must unwind through cleanup instead of killing the driver dead.
 
-    Regression: SIGTERM's default disposition terminated the driver outright,
-    so no ``finally`` ran. The pool was never shut down, its children were
-    reparented to init and kept running -- still driving CCP4 subprocesses --
-    and no run log was written, leaving nothing to explain the stop.
-
-    The driver is signalled directly rather than through its process group, so
-    the workers only stop if the driver itself stops them.
+    Under SIGTERM's default disposition no ``finally`` runs: the pool is never
+    shut down, its children are reparented to init and keep driving CCP4
+    subprocesses, and nothing is written to explain the stop. The driver is
+    signalled directly rather than through its process group, so the workers
+    only stop if the driver itself stops them.
     """
     output_dir = tmp_path / "out"
     id_file = tmp_path / "ids.txt"
@@ -1123,8 +1016,6 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
     child.start()
     try:
         assert ready.wait(30), "the driver process never started"
-        # Process.pid is None until start() has run; pinning it here documents
-        # that precondition and keeps the signalling below unambiguous.
         driver_pid = child.pid
         assert driver_pid is not None
         workers: list[int] = []

@@ -1,10 +1,9 @@
 """The four streamed CSV outputs and the schemas they are written against.
 
 Every entry's rows are appended and flushed as soon as the worker returns, so
-an interrupted batch keeps the results it already has. That makes the column
-lists an external contract twice over: users read the files, and ``--resume``
-reads them back to decide what still needs running. Defining each schema once,
-here, is what keeps the written header and the resume check from disagreeing.
+an interrupted batch keeps the results it already has. The column lists are an
+external contract twice over: users read the files, and ``--resume`` reads them
+back to decide what still needs running.
 """
 
 import csv
@@ -22,10 +21,8 @@ from worker import blank_if_unmeasured
 
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every
-# Python identifier is ``pdb_id``. The columns are an external contract: users'
-# scripts, notebooks and downstream joins address them by name, and renaming
-# one would break those silently while gaining nothing. The two spellings meet
-# only where a row dict is built, e.g. ``{"pdbID": pdb_id}``.
+# Python identifier is ``pdb_id``: downstream scripts and joins address the
+# columns by name, so renaming one breaks them silently.
 MANIFEST_COLUMNS = [
     "pdbID",
     "status",
@@ -56,11 +53,9 @@ MANIFEST_COLUMNS = [
     "symmetry_contact_policy",
 ]
 
-# metal_stats_all.csv schema. The middle block is the EDSTATS residue table,
-# whose column set and order `extract_metal_statistics` validates against
-# EDSTATS_COLUMNS before emitting any row, so the full header is fixed. Defining
-# it once keeps the written header and the --resume compatibility check from
-# disagreeing about the columns between them.
+# The middle block is the EDSTATS residue table, whose column set and order
+# `extract_metal_statistics` validates against EDSTATS_COLUMNS before emitting
+# any row, so the full header is fixed.
 STATS_COLUMNS = (
     ["pdbID", "category"]
     + list(EDSTATS_COLUMNS)
@@ -69,8 +64,8 @@ STATS_COLUMNS = (
 )
 
 
-#: The one manifest column whose name differs from its ``EntryResult`` field.
-#: The CSV keeps the deposited spelling; the identifier does not (commit 9).
+# ``pdbID`` is the one manifest column whose name differs from its
+# ``EntryResult`` field.
 MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {"pdbID": "pdb_id"}
 
 
@@ -99,11 +94,7 @@ def _manifest_row(
 
 
 class _OutputWriters:
-    """The streamed CSV outputs, with running row counts.
-
-    Each stream is flushed after every entry so an interrupted batch run
-    retains the results it already completed. Headers are written on creation.
-    """
+    """The streamed CSV outputs, with running row counts."""
 
     def __init__(
         self,
@@ -129,9 +120,6 @@ class _OutputWriters:
         )
         if confidence_fh is not None and confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
-        # Annotated because both start ``None`` and are assigned a writer
-        # below: left to inference the attribute types would be ``None``, and
-        # every assignment after this point an error.
         self._confidence: Optional[csv.DictWriter] = None
         self._confidence_inputs: Optional[csv.DictWriter] = None
         if confidence_fh is not None and confidence_columns is not None:

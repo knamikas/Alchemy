@@ -1,18 +1,10 @@
 """The batch driver: everything between the parsed arguments and the workers.
 
-One entrypoint, ``_run``, which is a handler around ``_execute`` -- an
-orchestrator that names the phases of a run in order and does nothing else.
-Each phase below either produces the value the next one needs or raises
-``DriverError`` carrying the message the user should see. That is what makes
-the shape of a batch readable: it is the sequence of calls in ``_execute``, not
-a 600-line function whose phases were visible only as blank lines.
-
-Also here: the driver's half of the worker protocol. ``multiprocessing.Pool``
-silently replaces a worker that died and never delivers a result for the task
-it was holding, so the dispatch loop cannot wait on the pool alone. It drains
-the notifications workers send (``_drain_inflight``), watches the pool roster
-(``_dead_worker_pids``), and bounds shutdown explicitly (``_shutdown_pool``),
-because a worker killed while holding the task-queue lock never releases it.
+Two constraints shape the dispatch loop. ``multiprocessing.Pool`` silently
+replaces a worker that died and never delivers a result for the task it held,
+so a lost entry is recovered from the pool roster rather than waited on. And a
+worker killed while blocked on the task queue never releases that queue's lock,
+which wedges ``Pool.terminate``, so shutdown is bounded explicitly.
 """
 
 import contextlib
@@ -90,11 +82,6 @@ from confidence_score import (
 )
 
 
-# ``REPO_DIR`` is imported rather than recomputed. The two-``dirname`` walk it
-# is built from is relative to the file that runs it, so repeating it here --
-# one directory deeper than ``src/`` -- would silently name ``src/`` as the
-# checkout root. One definition also settles the duplicate ``ccp4_setup`` and
-# the driver used to keep side by side.
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
 DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(REPO_DIR, "confidence_reference")
 
@@ -103,30 +90,20 @@ ALCHEMY_VERSION = __version__
 # it held, before the remaining outstanding entries are failed retryably.
 WORKER_STALL_GRACE_S = 600.0
 # Seconds to let a worker pool shut down cleanly before its children are killed
-# outright. Every result has already been collected by then and the workers are
-# idle, so a healthy pool finishes this in milliseconds and never approaches the
-# deadline; it exists only to bound the hang described in ``_shutdown_pool``.
+# outright. Every result has been collected by then, so only a wedged pool ever
+# reaches the deadline.
 WORKER_SHUTDOWN_GRACE_S = 5.0
 
-# Budget for the `git` probes that stamp run provenance. These read a local
-# repository and are expected to finish in milliseconds; a second is generous.
-# Exceeding it is not an entry failure -- `_alchemy_commit` already degrades to
-# "unknown" for any subprocess error -- so a stuck index lock costs the commit
-# hash rather than the run.
+# Budget for the `git` probes that stamp run provenance. Exceeding it costs the
+# commit hash, which degrades to "unknown", rather than the run.
 PROVENANCE_COMMAND_TIMEOUT_S = 1
 
 
 logger = logger_for(__name__)
 
 
-# CCP4 environment -- the CLI boundary over ccp4_setup
 def _verify_resolved_ccp4(env, setup_path):
-    """Verify ``env``, naming the script that was run when it comes up short.
-
-    Sourcing a setup script successfully and still not finding the programs is
-    a different diagnosis from never having found a script at all: the path is
-    real but points at an incomplete or wrong installation.
-    """
+    """Verify ``env``, naming the script that was run when it comes up short."""
     try:
         verify_ccp4(env)
     except Ccp4SetupError as exc:
@@ -136,17 +113,7 @@ def _verify_resolved_ccp4(env, setup_path):
 
 
 def _resolve_ccp4_environment(args):
-    """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure.
-
-    Split from the ``SystemExit`` wrapper below so the whole decision -- the
-    configure branch, the explicit override, the ambient environment and
-    auto-detection -- reports failure the one way ``ccp4_setup`` does.
-
-    Which files hold the saved setup path is deliberately not named here.
-    ``ccp4_setup.DEFAULT_CONFIG_FILES`` is the one definition, and a second
-    list in the driver is exactly the drift that made ``--configure-ccp4``
-    report success and then be ignored.
-    """
+    """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
     config = load_ccp4_setup_config()
     if args.configure_ccp4:
         setup_path = os.path.abspath(os.path.expanduser(args.configure_ccp4))
@@ -166,18 +133,15 @@ def _resolve_ccp4_environment(args):
 
     environment = os.environ.copy()
 
-    # An explicit --ccp4-setup is checked before the ambient environment, not
-    # after. A user passing it is overriding whatever the shell already has --
-    # typically because the wrong CCP4 version is sourced -- so honouring PATH
-    # first would silently run against the very installation they were
-    # replacing, and record that installation's version as the run's
-    # provenance. A path that does not exist is an error for the same reason:
-    # falling through would make a typo indistinguishable from success.
+    # An explicit --ccp4-setup is checked before the ambient environment, and a
+    # missing path is an error rather than a fallthrough: honouring PATH first
+    # would run against the very installation the user is replacing, and stamp
+    # that installation's version as the run's provenance.
     if args.ccp4_setup:
         setup_path = os.path.abspath(os.path.expanduser(args.ccp4_setup))
         if not os.path.exists(setup_path):
             # The user's own spelling, not the expanded path, so the message
-            # shows the typo they can see in their command line.
+            # shows the typo as they typed it.
             raise Ccp4SetupError(f"CCP4 setup file not found: {args.ccp4_setup}")
         env = resolve_env(setup_path)
         _verify_resolved_ccp4(env, setup_path)
@@ -201,19 +165,13 @@ def _resolve_ccp4_environment(args):
 
 
 def resolve_ccp4_environment(args):
-    """Return ``(env, setup_path)`` for this run, or fail with a diagnostic.
-
-    ``ccp4_setup`` raises ``Ccp4SetupError`` so that CCP4 resolution stays
-    usable outside a command-line process; this is the single place that turns
-    one into the driver's own failure.
-    """
+    """Return ``(env, setup_path)`` for this run, or raise ``DriverError``."""
     try:
         return _resolve_ccp4_environment(args)
     except Ccp4SetupError as exc:
         raise DriverError(str(exc)) from None
 
 
-# Run provenance -- stamped once by the driver and copied into every result
 def _alchemy_commit():
     try:
         completed = subprocess.run(
@@ -255,7 +213,6 @@ def _ccp4_version(env):
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-# Worker-pool supervision -- the driver's half of the protocol in ``worker``
 def _drain_inflight(inflight, assignments):
     """Apply pending worker notifications to the pid -> entry assignment map."""
     while True:
@@ -272,11 +229,7 @@ def _drain_inflight(inflight, assignments):
 
 
 def _dead_worker_pids(pool, known_pids):
-    """Return worker pids that have disappeared since the last check.
-
-    ``Pool`` silently replaces a worker that died, so a pid leaving the pool's
-    roster is the only signal that its task will never produce a result.
-    """
+    """Return worker pids that have disappeared since the last check."""
     current = {
         child.pid for child in getattr(pool, "_pool", ()) or () if child.pid is not None
     }
@@ -289,19 +242,11 @@ def _dead_worker_pids(pool, known_pids):
 
 
 def _sweep_leaked_work_dirs(output_dir):
-    """Remove per-entry scratch directories a previous run left behind.
+    """Remove per-entry scratch directories an interrupted run left behind.
 
-    Each entry works inside ``<output-dir>/.alchemy-<id>-XXXX`` and deletes it
-    once its rows are extracted, but a run that is interrupted -- Ctrl-C,
-    SIGTERM, an out-of-memory kill -- never reaches that cleanup, and the
-    directory survives holding that entry's maps. Nothing removed them, so they
-    accumulated over every interrupted attempt.
-
-    Sweeping at startup is safe because the directories belong to a run that is
-    no longer executing: a second Alchemy process sharing one ``--output-dir``
-    would already be overwriting the first one's manifest and CSVs.
-
-    Returns the number of directories removed.
+    Safe at startup only because two Alchemy processes cannot share one
+    ``--output-dir`` anyway: they would already be overwriting each other's
+    manifest and CSVs.
     """
     removed = 0
     try:
@@ -320,22 +265,12 @@ def _sweep_leaked_work_dirs(output_dir):
 
 
 def _shutdown_pool(pool):
-    """Close a worker pool without letting a dead worker hang the driver.
+    """Close a worker pool, killing its children if a clean shutdown hangs.
 
-    A pool worker waiting for its next task blocks inside the task queue's
-    ``get()`` while holding that queue's lock. A process killed there -- by the
-    out-of-memory killer, or by a crash in a compiled extension -- never
-    releases it, and ``Pool.terminate`` in turn blocks acquiring the same lock.
-    Shutdown then hangs *after* every result has already been collected and
-    written, so the batch is complete but the run log, confidence finalization
-    and exit code never happen.
-
-    Run the clean shutdown on a side thread and give it a deadline. If it does
-    not return, cancel the finalizer that would repeat the same wait at
-    interpreter exit and kill the remaining children directly. The thread is a
-    daemon, so an abandoned one cannot keep the process alive.
-
-    Returns ``True`` when shutdown had to be forced.
+    A worker killed while blocked in the task queue's ``get()`` never releases
+    that queue's lock, and ``Pool.terminate`` then blocks acquiring it, so the
+    clean shutdown runs on a deadline. Returns ``True`` when it had to be
+    forced.
     """
     children = [
         child
@@ -348,6 +283,7 @@ def _shutdown_pool(pool):
     if not closer.is_alive():
         return False
 
+    # Cancel the at-exit finalizer, which would repeat the same blocked wait.
     finalizer = getattr(pool, "_terminate", None)
     if finalizer is not None:
         try:
@@ -361,13 +297,11 @@ def _shutdown_pool(pool):
             child.kill()
         except (OSError, ValueError, AttributeError):  # already reaped
             pass
-    # The lock belongs to a process that is already gone, so killing the
-    # remaining children cannot release it and the thread will not return.
-    # Abandon it: a daemon thread does not keep the interpreter alive.
+    # The closer thread is abandoned: the lock is held by a process that is
+    # already gone, and a daemon thread does not keep the interpreter alive.
     return True
 
 
-# Driver
 def resolve_confidence_reference_dir(output_dir, configured_dir=None):
     """Find a frozen confidence reference, honoring an explicit override."""
     candidates: Tuple[str, ...]
@@ -414,22 +348,11 @@ def load_ids_from_file(path):
 
 
 class DriverError(Exception):
-    """A user-facing driver failure: the message is reported and the run exits 1.
-
-    The driver's only failure mechanism. Everything a user can fix -- an
-    unreadable id file, an unusable output directory, a CCP4 installation that
-    cannot be resolved -- raises this and is handled in one place, so the exit
-    code and the way the message reaches the operator do not depend on which
-    phase noticed. Argument validation is the deliberate exception: argparse
-    owns that, reports it its own way, and exits 2.
-    """
+    """A user-facing driver failure: the message is reported and the run exits 1."""
 
 
 def _select_entry_ids(args, cache_root):
-    """Resolve the run's work list, returning ``(ids, root, manual_inputs)``.
-
-    Raises ``DriverError`` when the request cannot be satisfied at all.
-    """
+    """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
     root = args.pdb_redo_root
     if args.pdb_file or args.mtz_file or args.cif_file:
         pdb_id = (
@@ -455,7 +378,6 @@ def _select_entry_ids(args, cache_root):
         )
 
     if args.id:
-        # Ensure requested single entry is available locally (mirror or cache).
         try:
             used_root = ensure_entry_available(args.id, args.pdb_redo_root, cache_root)
         except FileNotFoundError:
@@ -475,25 +397,14 @@ def _select_entry_ids(args, cache_root):
         return ids, root, None
 
     logger.info("enumerating final PDB-REDO entries under %s", root)
-    # Early-stop only when capping and not resuming (resume needs the full set).
+    # Resume subtracts finished entries from the full set, so enumeration can
+    # stop early only when not resuming.
     limit = args.max_pdbs if (args.max_pdbs and not args.resume) else None
     return enumerate_entries(root, limit=limit), root, None
 
 
-# The run phases. ``_run`` below is an orchestrator: it names them in order and
-# does nothing else. Each phase is a function here, and each one either produces
-# the value the next phase needs or raises ``DriverError`` with the message the
-# user should see. That is what makes the order of a run readable -- the shape
-# of a batch is the sequence of calls in ``_run``, not a 600-line function whose
-# phases are only visible as blank lines.
-
-
 class _OutputLayout:
-    """Every path a run reads or writes, all derived from ``--output-dir``.
-
-    Grouped because they travel together through every later phase, and because
-    a run that resumes has to name the *same* files a previous run wrote.
-    """
+    """Every path a run reads or writes, all derived from ``--output-dir``."""
 
     def __init__(self, output_dir):
         self.output_dir = output_dir
@@ -507,29 +418,18 @@ class _OutputLayout:
 
     @property
     def core(self) -> Tuple[str, str, str, str]:
-        """The four always-written outputs, in resume-validation order.
-
-        Annotated to its exact width: as a bare tuple, ``*layout.core`` looks
-        to a type checker like it might supply any number of arguments, so the
-        keywords after it all read as possible duplicates.
-        """
+        """The four always-written outputs, in resume-validation order."""
         return (self.manifest, self.stats, self.bonds, self.candidates)
 
 
 class _ConfidencePlan:
     """Whether this run scores confidence, and against what.
 
-    Three states, decided once before any entry runs. ``database`` streams the
-    inputs an uncapped full-database run finalizes into a new reference at the
-    end. ``reference`` scores each entry against a reference that already
-    exists. ``None`` means the bond stage is off, or no reference was found --
-    the expected state on a fresh checkout, since none is distributed.
+    ``database`` streams the inputs an uncapped full-database run finalizes
+    into a new reference; ``reference`` scores against one that already exists;
+    ``None`` means scoring is off.
     """
 
-    #: The two names ``mode`` takes when scoring is on. Annotated rather than
-    #: left to inference: every field starts at ``None`` for the disabled case,
-    #: so an unannotated ``self.mode = None`` types the attribute as ``None``
-    #: and makes every later assignment an error.
     def __init__(self):
         self.mode: Optional[str] = None
         self.reference: Optional[ConfidenceReference] = None
@@ -575,9 +475,6 @@ def _prepare_output_directory(output_dir):
     try:
         os.makedirs(output_dir, exist_ok=True)
     except OSError as exc:
-        # A read-only mount or someone else's directory is a fixable user
-        # mistake, so it exits the way every other unusable input does rather
-        # than as a traceback that reads like an Alchemy bug.
         raise DriverError(
             f"Cannot use --output-dir {output_dir}: {exc.strerror or exc}"
         ) from None
@@ -587,9 +484,8 @@ def _prepare_output_directory(output_dir):
 def _classify_run(args):
     """Return ``(run_mode, database_run)`` for this invocation.
 
-    ``database_run`` is the uncapped full-mirror case, and it is the only one
-    that may finalize a confidence reference: a capped or hand-picked run is
-    not a cohort.
+    ``database_run`` is the uncapped full-mirror case, the only one that may
+    finalize a confidence reference: a capped or hand-picked run is no cohort.
     """
     manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
     database_run = (
@@ -627,10 +523,6 @@ def _plan_confidence(args, layout, database_run, run_log):
         args.output_dir, args.confidence_reference_dir
     )
     if reference_dir is None:
-        # Expected on a fresh checkout: no reference is distributed with
-        # Alchemy because the confidence score is not finalized. Say so
-        # plainly -- naming the searched directories alone read as a
-        # misconfiguration the user was supposed to fix.
         logger.info(
             "confidence scoring is not enabled: no frozen reference is "
             "distributed with Alchemy, because the score is not yet "
@@ -655,9 +547,7 @@ def _plan_confidence(args, layout, database_run, run_log):
 def _check_resume_is_compatible(args, layout: _OutputLayout, plan) -> None:
     """Refuse to resume onto output this run cannot safely extend.
 
-    Every check here is about appending rows beneath a header that no longer
-    means what it did. Sets ``plan.synchronize_inputs`` as a side effect, since
-    whether the streamed inputs are also being extended is part of the answer.
+    Sets ``plan.synchronize_inputs`` as a side effect.
     """
     if not args.resume:
         return
@@ -697,10 +587,8 @@ def _check_resume_is_compatible(args, layout: _OutputLayout, plan) -> None:
 def _schedule_entries(args, layout, cache_root, run_log):
     """Return ``(ids, root, manual_inputs)`` for the entries this run will do.
 
-    The work list is selected first and then reduced: ``--resume`` removes what
-    an existing manifest already reports as finished, and ``--max-pdbs`` caps
-    what is left. That order matters -- capping first would let a resumed run
-    keep re-offering the same finished prefix and never reach the tail.
+    ``--resume`` removes finished entries before ``--max-pdbs`` caps what is
+    left; capping first would re-offer the same finished prefix forever.
     """
     ids, root, manual_inputs = _select_entry_ids(args, cache_root)
     run_log.details["entries_selected_before_resume"] = len(ids)
@@ -742,12 +630,7 @@ def _finalize_confidence_reference(layout):
 
 
 def _finish_without_entries(args, layout, plan):
-    """Exit code for a run whose work list came back empty.
-
-    A resumed database run with nothing left is the normal way a long batch
-    ends: its last chunk finished, and finalizing the reference is the only
-    remaining step.
-    """
+    """Exit code for a run whose work list came back empty."""
     if (
         args.resume
         and plan.mode == "database"
@@ -782,8 +665,7 @@ def _clear_stale_outputs(args, layout, plan):
         logger.info("removed stale bond-stage output: %s", removed_path)
     if args.resume:
         return
-    # Reference metadata is its completion marker. Fresh runs must not leave
-    # incompatible confidence artifacts beside newly replaced core output.
+    # The reference metadata file is the reference's completion marker.
     reference_marker = os.path.join(layout.reference_dir, REFERENCE_METADATA_FILE)
     stale: Tuple[str, ...]
     if plan.mode == "database":
@@ -803,9 +685,8 @@ def _clear_stale_outputs(args, layout, plan):
 def _choose_worker_count(args, entry_count, run_log):
     """Size the pool, never above the number of entries there are to run.
 
-    A Pool creates every worker up front, so asking for more than there are
-    entries just pays each one's startup for no work. Costly under the spawn
-    start method, where each worker re-imports gemmi into its own interpreter.
+    A Pool creates every worker up front, and under the spawn start method each
+    one re-imports gemmi into its own interpreter.
     """
     if args.workers is None:
         cpu_limit, memory_limit = automatic_worker_limits()
@@ -870,8 +751,8 @@ def _worker_config(
         ccp4_version=cfg.ccp4_version,
         confidence_mode=plan.mode or "disabled",
         reference_data_id=cfg.reference_data_id,
-        # The manifest column is one id for grouping; the log records which
-        # file each half of it came from, so a changed id can be attributed.
+        # The manifest carries one combined id; the per-file digests here are
+        # what attributes a change in it to a file.
         **{
             f"{name.split('.')[0]}_sha256": digest
             for name, digest in reference_data_checksums().items()
@@ -923,9 +804,6 @@ def _confidence_rows_for(result, plan):
         result.n_metals,
         result.confidence_inputs_missing_reason,
     )
-    # Equivalent to `plan.mode == "reference"`: the mode is set only where a
-    # reference has just been loaded. Testing the reference itself says what
-    # the call actually needs.
     if plan.reference is not None:
         rows = score_against_reference(rows, plan.reference)
     return rows
@@ -934,9 +812,8 @@ def _confidence_rows_for(result, plan):
 def _write_entry(result, args, plan, writers, staging, prior_counts):
     """Write one entry's rows, manifest row last.
 
-    The manifest is the completion marker, so it is written only after this
-    entry's data rows have flushed: an interruption between the two costs a
-    repeated entry on the next resume, never a lost one.
+    The manifest row is the entry's completion marker, so an interruption
+    between it and the data rows costs a repeat on the next resume, not a loss.
     """
     prior_bond_counts, prior_candidate_counts = prior_counts
     writers.write_stats_rows(result.rows)
@@ -958,11 +835,8 @@ def _dispatch_entries(
 ):
     """Run every entry across a worker pool and write the results as they land.
 
-    Returns the batch tally. The loop does three things at once, which is why
-    it does not simply iterate the pool's results: it collects finished entries,
-    it watches the pool roster for workers that died without returning anything,
-    and it renders progress. A killed worker never delivers a result, so waiting
-    on the pool alone would hang the batch forever on the entry it was holding.
+    The loop polls rather than iterating the pool's results, because waiting on
+    the pool alone would hang forever on an entry a killed worker was holding.
     """
     tally = _BatchTally()
     progress = _ProgressReporter(len(ids))
@@ -973,13 +847,10 @@ def _dispatch_entries(
     completed_ids: set = set()
     unattributed_deaths = 0
     last_progress = time.monotonic()
-    # Not a ``with`` block: ``Pool.__exit__`` calls the same ``terminate`` that
-    # a killed idle worker can wedge forever, so shutdown is bounded explicitly
-    # in the ``finally`` below.
-    # Worker records travel over this queue and are re-emitted by the driver, so
-    # only one process ever writes to a handler. The queue is created before the
-    # pool but the listener thread is started after it: forking a process that
-    # already has running threads risks the child deadlocking on a lock no
+    # Not a ``with`` block: ``Pool.__exit__`` calls the same ``terminate`` a
+    # killed idle worker can wedge, so the ``finally`` below bounds shutdown.
+    # The log listener thread starts only after the pool: forking a process
+    # that already has running threads risks the child deadlocking on a lock no
     # thread there holds.
     log_queue = create_worker_log_queue()
     pool = Pool(workers, initializer=_init_worker, initargs=(cfg, inflight, log_queue))
@@ -994,8 +865,6 @@ def _dispatch_entries(
                 batch.append(results.next(timeout=1.0))
             except MultiprocessingTimeoutError:
                 pass
-            # A killed worker never delivers a result, so its entry is
-            # recovered from the pool roster rather than waited on.
             _drain_inflight(inflight, assignments)
             for dead_pid in _dead_worker_pids(pool, worker_pids):
                 dead_id = assignments.pop(dead_pid, None)
@@ -1012,12 +881,10 @@ def _dispatch_entries(
                     and stalled > WORKER_STALL_GRACE_S
                     and remaining <= unattributed_deaths
                 ):
-                    # Every entry still outstanding can only be held by a
-                    # process that died before naming its entry. Entries that
-                    # already returned a result are not outstanding: blaming
-                    # one of those would write a second, failed row for an
-                    # entry that succeeded and leave the entry that actually
-                    # died unreported.
+                    # Only entries that never returned a result can still be
+                    # held by a process that died before naming its entry;
+                    # blaming a completed one would write a second, failed row
+                    # for an entry that succeeded.
                     for stuck_id in ids:
                         if stuck_id in lost_ids or stuck_id in completed_ids:
                             continue
@@ -1031,9 +898,7 @@ def _dispatch_entries(
             last_progress = time.monotonic()
             for r in batch:
                 if r.pdb_id in lost_ids and r.reason_codes != ["worker_process_died"]:
-                    # A real result arrived for an entry already declared lost.
-                    # The synthesized row stands, so this one is dropped rather
-                    # than written twice.
+                    # The synthesized loss row already stands for this entry.
                     continue
                 completed += 1
                 completed_ids.add(r.pdb_id)
@@ -1051,8 +916,8 @@ def _dispatch_entries(
                 )
     finally:
         forced = _shutdown_pool(pool)
-        # Stopped only after the pool is gone, so records emitted during
-        # shutdown are still forwarded.
+        # Stopped after the pool is gone, so records emitted during shutdown
+        # are still forwarded.
         log_listener.stop()
         log_queue.close()
         if forced:
@@ -1068,9 +933,8 @@ def _dispatch_entries(
 def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
     """Open the outputs, run the batch, and commit any staged retry rows.
 
-    Returns ``(tally, writers)``. Staging is discarded rather than committed
-    unless the batch ran to completion, so an interrupted retry leaves the
-    previous run's rows exactly as they were.
+    Staging is committed only once the batch has run to completion, so an
+    interrupted retry leaves the previous run's rows exactly as they were.
     """
     prior_counts = (
         _manifest_values_by_id(layout.manifest, "n_bonds")
@@ -1087,8 +951,6 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
     writers: Optional[_OutputWriters] = None
     processing_completed = False
     try:
-        # ExitStack closes whichever handles were opened, so a failure partway
-        # through opening them cannot leak the earlier ones.
         with contextlib.ExitStack() as handles:
             writers = _open_writers(handles, args, plan, write_paths)
             tally = _dispatch_entries(
@@ -1103,9 +965,7 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
                 run_log,
             )
             processing_completed = True
-            # Bound inside the block that opened it: reaching the summary below
-            # with no writers is impossible, and saying so here is cheaper than
-            # four ``Optional`` accesses that a reader has to reason about.
+            # Bound here so the summary below needs no ``Optional`` narrowing.
             opened_writers = writers
     finally:
         if staging is not None and not processing_completed:
@@ -1132,9 +992,8 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
 def _report_batch(args, layout, plan, tally, writers, run_log):
     """Print the human summary, finalize confidence, and return the exit code.
 
-    Confidence is finalized only on a clean batch: a reference built from a run
-    with incomplete entries would silently become the cohort every later run is
-    scored against.
+    Confidence is finalized only on a clean batch: a reference built from
+    incomplete entries becomes the cohort every later run is scored against.
     """
     print(
         f"Done. ok={tally.counts['ok']} partial={tally.counts['partial']} "

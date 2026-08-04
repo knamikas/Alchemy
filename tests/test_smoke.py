@@ -1,9 +1,6 @@
-"""Scaffolding smoke tests.
+"""Scaffolding smoke tests: src imports, and helper output the pipeline accepts.
 
-These prove two things: the src modules import from a test process, and every
-helper in ``tests/helpers.py`` produces input that the real pipeline accepts.
-They are deliberately shallow -- behavioural coverage lives in the other test
-modules.
+Shallow by design; behavioural coverage lives in the other test modules.
 """
 
 from __future__ import annotations
@@ -27,15 +24,12 @@ from helpers import (
 )
 
 
-# sys.path wiring
 def test_src_modules_import():
     """Every src module imports from a test process and exposes its entry points.
 
-    ``src/`` is not a package, so this only works because ``conftest.py`` puts
-    it on ``sys.path`` at import time. If that wiring breaks, every other module
-    in the suite fails with a confusing ``ModuleNotFoundError``; failing here
-    first names the real cause. ``driver`` *is* a package, reached the same way,
-    so it is covered here too.
+    ``src/`` is not a package, so this works only because ``conftest.py`` puts
+    it on ``sys.path``; failing here names that cause before the rest of the
+    suite fails with ``ModuleNotFoundError``.
     """
     from bond import bond_analysis
     from bond import bond_schema
@@ -74,8 +68,6 @@ def test_src_modules_import():
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
     assert callable(density_analysis.run_density_analysis)
     assert callable(confidence_score.score_site)
-    # Named explicitly rather than asserted truthy: a non-empty tuple literal is
-    # always true, so `assert REQUIRED_CCP4_TOOLS` could never fail.
     assert set(ccp4_setup.REQUIRED_CCP4_TOOLS) == {
         "mtzfix",
         "fft",
@@ -85,26 +77,18 @@ def test_src_modules_import():
 
 
 def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
-    """The path fixtures address the real checkout, not a copy or a stale root.
-
-    ``data_dir`` in particular has to reach the bundled literature tables, which
-    several modules read directly rather than through a fixture.
-    """
+    """The path fixtures address the real checkout, not a copy or a stale root."""
     assert os.path.isfile(os.path.join(src_dir, "bond", "bond_analysis.py"))
     assert os.path.dirname(src_dir) == repo_root
     assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
 
 
-# The isolation fixtures
 def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_factory):
     """A full in-memory analysis leaves the process working directory empty.
 
-    The suite's release-critical promise is that a test run puts nothing inside
-    the checkout, and pytest runs with the checkout as cwd. ``work_dir`` stands
-    in for it: every input and output below is addressed absolutely under a
-    *different* temporary directory, so any file appearing in the cwd is src
-    code writing to a relative path -- which would land in the repository on a
-    normal run.
+    Every path below is absolute and under a different temporary directory, so
+    a file appearing in the cwd is src code writing to a relative path, which on
+    a normal run would land in the checkout.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
@@ -127,10 +111,9 @@ def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_f
 def test_cache_directory_helper_uses_canonical_then_legacy(monkeypatch, tmp_path):
     """The shared helper prefers the canonical nonblank cache variable.
 
-    ``ALCHEMY_TESTS_CACHE`` is the canonical name, matching the other
-    ``ALCHEMY_TESTS_*`` switches; ``ALCHEMY_TEST_CACHE`` predates it and stays
-    supported. Both the conftest cache fixture and the integration fixture
-    resolve through this helper, so the precedence is suite-wide.
+    Every cache fixture in the suite resolves through this helper, so the
+    precedence between ``ALCHEMY_TESTS_CACHE`` and the older
+    ``ALCHEMY_TEST_CACHE`` is suite-wide.
     """
     for variable in helpers.CACHE_ENV_VARS:
         monkeypatch.delenv(variable, raising=False)
@@ -144,8 +127,8 @@ def test_cache_directory_helper_uses_canonical_then_legacy(monkeypatch, tmp_path
     monkeypatch.setenv("ALCHEMY_TESTS_CACHE", canonical)
     assert helpers.cache_dir_from_env() == canonical, "canonical name wins"
 
-    # A blank export from a wrapper script means "unset", not "use the current
-    # directory" -- which would scatter downloads through the checkout.
+    # A blank export means "unset", not "use the current directory", which
+    # would scatter downloads through the checkout.
     monkeypatch.setenv("ALCHEMY_TESTS_CACHE", "   ")
     assert helpers.cache_dir_from_env() == legacy
     monkeypatch.delenv("ALCHEMY_TEST_CACHE")
@@ -155,10 +138,8 @@ def test_cache_directory_helper_uses_canonical_then_legacy(monkeypatch, tmp_path
 def test_pdb_redo_cache_fixture_is_a_writable_directory(pdb_redo_cache):
     """The download cache fixture points somewhere downloads can actually go.
 
-    It is either the configured warm cache -- created if it does not exist yet
-    -- or a session tmp directory. A download test handed a missing or
-    read-only path would fail with an ``OSError`` halfway through a fetch
-    rather than skip or succeed.
+    A download test handed a missing or read-only path fails with an ``OSError``
+    halfway through a fetch rather than skipping.
     """
     assert os.path.isdir(pdb_redo_cache)
     assert os.access(pdb_redo_cache, os.W_OK | os.X_OK)
@@ -168,15 +149,12 @@ def test_pdb_redo_cache_fixture_is_a_writable_directory(pdb_redo_cache):
         assert os.path.realpath(pdb_redo_cache) == os.path.realpath(configured)
 
 
-# Structure helpers -> load_structure
 @pytest.mark.parametrize("suffix", [".pdb", ".cif"])
 def test_builder_output_loads_cleanly(tmp_path, suffix):
     """A default synthetic structure loads with no complaints in either format.
 
-    Every behavioural test starts from a builder structure, so a clean build
-    must produce no occupancy, element or duplicate-record warnings and must
-    carry usable symmetry. Otherwise those warnings would leak into unrelated
-    assertions and be mistaken for the behaviour under test.
+    Every behavioural test starts from a builder structure, so a warning raised
+    here would leak into unrelated assertions elsewhere.
     """
     from structure_analysis import load_structure
 
@@ -187,7 +165,6 @@ def test_builder_output_loads_cleanly(tmp_path, suffix):
     assert context.analysis_coordinate_format == (
         "mmcif" if suffix == ".cif" else "pdb"
     )
-    # No occupancy, element or duplicate-record complaints from a clean build.
     assert context.warning_codes == ()
     assert not context.occupancy_validation_failed
     assert context.unknown_element_atom_count == 0
@@ -205,10 +182,9 @@ def test_builder_output_loads_cleanly(tmp_path, suffix):
 def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix):
     """``simple_metal_site`` donor distances survive into measured bond rows.
 
-    The helper's contract is that a donor requested at 2.03 Angstrom really is
-    2.03 Angstrom from the metal after the file round-trip, in both formats.
-    Distance assertions across the suite are only meaningful if that holds, and
-    nothing but the requested donors may fall inside the 4 Angstrom search.
+    Distance assertions across the suite are only meaningful if a donor
+    requested at 2.03 Angstrom really is 2.03 Angstrom from the metal after the
+    file round-trip, and if nothing else falls inside the 4 Angstrom search.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
@@ -226,7 +202,6 @@ def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix
     }
     for resname, atom_name, distance in donors:
         assert measured[(resname, atom_name)] == pytest.approx(distance, abs=1e-6)
-    # Nothing else of the schematic skeletons came within the 4 A search radius.
     assert len(rows) == len(donors)
     assert candidates
     assert metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
@@ -236,10 +211,7 @@ def test_declared_connection_is_reported_for_both_formats(tmp_path):
     """A declared connection is honoured from a PDB LINK and from mmCIF alike.
 
     LYS NZ at this distance is not a proximity-inferable Zn donor, so the row
-    exists only because the connection was declared. The two formats differ in
-    what identity they preserve -- a LINK record carries no id and gemmi
-    regenerates one from the connection type, while ``_struct_conn.id``
-    round-trips -- and both must reach the same bond.
+    exists only because the connection was declared.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
@@ -250,8 +222,6 @@ def test_declared_connection_is_reported_for_both_formats(tmp_path):
     for suffix, expected_source, expected_id in cases:
         builder = StructureBuilder()
         metal = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-        # LYS NZ is not a proximity-inferable donor at this distance for Zn:
-        # the declaration is the only reason it becomes a bond.
         lys = builder.add_amino_acid(
             "LYS", 10, chain="A", positions={"NZ": (2.10, 0.0, 0.0)}
         )
@@ -282,10 +252,9 @@ def test_declared_connection_is_reported_for_both_formats(tmp_path):
 def test_conformers_drive_the_altloc_selection_policy(tmp_path):
     """Altloc selection picks the highest-occupancy conformer for contact search.
 
-    The selected conformer is the only one offered to contact search, while both
-    conformers remain available as source atoms for the occupancy-weighted atom
-    count. Conflating the two sets would either double-count atoms in the DPI
-    input or measure a bond to a conformer that was not selected.
+    Only the selected conformer reaches contact search, while both remain source
+    atoms for the occupancy-weighted count; conflating the two sets would either
+    double-count atoms in the DPI input or measure an unselected conformer.
     """
     from structure_analysis import load_structure
 
@@ -306,8 +275,6 @@ def test_conformers_drive_the_altloc_selection_policy(tmp_path):
     assert residue.alternative_conformers_present
     assert residue.selected_altloc == "B"
     assert residue.selected_conformer_mean_occupancy == pytest.approx(0.65)
-    # Only the selected conformer reaches contact search; both are kept as
-    # source records for the occupancy-weighted atom count.
     selected = [a for a in residue.contact_atoms if a.atom_name == "NE2"]
     assert [a.altloc for a in selected] == ["B"]
     assert sorted(a.altloc for a in residue.source_atoms if a.atom_name == "NE2") == [
@@ -319,10 +286,8 @@ def test_conformers_drive_the_altloc_selection_policy(tmp_path):
 def test_connection_can_name_a_specific_conformer(tmp_path):
     """A declaration naming an unselected conformer is re-pointed and flagged.
 
-    The connection names conformer A, but selection chose B. Alchemy measures
-    the contact against B -- so the reported distance is B's -- and records
-    ``declared_connection_conformer_substituted`` so the substitution is visible
-    rather than silent.
+    The connection names conformer A, but selection chose B, so the contact is
+    measured against B and the substitution is recorded rather than silent.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
@@ -352,8 +317,6 @@ def test_connection_can_name_a_specific_conformer(tmp_path):
         connection_path=path,
     )
 
-    # The declaration names conformer A, which selection did not choose, so the
-    # contact is re-pointed onto the selected conformer B and flagged.
     assert [row["neighbor_altloc"] for row in rows] == ["B"]
     assert rows[0]["distance"] == pytest.approx(2.80, abs=1e-6)
     assert "declared_connection_conformer_substituted" in metadata["warning_codes"]
@@ -362,9 +325,8 @@ def test_connection_can_name_a_specific_conformer(tmp_path):
 def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path):
     """Partial occupancies survive the PDB round trip and reach the atom count.
 
-    ``count_deposited_ni`` is an occupancy-weighted sum, so an occupancy that
-    was silently rounded to 1.00 on write would quietly inflate the DPI input
-    for every partially occupied site.
+    ``count_deposited_ni`` is an occupancy-weighted sum, so an occupancy rounded
+    to 1.00 on write would inflate the DPI input for every partial site.
     """
     from structure_analysis import count_deposited_ni, load_structure
 
@@ -382,9 +344,8 @@ def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path):
 def test_hetero_residue_builds_a_multi_metal_cofactor(tmp_path):
     """A het residue keeps its full atom composition and every element present.
 
-    Cofactor handling keys off the residue's element set and its chemical atom
-    count, so an FeS cluster must report both elements and all four atoms rather
-    than being flattened to its first atom.
+    Cofactor handling keys off the residue's element set and chemical atom
+    count, not its first atom.
     """
     from structure_analysis import load_structure
 
@@ -408,9 +369,8 @@ def test_hetero_residue_builds_a_multi_metal_cofactor(tmp_path):
 def test_builder_can_omit_symmetry_metadata(tmp_path):
     """A structure with no cell reports symmetry search as unavailable, with cause.
 
-    Several tests need an entry where symmetry expansion is impossible. The
-    builder must be able to express that, and the loader must name the reason
-    instead of failing later inside the contact search.
+    The loader must name the reason rather than fail later inside the contact
+    search.
     """
     from structure_analysis import load_structure
 
@@ -423,14 +383,11 @@ def test_builder_can_omit_symmetry_metadata(tmp_path):
     assert context.symmetry_search_failure_reason == "missing_or_invalid_unit_cell"
 
 
-# EDSTATS helpers -> extract_metal_statistics
 def test_edstats_row_matches_the_documented_schema():
     """Synthetic EDSTATS rows match the parser's own column list exactly.
 
-    The helper writes the 42-column EDSTATS header the real program emits, and a
-    metal row must be addressable by ``RT``/``CI``/``RN``. Two shapes matter
-    besides: a blank-chain row is one field short, and a separator row is 39
-    fields. An unknown metric name is a typo in the test, so it raises.
+    EDSTATS writes 42 columns for a residue row, 41 for a blank-chain row and
+    39 for a separator row, and the helper must reproduce all three.
     """
     from metal_identification import EDSTATS_COLUMNS
 
@@ -454,9 +411,7 @@ def test_edstats_row_matches_the_documented_schema():
 def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path):
     """Helper-written EDSTATS output is accepted by the real statistics parser.
 
-    This is the contract that lets the suite skip CCP4 entirely: whatever
-    ``stats_rows_for_structure`` writes must be parseable, joined to the right
-    residue, and marked as a matched, selected metal site.
+    This is the contract that lets the suite run without CCP4 at all.
     """
     from structure_analysis import load_structure
 
@@ -479,9 +434,8 @@ def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path):
 def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
     """Per-residue EDSTATS sigmas reach every bond row for that residue.
 
-    The bond stage joins its rows to the statistics table on residue identity.
-    If that join misses, the sigma columns are silently blank rather than wrong,
-    which is why they are asserted explicitly here.
+    A missed join leaves the sigma columns blank rather than wrong, so it is
+    invisible unless asserted.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
@@ -506,9 +460,9 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
 def test_blank_chain_rows_round_trip_through_the_parser(tmp_path):
     """A blank chain id survives the whitespace-delimited EDSTATS format.
 
-    EDSTATS writes columns separated by spaces, so a residue in the blank chain
-    produces a row with one field fewer. The parser has to attribute the missing
-    field to the chain rather than shifting every later column by one.
+    EDSTATS separates columns by spaces, so a blank-chain residue produces a row
+    with one field fewer; the parser has to attribute the missing field to the
+    chain rather than shift every later column by one.
     """
     from metal_elements import METAL_ELEMENTS
     from metal_identification import extract_metal_statistics
@@ -537,10 +491,9 @@ def test_blank_chain_rows_round_trip_through_the_parser(tmp_path):
 def test_cofactor_rows_repeat_once_per_metal_site(tmp_path):
     """A two-metal cofactor yields one row per metal over one shared observation.
 
-    EDSTATS measures the FES residue once, but the cofactor holds two iron
-    sites. Both must be reported, sharing a single density observation id and
-    both marked shared, so density is not double-counted as independent
-    evidence.
+    EDSTATS measures the FES residue once but the cofactor holds two iron sites,
+    so both rows share one density observation id and are marked shared, keeping
+    the density from counting twice as independent evidence.
     """
     from metal_elements import METAL_ELEMENTS
     from metal_identification import extract_metal_statistics
@@ -568,7 +521,6 @@ def test_cofactor_rows_repeat_once_per_metal_site(tmp_path):
 
     assert [row["category"] for row in rows] == ["cofactor", "cofactor"]
     assert [row["site"].atom_name for row in rows] == ["FE1", "FE2"]
-    # One density observation shared by two metal sites.
     assert len({row["density_observation_id"] for row in rows}) == 1
     assert all(row["density_shared_site_count"] == 2 for row in rows)
     assert all(row["density_is_shared"] for row in rows)
@@ -577,9 +529,8 @@ def test_cofactor_rows_repeat_once_per_metal_site(tmp_path):
 def test_insertion_codes_survive_into_the_edstats_join(tmp_path):
     """Insertion codes are preserved on the coordinate side of the join.
 
-    ``load_structure`` reports HIS 10A with its insertion code attached, which is
-    the identity the statistics table is joined on. Dropping the code would
-    merge residue 10 and residue 10A into one.
+    The insertion code is part of the identity the statistics table joins on:
+    dropping it would merge residue 10 and residue 10A into one.
     """
     from structure_analysis import load_structure
 
@@ -600,15 +551,13 @@ def test_insertion_codes_survive_into_the_edstats_join(tmp_path):
 def test_symmetry_image_contacts_are_reachable(tmp_path):
     """A contact that exists only through a symmetry image is found and labelled.
 
-    In this small P 1 cell the water's ``-a`` image lies 1.0 Angstrom from the
-    metal while the deposited copy is far away. The contact must be found, its
-    distance measured against the image, and it must be marked crystallographic
-    with the operation that produced it -- not reported as a deposited contact.
+    The deposited water is far from the metal, so the distance must be measured
+    against the image and marked crystallographic, not deposited.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
-    # A small P 1 cell puts the water's -a image 1.0 A from the metal.
+    # This small P 1 cell puts the water's -a image 1.0 A from the metal.
     builder = StructureBuilder(
         cell=(20.0, 20.0, 20.0, 90.0, 90.0, 90.0), spacegroup="P 1"
     )
@@ -631,11 +580,8 @@ def test_symmetry_image_contacts_are_reachable(tmp_path):
 def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     """Complete refinement metadata yields a finite DPI and a finite z-score.
 
-    Most tests deliberately run without a data.json and expect the
-    ``missing_dpi_metadata_source`` partial reason. This is the positive
-    control: with reflection count, R-free and resolution supplied, the DPI
-    chain must produce real numbers, so a blank z-score elsewhere means missing
-    metadata rather than a broken formula.
+    The positive control for the many tests that run without a data.json: a
+    blank z-score elsewhere means missing metadata, not a broken formula.
     """
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
@@ -665,15 +611,11 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     assert math.isfinite(rows[0]["zscore"])
 
 
-# Capability probes and markers
 def test_ccp4_capability_probe_is_boolean_and_does_not_raise():
     """The local CCP4 probe answers with a bool instead of raising.
 
-    ``conftest`` calls it during collection to decide what to skip. A probe that
-    raised -- no ``PATH`` or an unreadable config -- would abort collection of
-    the entire suite rather than skip a few tests. The live network probe stays
-    inside the ``network``-marked test below, so this unmarked smoke test never
-    opens a real socket.
+    ``conftest`` calls it during collection, so a probe that raised on an
+    unreadable config would abort collection of the whole suite.
     """
     assert isinstance(helpers.ccp4_available(), bool)
 
@@ -681,10 +623,9 @@ def test_ccp4_capability_probe_is_boolean_and_does_not_raise():
 def test_not_network_selection_does_not_call_the_network_probe(tmp_path, repo_root):
     """Marker deselection happens before the external capability probe.
 
-    ``-m 'not network'`` is an offline selection boundary, not merely a promise
-    to discard the test after collection. The child plugin replaces the probe
-    with a function that raises, making a hidden DNS or socket attempt
-    impossible while still exercising a real nested pytest collection.
+    ``-m 'not network'`` is an offline selection boundary, not just a promise to
+    discard the test after collection, so the nested run replaces the probe with
+    one that raises.
     """
     test_file = tmp_path / "test_marker_selection.py"
     test_file.write_text(
@@ -744,19 +685,16 @@ def test_not_network_selection_does_not_call_the_network_probe(tmp_path, repo_ro
 def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
     """The ``ccp4_env`` fixture hands back an environment CCP4 can actually run in.
 
-    Each of the four programs is executed with no input, which proves the
-    resolved ``PATH`` points at real, runnable binaries rather than at names
-    that merely resolve. A CCP4 install that is present but broken -- missing
-    shared libraries, a stale setup script -- is caught here instead of halfway
-    through an end-to-end run: the dynamic loader fails before ``main`` runs, so
-    the program never announces itself.
+    An install that resolves but is broken -- missing shared libraries, a stale
+    setup script -- must be caught here rather than halfway through an
+    end-to-end run.
     """
     resolved = {tool: helpers.which(tool, ccp4_env) for tool in helpers.CCP4_TOOLS}
     assert all(resolved.values()), resolved
 
     # What the loader says when a shared object is missing or a symbol is
-    # unresolved. Deliberately not "no such file or directory": fft and mapmask
-    # print that themselves when given no input file, which is healthy.
+    # unresolved. Not "no such file or directory": fft and mapmask print that
+    # themselves when given no input file, which is healthy.
     loader_failures = (
         "error while loading shared libraries",
         "cannot open shared object file",
@@ -766,9 +704,8 @@ def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
 
     for tool, path in resolved.items():
         assert path is not None
-        # No input and no arguments: every one of the four prints a banner
-        # naming itself and exits promptly. The exit status differs between
-        # them (edstats 0, the other three 1) and is not the point.
+        # With no input each of the four prints a banner naming itself and
+        # exits; the status differs between them (edstats 0, the rest 1).
         completed = subprocess.run(
             [path],
             env=ccp4_env,
@@ -780,16 +717,15 @@ def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
         output = completed.stdout.decode("utf-8", "replace")
         excerpt = output[:500]
 
-        # Negative means killed by a signal: a SIGSEGV on startup is exactly
-        # the "present but broken" install this test exists to catch.
+        # Negative means killed by a signal, so a SIGSEGV on startup is caught
+        # here rather than read as a normal nonzero exit.
         assert completed.returncode >= 0, (
             f"{tool} died on signal {-completed.returncode}: {excerpt!r}"
         )
         for marker in loader_failures:
             assert marker not in output.lower(), f"{tool}: {excerpt!r}"
-        # mtzfix prints "MTZFIX", fft prints "FFTBIG", and mapmask and edstats
-        # print their own names. Reaching the banner means the binary loaded
-        # and its own code ran.
+        # mtzfix prints "MTZFIX", fft prints "FFTBIG", mapmask and edstats print
+        # their own names; reaching the banner means the binary loaded.
         assert tool in output.lower(), (
             f"{tool} produced no banner naming itself: {excerpt!r}"
         )
@@ -799,10 +735,8 @@ def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
 def test_network_marker_only_runs_with_connectivity():
     """PDB-REDO really answers, not merely a TCP handshake on port 443.
 
-    The ``network`` marker gates tests that download entries, so the useful
-    question is whether an entry file can actually be fetched. A captive portal
-    or a proxy that accepts connections and then refuses them would pass the
-    socket probe used for skipping but fail here.
+    A captive portal or a proxy that accepts connections and then refuses them
+    passes the socket probe used for skipping but fails here.
     """
     assert helpers.network_available()
 
@@ -810,8 +744,8 @@ def test_network_marker_only_runs_with_connectivity():
     with urllib.request.urlopen(url, timeout=30) as response:
         assert response.status == 200
         payload = json.loads(response.read().decode("utf-8"))
-    # A JSON-formatted proxy error is still a non-empty dict, so require the
-    # crystallographic metadata Alchemy actually consumes from data.json.
+    # A JSON-formatted proxy error is still a dict, so require the
+    # crystallographic metadata Alchemy consumes from data.json.
     assert isinstance(payload, dict)
     properties = payload.get("properties")
     assert isinstance(properties, dict) and properties
@@ -822,9 +756,8 @@ def test_network_marker_only_runs_with_connectivity():
 def test_element_inference_rejects_ambiguous_names():
     """Atom-name element inference follows PDB naming and refuses metal names.
 
-    The helpers infer an element from a protein atom name, where the leading
-    character is the element. That rule does not hold for two-letter metals --
-    ``ZN`` is zinc, not nitrogen -- so those must raise rather than be guessed.
+    The leading character is the element for protein atom names, but not for
+    two-letter metals: ``ZN`` is zinc, not nitrogen.
     """
     assert helpers.element_for_atom_name("OD1") == "O"
     assert helpers.element_for_atom_name("ND1") == "N"
@@ -835,15 +768,13 @@ def test_element_inference_rejects_ambiguous_names():
 
 
 def test_gemmi_is_the_expected_flavour():
-    # The helpers rely on Connection/AtomAddress and mmCIF writing.
     """The installed gemmi has the APIs the helpers and src depend on.
 
-    ``Connection``/``AtomAddress`` are used to declare connections, and
-    ``src/structure_analysis.py`` uses ``Model.num``, which arrived in gemmi
-    0.7. An older build fails deep inside unrelated tests, so it is named here.
+    The helpers declare connections through ``Connection``/``AtomAddress``, and
+    ``src/structure_analysis.py`` uses ``Model.num``, which arrived in 0.7.
     """
     assert hasattr(gemmi, "Connection") and hasattr(gemmi, "AtomAddress")
     # Read via getattr: gemmi ships py.typed but its stubs omit __version__,
-    # so a direct access is a type-checker error against a real runtime name.
+    # so a direct access is a type error against a real runtime name.
     version = str(getattr(gemmi, "__version__", "unknown"))
     assert tuple(int(p) for p in version.split(".")[:2]) >= (0, 7)

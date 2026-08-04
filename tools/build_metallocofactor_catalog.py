@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Explicitly rebuild Alchemy's bundled metallocofactor catalog.
+"""Rebuild Alchemy's bundled metallocofactor catalog.
 
-This is a developer maintenance utility, not part of the analysis pipeline.
-Normal Alchemy runs never import it, check catalog age, or access the network.
+A developer utility: the analysis pipeline never imports it and never networks.
 """
 
 import argparse
@@ -34,29 +33,23 @@ METADATA_FILENAME = "metallocofactors_id.meta.json"
 COMPONENT_ID_PATTERN = re.compile(r"[A-Z0-9]+")
 ELEMENT_PATTERN = re.compile(r"([A-Z][a-z]?)(\d*)")
 
-# Alchemy tags each metal's environment with a structural class in the
-# parent_type column. Two architectures are singled out because their
-# coordination geometry is chemically constrained, which is what makes them
-# usable as reference populations. Deriving them here keeps them tracking the
-# CCD instead of drifting behind a hand-maintained list in the analysis code.
+#: Published ``parent_type`` values for the two reference populations.
 CLASS_CLUSTER = "cluster"
 CLASS_HEME = "heme"
 
 # Metals that form polynuclear metal-chalcogen clusters in biological cofactors.
 CLUSTER_METALS = ("FE", "NI", "MO", "V", "W")
 CLUSTER_CHALCOGENS = ("S", "SE")
-# The porphyrinoid core is a single biconnected conjugated system. Canonical
-# porphyrins have 20 carbon and four nitrogen atoms in a 24-atom component;
-# oxaporphyrins replace one carbon, while iron phthalocyanine is larger. Three
-# Fe-N bonds retain covalently modified porphyrins such as CCD ``WRK``.
+# The porphyrinoid core is one biconnected conjugated system. Canonical
+# porphyrins have 20 carbon and four nitrogen atoms in a 24-atom core;
+# oxaporphyrins replace one carbon, while iron phthalocyanine is larger.
+# Three Fe-N bonds admit covalently modified porphyrins such as CCD ``WRK``.
 PORPHYRINOID_CORE_MIN_ATOMS = 24
 PORPHYRINOID_CORE_MIN_CARBON = 18
 PORPHYRINOID_CORE_MIN_NITROGEN = 4
 PORPHYRINOID_MIN_FE_N_BONDS = 3
 
-# Canonical cofactors named in the Alchemy manuscript Methods. Asserted present
-# after every build so a change to the rules above cannot silently drop a
-# member of the published reference populations.
+# Canonical cofactors named in the Alchemy manuscript Methods.
 CANONICAL_CLASSES = {
     "HEM": CLASS_HEME,
     "HEC": CLASS_HEME,
@@ -155,11 +148,8 @@ def classify_component(block):
 
     Formula stoichiometry cannot establish either architecture: sulfur may be
     part of an unrelated substituent, and many siderophores and synthetic iron
-    chelates have Fe/N/C counts resembling a heme. A cluster therefore requires
-    a sulfur or selenium atom bonded to at least two cluster-forming metals. A
-    heme requires an Fe-bound porphyrinoid-sized biconnected C/N core.
-
-    Cluster is tested first, matching the precedence used by the analysis.
+    chelates have Fe/N/C counts resembling a heme. Cluster is tested first,
+    matching the precedence used by the analysis.
     """
     elements, adjacency = _component_graph(block)
     cluster_metals = {
@@ -395,7 +385,7 @@ def build_metallocofactors_list(cif_path, output_path):
 
 
 def rebuild_catalog(output_dir, ccd_path=None):
-    """Explicitly rebuild the bundled catalog and provenance metadata."""
+    """Rebuild the bundled catalog and its provenance metadata."""
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     catalog_path = os.path.join(output_dir, CATALOG_FILENAME)

@@ -1,19 +1,15 @@
 """The three CSV schemas Alchemy publishes, and the rows written against them.
 
-This is the output contract. ``metal_bonds_all.csv`` carries assigned
+This is the output contract: ``metal_bonds_all.csv`` carries assigned
 metal-donor contacts, ``metal_candidates_all.csv`` the evidence behind them,
 and ``metal_stats_all.csv`` the EDSTATS table with per-site columns appended.
-Each has a fixed column list here, a builder here that produces exactly those
-keys, and ``_check_row_schema`` to say so out loud when the two drift -- rows
-are written by projecting them onto the column list, so a key a builder gained
-without a matching column would be dropped in silence and one it lost would
-surface downstream as a bare ``KeyError``.
+Rows are written by projecting them onto their column list, so a key a builder
+gained without a matching column would be dropped in silence and one it lost
+would surface downstream as a bare ``KeyError``. ``_check_row_schema`` catches
+both.
 
-The builders are serialization only. They read an already-analyzed contact or
-candidate and name its fields; every decision they report -- whether a contact
-is an outlier, which donor rule allowed it, what provenance it carries -- was
-made in ``bond_analysis`` before the row is built. That is what lets this
-module sit underneath the analysis rather than beside it.
+The builders are serialization only: every decision they report was made in
+``bond_analysis`` before the row is built.
 """
 
 from typing import Any, Mapping, Optional
@@ -21,17 +17,15 @@ from typing import Any, Mapping, Optional
 from structure_analysis import NAN
 
 
-# Conservative cutoff for a reference-covered geometry outlier. It lives here
-# because both CSVs publish it as a column: a consumer reading an old file must
-# be able to see which threshold produced its `geometry_outlier` values.
-# ``bond_analysis`` imports it back to make that decision.
+# Cutoff for a reference-covered geometry outlier. Both CSVs publish it as a
+# column, so a consumer reading an old file can see which threshold produced
+# its `geometry_outlier` values.
 ZSCORE_OUTLIER_CUTOFF = 6.0
 
 
-# Fixed output schema; the driver's writers import it so the row builders and
-# the CSV header can never drift apart. Legacy "candidate" field names are
-# retained for CSV compatibility, but now describe inferred first-sphere or
-# source-declared contacts.
+# The driver's writers import these column lists, so the row builders and the
+# CSV header cannot drift apart. "candidate" field names are kept for CSV
+# compatibility and describe inferred first-sphere or source-declared contacts.
 BOND_COLUMNS = [
     "pdbID",
     "metal_resname",
@@ -123,10 +117,9 @@ BOND_COLUMNS = [
 ]
 
 
-# Candidate evidence is kept separately from assigned bond rows. This schema
-# intentionally contains no z-score or geometry classification: failing
-# first-sphere eligibility does not establish that an atom is chemically
-# nonbonded, and a source declaration may supersede the proximity-only result.
+# No z-score or geometry classification here: failing first-sphere eligibility
+# does not establish that an atom is chemically nonbonded, and a source
+# declaration may supersede the proximity-only result.
 CANDIDATE_COLUMNS = [
     "pdbID",
     "candidate_source",
@@ -287,12 +280,7 @@ STATS_EXTRA_COLUMNS = [
 
 
 def _check_row_schema(row, columns, name):
-    """Fail loudly when a row builder and its CSV schema have drifted apart.
-
-    Rows are written by projecting them onto a fixed column list, so a key the
-    builder gained without a matching column would be dropped silently and a
-    column it lost would surface only as a bare KeyError.
-    """
+    """Fail loudly when a row builder and its CSV schema have drifted apart."""
     expected = set(columns)
     if row.keys() == expected:
         return
@@ -308,7 +296,6 @@ def _check_row_schema(row, columns, name):
     )
 
 
-# Row values
 def _bonded_to(is_water=False):
     return "HOH" if is_water else "P"
 
@@ -351,7 +338,7 @@ def _donor_output_values(candidate):
 
 
 def _context_warning_values(candidate, include_proximal=False):
-    """Return the extensible binary context flag and auditable reason codes."""
+    """Return the context flag and the reason codes behind it."""
     reasons = []
     if not candidate.inferred_donor_allowed:
         if candidate.declared_connections:
@@ -548,7 +535,7 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_
 
 
 def _candidate_row(pdb_id, structure, metal, candidate):
-    """Return one discovered or declared candidate with full provenance."""
+    """Return one discovered or declared candidate as a candidate CSV row."""
     neighbor = candidate.neighbor
     x, y, z = candidate.transformed_position
     tx, ty, tz = candidate.translation

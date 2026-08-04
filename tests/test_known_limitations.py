@@ -1,53 +1,13 @@
 """Validated-but-unfixed defects, pinned so a fix cannot land unnoticed.
 
-Every executable defect pin in this module describes behaviour Alchemy *should*
-have and is marked ``xfail(strict=True)``.  Unsafe process-level reproductions
-are documented as explicit skips instead, so the reported outcome is:
+A pin asserts the behaviour Alchemy *should* have and is marked
+``xfail(strict=True)``: while the defect stands the pin is a quiet ``XFAIL``,
+and a fix turns the suite red, at which point the marker goes and the test moves
+into the module that owns the behaviour. Keep each pin narrow enough that only a
+fix to that defect can satisfy it, and free of CCP4 and the network so the
+findings stay visible on a bare checkout. A finding reproducible only by killing
+a process, filling a disk or exhausting memory is recorded as a ``skip`` with
+its manual reproduction in the docstring rather than as a fragile automation.
 
-``XFAIL``
-    The defect is still present. This is the expected, quiet state.
-``XPASS`` -> **the suite fails**
-    Someone fixed the defect. That is good news, and it is deliberately loud:
-    delete the ``xfail`` marker, move the test into the module that owns the
-    behaviour, and update the finding list below.
-
-Three properties keep this module honest:
-
-* it asserts the *desired* behaviour, never the buggy behaviour, so a fix turns
-  a red mark green rather than requiring the assertion to be inverted;
-* nothing here needs CCP4 or the network -- CCP4 is stubbed with four
-  do-nothing executables where the driver only probes ``PATH`` -- so the
-  findings stay visible on a bare laptop checkout; every strict assertion is
-  narrow enough that only a fix to *that* defect can satisfy it, because under
-  ``strict=True`` an incidental pass is a red suite claiming a fix nobody made;
-* findings that can only be reproduced by killing a process, filling a disk or
-  exhausting memory are recorded as ``skip`` with the manual reproduction in the
-  docstring, rather than as a fragile automated approximation.
-
-This module currently owns no pins.  Every finding it held has been fixed and
-its test moved to the module that owns the behaviour, including the last one --
-corrupt confidence coverage scoring as higher confidence, fixed in ``36e5dbf``
-and now covered by parametrised regression tests in
-``test_confidence_score.py``.  The protocol above is kept for the next
-validated-but-unfixed defect.
+This module currently owns no pins.
 """
-
-# No pins are currently open here. Every finding this module held has been
-# fixed, and each regression test moved to the module that owns the behaviour:
-#
-#   --ccp4-setup precedence, --max-pdbs, --no-bonds help,
-#   CCP4 config precedence          -> test_cli_and_config.py
-#   SIGTERM cleanup, idle-worker
-#   pool deadlock                   -> test_worker_recovery.py
-#   leaked scratch directories,
-#   unwritable --output-dir         -> test_driver_manifest.py
-#   declared donor/NCS handling     -> test_declared_connections.py
-#   placeholder unit cell           -> test_bond_geometry.py
-#
-# The last finding this module tracked -- a corrupt geometry_coverage cell
-# scoring as higher confidence -- was fixed in 36e5dbf; its regression tests
-# live in test_confidence_score.py, next to the scoring code they concern.
-#
-# The protocol above stands for the next validated-but-unfixed defect: assert
-# the desired behaviour, mark it xfail(strict=True) with a source anchor in the
-# reason, and move it out when it turns green.

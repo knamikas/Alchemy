@@ -1,15 +1,4 @@
-"""Pytest configuration shared by the whole suite.
-
-Responsibilities:
-
-1. Put ``src`` on ``sys.path`` so tests can ``import main``, ``import
-   bond_analysis`` and friends. ``src`` is not a package.
-2. Turn the ``ccp4``, ``entry_data``, ``network`` and ``slow`` markers into
-   clean skips for an ordinary local run, with opt-in strict modes for
-   capability-specific lanes.
-3. Expose fixtures for the things a test cannot build itself: a CCP4
-   environment, a PDB-REDO download cache, and an isolated working directory.
-"""
+"""Suite-wide sys.path wiring, capability markers and shared fixtures."""
 
 from __future__ import annotations
 
@@ -24,7 +13,8 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(REPO_ROOT, "src")
 
-# Must happen at import time, before any test module is collected.
+# ``src`` is not a package, so it is reached through sys.path, and the entry
+# must exist before any test module is collected.
 for _path in (SRC_DIR, TESTS_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
@@ -34,19 +24,16 @@ import gemmi  # noqa: E402  (needs the sys.path entries above)
 import helpers  # noqa: E402  (needs the sys.path entries above)
 
 
-#: ``src/structure_analysis.py`` uses ``gemmi.Model.num``, which arrived in
-#: 0.7. Older builds import fine and then fail deep inside ~200 unrelated tests
-#: with ``AttributeError``, which reads as a broken suite rather than a
-#: too-old dependency.
+# ``src/structure_analysis.py`` uses ``gemmi.Model.num``, which arrived in 0.7;
+# an older build imports fine and then fails inside ~200 unrelated tests.
 MINIMUM_GEMMI = (0, 7)
 
 
 def _gemmi_version_string():
-    """Return gemmi's reported version.
+    """gemmi's reported version.
 
-    Read through ``getattr`` because gemmi ships ``py.typed`` while its stubs
-    omit ``__version__``, so a direct attribute access is a type-checker error
-    against a name that exists at runtime. ``src/main.py`` reads it the same way.
+    Read through ``getattr``: gemmi ships ``py.typed`` but its stubs omit
+    ``__version__``, so a direct access is a type error against a real name.
     """
     return str(getattr(gemmi, "__version__", "unknown"))
 
@@ -91,7 +78,6 @@ def pytest_configure(config):
     }
 
 
-# Options
 def pytest_addoption(parser):
     group = parser.getgroup("alchemy")
     group.addoption(
@@ -145,14 +131,11 @@ def pytest_addoption(parser):
 def pytest_collection_modifyitems(config, items):
     """Skip marked tests whose external requirement is not satisfied.
 
-    Running after pytest's built-in ``-m``/``-k`` selection is essential: a
-    deselected network test must not cause the capability probe it was selected
-    out to avoid. Availability is probed at most once per session, and only when
-    a surviving test carries the relevant marker.
+    Must run after pytest's ``-m``/``-k`` selection: a deselected network test
+    must not trigger the probe it was selected out to avoid.
     """
-    # Annotated because the two probes have different signatures --
-    # ``network_available`` takes three defaulted arguments, ``ccp4_available``
-    # none -- so the inferred value type is their join, which is not callable.
+    # Annotated because the two probes have different signatures, so the
+    # inferred value type is their join, which is not callable.
     probes: dict[str, tuple[Callable[[], bool], str]] = {
         "ccp4": (
             helpers.ccp4_available,
@@ -221,7 +204,6 @@ def pytest_sessionfinish(session, exitstatus):
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
-# Paths
 @pytest.fixture(scope="session")
 def repo_root() -> str:
     """Absolute path of the repository checkout under test."""
@@ -244,23 +226,19 @@ def data_dir() -> str:
 def work_dir(tmp_path, monkeypatch) -> str:
     """A tmp directory that is also the process cwd for the duration of a test.
 
-    Use it for code that writes relative paths, and to prove that code under
-    test writes nothing into whatever directory pytest happened to start in --
-    nothing may be left in the repository. ``monkeypatch`` restores the previous
-    cwd at teardown even when the test fails.
+    Use it for code that writes relative paths, so that anything left behind
+    lands here instead of in the checkout.
     """
     monkeypatch.chdir(tmp_path)
     return str(tmp_path)
 
 
-# External capabilities
 @pytest.fixture(scope="session")
 def ccp4_env():
-    """Environment mapping with the CCP4 binaries on ``PATH``.
+    """Environment mapping with the CCP4 binaries on ``PATH``, else skip.
 
-    Skips the test when CCP4 cannot be resolved, so it is safe to request even
-    without the ``ccp4`` marker -- but mark the test ``ccp4`` anyway so the
-    reason is visible in a plain collection.
+    Mark the test ``ccp4`` as well, so the reason is visible in a plain
+    collection.
     """
     env = helpers.ccp4_env()
     if env is None:
@@ -272,12 +250,9 @@ def ccp4_env():
 def pdb_redo_cache(tmp_path_factory) -> str:
     """Directory for PDB-REDO downloads, shared across the session.
 
-    Honours the cache environment variable when set (the orchestrator points it
-    at a warm cache); otherwise a session tmp directory is used, which means a
-    real download. ``helpers.cache_dir_from_env`` is the suite-wide reader, so
-    the canonical ``ALCHEMY_TESTS_CACHE`` and older ``ALCHEMY_TEST_CACHE`` both
-    work, with the first nonblank value winning in canonical-then-legacy order.
-    Treat the contents as best-effort: entries may be missing.
+    Falls back to a session tmp directory when no warm cache is configured,
+    which means a real download. Treat the contents as best-effort: entries may
+    be missing.
     """
     configured = helpers.cache_dir_from_env()
     if configured:

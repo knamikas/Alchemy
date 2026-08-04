@@ -1,14 +1,6 @@
 # Alchemy
 # CCP4-based map calculation + edstats real-space statistics for one structure.
 #
-# Core pipeline (see main.py for batch orchestration over PDB-REDO):
-#   1. mtzfix validates/corrects the input MTZ's Fourier map coefficients
-#   2. fft  FWT/PHWT       -> {id}_fo.map   (2mFo-DFc "observed" map)
-#   3. fft  DELFWT/PHDELWT -> {id}_df.map   (mFo-DFc difference map)
-#   4. mapmask optionally limits both maps to the complete coordinate-model
-#      envelope, retaining a 10 Angstrom border and every deposited atom
-#   5. edstats XYZIN=pdb MAPIN1=fo MAPIN2=df -> {id}_stats.out per-atom stats
-#
 # Requires the CCP4 binaries `mtzfix`, `fft`, `mapmask`, and `edstats` on PATH
 # (pass `env=` to point at a sourced CCP4 environment). The input MTZ must carry
 # the FWT/PHWT/DELFWT/PHDELWT map-coefficient columns (PDB-REDO _final.mtz and
@@ -33,14 +25,9 @@ logger = logger_for(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 
-#: Per-program wall-clock budget for a CCP4 step, in seconds.
-#:
-#: Derived from the July 2026 database runs over several thousand entries,
-#: whose observed maxima were EDSTATS 185.7 s, FFT 54.2 s, MAPMASK 6.3 s and
-#: MTZFIX 1.3 s -- including the unusually large 8p4v. Fifteen minutes is
-#: roughly five times the worst case, which bounds a genuine hang without
-#: being aggressive toward an exceptionally large structure. Override with
-#: --ccp4-timeout when one needs longer.
+# Roughly five times the worst step observed across the July 2026 database runs
+# (EDSTATS 185.7 s), so a genuine hang is bounded without killing a very large
+# structure.
 CCP4_TOOL_TIMEOUT_S = 15 * 60
 DENSITY_MAP_SCOPES = ("model-envelope", "full")
 REFMAC_TWIN_COLUMNS = {
@@ -59,39 +46,20 @@ REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
 
 @dataclass(frozen=True)
 class DensityResult:
-    """What one entry's density stage produced, and how it produced it.
+    """What one entry's density stage produced, and how it produced it."""
 
-    Declared rather than assembled key by key because the worker used to read
-    it both ways in the same block -- ``res["density_map_scope_used"]`` beside
-    ``res.get("timings", {})`` -- which left a reader unable to tell which
-    fields are guaranteed. Every field below is always present: the function
-    either returns all of them or raises.
-
-    ``rszd`` and ``qq_out``-adjacent paths are here because the debug CLI and
-    ``--keep-intermediates`` both want to name the files the stage wrote, not
-    because the pipeline reads them back.
-    """
-
-    #: EDSTATS statistics table; the only output the pipeline parses.
+    # stats_out is the only output the pipeline parses; the remaining paths
+    # exist so the debug CLI and --keep-intermediates can name what was written.
     stats_out: str
-    #: Per-atom RSZD coordinates EDSTATS writes alongside its table.
     rszd: str
-    #: The 2mFo-DFc and mFo-DFc maps EDSTATS was run against.
     fo_map: str
     df_map: str
-    #: The MTZ the maps were computed from: the original, MTZFIX's correction,
-    #: or the twin-normalized rewrite, which ``mtzfix_applied`` and
-    #: ``twin_coefficient_normalization_applied`` distinguish.
     mtz_for_maps: str
     mtzfix_log: str
     mtzfix_applied: bool
-    #: Per-step wall-clock seconds, merged into the entry's timings.
     timings: dict[str, Any]
     twin_coefficient_normalization_applied: bool
-    #: The normalization's own reflection counts and residuals, or ``None``.
     twin_coefficient_normalization: Optional[dict[str, Any]]
-    #: What was asked for, and what was achieved -- they differ when a model
-    #: envelope could not be cropped and the full map was used instead.
     density_map_scope_requested: str
     density_map_scope_used: str
     full_map_bytes: int
@@ -107,17 +75,7 @@ class MtzfixValidationError(RuntimeError):
 
 
 class Ccp4ToolTimeoutError(RuntimeError):
-    """A CCP4 program ran past its time budget and was killed.
-
-    Distinguished from a non-zero exit so the driver can report it as its own
-    retryable outcome rather than as a generic processing error: a program that
-    exceeded its budget has told us nothing about the entry, whereas a failure
-    exit usually has.
-
-    Carries the tool name, the elapsed time, the budget, and the timings
-    accumulated before the timeout, so a run log records what the entry cost
-    before it was abandoned.
-    """
+    """A CCP4 program ran past its time budget and was killed."""
 
     def __init__(self, tool, timeout_s, elapsed_s, log_path, timings=None):
         super().__init__(
@@ -131,13 +89,11 @@ class Ccp4ToolTimeoutError(RuntimeError):
         self.timings = dict(timings or {})
 
 
-def _complex_coefficients(amplitudes, phases):
-    """Return complex Fourier coefficients for amplitudes and degree phases."""
-    return amplitudes * np.exp(1j * np.deg2rad(phases))
+def _complex_coefficients(amplitudes, degree_phases):
+    return amplitudes * np.exp(1j * np.deg2rad(degree_phases))
 
 
-def _amplitudes_and_phases(coefficients):
-    """Return non-negative amplitudes and degree phases for complex values."""
+def _amplitudes_and_degree_phases(coefficients):
     amplitudes = np.abs(coefficients)
     phases = np.rad2deg(np.angle(coefficients))
     phases[amplitudes == 0.0] = 0.0
@@ -173,13 +129,8 @@ def normalize_refmac_twin_coefficients(
     literature convention: ``2mFo-DFc`` and ``2(mFo-DFc)`` for acentric
     reflections, but ``mFo`` and ``mFo-DFc`` for centric reflections. Complex
     subtraction from ``FC_ALL`` performs that normalization without
-    reconstructing m or Fo -- an operation that is not valid under the ordinary
-    untwinned identities used by MTZFIX's consistency re-test.
-
-    This function accepts only recognizable Refmac output whose raw composite
-    coefficients satisfy ``FWT - FC_ALL = 2*DELFWT`` reflection by reflection.
-    It never modifies ``mtz_path`` and validates the written file before
-    returning conversion provenance.
+    reconstructing m or Fo, which the untwinned identities behind MTZFIX's
+    consistency re-test cannot do.
     """
     mtz_path = os.fspath(mtz_path)
     output_path = os.fspath(output_path)
@@ -251,8 +202,8 @@ def normalize_refmac_twin_coefficients(
     normalized_observed = observed.copy()
     normalized_observed[centric] = (observed[centric] + calculated[centric]) / 2.0
     normalized_difference = normalized_observed - calculated
-    fwt, phwt = _amplitudes_and_phases(normalized_observed)
-    delfwt, phdelwt = _amplitudes_and_phases(normalized_difference)
+    fwt, phwt = _amplitudes_and_degree_phases(normalized_observed)
+    delfwt, phdelwt = _amplitudes_and_degree_phases(normalized_difference)
 
     output_data = np.array(mtz.array, copy=True)
     for label, values in (
@@ -269,8 +220,8 @@ def normalize_refmac_twin_coefficients(
     ]
     mtz.write_to_file(output_path)
 
-    # Re-open the output and verify the semantic identity EDSTATS relies on:
-    # its observed map minus its difference map must be the calculated map.
+    # EDSTATS relies on observed minus difference being the calculated map, so
+    # verify that on the written file rather than on the in-memory arrays.
     written = gemmi.read_mtz_file(output_path)
     written_values = {
         label: np.asarray(written.column_with_label(label).array, dtype=np.float64)[
@@ -326,27 +277,9 @@ def run_density_analysis(
 ):
     """Validate the MTZ, compute maps with `fft`, then run `edstats`.
 
-    Parameters
-    ----------
-    pdbID : str            -- used only to name output files
-    mtz_path : str         -- MTZ with FWT/PHWT and DELFWT/PHDELWT columns
-    pdb_path : str         -- coordinates (edstats XYZIN)
-    out_dir : str          -- all outputs (maps, logs, stats) are written here
-    reslo, reshi : float   -- common low/high limits of the four map columns
-    env : dict | None      -- process environment (CCP4 on PATH) for subprocesses
-    map_scope : str        -- ``model-envelope`` (default) or legacy ``full``
-    keep_full_maps : bool  -- retain pre-crop maps with other intermediates
-    pdb_redo_is_twin : bool -- exact PDB-REDO ``properties.ISTWIN`` value
-
-    MTZFIX creates HKLOUT only when it has corrections to write. If the input
-    already passes its checks, no corrected file is produced and the original
-    MTZ is used for both FFT calculations.
-
-    Returns a ``DensityResult`` of output paths and MTZFIX provenance. Raises
-    RuntimeError if
-    any CCP4 step exits non-zero or edstats produces no stats file, and
-    ``Ccp4ToolTimeoutError`` if one of them runs past ``tool_timeout_s``. The budget
-    applies to each program separately, not to the entry as a whole.
+    ``reslo``/``reshi`` are the common low/high limits of the four map columns,
+    and ``pdb_redo_is_twin`` must be the exact PDB-REDO ``properties.ISTWIN``
+    value. ``tool_timeout_s`` is a budget per CCP4 program, not per entry.
     """
     if map_scope not in DENSITY_MAP_SCOPES:
         raise ValueError(
@@ -377,9 +310,6 @@ def run_density_analysis(
         logger.debug("%s: running %s (budget %gs)", pdb_id, program, timeout_s)
         started = time.monotonic()
         try:
-            # The budget is per program, not per entry: an entry running four
-            # CCP4 steps is allowed the full budget for each rather than
-            # sharing one deadline between them.
             with open(log_path, "w", encoding="utf-8", errors="replace") as log:
                 proc = subprocess.run(
                     cmd,
@@ -398,9 +328,8 @@ def run_density_analysis(
                 timeout_s,
                 log_path,
             )
-            # subprocess.run has already killed the child and reaped it. The
-            # log is left in place deliberately: whatever the program wrote
-            # before it stalled is the only evidence of where it stalled.
+            # subprocess.run has already killed and reaped the child; the
+            # partial log is the only evidence of where it stalled.
             elapsed = time.monotonic() - started
             timings[timing_name] = round(elapsed, 3)
             raise Ccp4ToolTimeoutError(
@@ -412,8 +341,6 @@ def run_density_analysis(
             ) from exc
         finally:
             timings.setdefault(timing_name, round(time.monotonic() - started, 3))
-            # "ended after" rather than "finished": this runs on the timeout
-            # path too, where the program was killed rather than completing.
             logger.debug(
                 "%s: %s ended after %.3fs", pdb_id, program, timings[timing_name]
             )
@@ -445,9 +372,8 @@ def run_density_analysis(
                 f"see {log_path}{detail_suffix}"
             )
 
-    # MTZFIX deliberately does not create HKLOUT when the input passes all of
-    # its consistency checks. Remove a result from any earlier retained run so
-    # that its absence after this invocation cannot be mistaken for new output.
+    # MTZFIX writes HKLOUT only when it has corrections to make, so a retained
+    # file from an earlier run would be read as this run's output.
     if os.path.lexists(fixed_mtz):
         if os.path.realpath(fixed_mtz) == os.path.realpath(mtz_path):
             raise RuntimeError(
@@ -527,9 +453,8 @@ def run_density_analysis(
 
         EDSTATS accepts cropped grids that overlap or extend in the negative
         direction, but wraps lookups into the primary unit cell when an entire
-        stored axis begins beyond its positive edge. MAPMASK can produce that
-        layout for a translated deposited model. Reading only the 1024-byte
-        CCP4 header keeps this preflight independent of map size.
+        stored axis begins beyond its positive edge, which MAPMASK can produce
+        for a translated deposited model.
         """
         with open(path, "rb") as handle:
             header = handle.read(1024)
@@ -578,12 +503,9 @@ def run_density_analysis(
         envelope_fo_bytes = _map_size(fo_map, "2mFo-DFc MAPMASK")
         full_map_bytes += full_fo_bytes
 
-        # A model spanning most or all of the cell can produce an extended
-        # envelope larger than FFT's original map. A translated model can also
-        # produce a smaller envelope whose stored extent begins entirely beyond
-        # the primary cell's positive edge; EDSTATS cannot safely consume that
-        # layout. In either case retain the legacy map and skip MAPMASK for the
-        # second map.
+        # A model spanning most or all of the cell can crop to an envelope
+        # larger than FFT's own map. Either fallback keeps the full map and
+        # skips MAPMASK for the second map too.
         fallback_scope = ""
         if envelope_fo_bytes >= full_fo_bytes:
             fallback_scope = "full-size-fallback"
@@ -616,7 +538,6 @@ def run_density_analysis(
             if not keep_full_maps:
                 os.remove(full_df_map)
 
-    # real-space statistics (RSZD/RSR per atom/residue)
     _run(
         [
             "edstats",
@@ -659,7 +580,6 @@ def run_density_analysis(
 
 
 if __name__ == "__main__":
-    # Thin single-structure CLI for manual testing. Batch runs go through main.py.
     import argparse
 
     p = argparse.ArgumentParser(

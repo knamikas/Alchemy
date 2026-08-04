@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """Record what ``src/data/metal_distances_info.txt`` currently is.
 
-The literature distance table is maintained by hand -- unlike the cofactor
-catalog, nothing generates it -- so it needs a way to say "this edit was
-deliberate". This writes the sidecar ``src/reference_data`` verifies at load:
-the file's SHA-256, its row count, and the citations the distances come from.
+Writes the sidecar ``src/reference_data`` verifies at load: the table's
+SHA-256, its row count, and the citations the distances come from. Run it
+after every hand edit of the table.
 
     python tools/stamp_distance_table.py            # rewrite the sidecar
     python tools/stamp_distance_table.py --check    # verify, change nothing
-
-Run it after editing the table. Every downstream z-score is measured against
-these numbers, so re-stamping is the moment to be sure the edit was right: the
-checksum only proves the file is the one somebody meant to ship.
 """
 
 import argparse
@@ -27,8 +22,7 @@ DATA_DIR = os.path.join(REPO_ROOT, "src", "data")
 TABLE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
 SIDECAR_PATH = os.path.join(DATA_DIR, "metal_distances_info.meta.json")
 
-#: Where the numbers come from. Recorded in the sidecar because the table
-#: itself carries no in-band citation, and README is not where a program looks.
+#: Published in the sidecar's ``sources``; the table carries no in-band citation.
 SOURCES = [
     {
         "citation": (
@@ -59,7 +53,7 @@ def sha256(path):
 
 
 def count_rows(path):
-    """Rows the loader will accept, counted the way the loader counts them."""
+    """Count the rows through the loader, so the count matches what it accepts."""
     sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
     from reference_data import _load_literature
 

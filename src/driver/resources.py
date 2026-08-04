@@ -1,10 +1,7 @@
 """What this machine will actually let a batch run use.
 
-``multiprocessing.cpu_count`` and total RAM both describe the hardware rather
-than the allocation, which is how an automatic run ends up starting dozens of
-workers inside a two-core container. These probes report what the process is
-permitted to use instead, and are deliberately dependency-free: worker
-selection happens before the analysis environment exists.
+Keep these probes dependency-free: worker selection happens before the analysis
+environment exists.
 """
 
 import os
@@ -12,19 +9,16 @@ import sys
 from multiprocessing import cpu_count
 
 
-#: Peak resident memory to budget for one worker. Measured against the largest
-#: entries in the integration set, so it is a ceiling rather than an average.
+# Peak resident memory to budget for one worker, measured against the largest
+# entries in the integration set, so it is a ceiling rather than an average.
 AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
 
 
 def available_cpu_count():
     """Return the number of CPUs this process is actually permitted to use.
 
-    ``multiprocessing.cpu_count()`` reports every logical CPU on the machine
-    and ignores CPU affinity, so inside a container or under a scheduler
-    allocation it can report far more than the job was granted -- defaulting a
-    batch run to dozens of workers on a handful of cores. The affinity-aware
-    interfaces are preferred where the platform provides them.
+    ``multiprocessing.cpu_count()`` ignores CPU affinity, so in a container or
+    under a scheduler allocation it reports far more than the job was granted.
     """
     process_cpu_count = getattr(os, "process_cpu_count", None)  # Python 3.13+
     if process_cpu_count is not None:
@@ -47,10 +41,8 @@ def available_cpu_count():
 def available_memory_bytes():
     """Return currently available physical memory, or ``None`` if unknown.
 
-    Available memory is used instead of total RAM so an automatic batch run
-    does not compete with memory already committed to other applications. Keep
-    this dependency-free because worker selection happens before the analysis
-    environment is initialized.
+    Available rather than total, so an automatic run does not compete with
+    memory already committed elsewhere.
     """
     if sys.platform.startswith("linux"):
         try:

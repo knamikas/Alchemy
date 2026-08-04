@@ -47,9 +47,6 @@ def test_refmac_twin_normalization_uses_edstats_centric_convention(tmp_path):
 
     provenance = density.normalize_refmac_twin_coefficients(source, output)
 
-    # The input remains byte-for-byte untouched; only the temporary output is
-    # normalized. The centric main coefficient becomes mFo=12 and keeps D=2,
-    # while the acentric main coefficient stays 14 and difference becomes 4.
     assert source.read_bytes() == source_bytes
     normalized = gemmi.read_mtz_file(str(output))
     np.testing.assert_allclose(
@@ -203,16 +200,13 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
         )
 
 
-# Timeouts
 def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     tmp_path, monkeypatch
 ):
     """A hung CCP4 step raises ``Ccp4ToolTimeoutError`` and keeps what it wrote.
 
-    Without a budget a stalled ``edstats`` holds its worker slot for the rest of
-    the run: the driver detects workers that have *died*, but nothing detects
-    one that is merely stuck. The partial log is retained deliberately -- what
-    the program printed before it stalled is the only evidence of where.
+    The driver detects workers that have died, but nothing detects one that is
+    merely stuck, and the partial log is the only evidence of where it stalled.
     """
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
@@ -250,7 +244,6 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     assert error.tool == "mtzfix"
     assert error.timeout_s == 900
     assert "mtzfix" in str(error) and "900" in str(error)
-    # The cost of the abandoned attempt is still recorded.
     assert error.timings.get("mtzfix_s") is not None
 
     with open(error.log_path, encoding="utf-8") as handle:
@@ -263,11 +256,7 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
 def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     tmp_path, monkeypatch
 ):
-    """Every CCP4 step gets the full budget rather than sharing one deadline.
-
-    An entry runs four programs; charging them against a single deadline would
-    make the last one fail for the sum of the others' legitimate work.
-    """
+    """Every CCP4 step gets the full budget rather than sharing one deadline."""
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
@@ -308,19 +297,11 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     )
 
 
-# ``model-envelope`` cropping is the *default* map scope, but every other
-# offline test here drives ``full``: the only model-envelope coverage lived in
-# the ccp4+slow integration lane, which does not run in CI. These tests reach
-# all three of its outcomes -- crop accepted, crop larger than the original,
-# crop positioned where EDSTATS cannot read it -- with a stub standing in for
-# MAPMASK.
-
-
 def _ccp4_map(size, *, starts=(0, 0, 0), sampling=(64, 64, 64), mode=2):
     """A byte string that ``_map_extent_requires_full_map`` will parse.
 
-    Only the first 1024 bytes are a real CCP4 header; the remainder is padding
-    that makes the file a chosen size, which is all ``_map_size`` inspects.
+    Only the first 1024 bytes are a real CCP4 header; the rest is padding to
+    reach ``size``, which is all ``_map_size`` inspects.
     """
     words = [0] * 256
     words[0:3] = [10, 10, 10]  # NC, NR, NS
@@ -412,8 +393,8 @@ def test_an_envelope_larger_than_the_original_falls_back_to_the_full_map(
 ):
     """A model spanning the cell can produce a crop bigger than its input.
 
-    Cropping is then pointless, so the original is kept and MAPMASK is skipped
-    for the second map.
+    Cropping is then pointless: the original is kept and MAPMASK is skipped for
+    the second map.
     """
     result = _run_envelope(
         tmp_path,
@@ -433,8 +414,8 @@ def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
 ):
     """EDSTATS wraps lookups when a stored axis starts past the positive edge.
 
-    A translated model can make MAPMASK emit exactly that, so the crop is
-    smaller yet unusable -- a case size alone cannot detect.
+    A translated model makes MAPMASK emit exactly that: a crop that is smaller
+    yet unusable, which size alone cannot detect.
     """
     result = _run_envelope(
         tmp_path,
@@ -443,7 +424,6 @@ def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
             full_size=8192,
             envelope_size=2048,
             # Exactly at the grid size: the first start the check rejects.
-            # A larger value would still pass if `>=` were weakened to `>`.
             envelope_starts=(64, 0, 0),
         ),
     )
@@ -456,9 +436,8 @@ def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
 def test_a_crop_starting_inside_the_cell_is_accepted(tmp_path, monkeypatch):
     """The last start the check accepts, one below the grid size.
 
-    Paired with the test above, this pins the comparison at exactly the
-    boundary: 63 must be accepted and 64 rejected, so neither `>` nor `>`
-    widened to `>=` on the other side could pass both.
+    Paired with the test above, 63 accepted and 64 rejected pins the comparison
+    at exactly the boundary.
     """
     result = _run_envelope(
         tmp_path,

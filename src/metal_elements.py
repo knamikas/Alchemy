@@ -1,11 +1,5 @@
 """Metal element symbols shared by analysis and catalog maintenance."""
 
-#: Every element Alchemy treats as a metal.
-#:
-#: Listed biologically-common-first (Na through Zn) and then the remainder,
-#: which is how the list was originally assembled. That ordering carries no
-#: meaning at runtime -- membership is all that is ever asked -- so the two
-#: groups are not exposed separately.
 METAL_ELEMENTS = frozenset(
     (
         "NA",

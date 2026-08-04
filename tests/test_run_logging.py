@@ -1,19 +1,18 @@
 """Diagnostics reach one place, bounded, from every process.
 
-Scope: the contract that ``run_logging`` establishes -- that the driver owns
-the handlers, that worker processes reach them over a queue rather than writing
-concurrently, and that no single record can grow without limit.
+Scope: the driver owns the handlers, workers reach them over a queue rather
+than writing concurrently, and no single record grows without limit.
 
 Out of scope here (owned elsewhere): what individual modules choose to log, and
-the structured per-run report written by ``driver.runlog._RunLog``, which is a separate
-artifact rather than a transcript.
+the per-run report written by ``driver.runlog._RunLog``, which is an artifact
+rather than a transcript.
 """
 
 from __future__ import annotations
 
 import io
 import logging
-import logging.handlers  # `logging.handlers` needs its own import
+import logging.handlers  # importing logging alone does not bind it
 import multiprocessing
 import re
 
@@ -24,11 +23,7 @@ import run_logging
 
 @pytest.fixture(autouse=True)
 def _restore_logging():
-    """Leave the ``alchemy`` logger exactly as it was found.
-
-    Handler configuration is process-wide state; a test that alters it and does
-    not restore it changes the behaviour of every later test in the session.
-    """
+    """Restore the ``alchemy`` logger: handler configuration is process-wide."""
     root = logging.getLogger(run_logging.LOGGER_NAME)
     saved = (list(root.handlers), root.level, root.propagate)
     try:
@@ -43,30 +38,20 @@ def _restore_logging():
 
 
 def test_module_loggers_share_one_configurable_root():
-    """Every module logs through a child of ``alchemy``.
-
-    One handler configuration must govern all of them, including modules that
-    only ever execute inside a worker.
-    """
+    """Every module logs through a child of ``alchemy``, so one configuration
+    governs all of them, worker-only modules included."""
     assert run_logging.logger_for("bond_analysis").name == "alchemy.bond_analysis"
     assert run_logging.logger_for("alchemy.main").name == "alchemy.main"
 
 
 def test_the_script_entry_point_is_not_named_dunder_main():
-    """``main.py`` is normally executed, where ``__name__`` is ``__main__``.
-
-    Without this, every driver record would be attributed to
-    ``alchemy.__main__``, which tells a reader nothing.
-    """
+    """``main.py`` runs as ``__main__``, which would name every driver record
+    ``alchemy.__main__``."""
     assert run_logging.logger_for("__main__").name == "alchemy.main"
 
 
 def test_records_are_bounded_regardless_of_level():
-    """A level says how important a record is, not how long it may be.
-
-    Regression risk: the call-site ``[:300]`` slices were replaced by handler
-    configuration, so the bound must be enforced here or it is enforced nowhere.
-    """
+    """A level says how important a record is, not how long it may be."""
     stream = io.StringIO()
     run_logging.configure_driver_logging(level=logging.DEBUG, stream=stream)
     logging.getLogger("alchemy.test").error("x" * (run_logging.MAX_RECORD_CHARS * 3))
@@ -85,12 +70,7 @@ def test_truncation_is_marked_rather_than_silent():
 @pytest.mark.parametrize("limit", [8, 20, 30, 50, 300, 500])
 @pytest.mark.parametrize("length", [5, 49, 300, 5000])
 def test_truncation_never_exceeds_the_limit_it_was_given(limit, length):
-    """The marker counts against the budget rather than being added to it.
-
-    Regression: the marker used to be appended after the cut, so
-    ``truncate(text, 300)`` returned more than 300 characters -- overflowing
-    any fixed-width field the bound was chosen to fit.
-    """
+    """The marker counts against the budget rather than being added to it."""
     result = run_logging.truncate("z" * length, limit=limit)
     assert len(result) <= limit, f"{len(result)} > {limit}: {result!r}"
 
@@ -101,9 +81,8 @@ def test_a_bounded_record_also_respects_the_limit():
     run_logging.configure_driver_logging(level=logging.DEBUG, stream=stream)
     logging.getLogger("alchemy.test").error("q" * 50_000)
 
-    # One record: the level/name prefix plus a message within the bound.
-    written = stream.getvalue().rstrip("\n")
-    message = written.split(": ", 1)[1]
+    record = stream.getvalue().rstrip("\n")
+    _level_and_name, message = record.split(": ", 1)
     assert len(message) <= run_logging.MAX_RECORD_CHARS
     assert "more characters" in message
 
@@ -133,11 +112,7 @@ def test_diagnostics_default_to_stderr_leaving_stdout_for_results(capsys):
 
 
 def test_a_log_file_keeps_debug_detail_the_console_discarded(tmp_path):
-    """The file is read afterwards, when the console level has already filtered.
-
-    Recording only what was displayed would make ``--log-file`` useless for the
-    case it exists to serve.
-    """
+    """The file records what the console level filtered out."""
     stream = io.StringIO()
     log_file = tmp_path / "run.log"
     run_logging.configure_driver_logging(
@@ -163,11 +138,10 @@ def _worker_emits(queue, level, message):
 
 
 def test_worker_records_reach_the_drivers_handlers(tmp_path):
-    """A record logged in another process is emitted by the driver.
+    """A record logged in another process is emitted by the driver's handlers.
 
-    Workers cannot share the driver's handlers: each is a separate interpreter,
-    and several writing one stream interleave mid-record. This proves the queue
-    actually carries records across the boundary rather than dropping them.
+    Workers cannot share those handlers: several processes writing one stream
+    interleave mid-record, so the queue is the only way across the boundary.
     """
     log_file = tmp_path / "run.log"
     run_logging.configure_driver_logging(
@@ -175,10 +149,8 @@ def test_worker_records_reach_the_drivers_handlers(tmp_path):
     )
     queue = run_logging.create_worker_log_queue()
 
-    # The default context, matching how ``multiprocessing.Pool`` creates the
-    # real workers; the queue is created under the same one. The inherited
-    # handlers a fork brings along are removed by configure_worker_logging,
-    # which the neighbouring test pins, so the record can only arrive by queue.
+    # The queue and the worker must share a start context, and this is the one
+    # ``multiprocessing.Pool`` uses for the real workers.
     context = multiprocessing.get_context()
     process = context.Process(
         target=_worker_emits, args=(queue, logging.INFO, "from the worker")
@@ -202,8 +174,7 @@ def test_a_worker_never_writes_through_an_inherited_handler():
     """Forked handlers are dropped before the queue handler is attached.
 
     A forked copy of the driver's stream handler shares the parent's file
-    descriptor, so several workers would write to one stream concurrently --
-    precisely the interleaving the queue exists to prevent.
+    descriptor, which is the interleaving the queue exists to prevent.
     """
     stream = io.StringIO()
     run_logging.configure_driver_logging(level=logging.INFO, stream=stream)
@@ -231,13 +202,8 @@ def test_configuring_the_driver_twice_does_not_duplicate_records():
 
 
 def test_a_log_file_raises_the_worker_level_to_debug():
-    """``--log-file`` promises full debug detail whatever the console shows.
-
-    Regression: workers filter before the queue, so a worker configured at the
-    console level discarded DEBUG records before the driver's file handler
-    could ever see them. ``--log-file`` then quietly contained no worker detail
-    unless ``-v`` happened to be given too.
-    """
+    """Workers filter before the queue, so the console level would discard the
+    DEBUG records the file handler is there to keep."""
     console = run_logging.level_for_verbosity(verbose=0, quiet=True)
     assert console == logging.WARNING
     assert run_logging.worker_level(console, log_file=None) == logging.WARNING
@@ -284,13 +250,8 @@ def test_worker_debug_records_reach_a_log_file_under_a_quiet_console(tmp_path):
 
 
 def test_an_unusable_log_file_is_raised_for_the_caller_to_report(tmp_path):
-    """A bad path must not bypass the driver's error handling.
-
-    The file is opened before ``main`` enters its protected block, so without
-    this it surfaced as a bare traceback with no structured run report. It is
-    an ``OSError`` rather than an exit: this runs before any handler exists,
-    and only the caller knows how a failure can still be reported.
-    """
+    """An ``OSError`` rather than an exit: this runs before any handler exists,
+    so only the caller can still report the failure."""
     with pytest.raises(OSError):
         run_logging.configure_driver_logging(
             level=logging.INFO, stream=io.StringIO(), log_file=str(tmp_path)
@@ -298,12 +259,8 @@ def test_an_unusable_log_file_is_raised_for_the_caller_to_report(tmp_path):
 
 
 def test_main_reports_an_unusable_log_file_and_exits_one(tmp_path, capsys):
-    """The other half: the caller turns that error into the run's one policy.
-
-    ``--log-file`` pointing at a directory is a fixable mistake, so it reports
-    the path and exits 1 like every other fixable failure -- not a traceback,
-    and not a status that says "you called this wrong", which argparse owns.
-    """
+    """``--log-file`` on a directory is a fixable failure: name the path and
+    exit 1, not a traceback and not argparse's usage status."""
     import cli
 
     exit_code = cli.main(["--id", "109m", "--log-file", str(tmp_path)])
@@ -315,5 +272,5 @@ def test_main_reports_an_unusable_log_file_and_exits_one(tmp_path, capsys):
 
 
 def test_repeated_verbose_flags_are_accepted_without_a_further_tier():
-    """Documented behaviour: one -v unlocks everything; more changes nothing."""
+    """One ``-v`` unlocks everything; further ones change nothing."""
     assert run_logging.level_for_verbosity(1) == run_logging.level_for_verbosity(5)

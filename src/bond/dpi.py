@@ -1,18 +1,12 @@
 """The diffraction-component precision index, and the crystal metadata it needs.
 
-DPI is a whole-structure number -- how precisely this refinement located its
-atoms, in Angstroms -- and it is what turns a measured metal-donor distance
-into a z-score that means something. It touches no bond and knows nothing about
-coordination chemistry, which is why it lives apart from ``bond_analysis``.
-
     DPI = 1.28 * ni**0.5 * va**(1/3) * nobs**(-5/6) * rfree     (Blow 2002, eq. 7)
 
 Every input can be absent: manual runs may have no ``data.json``, a coordinate
 file may carry no CRYST1 record, an older deposition may not report R-free.
 Nothing here raises for any of that. Each function degrades to ``NAN`` and
 ``_calculate_dpi_details`` returns a reason code naming which input was
-missing, so the caller still emits the geometry it did measure and the manifest
-still says why the z-score is blank.
+missing, so the caller still emits the geometry it did measure.
 """
 
 import json
@@ -25,16 +19,10 @@ from structure_analysis import NAN, count_ni
 def _is_placeholder_cell(cell) -> bool:
     """Whether ``cell`` is Gemmi's stand-in for a file with no CRYST1 record.
 
-    ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default,
-    which is what a coordinate file carrying no usable cell parses to. That
-    volume is smaller than a single non-hydrogen atom, so accepting it would
-    hand the DPI calculation a physically impossible asymmetric unit and give
-    every contact in the entry a confident-looking z-score derived from it.
-    Reporting the metadata as missing is the honest outcome.
-
-    Deliberately narrow: a small but genuine cell is still a crystal, and
-    widening this into a plausibility threshold would mean inventing a cutoff
-    nobody derived.
+    ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default a
+    file with no usable cell parses to. That volume is smaller than one
+    non-hydrogen atom, so accepting it would give every contact in the entry a
+    confident-looking z-score off an impossible asymmetric unit.
     """
     return not cell.is_crystal()
 
@@ -42,9 +30,7 @@ def _is_placeholder_cell(cell) -> bool:
 def _asu_volume(mtz_path, pdb_path):
     """Asymmetric-unit volume (A^3) = unit-cell volume / number of symmetry ops.
 
-    Computing this from the cell and space group is exact and needs no header
-    scrape. Prefer the MTZ (matching the diffraction data); fall back to PDB
-    CRYST1 metadata.
+    Prefer the MTZ, which matches the diffraction data; fall back to CRYST1.
     """
     import gemmi
 
@@ -89,10 +75,8 @@ def _rfree_from_pdb(pdb_path):
 def _calculate_dpi_details(structure, dpi_inputs):
     """Return ``(dpi, resolution, reason_code)``. Never raises.
 
-    DPI = 1.28 * ni**0.5 * va**(1/3) * nobs**(-5/6) * rfree  (Blow 2002 eq. 7).
-    Resolution is metadata only (it is implicit in va/nobs, not a separate term).
-    Any missing/non-finite input yields ``(nan, resolution)`` so the caller still
-    emits the measured bond geometry.
+    Resolution is metadata only: it is implicit in va and nobs, not a term of
+    the formula.
     """
     resolution = dpi_inputs.get("resolution", NAN)
     try:
@@ -102,11 +86,9 @@ def _calculate_dpi_details(structure, dpi_inputs):
 
     data_json = dpi_inputs.get("data_json")
     if not data_json:
-        # Manual input mode without --data-json: no metadata source exists, so
-        # the reflection count can never be resolved and DPI is unavailable by
-        # construction. Report that rather than letting open(None) raise a
-        # TypeError into the catch-all below, which mislabelled a missing
-        # argument as a failed calculation.
+        # Manual input mode without --data-json: the reflection count has no
+        # source at all, which is a different answer from a calculation that
+        # ran and failed.
         return NAN, resolution, "missing_dpi_metadata_source"
 
     try:
@@ -119,9 +101,6 @@ def _calculate_dpi_details(structure, dpi_inputs):
 
         nobs = props.get("NREFCNT")
         rfree = props.get("RFFIN")
-        # ``rfree is not None`` rather than ``not in (None, "")``: the tuple
-        # test reads the same to a person and tells a type checker nothing, so
-        # the two branches below both looked like ``float(None)``.
         rfree = (
             float(rfree)
             if rfree is not None and rfree != ""

@@ -1,9 +1,8 @@
 """The batch run's one line of terminal output.
 
-Progress is rendered by the parent process from results it has already
-collected, so a worker never pays for it. The throttle exists because the two
-consumers want opposite things: a terminal wants a line that moves, a redirected
-log wants a file that does not grow by a megabyte an hour.
+Rendered by the parent from results it has already collected, so a worker never
+pays for it. The throttle differs by consumer: a terminal wants a line that
+moves, a redirected log wants a file that does not grow by a megabyte an hour.
 """
 
 import sys
@@ -11,7 +10,7 @@ import time
 
 
 class _ProgressReporter:
-    """Render a throttled parent-process heartbeat without worker overhead."""
+    """Render a throttled one-line progress heartbeat."""
 
     TERMINAL_INTERVAL_S = 1.0
     REDIRECTED_INTERVAL_S = 30.0

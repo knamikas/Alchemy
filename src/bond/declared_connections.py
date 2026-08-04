@@ -1,33 +1,23 @@
 """Source ``struct_conn`` / ``LINK`` declarations, resolved onto the model.
 
-A deposition states its own coordination: ``_struct_conn`` in an mmCIF, ``LINK``
-records in a legacy PDB. Alchemy trusts those claims, but it measures geometry
-on the *analysis* model, which for an mmCIF entry is a converted PDB. Binding
-one to the other is the whole job of this module, and it is provenance work
-rather than chemistry -- it shares no vocabulary with z-scores, reference
-distances or coordination counts, which is why it lives apart from
-``bond_analysis``.
+A deposition states its own coordination, but geometry is measured on the
+analysis model, which for an mmCIF entry is a converted PDB. Three properties
+of that join are load-bearing:
 
-Three properties of that join are load-bearing, and each is defended by a test:
-
-* **Partners are matched by author identity**, never by atom serial. Gemmi's
-  PDB writer emits a TER record after each polymer and every TER consumes a
-  serial, so a converted model's serials run ahead of the source
-  ``_atom_site.id``; conversion provenance restores the identities the legacy
-  format could not hold.
-* **Both partners are re-pointed onto their residue's selected conformer**, so
-  a declaration cannot introduce a second record for a chemical site the
+* Partners are matched by author identity, never by atom serial. Gemmi's PDB
+  writer emits a TER record after each polymer and every TER consumes a serial,
+  so a converted model's serials run ahead of the source ``_atom_site.id``.
+* Both partners are re-pointed onto their residue's selected conformer, so a
+  declaration cannot introduce a second record for a chemical site the
   proximity search already reports.
-* **Whether a declaration names a metal is decided twice** -- once from the
+* Whether a declaration names a metal is decided twice, once from the
   declaration's own identifiers and again from the resolved atom's element.
   See ``_resolve_declared_partners``.
 
-``_collect_declared_candidates`` is the entry point. It never raises: every
-failure becomes a message in its ``issues`` list, which the caller turns into
-``declared_connection_resolution_incomplete``, or a code in its ``warnings``
-list. A declaration Alchemy cannot bind must leave an audit trail, because
-dropping it silently is indistinguishable from a metal that has no
-coordination at all.
+``_collect_declared_candidates`` never raises: every failure becomes a message
+in its ``issues`` list or a code in its ``warnings`` list. A declaration
+Alchemy cannot bind must leave an audit trail, because dropping it silently is
+indistinguishable from a metal that has no coordination at all.
 """
 
 import math
@@ -58,12 +48,9 @@ def _enum_name(value):
 def _analysis_chain_names(connection_path):
     """Map source chain names onto the analysis model's chain names.
 
-    For ordinary structures, replaying Gemmi's ``setup_entities`` and
-    ``shorten_chain_names`` calls recovers the conversion mapping instead of
-    assuming it is the identity. Oversized structures use residue-level
-    provenance and resolve source identities before this fallback is reached.
-    A source PDB is extracted textually and keeps its chain names, so its
-    mapping is empty.
+    Replaying Gemmi's ``setup_entities`` and ``shorten_chain_names`` recovers
+    the conversion mapping. A source PDB is extracted textually and keeps its
+    chain names, so its mapping is empty.
     """
     import gemmi
 
@@ -85,11 +72,8 @@ def _analysis_chain_names(connection_path):
 def _analysis_atom_for_partner(structure, cra, chain_names):
     """Resolve one declared partner to an analysis atom by author identity.
 
-    The declaration's author identifiers survive conversion: only chain names
-    are shortened, which ``chain_names`` reverses, and a component identifier
-    too long for the legacy residue field is indexed under both its source and
-    its converted name. Returns ``None`` when the identity matches no residue,
-    matches more than one, or names an atom the analyzed model does not hold.
+    Returns ``None`` when the identity matches no residue, matches more than
+    one, or names an atom the analyzed model does not hold.
     """
     chain = getattr(cra, "chain", None)
     residue = getattr(cra, "residue", None)
@@ -106,15 +90,10 @@ def _analysis_atom_for_partner(structure, cra, chain_names):
     )
     matches = source_lookup(str(residue.name), source_chain_id, resnum)
     if len(matches) != 1:
-        # Older analysis PDBs retain only Gemmi's chain-name shortening.  New
-        # packed PDBs embed full residue provenance, so the source lookup above
-        # succeeds without guessing how sequence numbers were remapped.
+        # Fallback for an analysis PDB carrying no residue provenance: retry
+        # under Gemmi's shortened chain name.
         chain_id = chain_names.get(source_chain_id, source_chain_id)
         if chain_id != source_chain_id:
-            # The combined legacy index restores >3-character residue names
-            # while using Gemmi's shortened chain name.  Packed structures do
-            # not need this fallback because their full source identity is
-            # indexed above.
             matches = structure.residues_for_author(str(residue.name), chain_id, resnum)
     if len(matches) != 1:
         return None
@@ -130,13 +109,9 @@ def _analysis_atom_for_partner(structure, cra, chain_names):
 def _selected_conformer_atom(structure, atom):
     """Return the selected-conformer record for ``atom``'s chemical site.
 
-    A declaration names one deposited atom record, which may belong to an
-    alternate conformer that per-residue selection did not choose. Contacts are
-    measured on the selected conformer only, so re-point the declaration onto
-    the same-named atom of that conformer rather than admitting a second record
-    for a chemical site the proximity search already reports. Returns ``None``
-    when the selected conformer has no atom of that name and element, because
-    the declared contact then has no counterpart in the analyzed model.
+    Contacts are measured on the selected conformer only. Returns ``None``
+    when that conformer has no atom of this name and element, because the
+    declared contact then has no counterpart in the analyzed model.
     """
     if atom is None:
         return None
@@ -154,12 +129,9 @@ def _selected_conformer_atom(structure, atom):
 def _declared_partner_is_metal(address, cra):
     """Whether a source connection partner unambiguously names a metal.
 
-    Prefer the element of the atom resolved in the source model.  A malformed
-    declaration may omit that atom or name a record no longer present, so fall
-    back only to unambiguous component/atom identifiers such as ``ZN``.  Do not
-    guess elements from prefixes (for example ``CA`` is commonly a protein
-    alpha carbon): an indeterminate non-metal declaration is outside Alchemy's
-    coordination-analysis scope.
+    The resolved atom's element is the best evidence; a malformed declaration
+    may omit that atom, so fall back to unambiguous identifiers such as ``ZN``.
+    Never guess from a prefix: ``CA`` is commonly a protein alpha carbon.
     """
     source_atom = getattr(cra, "atom", None)
     if source_atom is not None:
@@ -205,11 +177,9 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
     shift_a, shift_b, shift_c = nearest.pbc_shift
     translation = (int(shift_a), int(shift_b), int(shift_c))
     image_index = int(nearest.sym_idx)
-    # Classified exactly as the proximity path does. ``same_asu()`` alone
-    # cannot tell the two apart: after ``setup_cell_images`` the image list
-    # holds the strict-NCS transforms as well, so an NCS image is "not the same
-    # ASU" and would otherwise be reported as crystallographic with no NCS
-    # operation identifier.
+    # ``same_asu()`` cannot classify this: after ``setup_cell_images`` the
+    # image list holds the strict-NCS transforms too, so an NCS image is "not
+    # the same ASU" and reads as crystallographic with no NCS operation id.
     (
         crystallographic_contact,
         strict_ncs_contact,
@@ -237,33 +207,22 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
 class _PartnerResolution(NamedTuple):
     """What binding one declaration's two partners to the model produced."""
 
-    #: One selected-conformer atom per partner, ``None`` where the identity did
-    #: not resolve -- or the whole list is ``None`` when resolution raised.
-    atoms: Optional[list]
-    #: Whether either partner names a metal. Meaningful even when ``atoms`` is
-    #: ``None``: it is what decides whether a failure is worth reporting.
+    selected_conformer_atoms: Optional[list]
     declares_metal: bool
-    #: A partner named a conformer whose selected alternative has no such atom.
-    deselected: bool
-    #: A partner was re-pointed onto a different conformer's atom record.
-    substituted: bool
-    #: Exception type name, when resolving the partners raised.
-    failure: Optional[str]
+    conformer_deselected: bool
+    conformer_substituted: bool
+    failure_exception_name: Optional[str]
 
 
 def _resolve_declared_partners(structure, source_model, connection, chain_names):
     """Bind both partners of one declaration to selected-conformer atoms.
 
-    **The metal test runs twice, and both calls are deliberate.** The first
-    reads the declaration's own identifiers and runs before ``find_cra``, which
-    can raise: without it, a declaration Alchemy failed to resolve would lose
-    the one piece of evidence that says the failure matters, and a metal site
-    would be dropped with no audit trail. The second is widened by ``or`` from
-    the atom ``find_cra`` returned, whose element is the better evidence when
-    it is available. Neither subsumes the other.
-
-    Never raises. A failure is returned as ``failure`` so the caller can decide
-    whether this declaration was one worth reporting.
+    The metal test runs twice. The first call reads the declaration's own
+    identifiers and must precede ``find_cra``, which can raise: without it a
+    declaration that failed to resolve loses the one piece of evidence saying
+    the failure matters. The second widens it from the resolved atom's element,
+    the better evidence where it exists. Never raises: a failure comes back as
+    ``failure_exception_name``.
     """
     addresses = (connection.partner1, connection.partner2)
     declares_metal = any(
@@ -302,22 +261,22 @@ def _declared_candidate_for_connection(
     """Return ``(candidate, issues, warnings)`` for one resolved declaration.
 
     ``candidate`` is ``None`` whenever the declaration does not describe a
-    metal-donor contact this model can measure. Each way that can happen is one
-    guard with its own early return, and each decides separately whether the
-    outcome is an issue (reportable: the declaration named a metal, so silence
+    metal-donor contact this model can measure. Each guard decides separately
+    whether that outcome is an issue (the declaration named a metal, so silence
     would understate a coordination number), a warning code, or nothing at all
-    (a link between two amino acids is simply not Alchemy's subject).
+    (a link between two amino acids is not Alchemy's subject).
     """
     issues = []
     warnings: list[str] = []
-    if resolved.failure is not None:
+    if resolved.failure_exception_name is not None:
         if resolved.declares_metal:
             issues.append(
-                f"{source} {connection_id} resolution failed: {resolved.failure}"
+                f"{source} {connection_id} resolution failed: "
+                f"{resolved.failure_exception_name}"
             )
         return None, issues, warnings
 
-    if resolved.deselected:
+    if resolved.conformer_deselected:
         if resolved.declares_metal:
             issues.append(
                 f"{source} {connection_id} partner names a conformer whose "
@@ -325,13 +284,13 @@ def _declared_candidate_for_connection(
             )
         return None, issues, warnings
 
-    first, second = resolved.atoms
+    first, second = resolved.selected_conformer_atoms
     first_is_metal = first is not None and first.source_key in selected_metal_keys
     second_is_metal = second is not None and second.source_key in selected_metal_keys
     connection_involves_metal = (
         resolved.declares_metal or first_is_metal or second_is_metal
     )
-    if resolved.substituted and connection_involves_metal:
+    if resolved.conformer_substituted and connection_involves_metal:
         warnings.append(WarningCode.DECLARED_CONNECTION_CONFORMER_SUBSTITUTED)
     if first is None and second is None:
         if connection_involves_metal:
@@ -350,20 +309,14 @@ def _declared_candidate_for_connection(
     metal, neighbor = (first, second) if first_is_metal else (second, first)
     residue = structure.residue_for_atom(neighbor)
     if neighbor.element not in DONOR_ELEMENTS:
-        # Not a donor-like atom at all, so there is no coordination
-        # evidence to retain. Recorded rather than dropped in silence.
         warnings.append(WarningCode.DECLARED_DONOR_ELEMENT_UNSUPPORTED)
         return None, issues, warnings
-    # Nucleic acids, modified residues and organic ligands are genuine
-    # metal donors, but no bundled literature reference covers them, so
-    # their geometry can never be z-scored. Retain them as candidate
-    # evidence carrying the measured distance and the declaration's own
-    # provenance: dropping them is indistinguishable from a metal with no
-    # coordination at all, which is how a fully coordinated nucleic-acid
-    # site came to report no contacts. They are deliberately not promoted
-    # to bond rows -- that would raise coordination counts and enlarge the
-    # confidence geometry-coverage denominator on the strength of a contact
-    # nothing can assess.
+    # Nucleic acids, modified residues and organic ligands are genuine metal
+    # donors that no bundled literature reference covers, so their geometry can
+    # never be z-scored. They stay candidate evidence carrying the measured
+    # distance: dropping them is indistinguishable from a metal with no
+    # coordination at all. Promoting them to bond rows would raise coordination
+    # counts on the strength of a contact nothing can assess.
     donor_class_supported = bool(residue.is_water or residue.residue_name in AA)
     if not donor_class_supported:
         warnings.append(WarningCode.DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES)
@@ -403,23 +356,9 @@ def _declared_candidate_for_connection(
 def _collect_declared_candidates(structure, connection_path, metals):
     """Resolve source ``struct_conn``/``LINK`` claims to analysis atoms.
 
-    Partners are resolved by author identity -- chain, sequence number,
-    insertion code, component, atom name, and altloc -- against the analysis
-    model. Atom serials cannot carry this join: Gemmi's PDB writer emits a TER
-    record after each polymer and every TER consumes a serial number, so the
-    serials of an mmCIF-converted model run ahead of the source
-    ``_atom_site.id`` by one for each preceding TER, and a partner past the
-    first TER would resolve to a neighbouring atom. Conversion provenance
-    restores source residue identities when the legacy PDB representation
-    shortens a chain, truncates a component name, or packs an oversized model
-    into synthetic chain and residue identifiers.
-
-    A declaration names one deposited record, so either partner may be an
-    alternate conformer that per-residue selection did not choose. Both are
-    re-pointed onto their residue's selected conformer before use, so a
-    declaration cannot introduce a second record for a chemical site the
-    proximity search already reports and cannot inflate a coordination number
-    with a conformer that is absent from the analyzed model.
+    Partners are matched by author identity -- chain, sequence number,
+    insertion code, component, atom name, altloc -- and re-pointed onto their
+    residue's selected conformer.
     """
     import gemmi
 

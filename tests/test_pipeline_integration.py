@@ -1,29 +1,17 @@
 """End-to-end pipeline behaviour: ``src/main.py`` driven as a whole run.
 
 Most tests here execute the real driver over a checksum-pinned PDB-REDO entry
-snapshot, so they need CCP4 and either a warm entry cache or network access to
-fetch those exact bytes. Entry-dependent tests acquire a ``network`` marker only
-when the configured cache is not already complete. Consequently
-``pytest -m 'not network'`` can use a warm cache but never opens a socket, while
-a plain run on a bare machine downloads the snapshot or skips cleanly when the
-network is unavailable.
+snapshot, so they need CCP4 and either a warm entry cache or network access.
+The ``network`` marker is applied only when the configured cache is not already
+complete, so ``pytest -m 'not network'`` can use a warm cache and still never
+opens a socket.
 
-The entry set is deliberately tiny, chemically well understood, and limited to
-structures from the authors' research group:
-
-``9myr``  Sal-Shy(DUF35) aldolase. Two structural zinc sites, each declared as
-          a Cys3-His zinc-ribbon tetrad in ``_struct_conn``.
-``6nlr``  the Snell-group PIXE-remodelled histidinol phosphatase. Eleven metal
-          sites (Mn, Co, Fe, and Ca) across three chains provide the multi-site
-          and multi-element stress case.
-``9nxl``  steroid aldehyde dehydrogenase with no modelled metal: the documented
-          ``no_metals`` negative control.
-
-Nothing is written inside the repository: every run receives ``--output-dir``,
-``--pdb-redo-cache``, ``--pdb-redo-root`` and ``--confidence-reference-dir``
-under a tmp path. ``--confidence-reference-dir`` points at a non-existent
-directory unless a test deliberately installs a frozen reference, so confidence
-scoring is off by default and on exactly where it is under test.
+``9myr``  Sal-Shy(DUF35) aldolase; two zinc sites, each declared as a Cys3-His
+          zinc-ribbon tetrad in ``_struct_conn``.
+``6nlr``  PIXE-remodelled histidinol phosphatase; eleven Mn, Co, Fe and Ca
+          sites across three chains, the multi-site multi-element case.
+``9nxl``  steroid aldehyde dehydrogenase with no modelled metal, the
+          ``no_metals`` control.
 """
 
 from __future__ import annotations
@@ -54,18 +42,13 @@ from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 
 
-#: The three entries every test in this module draws on, and the set the cache
-#: discovery below is keyed by.
 ENTRY_IDS = ("9myr", "6nlr", "9nxl")
 
-#: Byte-level identity of the compact PDB-REDO snapshot used by the numerical
-#: assertions below. PDB-REDO's live entry URLs are mutable; pinning the three
-#: files required from each entry turns an upstream revision into an explicit
-#: snapshot-drift failure instead of a mysterious change in Alchemy's numbers.
-#: The test fixture deliberately requires uncompressed mmCIF, MTZ and data.json
-#: files. Production accepts compressed and legacy-PDB variants, but those are
-#: not interchangeable numerical regression inputs and the manual-mode tests
-#: require data.json.
+# PDB-REDO's live entry URLs are mutable, so pinning the bytes turns an upstream
+# revision into an explicit snapshot-drift failure instead of a mysterious change
+# in Alchemy's numbers. Uncompressed mmCIF, MTZ and data.json only: production
+# also accepts compressed and legacy-PDB variants, but those are not
+# interchangeable numerical regression inputs.
 _ENTRY_SNAPSHOT_SHA256 = {
     "9myr": {
         "9myr_final.mtz": "7d47d24a5a1e1cafc003adde878082aa9a2f4da8e947031b8228e1cf2234d21a",  # noqa: E501 - a SHA-256 digest cannot be wrapped
@@ -84,17 +67,11 @@ _ENTRY_SNAPSHOT_SHA256 = {
     },
 }
 
-#: Reference row for a zinc-ribbon histidine, read from the bundled literature
-#: table rather than hard-coded, so the assertion tracks the data.
 _HIS_N_ZN = ("HIS", "N", "ZN")
 
-#: Real-space difference-density z-scores measured by this pipeline for every
-#: selected metal site of the two metal-bearing entries, as
-#: ``(entry, chain, residue number) -> (ZDm, ZD-m, ZD+m)``.
-#:
-#: These are the output of the whole density arm -- mtzfix, both FFTs, mapmask
-#: and edstats -- over the checksum-pinned PDB-REDO snapshot above, so they are
-#: the numbers that arm exists to produce and the only genuine oracle for it.
+# ``(entry, chain, residue number) -> (ZDm, ZD-m, ZD+m)`` measured by the whole
+# density arm -- mtzfix, both FFTs, mapmask and edstats -- over the pinned
+# snapshot above, the only genuine oracle that arm has.
 _MEASURED_RSZD = {
     ("9myr", "B", "201"): (2.1, -2.1, 1.6),
     ("9myr", "D", "201"): (1.2, -1.0, 1.2),
@@ -111,11 +88,9 @@ _MEASURED_RSZD = {
     ("6nlr", "C", "304"): (12.0, -12.0, 0.0),
 }
 
-#: EDSTATS reports RSZD to one decimal, so 0.05 is already lost to printing.
-#: 0.3 leaves room on top of that for map-grid and rounding differences between
-#: CCP4 builds while still pinning every value to ~7 percent -- tight enough
-#: that a doubled, halved or sign-flipped RSZD, or a site scored against the
-#: wrong map, cannot pass.
+# EDSTATS reports RSZD to one decimal, so 0.05 is already lost to printing; 0.3
+# also absorbs map-grid differences between CCP4 builds while still pinning every
+# value to ~7 percent.
 _RSZD_TOLERANCE = 0.3
 
 
@@ -175,9 +150,6 @@ def _network_available_now(timeout: float = 5.0) -> bool:
         return False
 
 
-# Add the network marker only when acquiring the pinned entry data could touch
-# the network. With a complete configured cache the same tests remain eligible
-# under ``-m 'not network'`` and the fixture performs no capability probe.
 _CONFIGURED_ENTRY_CACHE = helpers.cache_dir_from_env()
 _ENTRY_SNAPSHOT_IS_WARM = bool(
     _CONFIGURED_ENTRY_CACHE
@@ -197,14 +169,9 @@ def _requires_entry_data(test):
 def entry_cache(tmp_path_factory) -> str:
     """A PDB-REDO cache root holding every entry in :data:`ENTRY_IDS`.
 
-    Uses :func:`helpers.cache_dir_from_env`, whose canonical
-    ``ALCHEMY_TESTS_CACHE`` spelling takes precedence over the legacy alias.
-    Otherwise downloads into a session tmp directory.
-
-    A missing capability skips, but a broken download fails. ``pdb-redo.eu``
-    being unreachable is an environment fact this suite cannot assert against;
-    ``download_entry_to_cache`` returning without the final model files is a
-    regression, and it must not be able to hide as a skip.
+    An unreachable ``pdb-redo.eu`` skips, but a ``download_entry_to_cache`` that
+    returns without the final model files is a regression and must not be able
+    to hide as a skip.
     """
     configured = helpers.cache_dir_from_env()
     if _ENTRY_SNAPSHOT_IS_WARM:
@@ -230,12 +197,9 @@ def entry_cache(tmp_path_factory) -> str:
             "no network access to fetch them"
         )
     for pdb_id in missing:
-        # download_entry_to_cache funnels every failure -- a dead socket, a 404
-        # and a renamed file alike -- into FileNotFoundError, so the exception
-        # alone cannot separate "no network" from "the downloader is broken".
-        # A fresh (non-memoized) re-probe separates them: if pdb-redo.eu answers,
-        # the fetch itself regressed. Every other exception (OSError from an
-        # unwritable cache, say) propagates untouched and fails the run.
+        # download_entry_to_cache funnels a dead socket, a 404 and a renamed file
+        # alike into FileNotFoundError, so only a fresh re-probe separates "no
+        # network" from a broken downloader.
         try:
             inputs.download_entry_to_cache(pdb_id, target)
         except FileNotFoundError as exc:
@@ -257,7 +221,6 @@ def entry_cache(tmp_path_factory) -> str:
     return target
 
 
-# Running the driver
 @dataclass
 class RunResult:
     """One completed ``main.main`` invocation."""
@@ -296,13 +259,10 @@ def run_alchemy(
 ) -> RunResult:
     """Invoke the driver in-process and return its exit code and output.
 
-    ``--output-dir`` plus every path option that otherwise defaults into the
-    repository is supplied here, so no test can leave anything in the checkout.
-
-    ``mirror`` sets ``--pdb-redo-root``; without it the root is a path that does
-    not exist, so entries can only come from the cache. ``reference_dir`` sets
-    ``--confidence-reference-dir``; without it that too is a non-existent path,
-    which is what turns confidence scoring off.
+    Every path option that otherwise defaults into the repository is supplied
+    here, so no test can write into the checkout. Omitting ``mirror`` or
+    ``reference_dir`` points that option at a non-existent path, which is what
+    forces cache-only input and leaves confidence scoring off.
     """
     output_dir = str(output_dir)
     argv = ["--output-dir", output_dir]
@@ -342,7 +302,6 @@ def id_file(directory, pdb_ids: Sequence[str]) -> str:
     return path
 
 
-# Output readers
 def read_rows(output_dir, name: str) -> List[Dict[str, str]]:
     with open(os.path.join(str(output_dir), name), newline="") as handle:
         return list(csv.DictReader(handle))
@@ -362,7 +321,7 @@ def rows_for(rows: Sequence[Dict[str, str]], pdb_id: str) -> List[Dict[str, str]
 
 
 def log_paths(output_dir) -> List[str]:
-    """Every run log this output directory has, wherever the default puts them."""
+    """Every run log in this output directory."""
     directory = os.path.join(str(output_dir), runlog.DEFAULT_LOG_DIRNAME)
     if not os.path.isdir(directory):
         return []
@@ -451,7 +410,6 @@ def batch(tmp_path_factory, entry_cache, ccp4_env) -> Batch:
     return result
 
 
-# 1. A single-entry run produces the documented files and columns
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -459,8 +417,7 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     """One ``--id`` run writes exactly the documented output set.
 
     README "Results are written to": manifest, statistics, bond and candidate
-    CSVs plus one timestamped run log. Each CSV must carry its module's full
-    fixed schema, and the per-entry scratch directory must be cleaned up.
+    CSVs plus one timestamped run log, each with its module's full schema.
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
@@ -484,12 +441,11 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     } <= written
     assert len(log_paths(output_dir)) == 1
 
-    # No confidence artefacts: no frozen reference is installed for this run.
+    # No frozen reference is installed for this run.
     assert "confidence_scores_all.csv" not in written
     assert "confidence_inputs_all.csv" not in written
     assert "no frozen reference is distributed with Alchemy" in result.text
 
-    # Per-entry working directories are removed once their rows are extracted.
     assert [name for name in written if name.startswith(".alchemy-")] == []
 
     assert read_header(output_dir, "manifest.csv") == MANIFEST_COLUMNS
@@ -497,9 +453,8 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
     assert read_header(output_dir, "metal_candidates_all.csv") == CANDIDATE_COLUMNS
 
-    # Columns the README names explicitly must really be present, so a schema
-    # that silently drifted away from the documentation is caught here and not
-    # only by comparison with the code's own constant.
+    # Columns the README names must be present, not merely equal to the code's
+    # own constant, which would drift away from the documentation unnoticed.
     stats_header = read_header(output_dir, "metal_stats_all.csv")
     assert set(helpers.EDSTATS_HEADER) <= set(stats_header)
     assert {
@@ -546,17 +501,14 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     } <= set(MANIFEST_COLUMNS)
 
 
-# 2. 9myr and 6nlr: the chemistry and density have to come out right
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
     """9myr yields two Cys3-His zinc sites with measured density and geometry.
 
-    Each site supplies four independently declared bonds. Their z-scores are
-    re-derived from the README formula and bundled literature table, so a
-    change in the scoring path -- not merely a changed recorded number -- makes
-    this fail.
+    The z-scores are re-derived from the README formula and the bundled
+    literature table, so a change in the scoring path fails here too.
     """
     stats = {row["CI"]: row for row in rows_for(batch.stats, "9myr")}
     assert set(stats) == {"B", "D"}
@@ -618,7 +570,6 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
             assert float(bond["sigma_neg"]) == pytest.approx(float(site["ZD-m"]))
             assert float(bond["sigma_pos"]) == pytest.approx(float(site["ZD+m"]))
 
-    # The histidine reference used above is an explicit shipped-data oracle.
     assert literature_reference(*_HIS_N_ZN) == pytest.approx((2.03, 0.05))
 
 
@@ -628,9 +579,8 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
 def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch):
     """All eleven PIXE-remodelled 6nlr sites carry their own RSZD triple.
 
-    This stresses the density join with four elements, three chains, and
-    repeated residue numbers. A map that is mis-scaled, mis-cropped, or joined
-    using an incomplete site key cannot pass.
+    Four elements, three chains and repeated residue numbers: a map that is
+    mis-scaled, mis-cropped or joined on an incomplete site key cannot pass.
     """
     sites = {(row["CI"], row["RN"]): row for row in rows_for(batch.stats, "6nlr")}
     expected_keys = {key[1:] for key in _MEASURED_RSZD if key[0] == "6nlr"}
@@ -653,8 +603,7 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch
             max(abs(float(row["ZD-m"])), abs(float(row["ZD+m"]))), abs=0.05
         ), (chain, resnum)
 
-    # The spread is a property of the snapshot, not merely a broad sanity
-    # bound: A302 and C303 tie at the low end while C304 reaches the top anchor.
+    # The spread is a property of the snapshot, not a broad sanity bound.
     minimum = min(float(row["ZDm"]) for row in sites.values())
     assert {key for key, row in sites.items() if float(row["ZDm"]) == minimum} == {
         ("A", "302"),
@@ -663,23 +612,18 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch
     assert max(sites, key=lambda key: float(sites[key]["ZDm"])) == ("C", "304")
 
 
-# 3. Regression: declared connections must bind to the atoms they name
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_declared_connections_measure_their_own_reported_distance(batch):
     """Every declared contact's measured distance matches the one it declares.
 
-    Regression for 733d8ec. ``_collect_declared_candidates`` used to translate
-    source-mmCIF atom serials into analysis-PDB serial space; gemmi's PDB writer
-    emits a TER after each polymer and every TER consumes a serial, so every
-    partner after the first TER resolved to the wrong atom. Both 6nlr's ions and
-    9myr's zinc sites are numbered after their polymer chains and therefore
-    place the metals behind TER records.
-
-    A ``_struct_conn`` row carries the distance the depositor measured, so a
-    declaration bound to the wrong atom disagrees with its own number -- the
-    reported symptom was Ca-to-donor "contacts" at 9-50 Angstrom.
+    gemmi's PDB writer emits a TER after each polymer and every TER consumes a
+    serial, so translating source-mmCIF atom serials into analysis-PDB serial
+    space re-points every partner behind a TER -- and both entries number their
+    metals after their polymer chains. A ``_struct_conn`` row carries the
+    distance the depositor measured, so a misbound declaration disagrees with
+    its own number.
     """
     declared = [row for row in batch.bonds if row["declared_connection"] == "True"]
     assert declared, "the batch must contain declared metal connections"
@@ -695,7 +639,7 @@ def test_declared_connections_measure_their_own_reported_distance(batch):
         assert reported > 0.0, where
         # Reported distances are written to two decimals, measured to three.
         assert measured == pytest.approx(reported, abs=0.02), where
-        # A first-sphere metal-donor contact is a chemical bond length, never a
+        # A first-sphere metal-donor contact is a bond length, not a
         # lattice-scale separation.
         assert 1.5 < measured < 3.0, where
         assert row["coordination_source"] == "struct_conn", where
@@ -703,8 +647,7 @@ def test_declared_connections_measure_their_own_reported_distance(batch):
         if math.isfinite(zscore):
             assert abs(zscore) < float(row["zscore_outlier_cutoff"]), where
 
-    # Every declaration in both metal-bearing entries survives resolution.
-    # Losing some of them is the other half of a broken partner lookup.
+    # Losing declarations is the other half of a broken partner lookup.
     assert len(declared) == 49, "declared connections went missing or duplicated"
     assert len(rows_for(declared, "6nlr")) == 41
     assert len(rows_for(declared, "9myr")) == 8
@@ -716,9 +659,7 @@ def test_declared_connections_measure_their_own_reported_distance(batch):
 def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(batch):
     """Both 9myr zinc sites resolve to the deposited Cys3-His tetrad.
 
-    A serial-space mismatch does not only distort distances: it re-points the
-    contact at whatever atom happens to hold the shifted serial. Checking donor
-    identities pins the mapping independently of geometry.
+    Donor identity pins the serial mapping independently of geometry.
     """
     zinc = rows_for(batch.bonds, "9myr")
     assert len(zinc) == 8
@@ -744,7 +685,6 @@ def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(batch):
         assert all(row["declared_connection"] == "True" for row in rows)
 
 
-# 4. The no-metal control
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -752,9 +692,8 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
     """9nxl finishes as a successful negative result with zeroed counts.
 
     README: "structures with no recognized metal atoms finish with n_metals=0
-    without running mtzfix, either FFT, or edstats", and those entries are
-    reported as ``no_metals`` -- an informational subset of ``ok``, never
-    ``skip``. Because the stage did run to completion, the bond counts are a
+    without running mtzfix, either FFT, or edstats", reported as ``no_metals``,
+    an informational subset of ``ok``. The stage ran, so the counts are a
     measured ``0`` rather than blank.
     """
     row = batch.manifest["9nxl"]
@@ -773,7 +712,6 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
     # Headers survive even when an entry contributes no rows.
     assert read_header(batch.output_dir, "metal_stats_all.csv") == STATS_COLUMNS
 
-    # The density stages are skipped entirely for a metal-free entry.
     log_text = open(log_paths(batch.output_dir)[0], encoding="utf-8").read()
     entry_line = next(
         line for line in log_text.splitlines() if line.startswith("9nxl | status=")
@@ -785,7 +723,6 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
     assert "Metal-free entries: 1" in log_text
 
 
-# 5. Manifest bookkeeping
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -801,7 +738,6 @@ def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch):
     for table in (batch.stats, batch.bonds, batch.candidates):
         assert {row["pdbID"] for row in table} <= set(ENTRY_IDS)
 
-    # Aggregate totals are the sum of the per-entry manifest counts.
     assert len(batch.bonds) == sum(
         int(row["n_bonds"]) for row in batch.manifest.values()
     )
@@ -809,8 +745,7 @@ def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch):
         int(row["n_candidates"]) for row in batch.manifest.values()
     )
 
-    # Each entry's rows really belong to it: metals only ever appear in the
-    # coordinate file they were read from.
+    # Metals only ever appear in the entry they were read from.
     assert {row["metal_element"] for row in rows_for(batch.bonds, "9myr")} == {"ZN"}
     assert {row["metal_element"] for row in rows_for(batch.bonds, "6nlr")} == {
         "MN",
@@ -828,8 +763,7 @@ def test_manifest_counts_match_the_rows_actually_written(batch, pdb_id):
     """``n_metals``/``n_bonds``/``n_candidates`` agree with the CSV contents.
 
     README: ``n_metals`` counts distinct selected coordinate-model sites, not
-    diagnostic or repeated EDSTATS rows, while ``n_bonds`` and ``n_candidates``
-    are assigned-output and candidate-evidence sizes.
+    diagnostic or repeated EDSTATS rows.
     """
     row = batch.manifest[pdb_id]
     assert int(row["n_bonds"]) == len(rows_for(batch.bonds, pdb_id))
@@ -842,8 +776,8 @@ def test_manifest_counts_match_the_rows_actually_written(batch, pdb_id):
     ]
     assert int(row["n_metals"]) == len(selected)
 
-    # Candidate evidence is a superset of assigned contacts: every bond was
-    # either discovered by the 4 A search or declared, and both are recorded.
+    # Every bond was either discovered by the 4 A search or declared, and both
+    # are recorded as candidate evidence.
     assert int(row["n_candidates"]) >= int(row["n_bonds"])
 
 
@@ -854,7 +788,7 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     """A second invocation adds a suffixed log instead of replacing the first.
 
     README: "Additional runs on the same UTC date receive a numeric suffix ...
-    Resume runs create another log rather than replacing the original record."
+    Resume runs create another log rather than replacing the original record".
     """
     output_dir = tmp_path / "output"
     first = run_alchemy(
@@ -889,7 +823,6 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     assert "no entries to process" in second.text
 
 
-# 6. Resume semantics
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -926,7 +859,6 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
     }
     assert after == before
 
-    # And, stated as row counts rather than bytes, nothing was appended.
     assert len(second.manifest) == len(ENTRY_IDS)
     assert len(second.bonds) == len(first.bonds)
     assert len(second.candidates) == len(first.candidates)
@@ -941,10 +873,8 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
 ):
     """``--no-bonds`` erases stale bond output; a later resume fills it back in.
 
-    README: "A fresh --no-bonds run removes pre-existing metal_bonds_all.csv and
-    metal_candidates_all.csv ... Entries originating from a bond-disabled run
-    retain blank n_bonds and n_candidates, so a later bond-enabled resume will
-    process them."
+    README: "Entries originating from a bond-disabled run retain blank n_bonds
+    and n_candidates, so a later bond-enabled resume will process them".
     """
     output_dir = tmp_path / "output"
     complete = run_batch(output_dir, entry_cache, ccp4_env, tmp_root=tmp_path)
@@ -973,7 +903,6 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
         assert row["status"] == "ok", pdb_id
         assert row["n_bonds"] == "", pdb_id
         assert row["n_candidates"] == "", pdb_id
-    # Statistics are still produced by the bond-disabled run.
     assert read_rows(output_dir, "metal_stats_all.csv")
 
     restored = run_batch(
@@ -985,13 +914,11 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
         assert row["n_bonds"] != "", pdb_id
         assert int(row["n_bonds"]) == len(rows_for(restored.bonds, pdb_id))
         assert int(row["n_candidates"]) == len(rows_for(restored.candidates, pdb_id))
-    # The retry replaced rows rather than duplicating them.
     assert len(restored.bonds) == len(complete.bonds)
     assert len(restored.stats) == len(complete.stats)
     assert len(restored.manifest) == len(ENTRY_IDS)
 
 
-# 7. Regression: an unrun bond stage is blank, not a measured zero
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1000,15 +927,10 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
 ):
     """A pre-bond failure leaves blank counts, so bonds are still filled later.
 
-    Regression for cf55dd5. ``_initial_result`` used to seed ``n_bonds`` and
-    ``n_candidates`` with ``0``. An entry that failed before the bond stage then
-    claimed a measured zero; ``--resume --no-bonds`` carried that stale ``0``
-    onto the now-``ok`` row, and the following bond-enabled ``--resume`` saw
-    ``status=ok`` with non-blank counts, judged the stage complete and skipped
-    the entry permanently while the bond CSVs held no rows for it.
-
-    The three runs below are exactly that sequence, with the third asserting
-    that the bond rows do arrive.
+    A seeded ``0`` would read as a measured zero: ``--resume --no-bonds``
+    carries it onto the now-``ok`` row, and the next bond-enabled resume then
+    judges the stage complete and skips the entry permanently with no bond rows
+    written for it. The three runs below are that sequence.
     """
     output_dir = tmp_path / "output"
     good_mtz = entry_file(entry_cache, "9myr", "9myr_final.mtz")
@@ -1080,7 +1002,6 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
     assert float(bonds[0]["distance"]) == pytest.approx(2.311, abs=0.02)
 
 
-# 8. Manual-file mode
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1089,9 +1010,7 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
 ):
     """Manual ``--cif-file/--mtz-file/--data-json`` matches the automatic run.
 
-    Manual mode is an input-selection path, not a different analysis: given the
-    same coordinates, reflections and metadata it must produce the same geometry
-    and the same DPI-derived numbers as the mirror/cache workflow.
+    Manual mode selects inputs; it is not a different analysis.
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
@@ -1146,10 +1065,9 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     """Omitting ``--data-json`` costs DPI only, and is not a failure.
 
     README: "Without --data-json there is no reflection count, so DPI and every
-    value derived from it are unavailable. Bond geometry is still measured and
-    emitted, and the omission is reported as ``missing_dpi_metadata_source``
-    rather than as a calculation failure." A deterministic limitation is a
-    terminal (non-retryable) partial, and terminal partials exit successfully.
+    value derived from it are unavailable ... the omission is reported as
+    ``missing_dpi_metadata_source`` rather than as a calculation failure". A
+    deterministic limitation is a terminal partial, and those exit successfully.
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
@@ -1178,7 +1096,7 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     site = read_rows(output_dir, "metal_stats_all.csv")[0]
     assert site["dpi_unavailable_reason"] == "missing_dpi_metadata_source"
     assert not math.isfinite(float(site["dpi"]))
-    # Density is unaffected: only the DPI-derived numbers are lost.
+    # Only the DPI-derived numbers are lost; density is unaffected.
     assert float(site["ZDm"]) == pytest.approx(
         float(rows_for(batch.stats, "9myr")[0]["ZDm"])
     )
@@ -1189,12 +1107,10 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     assert bond["neighbor_atom"] == "SG"
     assert not math.isfinite(float(bond["dpi"]))
     assert not math.isfinite(float(bond["zscore"]))
-    # The measured, non-derived evidence is still complete.
     assert float(bond["literature_distance"]) > 0.0
     assert bond["geometry_outlier"] in ("", "False")
 
 
-# 9. The map-scope equivalence claim
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1205,8 +1121,7 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
 
     README: "Model-envelope mode still calculates each complete FFT map before
     cropping, so map values come from the same Fourier calculation as legacy
-    full-map mode." That makes the default a pure performance optimisation, and
-    it is the pipeline's strongest numerical claim.
+    full-map mode", which makes the default a pure performance optimisation.
     """
     cropped = run_batch(
         tmp_path / "envelope",
@@ -1225,8 +1140,8 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
     assert cropped.result.exit_code == 0, cropped.result.text
     assert full.result.exit_code == 0, full.result.text
 
-    # The comparison is only meaningful if cropping actually happened for at
-    # least one entry; otherwise both runs took the same code path.
+    # Without cropping on at least one entry both runs took the same path and
+    # the comparison proves nothing.
     cropped_log = open(log_paths(cropped.output_dir)[0], encoding="utf-8").read()
     full_log = open(log_paths(full.output_dir)[0], encoding="utf-8").read()
     assert re.search(r"density_map_scope=model-envelope\b", cropped_log), (
@@ -1247,7 +1162,6 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
         for metric in helpers.EDSTATS_METRICS:
             assert row[metric] == other[metric], (site_key, metric)
 
-    # The downstream numbers that depend on those statistics agree too.
     def bond_key(row):
         return (
             row["pdbID"],
@@ -1264,7 +1178,6 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
             assert row[column] == full_bonds[bond_id][column], (bond_id, column)
 
 
-# 10. Clean failure, not a traceback or a hang
 def _mtz_without_map_coefficients(source_mtz: str, destination) -> str:
     """Write an MTZ with real indices but none of FWT/PHWT/DELFWT/PHDELWT."""
     import gemmi
@@ -1299,9 +1212,8 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
 ):
     """An id that exists nowhere ends the run with an explanation and exit 1.
 
-    The downloader is replaced at its boundary: this is an error-reporting test,
-    not a live-network test, and an unmarked test must never open a socket under
-    ``-m 'not network'``.
+    The downloader is stubbed because this test carries no ``network`` marker
+    and so must never open a socket.
     """
 
     def unavailable(pdb_id, cache_root):
@@ -1322,8 +1234,7 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
     assert result.exit_code == 1
     assert "not found locally and download failed" in result.text
     assert "Traceback" not in result.text
-    # The run is abandoned before any output table is created, but the run log
-    # still records the attempt.
+    # Abandoned before any output table exists, but the log records the attempt.
     assert not os.path.exists(os.path.join(str(output_dir), "manifest.csv"))
     assert len(log_paths(output_dir)) == 1
     assert "Driver error:" in open(log_paths(output_dir)[0], encoding="utf-8").read()
@@ -1337,9 +1248,9 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 ):
     """A missing FWT/PHWT/DELFWT/PHDELWT set fails one entry, not the process.
 
-    README: "The MTZ input must contain FWT, PHWT, DELFWT, and PHDELWT columns."
-    The failure must name them, be retryable, and exit nonzero -- and it must
-    not be mistaken for a bond stage that ran and found nothing.
+    README: "The MTZ input must contain FWT, PHWT, DELFWT, and PHDELWT
+    columns". The failure names them and must not read as a bond stage that ran
+    and found nothing.
     """
     output_dir = tmp_path / "output"
     broken = _mtz_without_map_coefficients(
@@ -1372,7 +1283,6 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
         assert column in row["error"], row["error"]
     assert row["n_bonds"] == "" and row["n_candidates"] == ""
 
-    # The other outputs exist and are empty rather than absent or malformed.
     assert read_rows(output_dir, "metal_stats_all.csv") == []
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
     assert [
@@ -1382,11 +1292,9 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 
 @pytest.mark.parametrize("value", ["0", "-1"])
 def test_workers_below_one_is_rejected_before_any_work(tmp_path, value):
-    """``--workers`` must be at least 1 and is refused during argument parsing.
+    """``--workers`` must be at least 1, and is refused during argument parsing.
 
-    README: "--workers <n> ... must be at least 1". Rejection happens before the
-    run starts, so no output directory and no log are created. This test needs
-    neither CCP4 nor the network.
+    Rejection precedes the run, so no output directory and no log are created.
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
@@ -1404,34 +1312,30 @@ def test_workers_below_one_is_rejected_before_any_work(tmp_path, value):
     assert not os.path.exists(output_dir)
 
 
-# 11. Database-referenced confidence scoring. The published severity anchors
-# below are restated here rather than imported, so this module scores sites
-# independently of the code it is checking.
-# ``test_the_scoring_policy_under_test_is_the_shipped_one`` keeps the two
-# copies honest; the anchors are part of the frozen policy that
-# ``confidence_reference_id`` is derived from, so they cannot drift quietly.
+# The published severity anchors and weights are restated here rather than
+# imported, so this module scores sites independently of the code it checks;
+# ``test_the_scoring_policy_under_test_is_the_shipped_one`` keeps the two copies
+# honest, and the policy is frozen into every ``confidence_reference_id``.
 _DENSITY_ANCHORS = ((2.0, 0.0), (3.0, 0.25), (6.0, 0.65), (12.0, 1.0))
 _GEOMETRY_ANCHORS = ((2.0, 0.0), (3.0, 0.35), (6.0, 0.70), (12.0, 1.0))
 _WEIGHTS = {"density": 0.50, "geometry": 0.35, "interaction": 0.15}
 
-#: Evidence grid the frozen test reference is built from: eight RSZD values
-#: spread over every density-anchor interval, crossed with five maximum
-#: ``|Zbond|`` values, so the cohort exercises the geometry and interaction
-#: terms as well as the density one and spans nearly the whole 0-100 range.
+# Evidence grid the frozen test reference is built from: RSZD values spread over
+# every density-anchor interval crossed with maximum ``|Zbond|`` values, so the
+# cohort exercises the geometry and interaction terms too and spans nearly the
+# whole 0-100 range.
 _COHORT_RSZD = (0.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.5, 8.0)
 _COHORT_ZBOND = (1.0, 2.5, 4.0, 7.0, 10.0)
 
-#: A second cohort: same policy, a different database snapshot.
+# A second cohort: same policy, a different database snapshot.
 _ALTERNATE_RSZD = (1.0, 2.2, 3.3, 4.4, 5.5, 7.7)
 _ALTERNATE_ZBOND = (0.5, 3.5, 6.0, 9.0)
 
-#: 9myr chain B's zinc scores 98.75: RSZD 2.1 is one tenth of the way
-#: through the 2.0-3.0 density interval, so SR = 0.025, while every |Zbond| is
-#: below the 2.0 geometry floor. Only the density term contributes:
-#: ``100 * (1 - 0.50 * 0.025)``.
+# 9myr chain B: RSZD 2.1 is one tenth through the 2.0-3.0 density interval, so
+# SR = 0.025, and every |Zbond| is below the 2.0 geometry floor, leaving
+# ``100 * (1 - 0.50 * 0.025)``.
 _9MYR_B_CONFIDENCE = 98.75
-#: ``_RSZD_TOLERANCE`` of RSZD slack inside the 2.0-3.0 interval is
-#: ``0.3 * 0.25 * 0.50 * 100 = 3.75`` points of score.
+# ``_RSZD_TOLERANCE`` inside that interval is ``0.3 * 0.25 * 0.50 * 100`` points.
 _9MYR_B_CONFIDENCE_TOLERANCE = 3.75
 
 
@@ -1449,11 +1353,10 @@ def _severity(value: float, anchors) -> float:
 
 
 def readme_confidence(rszd: float, max_abs_zbond: float, coverage: float) -> float:
-    """``100 * (1 - 0.50*SR - 0.35*QG*SG - 0.15*QG*sqrt(SR*SG))``.
+    """The README score ``100 * (1 - 0.50*SR - 0.35*QG*SG - 0.15*QG*sqrt(SR*SG))``.
 
-    The README's published score, computed here from the site's own recorded
-    evidence so a run's numbers are checked against the documentation rather
-    than against the implementation that produced them.
+    Computed from the site's own recorded evidence, so a run is checked against
+    the documentation rather than against the implementation that produced it.
     """
     coverage = min(1.0, max(0.0, coverage))
     density = _severity(rszd, _DENSITY_ANCHORS)
@@ -1489,10 +1392,9 @@ def reference_metadata(reference_dir) -> Dict[str, object]:
 def average_rank_percentile(cohort, score: float, tolerance: float = 1e-6) -> float:
     """Average-rank ECDF of ``score`` in ``cohort``, computed independently.
 
-    ``tolerance`` groups a printed score with the cohort value it came from:
-    scores reach the CSV rounded to six decimals while the frozen distribution
-    keeps them at full precision. Distinct cohort scores are three orders of
-    magnitude further apart than that, so nothing else can be merged by it.
+    ``tolerance`` groups a CSV score, rounded to six decimals, with the
+    full-precision cohort value it came from; distinct cohort scores are three
+    orders of magnitude further apart, so nothing else can be merged by it.
     """
     total = sum(count for _, count in cohort)
     below = sum(count for value, count in cohort if value < score - tolerance)
@@ -1505,11 +1407,10 @@ def frozen_reference(
 ) -> str:
     """Publish a frozen confidence reference and return its directory.
 
-    Built the way a real one is: a compact confidence-input CSV is finalized by
-    ``src/confidence_score.py finalize`` -- the documented recovery entry point
-    -- which is what writes ``metadata.json`` and ``score_distribution.csv``.
-    Two rows carry no RSZD, so the scorable cohort is genuinely smaller than the
-    input row count and the two cannot be confused.
+    Built the way a real one is, through the documented
+    ``src/confidence_score.py finalize`` entry point. Two rows carry no RSZD, so
+    the scorable cohort is smaller than the input row count and the two cannot
+    be confused.
     """
     directory = str(directory)
     os.makedirs(directory, exist_ok=True)
@@ -1574,10 +1475,8 @@ CONFIDENCE_COLUMNS = list(confidence_score.CONFIDENCE_INPUT_COLUMNS) + list(
 def assert_policy_was_applied(rows, reference_dir):
     """Every scored row obeys the README formula and the frozen cohort's ECDF.
 
-    This is the check the whole confidence feature reduces to: the score is the
-    published function of the site's own evidence, and the percentile places
-    that score in the *frozen database* cohort rather than in the handful of
-    sites this run happened to look at.
+    The percentile must place the score in the frozen database cohort, not in
+    the handful of sites this run happened to look at.
     """
     metadata = reference_metadata(reference_dir)
     cohort = frozen_cohort(reference_dir)
@@ -1590,7 +1489,6 @@ def assert_policy_was_applied(rows, reference_dir):
             f"{row['pdbID']} {row['metal_resname']}"
             f"{row['metal_resnum']}/{row['metal_atom']}"
         )
-        # Which snapshot produced this row is recorded on the row itself.
         assert row["confidence_reference_id"] == metadata["reference_id"], where
         assert int(row["confidence_cohort_size"]) == cohort_size, where
         if row["confidence_scoring_status"] == "unscorable":
@@ -1605,8 +1503,7 @@ def assert_policy_was_applied(rows, reference_dir):
             float(row["max_abs_zbond"]) if row["max_abs_zbond"] else math.nan,
             float(row["geometry_coverage"]),
         )
-        # 1e-3 absorbs the six-decimal rounding of geometry_coverage in the CSV;
-        # the score itself is reproduced to well under that.
+        # 1e-3 absorbs the six-decimal rounding of geometry_coverage in the CSV.
         assert score == pytest.approx(expected, abs=1e-3), where
         assert float(row["confidence_percentile"]) == pytest.approx(
             average_rank_percentile(cohort, expected), abs=1e-6
@@ -1618,12 +1515,8 @@ def assert_policy_was_applied(rows, reference_dir):
 def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path):
     """The anchors and weights this module re-implements are Alchemy's own.
 
-    ``assert_policy_was_applied`` deliberately recomputes scores from its own
-    copy of the policy instead of calling ``confidence_score``. That is only an
-    independent oracle while the two copies agree, and the policy is frozen: it
-    is published in every reference's ``metadata.json`` and hashed into every
-    ``confidence_reference_id``, so changing it invalidates every reference
-    already in the wild. Needs neither CCP4 nor the network.
+    ``assert_policy_was_applied`` is an independent oracle only while the two
+    copies agree.
     """
     assert _DENSITY_ANCHORS == confidence_score.DENSITY_ANCHORS
     assert _GEOMETRY_ANCHORS == confidence_score.GEOMETRY_ANCHORS
@@ -1645,19 +1538,10 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 ):
     """``--confidence-reference-dir`` makes a run emit its confidence scores.
 
-    README: "For later single-entry, ID-file, manual, or capped runs, place the
-    published database reference files in ... `confidence_reference/`, or select
-    another copy with `--confidence-reference-dir`. Alchemy loads that reference
-    once, derives each new site's compact inputs while its normal result is
-    still in memory, and writes `confidence_scores_all.csv` directly. These runs
-    are compared with the frozen database and never generate percentiles from
-    their own small cohort."
-
-    This is the product's differentiating output, so it is asserted as output:
-    one row per manifest-counted selected metal site, a README-formula score in
-    [0, 100] derived from that site's own density and geometry evidence, a
-    percentile relative to the frozen cohort rather than to these thirteen sites,
-    and the reference identifier recorded on every row.
+    README: such runs load the reference once, derive each new site's compact
+    inputs while its normal result is still in memory, write
+    `confidence_scores_all.csv` directly, and "never generate percentiles from
+    their own small cohort".
     """
     reference_dir = frozen_reference(tmp_path / "installed")
     output_dir = tmp_path / "output"
@@ -1672,15 +1556,14 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 
     written = set(os.listdir(str(output_dir)))
     assert "confidence_scores_all.csv" in written
-    # A referenced run scores in place; it neither streams compact inputs nor
-    # publishes a reference of its own, both of which belong to database runs.
+    # Streaming compact inputs and publishing a reference belong to database runs.
     assert "confidence_inputs_all.csv" not in written
     assert "confidence_reference" not in written
     assert read_header(output_dir, "confidence_scores_all.csv") == (CONFIDENCE_COLUMNS)
 
     rows = read_rows(output_dir, "confidence_scores_all.csv")
-    # One row per selected metal site, entry by entry -- the guarantee
-    # complete_confidence_site_count exists to keep.
+    # One row per selected metal site: the complete_confidence_site_count
+    # guarantee.
     for pdb_id, manifest_row in scored_run.manifest.items():
         assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
     assert len(rows) == 13
@@ -1701,11 +1584,9 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     percentiles = [percentile for _, percentile in ranked]
     assert all(0.0 < value < 100.0 for value in percentiles)
     assert len(set(percentiles)) > 1
-    # A percentile is a rank, so it never disagrees with the score ordering.
     assert percentiles == sorted(percentiles)
 
-    # 9myr chain B zinc: its confidence follows from the RSZD the density arm
-    # measured for it, and from the density term alone.
+    # 9myr chain B zinc: its confidence follows from the density term alone.
     zinc = next(
         row for row in rows if row["pdbID"] == "9myr" and row["metal_chain"] == "B"
     )
@@ -1739,16 +1620,11 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
 
     README: confidence inputs are collected "as part of an uncapped
     full-database run: no `--id`, `--id-file`, manual coordinate arguments, or
-    `--max-pdbs`", streamed to `confidence_inputs_all.csv`, and "only after the
-    database run completes without operationally incomplete entries does Alchemy
-    finalize confidence", writing `confidence_scores_all.csv` and a reusable
-    `confidence_reference/`.
+    `--max-pdbs`", and "only after the database run completes without
+    operationally incomplete entries does Alchemy finalize confidence".
 
-    The mirror here links the three cached entries where directory symlinks are
-    supported and copies them otherwise. It is a complete database as far as the
-    driver is concerned: enumeration finds exactly those entries and nothing
-    caps the run. That makes the database arm -- the one that produces the
-    reference everybody else consumes -- reachable without a 24k-entry mirror.
+    The three-entry mirror below is a complete database as far as the driver is
+    concerned, which reaches the database arm without a 24k-entry mirror.
     """
     mirror = os.path.join(str(tmp_path), "mirror")
     for pdb_id in ENTRY_IDS:
@@ -1789,7 +1665,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     streamed_inputs = read_rows(output_dir, "confidence_inputs_all.csv")
     rows = read_rows(output_dir, "confidence_scores_all.csv")
 
-    # Every selected metal site of every entry reaches both files exactly once.
+    # Every selected metal site reaches both files exactly once.
     assert (
         len(streamed_inputs)
         == len(rows)
@@ -1806,7 +1682,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     metadata = reference_metadata(reference_dir)
     assert metadata["input_row_count"] == len(rows)
     assert assert_policy_was_applied(rows, reference_dir) == len(rows)
-    # These sites *are* the cohort, so their average empirical rank is 50 even
+    # These sites are the cohort, so their average empirical rank is 50 even
     # when tied scores share a percentile.
     percentiles = [float(row["confidence_percentile"]) for row in rows]
     assert sum(percentiles) / len(percentiles) == pytest.approx(50.0)
@@ -1847,14 +1723,10 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
 def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp4_env):
     """Resuming against a different frozen reference is refused, not blended.
 
-    README: "A deterministic `confidence_reference_id` identifies the exact
-    frozen policy and score distribution and prevents resumed output from mixing
-    database snapshots." A percentile is only meaningful relative to one cohort,
-    so half a file scored against another database is worse than no file: it
-    reads as a single comparable column and is not one.
-
-    The same-reference resume is asserted first, so a failure of the mismatch
-    case cannot be a resume that was broken for some unrelated reason.
+    A percentile is meaningful only relative to one cohort, so half a file
+    scored against another database reads as a comparable column and is not
+    one. The same-reference resume is asserted first, so a failure of the
+    mismatch case cannot be an unrelated break in resume.
     """
     installed = frozen_reference(tmp_path / "installed")
     other = frozen_reference(tmp_path / "other", _ALTERNATE_RSZD, _ALTERNATE_ZBOND)
@@ -1913,8 +1785,8 @@ def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp
     # Refused before anything was rewritten.
     assert open(scores_path, "rb").read() == original
 
-    # And the converse gap: resuming a run that has no confidence output at all
-    # would silently score only the entries the resume happens to touch.
+    # The converse gap: resuming a run with no confidence output at all would
+    # silently score only the entries the resume happens to touch.
     unscored = tmp_path / "unscored"
     seed = run_alchemy(
         unscored,
@@ -1960,12 +1832,9 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
 ):
     """A reference that is not the one it claims to be aborts the run.
 
-    Two ways a reference directory can be wrong: its policy no longer matches
-    this code (``weights``), and its distribution no longer matches the
-    identifier published beside it (``distribution``). Either would produce
-    scores that are silently not comparable with anything, so the driver must
-    refuse the run rather than emit them -- and refuse before any entry is
-    processed, so nothing half-scored is left behind.
+    Either damage -- a policy that no longer matches this code, a distribution
+    that no longer matches its published identifier -- yields scores comparable
+    with nothing, so the run must stop before any entry is processed.
     """
     reference_dir = frozen_reference(tmp_path / "installed")
     metadata_path = os.path.join(
@@ -2006,7 +1875,6 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
     assert "Invalid confidence reference" in result.text
     assert message in result.text
 
-    # Nothing was analysed, so no output table and no partially scored file.
     assert not os.path.exists(os.path.join(str(output_dir), "manifest.csv"))
     assert not os.path.exists(
         os.path.join(str(output_dir), "confidence_scores_all.csv")

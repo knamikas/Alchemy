@@ -1,11 +1,8 @@
-# Analysis v2: extract metal / metallocofactor real-space stats from edstats output.
-#
-# edstats `stats.out` is a whitespace table: the first non-empty line is the column
-# header, and each data line begins with a residue/component name. Column layout
-# (0-indexed): 0 = residue name (RT), 1 = chain (CI), 2 = residue number (RN).
-#
-# `extract_metal_statistics` returns structured rows for metal ions and metal-containing
-# cofactors; `main.py` aggregates these across many structures.
+"""Extracting metal and cofactor real-space statistics from EDSTATS output.
+
+EDSTATS' ``stats.out`` is a whitespace-separated table whose first non-empty
+line is the column header.
+"""
 
 import math
 from typing import Any, Iterable, Optional
@@ -13,9 +10,8 @@ from typing import Any, Iterable, Optional
 from structure_analysis import NAN, canonical_pdb_residue_id
 
 
-# EDSTATS 1.0.9 standard residue-table schema. The twelve metrics are repeated
-# for main-chain, side-chain, and all atoms. ``n/a`` is EDSTATS' documented
-# null marker when a statistic cannot be calculated for an atom group.
+# EDSTATS 1.0.9's standard residue-table schema, whose twelve metrics repeat
+# for main-chain, side-chain and all atoms.
 _EDSTATS_METRIC_STEMS = (
     "BA",
     "NP",
@@ -44,6 +40,7 @@ EDSTATS_COLUMNS = (
     "CP",
     "NR",
 )
+# EDSTATS' documented marker for a statistic it could not calculate.
 EDSTATS_NULL_VALUE = "n/a"
 EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
 
@@ -51,12 +48,11 @@ EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
 def _is_edstats_separator(fields):
     """Whether split fields are EDSTATS' synthetic model separator row.
 
-    For a MODEL/ENDMDL-wrapped XYZIN, EDSTATS 1.0.9 emits a logical row with
-    blank residue name, residue number, and chain-position fields. Whitespace
-    splitting collapses those blanks, producing 39 fields rather than the
-    42-column residue schema: ``_``, 36 ``n/a`` metrics, model, and row number.
-    Older captured output may contain only the ``_`` marker. Recognize both
-    forms semantically while leaving every other malformed row to validation.
+    For a MODEL/ENDMDL-wrapped XYZIN, EDSTATS 1.0.9 emits a row whose residue
+    name, residue number and chain-position fields are blank, so whitespace
+    splitting yields ``_``, 36 ``n/a`` metrics, model and row number rather
+    than the 42-column residue schema. Older captured output carries only the
+    ``_`` marker.
     """
     if fields == ["_"]:
         return True
@@ -76,18 +72,14 @@ def _normalize_edstats_row(fields, header, indices):
     """Restore and normalize EDSTATS' valid blank-chain representation.
 
     EDSTATS leaves the trailing chain field (CP) empty for a blank-chain
-    residue, so whitespace splitting removes it and produces 41 fields. CP is
-    the only field EDSTATS can legitimately omit, so restore it for that
-    unambiguous shape: the row is exactly one field short, and its final two
-    tokens are the integer MN and NR values. All other short rows remain short
-    and are rejected by normal row validation.
+    residue, so whitespace splitting removes it. CP is the only field EDSTATS
+    can legitimately omit, so restore it for that unambiguous shape -- one
+    field short, ending in the integer MN and NR values -- and leave every
+    other short row to fail row validation.
 
-    The leading CI field cannot gate this restoration. CI is EDSTATS' own group
-    label rather than the deposited chain identifier -- ordered waters are
-    reported as chain ``0`` whatever their actual chain, while CP carries the
-    real one. A blank-chain entry therefore yields CI ``0`` for every water and
-    CI ``_`` for every other residue, with CP omitted from both. Both chain
-    fields then use an empty string as their canonical missing value.
+    The leading CI field cannot gate the restoration: CI is EDSTATS' own group
+    label, reported as ``0`` for ordered waters whatever their actual chain,
+    while CP carries the deposited one.
     """
     normalized = list(fields)
     if (
@@ -171,8 +163,8 @@ def _classify_residue(residue, metals_upper, cofactor_set):
 
     ``category`` is ``"cofactor"``, ``"metal"``, or ``""`` when the residue is
     neither. The emitted rows and the EDSTATS completeness check below both
-    derive from this single rule, so the set of sites Alchemy demands EDSTATS
-    report cannot drift away from the set it actually emits.
+    derive from this one rule, so the set of sites Alchemy demands EDSTATS
+    report cannot drift from the set it emits.
     """
     metal_sites = [
         atom
@@ -198,11 +190,10 @@ def _expected_edstats_residues(structure, metals_upper, cofactor_set):
 def _density_observation_id(pdb_id, fields, indices):
     """Return a stable identifier for one residue-level EDSTATS observation.
 
-    EDSTATS reports one density observation per coordinate residue. Alchemy can
-    expand that observation into several metal-site rows for a multi-metal
-    cofactor, so the identifier deliberately derives from the EDSTATS row and
-    not from an individual metal atom. ``NR`` disambiguates otherwise repeated
-    author residue identifiers within the selected model.
+    EDSTATS reports one observation per coordinate residue, which Alchemy can
+    expand into several metal-site rows, so the identifier derives from the
+    EDSTATS row rather than from an individual metal atom. ``NR`` disambiguates
+    repeated author residue identifiers within the selected model.
     """
     chain = fields[indices["CI"]] or "_"
     return "/".join(
@@ -224,46 +215,27 @@ def extract_metal_statistics(
     cofactor_set: Iterable[str],
     structure: Any,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Parse an edstats stats.out file, returning (rows, header).
-    `structure` is the shared first-model Gemmi context used by bond analysis.
+    """Parse an EDSTATS ``stats.out``, returning ``(rows, header)``.
 
-    Cofactors are matched by CCD component name (fields[0]) against
-    cofactor_set, as before. Plain metals are matched by the residue's
-    actual atom element(s), read from `structure` -- a single-atom residue
-    whose element is in metals_set is classified as a metal. This avoids
-    misclassifying components whose CCD id happens to look like an element
-    symbol (RNA "U", nitric oxide "NO") and catches metal-ion CCD ids that
-    don't themselves match an element string (e.g. "FE2").
-
-    EDSTATS matching uses the legacy-PDB residue name. When the analysis PDB was
-    converted from mmCIF, Alchemy restores the original component identifier
-    before matching the cofactor catalog and writing the result. This supports
-    CCD identifiers that cannot fit in the three-character PDB residue field.
+    Cofactors match by CCD component name. A plain metal is a single-atom
+    residue whose element, read from ``structure``, is in ``metals_set``:
+    matching on the CCD id alone misclassifies RNA ``U`` and nitric oxide
+    ``NO``, and misses metal ids like ``FE2``. Where the analysis PDB came from
+    mmCIF the original component identifier is restored before matching, since
+    a CCD id need not fit the three-character PDB residue field.
 
     Output is site-level: a multi-metal cofactor repeats its residue-level
-    EDSTATS values once per selected metal site. Repeated rows share a
-    ``density_observation_id`` and report their shared-site multiplicity so
-    downstream analyses can count the density observation only once. Each row
-    also carries ``site`` and ``site_key`` internally so downstream contact
-    summaries cannot collide for multiple metals or duplicate author residue
-    identifiers.
-
-    A cofactor row that has no matching coordinate residue or no selected metal
-    site is retained once with ``site=None``. Machine-readable row status fields
-    distinguish an identifier-join failure from a matched cofactor that simply
-    has no selected configured metal. This preserves the residue-level EDSTATS
-    observation without pretending that a metal site was available for geometry
-    analysis.
+    EDSTATS values once per selected metal site, sharing a
+    ``density_observation_id`` and reporting the shared-site multiplicity so a
+    density observation is counted only once. A cofactor with no matching
+    coordinate residue or no selected metal site is retained once with
+    ``site=None``, its row status distinguishing a failed identifier join from
+    a matched cofactor that has no configured metal.
     """
 
     metals_upper = {element.upper() for element in metals_set}
 
     rows = []
-    # The column names and their positions are one value, not two: they are
-    # produced together by header validation and are meaningless apart. Keeping
-    # them in a single Optional makes the "not yet seen a header" state a
-    # property of one variable, so every use below is reachable only after it
-    # has been set -- which a reader and a type checker can both follow.
     schema: Optional[tuple[list[str], dict[str, int]]] = None
     residue_row_count = 0
     observed_residues = set()
@@ -274,7 +246,6 @@ def extract_metal_statistics(
                 continue
             fields = stripped.split()
             if schema is None:
-                # first non-empty line is the edstats column header
                 schema = (fields, _validated_edstats_header(fields))
                 continue
 
@@ -438,11 +409,9 @@ def extract_metal_statistics(
     return rows, header
 
 
-# The density-sigma join reads the real-space Z-difference metrics back out of
-# an extracted EDSTATS row. This is the same table ``EDSTATS_COLUMNS`` above
-# describes, so the two live together: a column-order change breaks both, and
-# having the reader in ``bond_analysis`` meant EDSTATS knowledge was split
-# across two modules that had to agree without either one saying so.
+# The density-sigma join reads Z-difference metrics back out of an extracted
+# EDSTATS row, so it lives beside ``EDSTATS_COLUMNS``: a column-order change
+# breaks both.
 def _sigma_index(stats_rows):
     """Map (resname, chain, resnum) -> edstats fields, for the sigma join."""
     return {
@@ -455,8 +424,7 @@ ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
 
 
 def _zd_indices(header):
-    """Return column indices for ZDm/ZD-m/ZD+m, or None
-    if the header is missing or doesn't contain all three names."""
+    """Return column indices for ZDm/ZD-m/ZD+m, or ``None`` if any is absent."""
     if not header:
         return None
     try:

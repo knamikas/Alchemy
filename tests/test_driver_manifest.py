@@ -1,12 +1,6 @@
-"""Batch-driver data management in ``src/main.py``.
-
-Scope: argument validation (``positive_int``), the resume bookkeeping that
-decides which entries are already finished (``load_done``,
-``_manifest_values_by_id``, ``_resume_replacement_succeeded``), the manifest
-row projection and its provenance skeleton (``_manifest_row``,
-``_initial_result``), the staged-retry and streamed-output machinery
-(``_ResumeStaging``, ``_OutputWriters``), and the two coordinate-preparation
-converters (``_cif_to_pdb``, ``_first_model_pdb``).
+"""Batch-driver data management: argument validation, resume bookkeeping, the
+manifest projection, the staged-retry and streamed-output machinery, and the
+two coordinate-preparation converters.
 
 Worker-death recovery and end-to-end pipeline runs are covered elsewhere.
 """
@@ -51,14 +45,8 @@ from driver import pool
 import confidence_score
 
 
-# Local fixtures / builders
 def _cfg(**overrides):
-    """A complete ``WorkerConfig`` with test placeholders.
-
-    Every field is required now that the config is a frozen dataclass, and
-    naming them here rather than in each test keeps the three provenance values
-    the manifest actually asserts on visible.
-    """
+    """A complete ``WorkerConfig`` with test placeholders."""
     fields: dict[str, Any] = {
         "root": "/nonexistent/root",
         "mirror_root": "/nonexistent/mirror",
@@ -84,8 +72,7 @@ def _cfg(**overrides):
 
 CFG = _cfg()
 
-# Columns that ``_manifest_row`` recomputes from the worker result rather than
-# copying straight out of it.
+# Columns ``_manifest_row`` computes; every other column it copies.
 DERIVED_MANIFEST_COLUMNS = frozenset(
     {
         "n_metals",
@@ -109,10 +96,8 @@ def _result(pdb_id="109m", **overrides):
 def _manual_entry(tmp_path, monkeypatch, density_stage, **cfg_overrides):
     """Run one manual-input entry through ``worker.process``.
 
-    Only the three MTZ-dependent readers are stubbed -- ``density_stage``
-    stands in for the CCP4 work, and may raise or return a ``DensityResult``.
-    Structure loading, result assembly and status computation all run for
-    real, which is the part under test.
+    Only the three MTZ-dependent readers are stubbed; structure loading, result
+    assembly and status computation all run for real.
     """
     builder = helpers.StructureBuilder()
     builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
@@ -147,8 +132,7 @@ def _manual_entry(tmp_path, monkeypatch, density_stage, **cfg_overrides):
         ccp4_version="test",
         **cfg_overrides,
     )
-    # Set the worker global directly: monkeypatch restores it after the
-    # test, whereas _init_worker has no teardown counterpart.
+    # monkeypatch restores ``_CFG``; ``_init_worker`` has no teardown counterpart.
     monkeypatch.setattr(worker, "_CFG", cfg)
     return worker.process("1abc")
 
@@ -173,10 +157,8 @@ def _read_csv(path):
         return list(csv.reader(handle))
 
 
-# mmCIF scaffolding for the conversion tests. Written by hand rather than by
-# gemmi because the behaviours under test are about raw ``.``/``?`` occupancy
-# tokens and >3-character component ids, neither of which a gemmi round trip
-# would produce.
+# Hand-written because the behaviours under test are raw ``.``/``?`` occupancy
+# tokens and >3-character component ids, neither of which gemmi would write.
 _CIF_HEADER = """data_TEST
 _cell.length_a 60.0
 _cell.length_b 70.0
@@ -273,8 +255,8 @@ def _element_field(line):
 def _simple_structure(residues):
     """Build a one-model gemmi structure from (chain, seqid, name, atoms).
 
-    ``add_chain``/``add_residue`` copy their argument, so each chain is fully
-    populated before it is attached.
+    gemmi's ``add_chain``/``add_residue`` copy their argument, so each chain is
+    fully populated before it is attached.
     """
     structure = gemmi.Structure()
     model = gemmi.Model(1)
@@ -306,7 +288,6 @@ _BASE_RESIDUES = [
 ]
 
 
-# positive_int
 class TestPositiveInt:
     """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
 
@@ -323,13 +304,11 @@ class TestPositiveInt:
         ],
     )
     def test_accepts_integers_of_at_least_one(self, value, expected):
-        """Any representation of an integer >= 1 is accepted and normalized."""
         assert cli.positive_int(value) == expected
         assert isinstance(cli.positive_int(value), int)
 
     @pytest.mark.parametrize("value", ["0", "-1", "-28", 0, -3])
     def test_rejects_zero_and_negative(self, value):
-        """Zero workers or a zero cap would silently do nothing; reject them."""
         with pytest.raises(argparse.ArgumentTypeError) as excinfo:
             cli.positive_int(value)
         assert "at least 1" in str(excinfo.value)
@@ -351,19 +330,16 @@ class TestPositiveInt:
         ],
     )
     def test_rejects_non_integer_text(self, value):
-        """Argparse hands over raw strings; anything non-integral is a usage error."""
         with pytest.raises(argparse.ArgumentTypeError) as excinfo:
             cli.positive_int(value)
         assert "positive integer" in str(excinfo.value)
 
     def test_boundary_is_one_not_zero(self):
-        """1 is the smallest accepted value; 0 is the first rejected one."""
         assert cli.positive_int("1") == 1
         with pytest.raises(argparse.ArgumentTypeError):
             cli.positive_int("0")
 
 
-# load_done
 class TestLoadDone:
     """Which manifest rows count as finished work that --resume may skip."""
 
@@ -376,7 +352,7 @@ class TestLoadDone:
             ("partial", "False", True),  # terminal partial: nothing left to do
             ("partial", "0", True),
             ("partial", "no", True),
-            ("partial", "True", False),  # retryable partial must be retried
+            ("partial", "True", False),
             ("partial", "", False),
             ("error", "True", False),
             ("error", "False", False),  # even a terminal error is not "done"
@@ -455,24 +431,20 @@ class TestLoadDone:
         }
 
     def test_missing_manifest_is_an_empty_done_set(self, tmp_path):
-        """A first run has no manifest; resume must not crash on that."""
         assert _manifest_ids(tmp_path / "absent.csv") == set()
 
     def test_manifest_without_the_required_columns_is_ignored(self, tmp_path):
-        """A foreign CSV cannot be mistaken for completion evidence."""
         path = tmp_path / "manifest.csv"
         with open(path, "w", newline="") as handle:
             csv.writer(handle).writerows([["id", "state"], ["109m", "ok"]])
         assert _manifest_ids(path) == set()
 
     def test_empty_manifest_file_is_ignored(self, tmp_path):
-        """A zero-byte manifest has no header and therefore no done rows."""
         path = tmp_path / "manifest.csv"
         path.write_text("")
         assert _manifest_ids(path) == set()
 
     def test_row_without_a_pdb_id_is_not_done(self, tmp_path):
-        """A blank ID cannot mark anything complete."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -518,7 +490,6 @@ class TestLoadDone:
         assert ("109m" in done) is expected_done
 
     def test_blank_counts_are_irrelevant_when_bonds_are_not_required(self, tmp_path):
-        """A --no-bonds resume must not re-run density-complete entries."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -545,7 +516,6 @@ class TestLoadDone:
     def test_absent_bond_outputs_make_the_result_incomplete(
         self, tmp_path, bond_present, candidate_present, expected_done
     ):
-        """Counts in the manifest are worthless if the CSV rows are gone."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -567,7 +537,6 @@ class TestLoadDone:
         assert ("109m" in done) is expected_done
 
     def test_selects_only_the_terminal_rows_of_a_mixed_manifest(self, tmp_path):
-        """A realistic manifest yields exactly the finished subset."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -607,12 +576,10 @@ class TestLoadDone:
         assert _manifest_ids(path, bonds_required=False) == {"109m", "1cll", "100d"}
 
 
-# _manifest_values_by_id
 class TestManifestValuesById:
     """Reading one prior manifest column for the resume carry-forward."""
 
     def test_returns_the_column_keyed_by_normalized_id(self, tmp_path):
-        """Values are returned verbatim under a lowercased, stripped key."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -628,7 +595,6 @@ class TestManifestValuesById:
         }
 
     def test_missing_and_empty_files_yield_no_values(self, tmp_path):
-        """A first run or a truncated manifest carries nothing forward."""
         empty = tmp_path / "empty.csv"
         empty.write_text("")
         assert (
@@ -646,7 +612,6 @@ class TestManifestValuesById:
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": ""}
 
     def test_blank_ids_are_dropped(self, tmp_path):
-        """An unattributable row must not become a wildcard carry-forward."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -668,16 +633,11 @@ class TestManifestValuesById:
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "5"}
 
 
-# _initial_result
 class TestInitialResult:
     """The per-entry skeleton that guarantees a complete manifest row."""
 
     def test_seeds_bond_counts_blank_not_zero(self):
-        """REGRESSION (cf55dd5): an unrun bond stage must not claim a zero.
-
-        ``0`` is a measured result. Seeding it made an entry that failed
-        before the bond stage look like a completed bond analysis.
-        """
+        """``0`` is a measured result, so an unrun bond stage must stay blank."""
         result = worker._initial_result("109m", CFG, None)
         assert result.n_bonds is None
         assert result.n_candidates is None
@@ -700,17 +660,13 @@ class TestInitialResult:
             assert hasattr(result, name)
 
     def test_defaults_to_a_retryable_error(self):
-        """An entry that dies before setting a status must be retried."""
         result = worker._initial_result("109m", CFG, None)
         assert result.status == "error"
         assert result.retryable is True
 
     def test_carries_the_reference_data_identity(self):
-        """Every row says which catalog and distance table produced it.
-
-        Without it the manifest records the software that ran but not the data
-        it measured against, and two runs whose z-scores came from different
-        reference distances are indistinguishable in the output.
+        """Two runs whose z-scores used different reference distances must be
+        distinguishable in the output.
         """
         result = worker._initial_result("109m", CFG, None)
         row = _manifest_row(result, False, True, {}, {})
@@ -719,7 +675,6 @@ class TestInitialResult:
         assert row["reference_data_id"] == CFG.reference_data_id
 
     def test_carries_run_provenance_from_the_config(self):
-        """Version provenance is stamped once and shared by every row."""
         result = worker._initial_result("109m", CFG, None)
         assert result.alchemy_version == pool.ALCHEMY_VERSION
         assert result.alchemy_commit == CFG.alchemy_commit
@@ -743,7 +698,6 @@ class TestInitialResult:
         assert result.refinement_state == expected
 
     def test_row_lists_are_independent_between_entries(self):
-        """Two skeletons must not share mutable row accumulators."""
         first = worker._initial_result("109m", CFG, None)
         second = worker._initial_result("1cll", CFG, None)
         first.rows.append({"x": 1})
@@ -752,13 +706,8 @@ class TestInitialResult:
         assert second.reason_codes == []
 
     def test_a_misspelled_field_cannot_be_assigned(self):
-        """A misspelled field must fail here, not silently later.
-
-        ``process`` fills the result in stage by stage. While it was a dict,
-        ``result["retryble"] = True`` added a key nobody read and left the
-        entry reporting whatever ``retryable`` still held -- for a real entry,
-        in a real manifest, with nothing anywhere saying so. ``slots=True`` is
-        what makes the assignment itself the error.
+        """``slots=True`` makes a misspelled assignment the error, not a field
+        nobody reads and a stale value in the manifest.
         """
         result = worker._initial_result("109m", CFG, None)
 
@@ -768,11 +717,8 @@ class TestInitialResult:
         assert result.retryable is True, "the real field must be untouched"
 
     def test_unmeasured_fields_render_blank_not_none(self):
-        """``None`` means "this stage never ran", and every output says so blank.
-
-        A ``None`` reaching a CSV as ``"None"`` would be read back by the next
-        ``--resume`` as a completed stage, which is the same failure the blank
-        counts exist to prevent.
+        """A ``None`` reaching a CSV as ``"None"`` reads back to the next
+        ``--resume`` as a completed stage.
         """
         result = worker._initial_result("109m", CFG, None)
         row = _manifest_row(result, False, True, {}, {})
@@ -782,12 +728,10 @@ class TestInitialResult:
         assert "None" not in set(map(str, row.values()))
 
 
-# _manifest_row
 class TestManifestRow:
     """Projection of a worker result onto the manifest schema."""
 
     def test_projects_exactly_the_manifest_columns(self):
-        """No worker-internal key leaks into the CSV and none is missing."""
         row = _manifest_row(_result(), False, True, {}, {})
         assert set(row) == set(MANIFEST_COLUMNS)
         assert "rows" not in row
@@ -819,7 +763,6 @@ class TestManifestRow:
         assert row["warning_codes"] == ""
 
     def test_bonds_enabled_reports_the_measured_zero(self):
-        """A bond run that found nothing records 0, distinct from blank."""
         row = _manifest_row(_result(n_bonds=0, n_candidates=0), False, True, {}, {})
         assert row["n_bonds"] == 0
         assert row["n_candidates"] == 0
@@ -837,40 +780,35 @@ class TestManifestRow:
         assert row["n_candidates"] == ""
 
     def test_resume_no_bonds_carries_the_prior_counts_forward(self):
-        """--resume --no-bonds preserves an earlier run's bond-stage counts."""
         row = _manifest_row(_result("109M"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == "6"
         assert row["n_candidates"] == "8"
 
     def test_resume_no_bonds_carry_forward_preserves_a_prior_zero(self):
-        """A prior measured zero stays a zero, not a blank."""
         row = _manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
         assert row["n_bonds"] == "0"
         assert row["n_candidates"] == "0"
 
     def test_resume_no_bonds_without_a_prior_row_stays_blank(self):
-        """An entry new to this output dir has no bond stage to inherit."""
         row = _manifest_row(_result("1cll"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
     def test_prior_blank_counts_are_not_upgraded(self):
-        """Carrying forward a blank must keep it blank, never zero."""
         row = _manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
 
-# REGRESSION (bug 4): the unrun-bond-stage chain
 class TestUnrunBondStageChain:
-    """REGRESSION (cf55dd5): an unrun bond stage must never look complete.
+    """An unrun bond stage must never look complete.
 
-    The bug is the whole chain, not the literal seed value:
+    What matters is the chain, not the seed value:
       1. an entry fails before the bond stage,
-      2. its manifest row is later carried forward by ``--resume --no-bonds``,
-      3. a subsequent bond-enabled ``--resume`` reads that row.
-    With ``0`` seeded, step 3 judged the bond stage complete and skipped the
-    entry permanently while the bond CSVs held no rows for it.
+      2. its manifest row is carried forward by ``--resume --no-bonds``,
+      3. a bond-enabled ``--resume`` reads that row.
+    A ``0`` anywhere along it makes step 3 skip the entry permanently while the
+    bond CSVs hold no rows for it.
     """
 
     @staticmethod
@@ -890,24 +828,20 @@ class TestUnrunBondStageChain:
         manifest = tmp_path / "manifest.csv"
         self._write_rows(manifest, [row])
 
-        # Observable consequence first: the entry is still work to do.
         assert resume.load_done(str(manifest), bonds_required=True) == set()
         assert resume.load_done(str(manifest), bonds_required=False) == set()
-        # ...because the row records "the bond stage did not run", not "zero".
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
     def test_resume_no_bonds_recovery_does_not_fake_a_completed_bond_stage(
         self, tmp_path
     ):
-        """The full chain: fail, resume --no-bonds to ok, then resume bonds.
-
-        The entry must still be scheduled by the bond-enabled resume, because
-        no bond analysis has ever run for it.
+        """Run 1 fails before the bond stage, run 2 recovers it under
+        ``--no-bonds``, and run 3 must still schedule it: no bond analysis has
+        ever run for the entry.
         """
         manifest = tmp_path / "manifest.csv"
 
-        # Run 1: bonds enabled, but the entry fails before the bond stage.
         failed = _manifest_row(
             _result("109m", status="error", retryable=True, error="edstats failed"),
             resume=False,
@@ -917,8 +851,6 @@ class TestUnrunBondStageChain:
         )
         self._write_rows(manifest, [failed])
 
-        # Run 2: --resume --no-bonds. The entry is scheduled (not done) and
-        # this time the density stage succeeds.
         assert resume.load_done(str(manifest), bonds_required=False) == set()
         prior_bonds = resume._manifest_values_by_id(str(manifest), "n_bonds")
         prior_candidates = resume._manifest_values_by_id(str(manifest), "n_candidates")
@@ -934,14 +866,10 @@ class TestUnrunBondStageChain:
         assert recovered["n_metals"] == 2
         self._write_rows(manifest, [recovered])
 
-        # Run 3: --resume with bonds. status is ok and the density stage is
-        # done, but the bond stage has never run, so the entry must still be
-        # scheduled rather than skipped forever with empty bond CSVs.
         assert resume.load_done(str(manifest), bonds_required=False) == {"109m"}
         assert resume.load_done(str(manifest), bonds_required=True) == set()
 
-        # Run 3 completes the bond stage with a genuine measured zero; only
-        # now may a later bond-enabled resume skip the entry.
+        # Only a genuine measured zero may let a later resume skip the entry.
         completed = _manifest_row(
             _result(
                 "109m",
@@ -960,7 +888,6 @@ class TestUnrunBondStageChain:
         assert resume.load_done(str(manifest), bonds_required=True) == {"109m"}
 
 
-# _resume_replacement_succeeded
 class TestResumeReplacementSucceeded:
     """Only a terminal retry may replace the rows it is retrying."""
 
@@ -985,15 +912,12 @@ class TestResumeReplacementSucceeded:
         assert resume._resume_replacement_succeeded(result) is expected
 
     def test_an_untouched_partial_is_assumed_unfinished(self):
-        """``retryable`` starts true, so a partial nothing cleared cannot replace.
-
-        This used to depend on a ``.get`` default; it is now the field's own
-        default, which is the same rule in a place a reader can find it.
+        """``retryable`` defaults to true, so a partial nothing cleared cannot
+        replace.
         """
         assert resume._resume_replacement_succeeded(_result(status="partial")) is False
 
 
-# _ResumeStaging
 class TestResumeStaging:
     """Staged retries replace rows only on a completed, terminal batch."""
 
@@ -1041,7 +965,6 @@ class TestResumeStaging:
             ]
             assert all(os.path.dirname(p) == staging.dir for p in staging.staged)
             assert staging.replacement_ids == set()
-            # Nothing has touched the real outputs yet.
             for target in targets:
                 assert _read_csv(target)[1][1].startswith("old-109m")
         finally:
@@ -1050,7 +973,6 @@ class TestResumeStaging:
     def test_commit_without_replacement_ids_leaves_outputs_byte_identical(
         self, tmp_path
     ):
-        """A batch in which no retry succeeded must change nothing."""
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1062,7 +984,6 @@ class TestResumeStaging:
         assert {p: open(p, "rb").read() for p in targets} == before
 
     def test_commit_replaces_only_the_retried_ids(self, tmp_path):
-        """Rows for untouched entries are copied through verbatim."""
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
         try:
@@ -1086,7 +1007,6 @@ class TestResumeStaging:
             assert len(rows) == 3
 
     def test_commit_drops_stale_rows_when_the_retry_produced_none(self, tmp_path):
-        """A retry that yields no rows must not leave the old ones behind."""
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
         try:
@@ -1100,7 +1020,6 @@ class TestResumeStaging:
             assert values == {"1cll"}
 
     def test_commit_with_bonds_disabled_leaves_bond_outputs_untouched(self, tmp_path):
-        """--resume --no-bonds must preserve existing bond and candidate rows."""
         targets = self._outputs(tmp_path)
         bond_paths = targets[2:4]
         before = {p: open(p, "rb").read() for p in bond_paths}
@@ -1127,7 +1046,6 @@ class TestResumeStaging:
         }
 
     def test_commit_replaces_confidence_rows_only_when_enabled(self, tmp_path):
-        """The optional fifth output participates only in confidence runs."""
         targets = self._outputs(tmp_path, confidence=True)
         confidence_path = targets[4]
         before = open(confidence_path, "rb").read()
@@ -1186,7 +1104,6 @@ class TestResumeStaging:
             assert values == {"109m": f"new-{index}", "1cll": expected_old}
 
     def test_discard_leaves_previous_rows_intact(self, tmp_path):
-        """An interrupted retry batch must not damage the existing outputs."""
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1205,7 +1122,6 @@ class TestResumeStaging:
         assert not os.path.exists(staging.dir)
 
     def test_replacement_ids_are_matched_case_insensitively(self, tmp_path):
-        """Manifest IDs and worker IDs may differ in case; the merge must not."""
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
         try:
@@ -1237,14 +1153,12 @@ class TestResumeStaging:
         finally:
             staging.discard()
         assert open(targets[0], "rb").read() == before
-        # No temporary merge file was left behind next to the target.
         leftovers = [
             name for name in os.listdir(tmp_path) if name.startswith(".manifest.csv.")
         ]
         assert leftovers == []
 
 
-# _OutputWriters
 class TestOutputWriters:
     """The streamed CSVs: headers on creation, running counts, schema guards."""
 
@@ -1311,7 +1225,7 @@ class TestOutputWriters:
         assert writers.n_rows == 6
         assert writers.n_bonds == 4
         assert writers.n_candidates == 2
-        assert len(_read_csv(tmp_path / "stats.csv")) == 7  # header + 6
+        assert len(_read_csv(tmp_path / "stats.csv")) == 7
         assert len(_read_csv(tmp_path / "bonds.csv")) == 5
         assert len(_read_csv(tmp_path / "candidates.csv")) == 3
 
@@ -1333,7 +1247,6 @@ class TestOutputWriters:
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
         row = {column: f"v-{column}" for column in bond_schema.BOND_COLUMNS}
-        # Feed it in a deliberately different key order.
         shuffled = {key: row[key] for key in reversed(list(row))}
         writers.write_bond_rows([shuffled])
         self._close(handles)
@@ -1379,8 +1292,8 @@ class TestOutputWriters:
             self._close(handles)
         message = str(excinfo.value)
         assert "metal_bonds_all.csv" in message
-        # Naming the column is the whole value of the guard: "the schema drifted"
-        # sends a maintainer through 90 columns by hand.
+        # The guard must name the column: "the schema drifted" alone sends a
+        # maintainer through 90 columns by hand.
         assert expected_clause in message
         assert writers.n_bonds == 0
 
@@ -1399,7 +1312,6 @@ class TestOutputWriters:
         assert "unexpected bogus" in str(excinfo.value)
 
     def test_confidence_output_requires_its_columns(self, tmp_path):
-        """A confidence stream without a schema cannot be written safely."""
         handles = self._handles(tmp_path, confidence=True)
         try:
             with pytest.raises(ValueError):
@@ -1410,7 +1322,6 @@ class TestOutputWriters:
             self._close(handles)
 
     def test_confidence_header_and_counts(self, tmp_path):
-        """The optional fifth stream behaves like the others."""
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
         writers = _OutputWriters(
@@ -1457,7 +1368,6 @@ class TestOutputWriters:
         ]
 
     def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path):
-        """A drifted confidence row must not be written under the old header."""
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
         writers = _OutputWriters(
@@ -1523,21 +1433,18 @@ class TestOutputWriters:
         writers.write_manifest_row(
             _manifest_row(_result(status="ok"), False, True, {}, {})
         )
-        # Without closing the handles, the data must already be on disk.
+        # Read before ``_close``: the rows must already be on disk.
         assert len(_read_csv(tmp_path / "stats.csv")) == 2
         assert len(_read_csv(tmp_path / "bonds.csv")) == 2
         assert len(_read_csv(tmp_path / "manifest.csv")) == 2
         self._close(handles)
 
 
-# Run phases
 class TestScheduleEntries:
     """The work list is reduced by resume first and capped by --max-pdbs after.
 
-    The order is the whole point. Capping first would hand a resumed run the
-    same already-finished prefix on every attempt, filter all of it away, and
-    schedule nothing -- so a capped resume would never reach the tail of a
-    mirror no matter how many times it was run.
+    Capping first would hand a resumed run the same already-finished prefix on
+    every attempt, filter all of it away, and schedule nothing.
     """
 
     @staticmethod
@@ -1594,7 +1501,6 @@ class TestScheduleEntries:
         assert run_log.details["entries_scheduled"] == 2
 
     def test_without_resume_the_cap_takes_the_first_entries(self, tmp_path):
-        """A fresh capped run is a plain prefix; nothing is filtered out."""
         args = self._args(tmp_path, ["1abc", "2abc", "3abc"], max_pdbs=2)
         ids, _run_log = self._schedule(tmp_path, args)
         assert ids == ["1abc", "2abc"]
@@ -1603,10 +1509,9 @@ class TestScheduleEntries:
 class TestWriteEntry:
     """One entry's rows, with the manifest row written last.
 
-    The manifest is the completion marker ``--resume`` reads. Writing it before
-    the data rows would make an interruption in between mark an entry finished
-    whose statistics never reached disk -- and a later resume would skip it
-    permanently.
+    The manifest is the completion marker ``--resume`` reads, so writing it
+    first would let an interruption mark an entry whose statistics never
+    reached disk as finished.
     """
 
     class _RecordingWriters:
@@ -1650,7 +1555,6 @@ class TestWriteEntry:
         assert staging.replacement_ids == {"109m"}
 
 
-# _ProgressReporter
 class TestProgressReporter:
     """The heartbeat is throttled differently for a terminal and a log file."""
 
@@ -1673,9 +1577,8 @@ class TestProgressReporter:
     def test_a_redirected_run_renders_far_less_often_than_a_terminal(self):
         """A run redirected to a file must not grow it by a line per second.
 
-        The two intervals differ by 30x on purpose: a terminal wants a line
-        that moves, a log wants a file that stays readable over a database run.
-        A single shared interval would have to be wrong for one of them.
+        The counts follow from stepping the clock by ``TERMINAL_INTERVAL_S``:
+        a terminal renders every step, a log renders once.
         """
         now = [1000.0]
         for terminal, expected in ((True, 3), (False, 1)):
@@ -1688,7 +1591,6 @@ class TestProgressReporter:
             )
 
     def test_force_renders_regardless_of_the_interval(self):
-        """The final line has to appear even when nothing has elapsed."""
         reporter, stream = self._reporter(False, lambda: 1000.0)
         reporter.render(1, self._counts(), 0)
         reporter.render(2, self._counts(), 0)
@@ -1698,17 +1600,11 @@ class TestProgressReporter:
         assert "[10/10 100.0%]" in stream.getvalue()
 
 
-# _RunLog
 class TestRunLog:
     """The written log is the only record of how a finished run behaved."""
 
     def test_the_log_goes_to_a_subdirectory_of_the_output_by_default(self, tmp_path):
-        """Logs accumulate; results do not. They should not share a directory.
-
-        One log per invocation, kept forever, beside the four CSVs a user
-        actually opens. The default is a subdirectory so listing the output
-        directory stays readable after the hundredth run.
-        """
+        """One log per invocation accumulates; the four result CSVs do not."""
         args = SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1)
 
         path = _RunLog(args, "pytest").write(0)
@@ -1717,11 +1613,6 @@ class TestRunLog:
         assert sorted(os.listdir(tmp_path)) == [runlog.DEFAULT_LOG_DIRNAME]
 
     def test_an_explicit_log_dir_is_used_as_given(self, tmp_path):
-        """``--log-dir`` sends logs somewhere else entirely, not under output.
-
-        A shared log area on another filesystem is the point: the output
-        directory may be scratch, or per-run, while the logs are the record.
-        """
         elsewhere = tmp_path / "shared-logs"
         args = SimpleNamespace(
             output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
@@ -1752,10 +1643,8 @@ class TestRunLog:
         return run_log
 
     def test_the_slowest_entries_table_is_ordered_slowest_first(self, tmp_path):
-        """It is the table an operator reads to find what to investigate.
-
-        Sorted the other way it still lists twenty entries and still looks
-        plausible, while naming the twenty entries that mattered least.
+        """Reversed, the table still looks plausible while naming the entries
+        that mattered least.
         """
         text = open(self._log(tmp_path, [0.5, 9.0, 3.0]).write(0)).read()
         section = text.split("Slowest entries")[1].split("Per-entry results")[0]
@@ -1767,7 +1656,6 @@ class TestRunLog:
         assert listed == ["e1", "e2", "e0"]
 
     def test_an_existing_log_is_never_overwritten(self, tmp_path):
-        """Two runs on one output directory each keep their own log."""
         first = self._log(tmp_path, [1.0]).write(0)
         second = self._log(tmp_path, [2.0]).write(1)
         assert first != second
@@ -1776,7 +1664,6 @@ class TestRunLog:
         assert "Exit code: 1" in open(second).read()
 
 
-# _cif_to_pdb
 class TestCifToPdb:
     """mmCIF -> analysis PDB conversion must not lose provenance."""
 
@@ -1850,7 +1737,6 @@ class TestCifToPdb:
         assert len(blanked.rstrip("\n")) >= 78
 
     def test_absent_occupancy_column_blanks_every_atom(self, tmp_path):
-        """An mmCIF with no occupancy loop item asserts nothing about it."""
         cif = _write_cif(
             tmp_path / "noocc.cif",
             [
@@ -1916,7 +1802,6 @@ class TestCifToPdb:
         assert "SF4X" not in written_names
 
     def test_no_mapping_remark_when_every_name_fits(self, tmp_path):
-        """Short component ids need no provenance record."""
         cif = _write_cif(
             tmp_path / "short.cif",
             [
@@ -1944,10 +1829,8 @@ class TestCifToPdb:
             assert not any(line.startswith(RESNAME_REMARK_PREFIX) for line in handle)
 
     def test_conversion_round_trips_through_load_structure(self, tmp_path):
-        """The mapping is reversible: the analysis load restores the CCD id.
-
-        This is the end of the provenance contract -- the truncated name is
-        what EDSTATS sees, while Alchemy's own output keeps the mmCIF identity.
+        """The mapping is reversible: the truncated name is what EDSTATS sees,
+        while Alchemy's own output keeps the mmCIF identity.
         """
         cif = self._standard_cif(tmp_path)
         out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
@@ -1959,7 +1842,6 @@ class TestCifToPdb:
         assert by_atom["FE1"].element == "FE"
         assert by_atom["ZN"].residue_name == "ZN"
 
-        # Occupancy missingness survived as missingness, not as 1.0.
         assert by_atom["CA"].occupancy_valid is False
         assert by_atom["C"].occupancy_valid is False
         assert by_atom["N"].occupancy == pytest.approx(1.0)
@@ -2013,8 +1895,8 @@ class TestCifToPdb:
         assert {metal.output_residue_index for metal in metals} == {0}
         assert context.raw_occupancy_mapping_failed is False
         assert "legacy_pdb_identifiers_packed" in context.warning_codes
-        # A source key can coincide with a different residue's packed key.
-        # The explicit indexes keep those two namespaces unambiguous.
+        # A source key can coincide with a different residue's packed key, so
+        # the two namespaces are indexed separately.
         assert len(context.residues_for_author("ZN", "A", "1")) == 2
         (source_a,) = context.residues_for_source_author("ZN", "A", "1")
         (coordinate_a1,) = context.residues_for_coordinate_author("ZN", "A", "1")
@@ -2034,8 +1916,8 @@ class TestCifToPdb:
         assert {row["fields"][1] for row in rows} == set(source_chains)
         assert {row["resnum"] for row in rows} == {"1"}
 
-        # Source struct_conn partners resolve directly through the same
-        # provenance, without trying to reproduce the packed numbering.
+        # Source struct_conn partners resolve through the same provenance,
+        # without reproducing the packed numbering.
         source = gemmi.read_structure(cif)
         source_chain = next(chain for chain in source[0] if chain.name == "A")
         source_residue = source_chain[0]
@@ -2049,7 +1931,6 @@ class TestCifToPdb:
         assert resolved.resnum == "1"
 
     def test_missing_input_file_raises_file_not_found(self, tmp_path):
-        """A vanished mirror file must not be reported as a conversion bug."""
         with pytest.raises(FileNotFoundError):
             conversion._cif_to_pdb(
                 str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb")
@@ -2096,7 +1977,6 @@ class TestCifToPdb:
             conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
     def test_multiple_atom_site_blocks_are_rejected(self, tmp_path):
-        """Ambiguous input must fail rather than silently convert one block."""
         atoms = [
             _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A")
         ]
@@ -2120,7 +2000,6 @@ class TestCifToPdb:
             conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
     def test_creates_the_destination_directory(self, tmp_path):
-        """Work directories are created lazily around the converted file."""
         cif = self._standard_cif(tmp_path)
         dst = tmp_path / "nested" / "deeper" / "out.pdb"
         out = conversion._cif_to_pdb(cif, str(dst))
@@ -2132,7 +2011,6 @@ class TestResidueConversionRecords:
     """The identity assertions ``_cif_to_pdb`` enforces on gemmi's writer."""
 
     def test_identical_structures_produce_no_records(self):
-        """No renaming means no provenance remark is needed."""
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(_BASE_RESIDUES)
         assert conversion._residue_conversion_records(source, converted) == []
@@ -2163,7 +2041,6 @@ class TestResidueConversionRecords:
             conversion._residue_conversion_records(source, converted)
 
     def test_changed_author_identifiers_are_rejected(self):
-        """A renumbered or rechained residue would break every downstream join."""
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(
             [
@@ -2175,7 +2052,6 @@ class TestResidueConversionRecords:
             conversion._residue_conversion_records(source, converted)
 
     def test_changed_atom_membership_is_rejected(self):
-        """Dropping or renaming an atom silently would corrupt coordination."""
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(
             [
@@ -2187,7 +2063,6 @@ class TestResidueConversionRecords:
             conversion._residue_conversion_records(source, converted)
 
     def test_changed_duplicate_multiplicity_is_rejected(self):
-        """Two residues sharing an author id must stay two after conversion."""
         source = _simple_structure(
             [
                 ("A", 1, "GLY", [("N", "N")]),
@@ -2210,7 +2085,6 @@ class TestResidueConversionRecords:
         assert index[(0, "B", "2")] == [("ZN", (("ZN", "Zn"),))]
 
     def test_duplicate_author_ids_are_indexed_together_in_order(self):
-        """Two residues with one author id must both survive the index."""
         structure = _simple_structure(
             [
                 ("A", 1, "GLY", [("N", "N")]),
@@ -2222,7 +2096,6 @@ class TestResidueConversionRecords:
         assert [name for name, _ in index[(0, "A", "1")]] == ["GLY", "ALA"]
 
 
-# _first_model_pdb
 _MULTI_MODEL_PDB = """\
 HEADER    TEST
 NUMMDL    2
@@ -2245,7 +2118,6 @@ class TestFirstModelPdb:
     """Textual first-model extraction for EDSTATS."""
 
     def test_single_model_file_is_used_in_place(self, tmp_path):
-        """A file with no MODEL wrapper needs no rewrite at all."""
         builder = helpers.simple_metal_site(
             "ZN", [("HIS", "NE2", 2.03), ("HOH", "O", 2.09)]
         )
@@ -2257,7 +2129,6 @@ class TestFirstModelPdb:
         assert not dst.exists()
 
     def test_extracts_only_the_first_model(self, tmp_path):
-        """Later models must not contribute a single coordinate record."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
@@ -2317,7 +2188,6 @@ class TestFirstModelPdb:
         ] == source_atom_lines[:2]
 
     def test_creates_the_destination_directory(self, tmp_path):
-        """The analysis file may be the first thing written to a work dir."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "nested" / "first.pdb"
@@ -2333,17 +2203,14 @@ class TestFirstModelPdb:
         assert len(gemmi.read_structure(str(source))) == count
 
 
-# Cleaning up after a run that did not finish
 class TestLeakedWorkDirectorySweep:
     """``_sweep_leaked_work_dirs`` clears scratch a dead run left behind."""
 
     def test_removes_per_entry_and_staging_directories(self, tmp_path):
         """Both scratch shapes are swept, with their contents.
 
-        Regression: a per-entry ``.alchemy-<id>-XXXX`` directory is deleted
-        only on the normal completion path, so an interrupted run left one
-        behind holding that entry's maps -- tens of megabytes each -- and
-        nothing, including ``--resume``, ever removed them.
+        A per-entry directory is otherwise removed only on the normal
+        completion path, and holds that entry's maps.
         """
         entry = tmp_path / ".alchemy-109m-abcd"
         entry.mkdir()
@@ -2360,9 +2227,9 @@ class TestLeakedWorkDirectorySweep:
     def test_leaves_real_output_alone(self, tmp_path):
         """Only the dotted scratch prefixes are swept, never results.
 
-        The sweep runs at startup against a directory that normally holds the
-        four result CSVs and every previous run log, so a prefix match that was
-        even slightly too broad would delete a completed run's output.
+        The sweep runs at startup against a directory holding the result CSVs
+        and every previous run log, so a slightly too broad prefix match would
+        delete a completed run's output.
         """
         (tmp_path / "manifest.csv").write_text("keep", encoding="utf-8")
         (tmp_path / "alchemy_run_20260101.log").write_text("keep", encoding="utf-8")
@@ -2378,25 +2245,17 @@ class TestLeakedWorkDirectorySweep:
         ]
 
     def test_missing_directory_is_not_an_error(self, tmp_path):
-        """A sweep of a directory that does not exist yet is a no-op."""
         assert pool._sweep_leaked_work_dirs(str(tmp_path / "absent")) == 0
 
 
-# An unusable --output-dir is a user error, not a crash
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
 def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     tmp_path, monkeypatch, capsys
 ):
     """A read-only destination exits like every other unusable input.
 
-    Regression: ``os.makedirs(args.output_dir, exist_ok=True)`` was unguarded,
-    so a read-only mount or someone else's directory escaped ``main()`` as a
-    raw ``PermissionError`` traceback -- which reads as an Alchemy bug rather
-    than a path the user can fix.
-
-    CCP4 resolution is stubbed out because it runs before the directory is
-    created; without that the test would fail for an unrelated reason on a
-    machine with no CCP4 installed.
+    CCP4 resolution is stubbed because it runs before the directory is created,
+    and would otherwise fail on a machine with no CCP4 installed.
     """
     if os.geteuid() == 0:
         pytest.skip("root ignores directory permissions")
@@ -2427,9 +2286,7 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     finally:
         parent.chmod(0o700)
 
-    # One failure mechanism: the driver reports it and returns 1, the same as
-    # every other fixable failure. Argument validation is argparse's, and exits
-    # 2; nothing in between raises ``SystemExit`` of its own.
+    # 1 is the driver's code for a fixable failure; argparse owns 2.
     assert exit_code == 1
     message = capsys.readouterr().err
     assert str(output_dir) in message, message
@@ -2440,13 +2297,9 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
 def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     """The sweep is wired into the driver, not merely available to it.
 
-    Exercises ``main.main`` rather than ``_sweep_leaked_work_dirs`` directly:
-    the defect was that nothing ever *called* a sweep, so a test of the helper
-    alone would stay green with the call site deleted.
-
-    The run itself fails -- there is no mirror and no network -- which is the
-    point: sweeping happens at startup, so even a run that goes on to fail must
-    leave the directory clean.
+    Driven through ``main.main`` so that deleting the call site fails the test.
+    The run itself fails for want of a mirror: sweeping happens at startup, so
+    even a failing run must leave the directory clean.
     """
     monkeypatch.setattr(
         pool, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
@@ -2478,16 +2331,8 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     assert leftovers == [], f"the run left scratch behind: {leftovers}"
 
 
-# What the density stage returns is what the entry reports
 class TestDensityResultReachesTheResult:
-    """The worker must report the density stage's own answers, not its request.
-
-    ``DensityResult`` is the contract between the two, and every field below
-    used to be a string key the worker read with a mixture of ``[...]`` and
-    ``.get()``. These are the three the manifest and the run log depend on;
-    only the entry-data lane exercised the successful path before, and that
-    lane does not run in CI.
-    """
+    """The worker must report the density stage's own answers, not its request."""
 
     @staticmethod
     def _density(**overrides):
@@ -2521,11 +2366,9 @@ class TestDensityResultReachesTheResult:
     def test_the_scope_reported_is_the_one_achieved(self, tmp_path, monkeypatch):
         """A crop that could not be applied must not be reported as applied.
 
-        The requested and achieved scopes are separate fields precisely because
-        they disagree: an envelope larger than the map, or one past the cell
-        edge, falls back to the full map. Reporting the request would make
-        every entry look cropped and quietly invalidate any later analysis that
-        grouped entries by map scope.
+        Requested and achieved scope are separate fields because they disagree:
+        an envelope larger than the map, or one past the cell edge, falls back
+        to the full map.
         """
         result = self._entry(
             tmp_path,
@@ -2541,17 +2384,12 @@ class TestDensityResultReachesTheResult:
         assert result.density_edstats_map_bytes == 2048
 
     def test_density_timings_reach_the_entry(self, tmp_path, monkeypatch):
-        """The stage's own per-program timings are merged, not discarded.
-
-        They are how a run log attributes an entry's cost to a CCP4 program,
-        which is what the timeout budgets in commit 5 were derived from.
-        """
+        """They are how a run log attributes an entry's cost to a CCP4 program."""
         result = self._entry(
             tmp_path, monkeypatch, self._density(timings={"edstats_s": 12.5})
         )
 
         assert result.timings["edstats_s"] == 12.5
-        # And the worker's own measurement of the whole stage is still there.
         assert "density_total_s" in result.timings
 
     def test_a_normalized_twin_entry_is_flagged(self, tmp_path, monkeypatch):
@@ -2571,12 +2409,7 @@ class TestDensityResultReachesTheResult:
     def test_keep_intermediates_decides_the_scratch_directory(
         self, tmp_path, monkeypatch, keep
     ):
-        """``--keep-intermediates`` reaches the worker's cleanup, or nothing does.
-
-        The scratch directory holds the maps, so the default must remove it;
-        the flag exists to inspect them. The worker reads one config field to
-        decide, and until now only an end-to-end run exercised it.
-        """
+        """The scratch directory holds the maps, so only the flag may keep it."""
         self._entry(tmp_path, monkeypatch, self._density(), keep=keep)
 
         scratch = [
@@ -2587,13 +2420,9 @@ class TestDensityResultReachesTheResult:
 
 
 def test_a_loaded_structure_fills_in_the_model_provenance(tmp_path, monkeypatch):
-    """The model fields are blank only until the coordinates load.
-
-    They start unmeasured for the same reason the bond counts do -- an entry
-    that failed before ``load_structure`` must not claim a model count -- so
-    something has to prove they stop being blank once it succeeds. Nothing did:
-    the manifest would have carried three empty columns for every entry in a
-    database run and the suite would have stayed green.
+    """The model fields start unmeasured, like the bond counts, so an entry that
+    failed before ``load_structure`` cannot claim a model count; a successful
+    load must fill them in.
     """
     monkeypatch.setattr(worker, "extract_metal_statistics", lambda *a, **k: ([], []))
     result = _manual_entry(
@@ -2611,14 +2440,12 @@ def test_a_loaded_structure_fills_in_the_model_provenance(tmp_path, monkeypatch)
     assert row["model_analyzed"] == 1
 
 
-# CCP4 timeout as an entry outcome
 class TestCcp4TimeoutOutcome:
     """A stalled CCP4 program must be a named, retryable entry outcome.
 
-    Regression risk: falling through to the generic ``except Exception`` handler
-    would report ``unexpected_processing_error``, which reads like a crash in
-    Alchemy rather than a CCP4 program that never returned -- and would hide a
-    stalled installation behind an error code shared with real bugs.
+    The generic ``except Exception`` handler would report
+    ``unexpected_processing_error``, hiding a stalled installation behind an
+    error code shared with real bugs.
     """
 
     @staticmethod
@@ -2653,18 +2480,13 @@ class TestCcp4TimeoutOutcome:
         assert result.status == "partial"
         assert "edstats" in result.error
         assert result.confidence_inputs_missing_reason == "ccp4_tool_timeout"
-        # The cost of the abandoned attempt is preserved for the run log.
+        # The abandoned attempt still cost time, and the run log reports it.
         assert result.timings.get("edstats_s") == 900.4
 
     def test_the_partial_log_survives_scratch_cleanup(self, tmp_path, monkeypatch):
-        """The log the timeout message names must still exist afterwards.
-
-        Regression: ``Ccp4ToolTimeoutError`` reports "partial log kept at <path>",
-        but ``process`` deletes the whole scratch directory unless
-        --keep-intermediates is given, so under the default configuration that
-        path was gone by the time anyone read the manifest. Only the log is
-        copied out -- the maps beside it can be hundreds of megabytes, and a
-        run that started timing out would otherwise fill the output directory.
+        """``Ccp4ToolTimeoutError`` names a partial log, but ``process`` deletes
+        the scratch directory unless --keep-intermediates is given, so the log
+        alone is copied out: the maps beside it can be hundreds of megabytes.
         """
         scratch_log = tmp_path / "scratch_edstats.log"
         scratch_log.write_text("edstats output before the stall\n", encoding="utf-8")
@@ -2694,7 +2516,6 @@ class TestCcp4TimeoutOutcome:
     def test_only_the_log_is_kept_not_the_scratch_directory(
         self, tmp_path, monkeypatch
     ):
-        """Retention is deliberately narrow: maps are not preserved."""
         scratch = tmp_path / "scratch"
         scratch.mkdir()
         (scratch / "edstats.log").write_text("stalled\n", encoding="utf-8")
@@ -2719,7 +2540,6 @@ class TestCcp4TimeoutOutcome:
         )
 
     def test_a_missing_log_is_not_an_error(self, tmp_path, monkeypatch):
-        """Failing to keep a diagnostic must not change the entry's outcome."""
         result = self._entry(
             tmp_path,
             monkeypatch,

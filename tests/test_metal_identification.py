@@ -1,17 +1,10 @@
 """EDSTATS table parsing and metal/cofactor identification.
 
-Covers ``src/metal_identification.py``: the fixed 42-column EDSTATS schema, row
-validation (null marker, non-finite and nonnumeric statistics, model number),
-the synthetic model-separator row, normalization of EDSTATS' blank-chain
-representation, the residue-level density observation identifier, the
-metal/cofactor classification rule, and ``extract_metal_statistics`` end to end
-against a synthetic ``stats.out`` plus a real loaded structure.
-
-The critical regression here is the blank-chain water row (commit 7e03abd):
-EDSTATS relabels every ordered water's CI field to ``0`` whatever its real
-chain, and omits the empty trailing CP field for a chain-less coordinate file,
-so such a row arrives with 41 fields and CI ``0``. Restoration must key on the
-row *shape*; a CI-gated guard rejects every water row and fails the entry.
+EDSTATS emits a fixed 42-column table plus a synthetic model-separator row, and
+for a chain-less coordinate file it omits the empty trailing CP field, so those
+rows arrive with 41 fields. It also relabels every ordered water's CI field to
+``0`` whatever the real chain, so restoring the missing field must key on the
+row *shape*: a CI-gated guard rejects every water row and fails the entry.
 """
 
 from __future__ import annotations
@@ -42,7 +35,6 @@ HEADER = list(helpers.EDSTATS_HEADER)
 INDICES = _validated_edstats_header(HEADER)
 
 
-# Local helpers (private to this module by the suite's ownership rules)
 def _normalize(fields):
     """``_normalize_edstats_row`` against the standard schema."""
     return _normalize_edstats_row(list(fields), HEADER, INDICES)
@@ -73,8 +65,6 @@ class _RemappedStructure:
 
     Gemmi merges coordinate residues that share an author name, chain and
     sequence number, so a genuine duplicate cannot be produced from a file.
-    This stub reproduces only the lookup result that ``extract_metal_statistics``
-    branches on, leaving every other attribute delegated to the real context.
     """
 
     def __init__(self, context, author_key, residues):
@@ -91,23 +81,17 @@ class _RemappedStructure:
         return (self._residues[0],)
 
     def residues_for_coordinate_author(self, residue_name, chain_id, resnum):
-        # The lookup `extract_metal_statistics` actually performs. Named to
-        # match the real context: a stub that implements a neighbouring method
-        # instead only works while production carries a fallback, and silently
-        # stops exercising the intended path once that fallback is removed.
         if (residue_name, chain_id, resnum) == self._author_key:
             return self._residues
         return self._context.residues_for_author(residue_name, chain_id, resnum)
 
 
-# Header schema
 def test_valid_header_maps_every_documented_column_to_its_position():
     """The standard header validates and yields the schema's column indices."""
     indices = _validated_edstats_header(list(helpers.EDSTATS_HEADER))
 
-    # The fixture literal is independent of both production constants. A
-    # production reorder must therefore fail here even if its own parser and
-    # constants change together.
+    # The fixture literal is independent of the production constants, so a
+    # reorder fails here even if parser and constants change together.
     assert tuple(EDSTATS_COLUMNS) == helpers.EDSTATS_HEADER
     assert tuple(EDSTATS_METRIC_COLUMNS) == helpers.EDSTATS_METRICS
     assert len(helpers.EDSTATS_HEADER) == 42
@@ -115,7 +99,6 @@ def test_valid_header_maps_every_documented_column_to_its_position():
     assert indices == {
         name: position for position, name in enumerate(helpers.EDSTATS_HEADER)
     }
-    # The three identity columns lead and the three bookkeeping columns trail.
     assert (indices["RT"], indices["CI"], indices["RN"]) == (0, 1, 2)
     assert (indices["MN"], indices["CP"], indices["NR"]) == (39, 40, 41)
 
@@ -176,7 +159,6 @@ def test_extract_rejects_a_reordered_header_file(tmp_path):
         _extract(stats, context)
 
 
-# Row validation
 def test_a_wellformed_row_validates_and_returns_its_model_number():
     """Validation reports the row's MN so the caller can enforce model policy."""
     row = helpers.edstats_row("ZN", "B", "1", mn=3, metrics={"ZDm": -2.5})
@@ -210,7 +192,6 @@ def test_the_documented_null_marker_is_accepted_for_every_metric(null):
     """``n/a`` is EDSTATS' null for an uncomputable statistic, case-blind."""
     row = helpers.edstats_row("ZN", "B", "1", default=null)
     assert _validate(row) == 1
-    # The marker is preserved verbatim rather than coerced to a number.
     assert row[INDICES["ZDm"]] == null
 
 
@@ -268,7 +249,6 @@ def test_rows_from_another_model_fail_the_entry(tmp_path):
     assert "selected model 1" in message
 
 
-# Model separator rows
 @pytest.mark.parametrize(
     "fields",
     [
@@ -339,7 +319,6 @@ def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path):
         _extract(stats, context)
 
 
-# Blank-chain normalization  (REGRESSION: 7e03abd)
 @pytest.mark.parametrize(
     "ci, kind",
     [
@@ -348,7 +327,7 @@ def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path):
     ],
 )
 def test_omitted_trailing_chain_field_is_restored_whatever_ci_says(ci, kind):
-    """REGRESSION 7e03abd: restoration keys on row shape, never on CI.
+    """Restoration keys on the row shape, never on CI.
 
     EDSTATS reports every ordered water as chain ``0`` regardless of its real
     chain, so a CI-gated guard restores the non-water rows and rejects every
@@ -362,10 +341,10 @@ def test_omitted_trailing_chain_field_is_restored_whatever_ci_says(ci, kind):
     normalized = _normalize(row)
 
     assert len(normalized) == 42
-    assert normalized[INDICES["CP"]] == ""  # restored, canonically blank
-    assert normalized[INDICES["NR"]] == "7"  # row number not consumed
+    assert normalized[INDICES["CP"]] == ""
+    assert normalized[INDICES["NR"]] == "7"
     assert normalized[INDICES["MN"]] == "1"
-    assert _validate(normalized) == 1  # and it now validates
+    assert _validate(normalized) == 1
 
 
 @pytest.mark.parametrize("marker", ["", ".", "?", "_"])
@@ -406,12 +385,10 @@ def test_a_short_row_that_is_not_the_blank_chain_shape_stays_short():
 
 
 def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path):
-    """REGRESSION 7e03abd: a chain-less entry must not fail on its waters.
+    """A chain-less entry must not fail on its waters.
 
     Every row of a blank-chain coordinate file arrives with 41 fields; the
-    waters carry CI ``0`` and everything else CI ``_``. Before the fix the water
-    rows were rejected, ``extract_metal_statistics`` raised, and the entry was
-    classified retryable and retried forever.
+    waters carry CI ``0`` and everything else CI ``_``.
     """
     builder = StructureBuilder()
     builder.add_amino_acid("HIS", 10, chain="", positions={"NE2": (2.03, 0, 0)})
@@ -432,7 +409,7 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path):
     assert [len(fields) for fields in lines] == [41, 41, 41, 41]
     water_rows = [fields for fields in lines if fields[0] == "HOH"]
     assert len(water_rows) == 2
-    assert {fields[1] for fields in water_rows} == {"0"}  # the killer case
+    assert {fields[1] for fields in water_rows} == {"0"}
     assert {fields[1] for fields in lines if fields[0] != "HOH"} == {"_"}
 
     rows, header = _extract(stats, context)
@@ -445,7 +422,6 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path):
     assert rows[0]["density_observation_id"].count("chain=_") == 1
 
 
-# Density observation identifier
 def test_density_observation_id_names_the_edstats_row_not_an_atom():
     """The identifier is residue-level and case-normalized on the entry id."""
     fields = _normalize(helpers.edstats_row("FES", "B", "5", mn=1, nr=12))
@@ -454,7 +430,6 @@ def test_density_observation_id_names_the_edstats_row_not_an_atom():
     assert observation == (
         "1abc/model=1/chain=B/residue=5/component=FES/edstats_row=12"
     )
-    # Stable: the same row always yields the same identifier.
     assert observation == _density_observation_id("1ABC", fields, INDICES)
 
 
@@ -516,19 +491,15 @@ def test_shared_cofactor_repeats_one_observation_once_per_metal_site(tmp_path):
 
     assert [row["category"] for row in rows] == ["cofactor", "cofactor"]
     assert [row["site"].atom_name for row in rows] == ["FE1", "FE2"]
-    # One residue-level observation, counted once downstream.
     assert len({row["density_observation_id"] for row in rows}) == 1
     assert all(row["density_shared_site_count"] == 2 for row in rows)
     assert all(row["density_is_shared"] for row in rows)
     assert all(row["density_scope"] == "cofactor_residue" for row in rows)
-    # The density values themselves are the same residue-level numbers.
     assert {row["fields"][header.index("ZDm")] for row in rows} == {"1.75"}
-    # ... but each row points at its own atom.
     assert len({row["site_key"] for row in rows}) == 2
     assert len({row["residue_key"] for row in rows}) == 1
 
 
-# Residue classification
 @pytest.fixture(scope="module")
 def classification_context(tmp_path_factory):
     """One structure holding every classification case, loaded once."""
@@ -539,8 +510,7 @@ def classification_context(tmp_path_factory):
     # A metal-ion CCD id that is not itself an element symbol.
     builder.add_metal("FE", 2, chain="B", pos=(10.0, 0.0, 0.0), resname="FE2")
     builder.add_water(101, (20.0, 0.0, 0.0), chain="B")
-    # Nitric oxide: the component id "NO" collides with nobelium, so a
-    # name-based rule would call this a metal. Its atoms say otherwise.
+    # Nitric oxide: the component id "NO" collides with nobelium.
     builder.add_hetero_residue(
         "NO",
         3,
@@ -550,8 +520,7 @@ def classification_context(tmp_path_factory):
         ],
         chain="B",
     )
-    # A hydrated ion modeled as one multi-atom component and absent from the
-    # cofactor catalog: it contains a metal but is not a bare ion.
+    # A hydrated ion: metal-containing, but not a bare ion.
     builder.add_hetero_residue(
         "MZN",
         4,
@@ -629,11 +598,9 @@ def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(tmp_path):
 
     category, sites = _classify_residue(residue, {"ZN"}, set())
     assert category == "metal"
-    # Only the selected conformer becomes a site.
     assert [site.altloc for site in sites] == ["B"]
 
 
-# extract_metal_statistics, end to end
 def test_only_metal_and_cofactor_residues_produce_rows(tmp_path):
     """Donor residues and waters are density-scored but never emitted."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
@@ -777,7 +744,6 @@ def test_an_ambiguous_author_join_is_reported_on_every_emitted_row(tmp_path):
         for row in rows
     )
     assert all(row["selected_metal_site_status"] == "selected" for row in rows)
-    # One density observation, shared by both candidate residues.
     assert len({row["density_observation_id"] for row in rows}) == 1
     assert all(row["density_shared_site_count"] == 2 for row in rows)
     assert len({row["residue_key"] for row in rows}) == 2
@@ -896,17 +862,10 @@ def test_blank_lines_between_rows_are_ignored(tmp_path):
 
 
 def test_a_structure_is_required_for_identification(tmp_path):
-    """Element-based identification cannot run against the table alone.
-
-    ``structure`` used to be an optional parameter that raised the moment it
-    was omitted -- a signature that documented the opposite of the contract.
-    It is now required, so the interpreter enforces what the runtime check
-    used to, and the failure names the missing argument.
-    """
+    """Element-based identification cannot run against the table alone."""
     stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "1")])
     with pytest.raises(TypeError, match="structure"):
-        # The omission is the point of the test, so the type checker's
-        # complaint about it is correct and expected.
+        # Omitting the argument is the point of the test.
         extract_metal_statistics(  # type: ignore[call-arg]
             "test", str(stats), set(METAL_ELEMENTS), set()
         )

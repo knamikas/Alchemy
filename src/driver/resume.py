@@ -1,24 +1,12 @@
 """Resuming a run over output a previous run left behind.
 
-``--resume`` exists because a database run takes hours and gets interrupted:
-by a scheduler, a reboot, or an entry that made a CCP4 program fall over. The
-rules here are all about not making an interruption worse than it was.
-
-Three of them carry the weight.
-
-*The manifest is the completion marker.* An entry counts as finished only when
-its manifest row says so, and that row is written after the entry's data rows
-have already been flushed. An interruption between the two costs a repeated
-entry, never a lost one.
-
-*Blank is not zero.* A blank ``n_bonds`` means the bond stage never ran; a
-``0`` means it ran and found nothing. Reading the first as the second would
-mark an unanalysed entry permanently done.
-
-*Retried rows are staged, not overwritten.* ``_ResumeStaging`` writes a retry
-batch to a temporary directory and merges it into the real files only once the
-batch has completed, so a retry that fails halfway leaves the previous run's
-results exactly as they were.
+Three rules carry the weight. An entry counts as finished only when its
+manifest row says so, and that row is written after its data rows, so an
+interruption between the two costs a repeated entry, never a lost one. A blank
+``n_bonds`` means the bond stage never ran while ``0`` means it ran and found
+nothing, so reading blank as zero would mark an unanalysed entry permanently
+done. And a retry batch is staged to a temporary directory and merged into the
+real files only once it completes.
 """
 
 import csv
@@ -40,13 +28,10 @@ def load_done(
 ):
     """PDB IDs whose requested result is terminal in an existing manifest.
 
-    Blank ``n_bonds`` and ``n_candidates`` values mean bond analysis was
-    disabled, while ``0`` means it ran successfully and found no rows of that
-    type. When bonds are requested, a terminal density result with either blank
-    count still needs processing. Absent bond or candidate CSVs also make
-    bond-stage results incomplete. IDs in ``retry_partial_ids`` are removed
-    from the done set only when their row is a non-retryable ``partial``;
-    successful ``ok`` rows remain protected from accidental reprocessing.
+    Blank ``n_bonds`` or ``n_candidates`` mean the bond stage never ran, so
+    under ``bonds_required`` such a row is not done; a missing bond or
+    candidate CSV has the same effect. ``retry_partial_ids`` releases only
+    non-retryable ``partial`` rows, never ``ok`` ones.
     """
     retry_partial_ids = {
         str(pdb_id).strip().lower()
@@ -116,12 +101,11 @@ def validate_resume_schemas(
     confidence_path: Optional[str] = None,
     confidence_columns: Optional[Sequence[str]] = None,
 ) -> None:
-    """Refuse to append migration rows beneath an incompatible old header.
+    """Refuse to append rows beneath an incompatible old header.
 
     Whole headers are compared, including the EDSTATS block of
-    metal_stats_all.csv. Appending rows beneath a header from a different
-    EDSTATS build would misalign every density column without any other
-    symptom.
+    metal_stats_all.csv: a header from a different EDSTATS build would misalign
+    every density column with no other symptom.
     """
     checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
@@ -136,9 +120,6 @@ def validate_resume_schemas(
         header = _csv_header(path)
         if header is None or header == expected:
             continue
-        # Name what differs. The old message blamed a Gemmi migration, which
-        # was one cause among several: an added provenance column does this
-        # too, and a user who upgraded mid-database has no way to guess which.
         missing = [column for column in expected if column not in header]
         unexpected = [column for column in header if column not in expected]
         difference = (
@@ -161,12 +142,10 @@ def validate_resume_schemas(
 
 
 def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
-    """Remove previous bond-stage CSVs before a fresh disabled run.
+    """Remove previous bond-stage CSVs before a fresh run with bonds disabled.
 
     A non-resume run replaces the manifest and statistics outputs, so retaining
-    older bond-stage files would falsely associate them with the new run.
-    Resume mode is different: completed entries and their existing rows are
-    retained.
+    older bond-stage files would associate them with the new run.
     """
     if resume or bonds_enabled:
         return []
@@ -181,9 +160,7 @@ def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
 def _merge_csv_replacements(path, staged_path, pdb_ids):
     """Atomically replace selected IDs with rows from a completed staging file.
 
-    The existing destination is never changed until the full replacement file
-    has been written successfully. Rows for IDs absent from ``pdb_ids`` are
-    copied verbatim.
+    Rows for IDs absent from ``pdb_ids`` are copied verbatim.
     """
     replacement_ids = {pdb_id.lower() for pdb_id in pdb_ids}
     if not replacement_ids:
@@ -195,9 +172,9 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
         prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory, text=True
     )
     try:
-        # os.fdopen takes ownership of the descriptor and closes it on exit, so
-        # it is closed here only if the wrapping itself failed. Closing it again
-        # afterwards could target a descriptor the runtime has since reused.
+        # os.fdopen takes ownership of the descriptor, so it is closed here
+        # only if the wrapping itself failed: a second close could land on a
+        # descriptor the runtime has since reused.
         try:
             staged = os.fdopen(fd, "w", newline="")
         except BaseException:
@@ -247,12 +224,7 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
 
 
 class _ResumeStaging:
-    """Holds retried entries' rows until the whole retry batch has succeeded.
-
-    Rows go to a temporary directory and are merged into the real outputs only
-    once the batch completes, so a failed or interrupted retry leaves the
-    previous rows untouched.
-    """
+    """Hold retried entries' rows until the whole retry batch has succeeded."""
 
     def __init__(self, output_dir, targets):
         self.targets = targets
@@ -270,9 +242,8 @@ class _ResumeStaging:
         (staged_manifest, staged_stats, staged_bonds, staged_candidates) = self.staged[
             :4
         ]
-        # Data files are committed before the manifest completion marker. If an
-        # interruption occurs between replacements, the old manifest causes the
-        # entry to be retried safely.
+        # Data files are committed before the manifest completion marker, so an
+        # interruption between replacements leaves the entry safely retryable.
         _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
         if bonds_enabled:
             _merge_csv_replacements(bonds_path, staged_bonds, self.replacement_ids)

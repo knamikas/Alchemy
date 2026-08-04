@@ -1,33 +1,22 @@
 """Symmetry-image provenance: published coordinates, special positions, scope.
 
-Three things Alchemy publishes about a symmetry-generated contact were never
-checked anywhere in the suite, and each of them can be wrong in a way that is
-invisible in the columns that *were* checked:
+Three claims Alchemy publishes about a symmetry-generated contact, each of which
+can be wrong while ``distance`` and ``symmetry_operation`` still look right:
 
-* **The image coordinates.** ``transformed_neighbor_x/y/z`` and
-  ``cell_translation_x/y/z`` say *where* the donor actually is. The existing
-  symmetry tests assert ``distance`` and ``symmetry_operation`` only, so an
-  inverted or mis-composed transform could ship a donor position that
-  contradicts its own reported distance and nothing would notice. The binding
-  invariant is ``position_distance(metal, transformed_neighbor) == distance``,
-  and the cell translation must agree with the ``N_klm`` symmetry code.
+* **The image coordinates.** ``position_distance(metal, transformed_neighbor)``
+  must equal the row's own ``distance``, and ``cell_translation_x/y/z`` must
+  agree with the ``N_klm`` symmetry code.
 
 * **Special-position deduplication.** A metal on a crystallographic axis sees
-  several Gemmi images of one deposited donor land on (nearly) the same point.
-  ``_deduplicate_special_position_contacts`` collapses them inside Gemmi's
-  0.8 A special-position cutoff. Failing to collapse doubles the coordination
-  number and fabricates a second multi-donor residue group out of nothing --
-  the same corruption class as the already-fixed duplicate-record bugs. The
-  much stricter 0.001 A tolerance belongs to *conflicting duplicate coordinate
-  records* and must not be confused with this cutoff.
+  several Gemmi images of one deposited donor land on nearly the same point;
+  ``_deduplicate_special_position_contacts`` collapses them inside the 0.8 A
+  special-position cutoff, which is a different threshold from the 0.001 A
+  tolerance for conflicting duplicate coordinate records.
 
-* **Explicit-only versus image-inclusive divergence.**
-  ``explicit_contact_count`` / ``image_inclusive_contact_count``,
-  ``generated_contact_scope``, ``coordination_depends_on_crystallographic_symmetry``
-  and ``coordination_depends_on_strict_ncs`` are how a reader learns that a
-  metal's coordination sphere exists only in a symmetry mate or only in an NCS
-  copy. That is a headline scientific caveat, and the two scopes must not leak
-  into each other.
+* **Explicit-only versus image-inclusive divergence.** The two contact counts,
+  ``generated_contact_scope`` and the ``coordination_depends_on_*`` flags are
+  how a reader learns that a coordination sphere exists only in a symmetry mate
+  or only in an NCS copy, so the two scopes must not leak into each other.
 
 Everything here is synthetic, offline, and needs neither CCP4 nor the network.
 """
@@ -53,22 +42,18 @@ import helpers
 from helpers import StructureBuilder, simple_metal_site
 
 
-#: A deliberately tiny cell: every cell edge is short enough that a donor
-#: deposited on the far side of the box has an image inside the metal's first
-#: coordination sphere, which is what makes the symmetry branch fire at all.
+# Every edge is short enough that a donor deposited on the far side of the box
+# has an image inside the metal's first coordination sphere, which is what makes
+# the symmetry branch fire at all.
 SMALL_CELL: Tuple[float, ...] = (20.0, 20.0, 20.0, 90.0, 90.0, 90.0)
 
-#: The suite's default cell. It is roomy enough that no crystallographic image
-#: of a donor reaches a metal placed near its centre, so any generated contact
-#: seen with this cell comes from strict NCS and nothing else.
+# Roomy enough that no crystallographic image of a donor reaches a metal near
+# its centre, so any generated contact here comes from strict NCS.
 ROOMY_CELL: Tuple[float, ...] = helpers.DEFAULT_CELL
 
-#: An identity-rotation NCS operator is enough to generate strict-NCS images
-#: without also having to reason about a rotated donor.
 NCS_SHIFT: Tuple[float, float, float] = (-6.0, 0.0, 0.0)
 
 
-# Private helpers
 def _write_structure(
     builder: StructureBuilder,
     path,
@@ -76,10 +61,8 @@ def _write_structure(
 ) -> str:
     """Write ``builder`` as PDB, optionally with MTRIX strict-NCS operators.
 
-    ``helpers.StructureBuilder`` has no NCS hook, so the operators are appended
-    to the materialized gemmi structure. Each entry is ``(id, translation)``
-    and uses an identity rotation, which keeps the generated image a pure
-    translation of the deposited copy and therefore easy to place.
+    Each ``ncs`` entry is ``(id, translation)`` with an identity rotation, which
+    keeps the generated image a pure translation of the deposited copy.
     """
     structure = builder.to_gemmi()
     for identifier, translation in ncs:
@@ -104,7 +87,6 @@ class _Analysis:
 
     @property
     def summary(self):
-        """The single metal site's summary; asserts there is exactly one."""
         assert len(self.summaries) == 1, "expected a one-metal structure"
         return next(iter(self.summaries.values()))
 
@@ -126,8 +108,7 @@ def _analyze(
     """Write ``builder`` and run the real bond analysis over it.
 
     ``with_dpi=True`` supplies the refinement metadata that makes the DPI
-    finite, which is what turns z-scores and geometry statuses into real
-    values instead of ``insufficient data``.
+    finite, without which every geometry status is ``insufficient data``.
     """
     path = _write_structure(
         builder, os.path.join(str(tmp_path), f"{name}.pdb"), ncs=ncs
@@ -166,8 +147,8 @@ def _cell_translation(row) -> Tuple[int, int, int]:
 def _decode_symmetry_code(code: str) -> Tuple[int, Tuple[int, int, int]]:
     """Split a ``N_klm`` symmetry code into its 1-based op number and shift.
 
-    The three trailing digits are unit-cell translations offset by 5, which is
-    the PDB/CCP4 convention Gemmi's ``symmetry_code()`` emits.
+    The three trailing digits are unit-cell translations offset by 5, the
+    PDB/CCP4 convention Gemmi's ``symmetry_code()`` emits.
     """
     number, _, digits = str(code).partition("_")
     assert len(digits) == 3, f"unexpected symmetry code {code!r}"
@@ -185,9 +166,6 @@ def _apply_spacegroup_operation(
 
     Fractionalize the deposited coordinate, apply the ``op_number``-th
     space-group operation, add the reported cell translation, orthogonalize.
-    Composing the steps in the wrong order, or applying the inverse operation,
-    lands somewhere else, which is exactly what this reconstruction is meant to
-    catch.
     """
     cell = context.structure.cell
     spacegroup = gemmi.find_spacegroup_by_name(context.structure.spacegroup_hm)
@@ -201,10 +179,8 @@ def _apply_spacegroup_operation(
     return (position.x, position.y, position.z)
 
 
-#: The symmetry cases shared by the coordinate tests, each ``(builder factory,
-#: ncs ops, deposited donor xyz, expected code, scope)``. Every case has exactly
-#: one Zn and one water; the water's *deposited* copy is always out of range, so
-#: any reported contact is the image.
+# Each case builds one Zn and one water whose deposited copy is out of range, so
+# any contact the analysis reports is the image.
 def _case_explicit():
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(10.0, 10.0, 10.0))
@@ -244,7 +220,7 @@ def _case_strict_ncs():
     return builder, (("1", NCS_SHIFT),), (18.09, 10.0, 10.0)
 
 
-#: ``(factory, expected symmetry code, expected scope, crystallographic?)``
+# ``(factory, expected symmetry code, expected scope, crystallographic?)``
 SYMMETRY_CASES = [
     (_case_explicit, "1_555", "explicit", True),
     (_case_cell_edge, "1_455", "crystallographic", True),
@@ -262,8 +238,8 @@ def _case_id(factory) -> str:
 
 _CASE_IDS = [_case_id(factory) for factory, _, _, _ in SYMMETRY_CASES]
 
-#: The subset whose symmetry code addresses a space-group operation, and can
-#: therefore be rebuilt from the space group alone.
+# The subset whose symmetry code addresses a space-group operation, and can
+# therefore be rebuilt from the space group alone.
 CRYSTALLOGRAPHIC_CASES = [
     factory for factory, _, _, crystallographic in SYMMETRY_CASES if crystallographic
 ]
@@ -271,18 +247,13 @@ CRYSTALLOGRAPHIC_CASES = [
 
 @pytest.fixture(params=SYMMETRY_CASES, ids=_CASE_IDS)
 def symmetry_case(request, tmp_path):
-    """One analyzed single-water site per symmetry case, plus its expectations.
-
-    Returns ``(analysis, deposited_xyz, expected_code, expected_scope,
-    is_crystallographic)``.
-    """
+    """``(analysis, deposited_xyz, code, scope, is_crystallographic)`` per case."""
     factory, code, scope, crystallographic = request.param
     builder, ncs, deposited = factory()
     analysis = _analyze(builder, tmp_path, _case_id(factory), ncs=ncs)
     return analysis, deposited, code, scope, crystallographic
 
 
-# G3 -- the published image coordinates
 def test_symmetry_case_reports_the_expected_operation_and_scope(symmetry_case):
     """Each case really exercises the branch it claims to.
 
@@ -301,11 +272,9 @@ def test_symmetry_case_reports_the_expected_operation_and_scope(symmetry_case):
 def test_transformed_neighbor_position_reproduces_the_reported_distance(symmetry_case):
     """``|metal - transformed_neighbor|`` must equal the row's own ``distance``.
 
-    This is the invariant that makes the published donor position usable. An
-    inverted or mis-composed transform would still report the right distance --
-    Gemmi measures that separately -- while writing a position that is
-    somewhere else entirely, and a downstream consumer plotting the site would
-    silently draw a bond that does not exist.
+    Gemmi measures the distance separately, so an inverted or mis-composed
+    transform still reports the right distance beside a position that is
+    somewhere else entirely.
     """
     analysis, _, _, _, _ = symmetry_case
     row = analysis.rows[0]
@@ -320,11 +289,8 @@ def test_transformed_neighbor_position_reproduces_the_reported_distance(symmetry
 def test_published_image_positions_are_rounded_in_both_streams(symmetry_case):
     """Both CSVs publish 6-decimal coordinates, and the test above assumes it.
 
-    The rounding is what makes the tolerance in
-    ``test_transformed_neighbor_position_reproduces_the_reported_distance``
-    correct, and it is what keeps a 17-digit float repr out of a column users
-    read. Asserted on the candidate stream as well as the bond stream: they are
-    built by two different functions that round separately.
+    The bond and candidate streams are built by two functions that round
+    separately, so both are checked.
     """
     analysis, _, _, _, _ = symmetry_case
 
@@ -339,9 +305,8 @@ def test_published_image_positions_are_rounded_in_both_streams(symmetry_case):
 def test_cell_translation_agrees_with_the_symmetry_code(symmetry_case):
     """The ``klm`` digits of the code and ``cell_translation_*`` say one thing.
 
-    They are two renderings of the same lattice shift. If they disagree, one of
-    the two is a lie about which crystal image was measured, and there is no
-    way for a reader to tell which.
+    They are two renderings of the same lattice shift, and a reader who finds
+    them disagreeing cannot tell which of the two is the lie.
     """
     analysis, _, _, _, _ = symmetry_case
     row = analysis.rows[0]
@@ -356,11 +321,8 @@ def test_cell_translation_agrees_with_the_symmetry_code(symmetry_case):
 def test_transformed_neighbor_is_the_image_not_the_deposited_atom(symmetry_case):
     """A generated contact must publish the image, never the deposited copy.
 
-    The whole point of the column is that the contacting atom is somewhere the
-    coordinate file does not contain. Publishing the deposited position while
-    reporting the image distance is precisely the inconsistency this module
-    exists to prevent, so assert the two differ by the amount the geometry
-    demands.
+    The contacting atom is at a position the coordinate file does not contain,
+    so the two must differ by the amount the geometry demands.
     """
     analysis, deposited, _, scope, _ = symmetry_case
     row = analysis.rows[0]
@@ -385,13 +347,10 @@ def test_transformed_neighbor_is_the_image_not_the_deposited_atom(symmetry_case)
 def test_crystallographic_image_matches_an_independent_transform(factory, tmp_path):
     """Rebuild the image from the code and the cell shift, and compare.
 
-    Fractionalize the deposited atom, apply the named space-group operation,
-    add the reported cell translation, orthogonalize. Getting the composition
-    order wrong, or applying the inverse operation, changes the answer for the
-    screw-axis cases, so this pins the transform itself rather than only its
-    length. Strict-NCS images are excluded rather than skipped: their operation
-    index addresses an NCS block, not a space-group operation, so there is no
-    reconstruction to make.
+    This pins the transform itself, not only its length: the screw-axis cases
+    give a different answer under the inverse operation or the wrong
+    composition order. Strict-NCS images are excluded because their operation
+    index addresses an NCS block rather than a space-group operation.
     """
     builder, ncs, deposited = factory()
     analysis = _analyze(builder, tmp_path, _case_id(factory), ncs=ncs)
@@ -408,9 +367,7 @@ def test_crystallographic_image_matches_an_independent_transform(factory, tmp_pa
 def test_candidate_rows_carry_the_same_image_geometry(symmetry_case):
     """The candidate table must not contradict the bond table.
 
-    ``candidate_distance`` and the transformed position travel together in
-    ``CANDIDATE_COLUMNS`` too, and a reader who joins the two tables on the
-    donor identity has to get one consistent site.
+    A reader who joins the two on the donor identity has to get one site.
     """
     analysis, _, code, scope, _ = symmetry_case
 
@@ -437,10 +394,9 @@ def test_candidate_rows_carry_the_same_image_geometry(symmetry_case):
 def test_every_bond_row_position_matches_its_distance_in_a_mixed_site(tmp_path):
     """The invariant holds row by row when explicit and generated rows mix.
 
-    A per-row check matters more than a single-contact one: the transformed
-    position is written from the candidate that produced the row, so a mix-up
-    between two candidates of the same site would leave each individual
-    distance plausible while pairing it with the wrong position.
+    The transformed position is written from the candidate that produced the
+    row, so a mix-up between two candidates of one site leaves every distance
+    plausible while pairing it with the wrong position.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))
@@ -462,15 +418,12 @@ def test_every_bond_row_position_matches_its_distance_in_a_mixed_site(tmp_path):
         assert _cell_translation(row) == code_translation
 
 
-# G4 -- special-position deduplication
 def _axis_site(offset: float, *, donor: str = "water") -> StructureBuilder:
     """A Zn on the ``P 1 2 1`` two-fold, with a donor ``offset`` A off the axis.
 
     The two-fold along **b** maps ``(x, y, z)`` to ``(-x, y, -z)``, so an atom
     at ``x = offset, z = 0`` and its image are ``2 * offset`` apart and both sit
-    at the same distance from a metal on the axis. ``offset = 0`` is the exact
-    special position; anything under 0.4 A is the near-coincident case the
-    0.8 A cutoff exists for.
+    at the same distance from a metal on the axis.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1 2 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 10.0, 0.0))
@@ -492,7 +445,7 @@ def _raw_and_deduplicated(context):
 
     ``_collect_proximal_candidates`` is the last stage that still holds one
     candidate per Gemmi image, so it is the only place the collapse can be
-    observed as a difference rather than inferred from a count.
+    observed rather than inferred from a count.
     """
     metals = context.metal_atoms(METAL_ELEMENTS, canonical=True)
     assert len(metals) == 1
@@ -509,8 +462,8 @@ def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(tmp_path)
     """One deposited water on the axis must yield one contact, not two.
 
     The two-fold maps the water onto itself, so Gemmi offers two images of the
-    same deposited atom at the same point and the same distance. Reporting both
-    would claim a two-coordinate site built from a single oxygen.
+    same atom at the same point: reporting both claims a two-coordinate site
+    built from one oxygen.
     """
     path = _write_structure(_axis_site(0.0), tmp_path / "axis.pdb")
     context = sa.load_structure("test", path)
@@ -533,8 +486,8 @@ def test_special_position_collapse_keeps_the_explicit_image(tmp_path):
     """The surviving representative is the deposited image, not a generated one.
 
     ``_special_position_preference`` prefers an explicit image so that a
-    fraction-of-an-Angstrom refinement artifact cannot reclassify an ordinary
-    deposited contact as symmetry-dependent -- which would then propagate into
+    fraction-of-an-Angstrom refinement artifact cannot reclassify a deposited
+    contact as symmetry-dependent and propagate that into
     ``generated_contact_scope`` and the ``coordination_depends_on_*`` flags.
     """
     analysis = _analyze(_axis_site(0.025), tmp_path, "prefer")
@@ -544,7 +497,6 @@ def test_special_position_collapse_keeps_the_explicit_image(tmp_path):
     assert row["contact_scope"] == "explicit"
     assert row["symmetry_operation"] == "1_555"
     assert row["symmetry_contact"] is False
-    # The collapse must not manufacture a symmetry dependence for the site.
     assert analysis.summary["generated_contact_scope"] == "none"
     assert (
         analysis.summary["coordination_depends_on_crystallographic_symmetry"] is False
@@ -569,9 +521,9 @@ def test_images_collapse_only_within_the_special_position_cutoff(
     """0.8 A is the collapse threshold, and it is applied to image separation.
 
     Below it the two images are one atom on a special position; above it they
-    are two distinct crystal contacts and merging them would *lose* a real
-    donor. The separation is asserted alongside the outcome so the case cannot
-    quietly stop testing the boundary if the geometry is edited.
+    are distinct crystal contacts and merging them would *lose* a real donor.
+    The separation is asserted alongside the outcome so an edit to the geometry
+    cannot quietly move a case off the boundary.
     """
     builder = _axis_site(offset)
     path = _write_structure(builder, tmp_path / f"sep_{offset}.pdb")
@@ -644,10 +596,8 @@ def test_special_position_cutoff_is_not_the_duplicate_record_tolerance():
     """The 0.8 A and 0.001 A thresholds are separate constants for separate jobs.
 
     ``README.md`` promises both: near-coincident *images* collapse at 0.8 A,
-    while 0.001 A stays reserved for deciding that two deposited records with
-    the same identity disagree about where the atom is. Conflating them would
-    either stop collapsing special positions or start silently accepting
-    half-Angstrom coordinate conflicts.
+    while 0.001 A decides that two deposited records with the same identity
+    disagree about where the atom is.
     """
     assert ba.SPECIAL_POSITION_DEDUP_CUTOFF == 0.8
     assert sa.DUPLICATE_ATOM_POSITION_TOLERANCE == 0.001
@@ -657,11 +607,10 @@ def test_special_position_cutoff_is_not_the_duplicate_record_tolerance():
 def test_collapsed_images_are_not_reported_as_duplicate_records(tmp_path):
     """A special position is not a deposition error, and vice versa.
 
-    The axis site has one deposited water record whose images coincide: the
-    duplicate-record counters must stay at zero. The converse structure -- two
-    records for one atom 0.05 A apart -- is a coordinate conflict even though
-    0.05 A is far inside the 0.8 A image cutoff, so the wider cutoff does not
-    silence the stricter check.
+    The axis site has one deposited water record whose images coincide, so the
+    duplicate-record counters stay at zero. Two records for one atom 0.05 A
+    apart are a coordinate conflict even though 0.05 A is far inside the 0.8 A
+    image cutoff.
     """
     axis_path = _write_structure(_axis_site(0.025), tmp_path / "axis_dup.pdb")
     axis = sa.load_structure("test", axis_path)
@@ -694,13 +643,11 @@ def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
 ):
     """Show the corruption the collapse prevents, by neutralizing the cutoff.
 
-    An aspartate on the two-fold contributes OD1 and OD2, so the site is a
-    genuine two-donor chelate. With the special-position cutoff neutralized the
-    same deposited pair is counted twice: the coordination number doubles, a
-    second multi-donor residue group appears out of nothing, and the site is
-    additionally mislabelled as depending on crystallographic symmetry. That is
-    the same class of fabricated-coordination corruption as the duplicate-atom
-    defects already fixed, which is why the collapse is not cosmetic.
+    An aspartate on the two-fold contributes OD1 and OD2, a genuine two-donor
+    chelate. With the cutoff neutralized the same deposited pair is counted
+    twice: the coordination number doubles, a second multi-donor residue group
+    appears out of nothing, and the site is mislabelled as depending on
+    crystallographic symmetry.
     """
     builder = _axis_site(0.025, donor="aspartate")
 
@@ -715,8 +662,8 @@ def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
         collapsed.summary["coordination_depends_on_crystallographic_symmetry"] is False
     )
 
-    # A zero cutoff still merges exactly coincident images, so this isolates
-    # the near-coincident case the 0.8 A value exists for.
+    # A zero cutoff still merges exactly coincident images, isolating the
+    # near-coincident case the 0.8 A value exists for.
     monkeypatch.setattr(ba, "SPECIAL_POSITION_DEDUP_CUTOFF", 0.0)
     uncollapsed = _analyze(builder, tmp_path, "chelate_raw")
 
@@ -734,9 +681,8 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path):
     """The retained representative may not depend on Gemmi's mark order.
 
     ``_deduplicate_special_position_contacts`` sorts each source-atom group
-    before comparing, so shuffling the input cannot change which image
-    survives. Without that sort the reported scope of a special-position
-    contact would be luck of the draw between runs.
+    before comparing; without that sort the reported scope of a special-position
+    contact is luck of the draw between runs.
     """
     path = _write_structure(_axis_site(0.025), tmp_path / "order.pdb")
     context = sa.load_structure("test", path)
@@ -751,12 +697,11 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path):
     )
 
 
-# G8 -- explicit-only versus image-inclusive
 def test_purely_explicit_site_declares_no_generated_dependence(tmp_path):
     """All donors in the asymmetric unit: the two scopes must agree exactly.
 
-    This is the control. If the generated columns can report a dependence here,
-    every claim they make elsewhere is worthless.
+    The control: if the generated columns can report a dependence here, every
+    claim they make elsewhere is worthless.
     """
     builder = simple_metal_site(
         "ZN",
@@ -781,9 +726,8 @@ def test_purely_generated_site_reports_no_explicit_contacts(tmp_path):
     """A coordination sphere that exists only in a symmetry mate says so.
 
     ``explicit_contact_count == 0`` with a nonzero image-inclusive count is the
-    strongest caveat the summary can carry: nothing in the deposited
-    asymmetric unit coordinates this metal. Losing that distinction would let a
-    lattice contact be read as a deposited one.
+    strongest caveat the summary can carry: nothing in the deposited asymmetric
+    unit coordinates this metal.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))
@@ -800,7 +744,7 @@ def test_purely_generated_site_reports_no_explicit_contacts(tmp_path):
     assert summary["generated_contact_scope"] == "crystallographic"
     assert summary["coordination_depends_on_crystallographic_symmetry"] is True
     assert summary["coordination_depends_on_strict_ncs"] is False
-    # The explicit-only view has nothing to assess, and says so rather than
+    # The explicit-only view has nothing to assess, so it abstains rather than
     # borrowing the image-inclusive coverage.
     assert math.isnan(summary["geometry_coverage_explicit"])
     assert summary["geometry_coverage_image_inclusive"] == pytest.approx(1.0)
@@ -809,8 +753,8 @@ def test_purely_generated_site_reports_no_explicit_contacts(tmp_path):
 def test_mixed_site_keeps_the_two_counts_apart(tmp_path):
     """One deposited donor plus one lattice donor: 1 explicit, 2 image-inclusive.
 
-    The counts must not be the same number, and the primary (image-inclusive)
-    bond rows must still be individually attributable to a scope.
+    Each primary (image-inclusive) bond row stays individually attributable to
+    a scope.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))
@@ -836,7 +780,7 @@ def test_strict_ncs_site_does_not_claim_a_crystallographic_dependence(tmp_path):
 
     The two provenances answer different questions -- "another copy of the same
     molecule" versus "the neighbouring unit cell" -- and a reader draws
-    different conclusions from each, so they must not leak into one another.
+    different conclusions from each.
     """
     builder = StructureBuilder(cell=ROOMY_CELL, spacegroup="P 21 21 21")
     builder.add_metal("ZN", 1, chain="B", pos=(10.0, 10.0, 10.0))
@@ -923,11 +867,9 @@ def test_generated_images_can_change_the_geometry_verdict(tmp_path):
 
     The deposited histidine alone looks plausible; the water reached across a
     cell edge sits at 1.35 A, far too short for Zn-O, and makes the
-    image-inclusive assessment suspect. Both verdicts are published, and
-    ``geometry_classification_changes_with_generated_images`` is the flag that
-    tells a reader the difference is real rather than a rounding artifact --
-    a user who reads only the primary result would otherwise blame the
-    deposited model for a lattice contact.
+    image-inclusive assessment suspect. Without
+    ``geometry_classification_changes_with_generated_images`` a user reading
+    only the primary result blames the deposited model for a lattice contact.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))
@@ -959,10 +901,9 @@ def test_generated_images_can_change_the_geometry_verdict(tmp_path):
 def test_count_divergence_alone_does_not_flip_the_classification_flag(tmp_path):
     """The flag tracks the verdict, not the contact count.
 
-    Adding a well-behaved lattice donor changes both counts but leaves both
-    scopes classified the same way, so the flag must stay ``False``. Wiring it
-    to a count comparison would fire on almost every crystal structure and stop
-    meaning anything.
+    A well-behaved lattice donor changes both counts while leaving both scopes
+    classified the same way; a flag wired to the counts would fire on almost
+    every crystal structure.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))

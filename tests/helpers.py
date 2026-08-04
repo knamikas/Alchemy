@@ -1,24 +1,10 @@
 """Shared test helpers: synthetic structures, EDSTATS tables, capability probes.
 
 Nothing here touches the network, CCP4, or the PDB-REDO mirror unless a probe is
-called explicitly. Everything is built in memory with gemmi and written to a
-caller-supplied temporary path.
+called explicitly.
 
-The three things most tests need:
-
-* :class:`StructureBuilder` -- compose a coordinate model out of amino acids,
-  metals and waters, add alternate conformers and ``struct_conn``/``LINK``
-  declarations, then write it as legacy PDB or mmCIF.
-* :func:`simple_metal_site` -- a one-liner builder for "one metal surrounded by
-  donors at chosen distances", which is what most bond-analysis tests want.
-* :func:`write_edstats_for_structure` -- a synthetic EDSTATS ``stats.out`` whose
-  rows are guaranteed to satisfy the completeness check in
-  ``metal_identification.extract_metal_statistics``.
-
-Geometry note: side-chain skeleton coordinates are *schematic*. They are chosen
-so that atoms are distinct, elements are unambiguous and bond lengths are
-plausible, not so that they reproduce a real rotamer. Tests that care about a
-distance must place that atom explicitly through ``positions=``.
+Side-chain skeleton coordinates are schematic, not a real rotamer: a test that
+cares about a distance must place that atom itself through ``positions=``.
 """
 
 from __future__ import annotations
@@ -36,16 +22,11 @@ import gemmi
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(REPO_ROOT, "src")
-# ``src`` is placed on sys.path by conftest.py, which pytest always imports
-# before this module. The standalone catalog builder in tools/ runs without
-# pytest and keeps its own bootstrap; a single shared insertion point is not
-# possible for both.
 
 Vec3 = Tuple[float, float, float]
 
-#: Default crystal metadata. ``P 21 21 21`` gives four symmetry operations, so
-#: ``StructureContext.symmetry_search_available`` is true and image searches and
-#: ``crystallographic_operation_count`` are exercised.
+# ``P 21 21 21`` gives four symmetry operations, so symmetry search is available
+# and image contacts are exercised.
 DEFAULT_CELL: Tuple[float, float, float, float, float, float] = (
     60.0,
     70.0,
@@ -56,13 +37,11 @@ DEFAULT_CELL: Tuple[float, float, float, float, float, float] = (
 )
 DEFAULT_SPACEGROUP = "P 21 21 21"
 
-#: Where a residue's schematic skeleton is placed when the caller does not say.
-#: Far enough from the origin that an unmodified residue contributes no contact
-#: to a metal sitting at ``(0, 0, 0)``.
+# Far enough from the origin that an unmodified residue contributes no contact
+# to a metal sitting at ``(0, 0, 0)``.
 DEFAULT_RESIDUE_ORIGIN: Vec3 = (20.0, 20.0, 20.0)
 
-#: Unit directions used by :func:`simple_metal_site` to spread donors around a
-#: metal, ordered so the first six are octahedral.
+# Unit directions spreading donors around a metal, ordered octahedrally.
 DONOR_DIRECTIONS: Tuple[Vec3, ...] = (
     (1.0, 0.0, 0.0),
     (-1.0, 0.0, 0.0),
@@ -124,7 +103,6 @@ _SIDE_CHAIN_ATOMS: Dict[str, Tuple[str, ...]] = {
     "VAL": ("CB", "CG1", "CG2"),
 }
 
-# Schematic local coordinates for the four backbone atoms, in Angstrom.
 _BACKBONE_OFFSETS: Dict[str, Vec3] = {
     "N": (0.000, 0.000, 0.000),
     "CA": (1.458, 0.000, 0.000),
@@ -140,8 +118,7 @@ def element_for_atom_name(atom_name: str) -> str:
     """Element symbol implied by a standard amino-acid heavy-atom name.
 
     Every heavy atom of the twenty standard residues begins with C, N, O or S,
-    so the first character is unambiguous. Anything else raises, because a
-    silently wrong element would produce a structure the pipeline misreads.
+    so the first character is unambiguous; anything else raises.
     """
     name = str(atom_name).strip().upper()
     if not name:
@@ -166,7 +143,6 @@ def _translate(offset: Vec3, origin: Sequence[float]) -> Vec3:
     )
 
 
-# Specs
 @dataclass(frozen=True)
 class AtomSpec:
     """One deposited atom record."""
@@ -266,16 +242,14 @@ _ASU_VALUES = {
 }
 
 
-# Builder
 class StructureBuilder:
     """Compose a gemmi structure and write it as PDB and/or mmCIF.
 
-    Residues are emitted in the order they were added, except that within one
-    chain every non-het residue is written before every het residue. gemmi's
-    ``setup_entities`` classifies a polymer residue that follows a het residue
-    as non-polymer, which would silently disable Alchemy's polymer-terminal
-    donor rules; grouping avoids that. Pass ``group_het=False`` to keep strict
-    insertion order when a test needs it.
+    Residues are emitted in insertion order, except that within a chain every
+    non-het residue is written before every het one: gemmi's ``setup_entities``
+    classifies a polymer residue following a het residue as non-polymer, which
+    would silently disable Alchemy's polymer-terminal donor rules. Pass
+    ``group_het=False`` for strict insertion order.
     """
 
     def __init__(
@@ -297,7 +271,6 @@ class StructureBuilder:
         self._residues: List[ResidueSpec] = []
         self.connections: List[ConnectionSpec] = []
 
-    # -- low level ---------------------------------------------------------- #
     def add_residue(self, residue: ResidueSpec, chain: str = "A") -> ResidueSpec:
         """Append an already-built :class:`ResidueSpec` to ``chain``."""
         residue.chain = chain
@@ -310,7 +283,6 @@ class StructureBuilder:
     def residues(self) -> Tuple[ResidueSpec, ...]:
         return tuple(self._residues)
 
-    # -- residue constructors ----------------------------------------------- #
     def add_amino_acid(
         self,
         resname: str,
@@ -329,12 +301,9 @@ class StructureBuilder:
 
         ``positions`` maps atom name to an absolute ``(x, y, z)``; listed atoms
         override the schematic skeleton and unknown names are appended with an
-        element derived from the name (so ``{"OXT": ...}`` adds a C-terminal
-        oxygen). Every other atom is placed relative to ``origin``, which
-        defaults far enough away that it contributes no metal contact.
-
-        ``atoms`` replaces the skeleton entirely and is mutually exclusive with
-        ``positions``.
+        element derived from the name. Every other atom is placed relative to
+        ``origin``. ``atoms`` replaces the skeleton entirely and is mutually
+        exclusive with ``positions``.
         """
         resname = str(resname).upper()
         if atoms is not None and positions:
@@ -369,8 +338,8 @@ class StructureBuilder:
     ) -> ResidueSpec:
         """Add a single-atom hetero metal ion.
 
-        ``resname`` and ``atom_name`` both default to the upper-cased element,
-        which is what the PDB uses for monatomic ions and what makes
+        ``resname`` and ``atom_name`` default to the upper-cased element, which
+        is what the PDB uses for monatomic ions and what makes
         ``metal_identification`` classify the residue as ``metal``.
         """
         element = str(element).upper()
@@ -444,7 +413,6 @@ class StructureBuilder:
             chain=chain,
         )
 
-    # -- conformers --------------------------------------------------------- #
     def add_conformers(
         self,
         residue: ResidueSpec,
@@ -454,16 +422,11 @@ class StructureBuilder:
     ) -> ResidueSpec:
         """Split atoms of ``residue`` into alternate conformers.
 
-        ``conformers`` is a sequence of ``(altloc, occupancy, positions)``.
-        Every named atom is replicated once per conformer with that altloc label
-        and occupancy; ``positions`` (may be empty) overrides coordinates for
-        that conformer only. ``atom_names`` restricts the split to a subset,
-        leaving the rest as blank-altloc records shared by both conformers,
-        which is how deposited files usually model a partial side-chain
+        ``conformers`` is a sequence of ``(altloc, occupancy, positions)``, and
+        ``positions`` may be empty. ``atom_names`` restricts the split to a
+        subset, leaving the rest as blank-altloc records shared by every
+        conformer, which is how deposited files model a partial side-chain
         alternative.
-
-        Alchemy selects the conformer with the highest mean occupancy and
-        breaks ties by the alphabetically first label.
         """
         if not conformers:
             raise ValueError("at least one conformer is required")
@@ -489,7 +452,6 @@ class StructureBuilder:
         residue.atoms = kept + expanded
         return residue
 
-    # -- connections -------------------------------------------------------- #
     def add_connection(
         self,
         partner1: AtomRef,
@@ -503,10 +465,8 @@ class StructureBuilder:
     ) -> ConnectionSpec:
         """Declare a connection between two atoms.
 
-        Written as ``_struct_conn`` in mmCIF and as a ``LINK`` record in PDB, so
-        the same builder exercises both branches of
-        ``declared_connections._collect_declared_candidates``. ``asu`` is one of
-        ``same``, ``any`` or ``different``.
+        Written as ``_struct_conn`` in mmCIF and as a ``LINK`` record in PDB.
+        ``asu`` is one of ``same``, ``any`` or ``different``.
         """
         if str(type).lower() not in _CONNECTION_TYPES:
             raise ValueError(f"unknown connection type {type!r}")
@@ -524,7 +484,6 @@ class StructureBuilder:
         self.connections.append(spec)
         return spec
 
-    # -- output ------------------------------------------------------------- #
     def _ordered_residues(self, chain: str) -> List[ResidueSpec]:
         residues = [r for r in self._residues if r.chain == chain]
         if not self.group_het:
@@ -532,7 +491,7 @@ class StructureBuilder:
         return [r for r in residues if not r.het] + [r for r in residues if r.het]
 
     def to_gemmi(self) -> gemmi.Structure:
-        """Materialize the gemmi structure. Called fresh by every writer."""
+        """Materialize a fresh gemmi structure."""
         structure = gemmi.Structure()
         structure.name = self.name
         if self.cell is not None:
@@ -555,7 +514,7 @@ class StructureBuilder:
         return structure
 
     def write_pdb(self, path) -> str:
-        """Write legacy PDB (ATOM/HETATM + LINK) and return the path as ``str``."""
+        """Write legacy PDB (ATOM/HETATM + LINK); returns the path."""
         path = str(path)
         self.to_gemmi().write_pdb(path)
         return path
@@ -582,7 +541,6 @@ class StructureBuilder:
             return self.write_pdb(path)
         raise ValueError(f"unknown coordinate format {fmt!r}")
 
-    # -- convenience -------------------------------------------------------- #
     def _amino_acid_skeleton(
         self,
         resname: str,
@@ -689,7 +647,6 @@ def _gemmi_address(ref: AtomRef) -> gemmi.AtomAddress:
     )
 
 
-# High-level structure recipes
 def simple_metal_site(
     metal: str = "ZN",
     donors: Sequence[Tuple[str, str, float]] = (
@@ -709,18 +666,10 @@ def simple_metal_site(
     """One metal ion surrounded by donors at exactly the requested distances.
 
     ``donors`` is a sequence of ``(resname, atom_name, distance)``. Each donor
-    gets its own residue; its named atom is placed ``distance`` Angstrom from
-    the metal along a distinct direction from ``directions`` (octahedral by
-    default), so donor-donor separations stay large and no other atom of the
-    residue comes near the metal. Water names produce water residues, standard
-    amino-acid names produce amino-acid residues.
-
-    Residues are numbered from ``first_seqid`` upward in the order given.
-    Returns the builder so the caller can add conformers or connections before
-    writing.
-
-    >>> builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
-    >>> path = builder.write_pdb(tmp_path / "zn.pdb")           # doctest: +SKIP
+    gets its own residue, numbered from ``first_seqid``, with its named atom
+    ``distance`` Angstrom from the metal along a distinct direction, so
+    donor-donor separations stay large and no other atom of the residue comes
+    near the metal.
     """
     if len(donors) > len(directions):
         raise ValueError(f"{len(donors)} donors need at least as many directions")
@@ -763,13 +712,9 @@ def write_data_json(
 ) -> str:
     """Write a PDB-REDO-style ``data.json`` for the DPI calculation.
 
-    ``NREFCNT`` is the reflection count and ``RFFIN`` the final R-free; pass
-    ``None`` for either to omit it and exercise the missing-input branches of
-    ``dpi._calculate_dpi_details``.
-
-    Both are typed ``object`` deliberately: callers also pass non-numeric values
-    such as ``"many"`` to exercise the malformed-metadata branches, which is the
-    point of those tests rather than a type error.
+    ``NREFCNT`` is the reflection count and ``RFFIN`` the final R-free. Both are
+    typed ``object`` so a test can pass ``None`` to omit the key or a
+    non-numeric value to reach the malformed-metadata branches.
     """
     import json
 
@@ -791,8 +736,7 @@ def dpi_inputs(
     """Build the ``dpi_inputs`` mapping ``run_bond_analysis`` expects.
 
     With no ``data_json`` the DPI is unavailable by construction and
-    ``run_bond_analysis`` reports ``missing_dpi_metadata_source``; measured
-    distances are still emitted.
+    ``run_bond_analysis`` reports ``missing_dpi_metadata_source``.
     """
     return {
         "resolution": resolution,
@@ -802,10 +746,9 @@ def dpi_inputs(
     }
 
 
-#: Literal EDSTATS 1.0.9 ``stats.out`` residue-table header, intentionally
-#: independent of ``metal_identification``. Keeping the fixture oracle separate
-#: from the production constant means an accidental reorder in production cannot
-#: update both the generated test input and its expected schema at once.
+# Literal EDSTATS 1.0.9 ``stats.out`` residue-table header, transcribed rather
+# than imported from ``metal_identification`` so that a production reorder
+# cannot update both the generated input and its own oracle at once.
 EDSTATS_HEADER: Tuple[str, ...] = (
     "RT",
     "CI",
@@ -854,10 +797,8 @@ EDSTATS_METRICS: Tuple[str, ...] = EDSTATS_HEADER[3:39]
 EDSTATS_NULL = "n/a"
 
 
-#: The synthetic row EDSTATS emits between MODEL/ENDMDL blocks: ``_`` followed
-#: by 36 null metrics and the model and row numbers (39 whitespace fields).
 def edstats_separator_row(model: int = 1, row_number: int = 1) -> List[str]:
-    """Return EDSTATS' model-separator row as a field list."""
+    """The row EDSTATS emits between MODEL/ENDMDL blocks: 39 fields, not 42."""
     return [
         "_",
         *([EDSTATS_NULL] * len(EDSTATS_METRICS)),
@@ -881,19 +822,13 @@ def edstats_row(
     """Build one 42-field EDSTATS residue row as a list of strings.
 
     ``rt``/``ci``/``rn`` are the residue name, EDSTATS chain group and residue
-    number. ``cp`` is the deposited chain and defaults to ``ci``. ``metrics``
-    overrides individual metric columns by name (``"ZDm"``, ``"CCPa"``, ...);
-    every other metric gets ``default``, which may be ``"n/a"``.
+    number; ``cp`` is the deposited chain and defaults to ``ci``. ``metrics``
+    overrides metric columns by name, and every other metric gets ``default``.
 
-    ``omit_cp=True`` produces EDSTATS' legitimate blank-chain form: the trailing
-    CP field is absent, so the row has only 41 whitespace fields and
-    ``metal_identification`` has to restore it. Use it together with
-    ``ci="_"`` (or ``ci="0"`` for waters), which is what EDSTATS emits for a
-    residue deposited without a chain identifier.
-
-    >>> row = edstats_row("ZN", "B", 1, metrics={"ZDm": 1.25})
-    >>> len(row)
-    42
+    ``omit_cp=True`` produces EDSTATS' blank-chain form, in which the trailing
+    CP field is absent and the row has 41 fields. Use it with ``ci="_"`` (or
+    ``ci="0"`` for waters), which is what EDSTATS emits for a residue deposited
+    without a chain identifier.
     """
     unknown = set(metrics or {}) - set(EDSTATS_METRICS)
     if unknown:
@@ -940,14 +875,10 @@ def edstats_rows_for_structure(
 ) -> List[List[str]]:
     """One EDSTATS row per residue of a loaded :class:`StructureContext`.
 
-    Rows use each residue's *coordinate* name, chain and author residue number,
-    so the completeness check in ``extract_metal_statistics`` -- which demands a
-    row for every metal and cofactor residue -- always passes.
-
+    Rows use each residue's coordinate name, chain and author residue number,
+    so the completeness check in ``extract_metal_statistics`` always passes.
     ``metrics`` applies to every row; ``per_residue`` is keyed by
     ``(coordinate_residue_name, chain_id, resnum)`` and overrides on top.
-    ``blank_chain_form=True`` emits the 41-field no-CP shape for residues whose
-    chain identifier is empty.
     """
     rows: List[List[str]] = []
     for index, residue in enumerate(context.residues, start=1):
@@ -975,12 +906,7 @@ def edstats_rows_for_structure(
 
 
 def write_edstats_for_structure(path, context, **kwargs) -> str:
-    """Write a complete synthetic ``stats.out`` for a loaded structure.
-
-    >>> ctx = load_structure("test", pdb_path)                 # doctest: +SKIP
-    >>> stats = write_edstats_for_structure(tmp_path / "s.out", ctx,
-    ...                                     metrics={"ZDm": 2.0})  # doctest: +SKIP
-    """
+    """Write a complete synthetic ``stats.out`` for a loaded structure."""
     return write_edstats(path, edstats_rows_for_structure(context, **kwargs))
 
 
@@ -993,11 +919,10 @@ def stats_rows_for_structure(
     cofactors: Optional[Iterable[str]] = None,
     **kwargs,
 ):
-    """Write a synthetic ``stats.out`` then parse it back with the real code.
+    """Write a synthetic ``stats.out``, then parse it back with the real code.
 
-    Returns ``(rows, header, stats_path)`` where ``rows``/``header`` are exactly
-    what ``metal_identification.extract_metal_statistics`` produced, ready to
-    hand to ``bond_analysis.run_bond_analysis`` as its sigma join input.
+    Returns ``(rows, header, stats_path)``, ready to hand to
+    ``bond_analysis.run_bond_analysis`` as its sigma join input.
     """
     from metal_elements import METAL_ELEMENTS
     from metal_identification import extract_metal_statistics
@@ -1013,18 +938,12 @@ def stats_rows_for_structure(
     return rows, header, stats_path
 
 
-# Capability probes
 CCP4_TOOLS = ("mtzfix", "fft", "mapmask", "edstats")
 _NETWORK_CACHE: Dict[Tuple[str, int], bool] = {}
 
 
 def ccp4_env() -> Optional[Dict[str, str]]:
-    """Return an environment with the CCP4 tools on PATH, or ``None``.
-
-    Tries the current environment first, then ``find_ccp4_setup``
-    (``CCP4_SETUP``, the user config, and the usual install locations) sourced
-    through ``resolve_env``.
-    """
+    """An environment with the CCP4 tools on PATH, or ``None``."""
     from ccp4_setup import ccp4_tools_available, find_ccp4_setup, resolve_env
 
     if os.environ.get("ALCHEMY_TESTS_NO_CCP4"):
@@ -1074,20 +993,15 @@ def which(program: str, env: Optional[Mapping[str, str]] = None) -> Optional[str
     return shutil.which(program, path=(env or os.environ).get("PATH"))
 
 
-#: Canonical name of the warm PDB-REDO download cache variable, first, followed
-#: by the spellings kept working for compatibility. Every reader in the suite
-#: goes through :func:`cache_dir_from_env` so one export is enough whichever
-#: name a caller learned first.
+# Warm PDB-REDO download cache variables, canonical name first.
 CACHE_ENV_VARS = ("ALCHEMY_TESTS_CACHE", "ALCHEMY_TEST_CACHE")
 
 
 def cache_dir_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """The configured PDB-REDO cache directory, or ``None`` if unset.
 
-    Reads :data:`CACHE_ENV_VARS` in order, so the canonical
-    ``ALCHEMY_TESTS_CACHE`` wins when both are exported. Blank and
-    whitespace-only values count as unset -- ``ALCHEMY_TESTS_CACHE=`` in a
-    wrapper script must not resolve the cache to the current directory.
+    Blank and whitespace-only values count as unset: ``ALCHEMY_TESTS_CACHE=``
+    in a wrapper script must not resolve the cache to the current directory.
     """
     source = os.environ if env is None else env
     for variable in CACHE_ENV_VARS:

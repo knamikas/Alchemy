@@ -2,19 +2,10 @@
 
 Scope: the functions that decide *what a run does to existing data* and *which
 entries it selects* -- resume-schema validation, the exit-code contract, ID
-parsing, mirror enumeration, input preparation, and worker autoscaling.
-
-Every one of these was previously reached only through ``main.main()``, which
-runs solely in the ``ccp4``+``slow`` lane. That lane is deliberately not run in
-CI (finding 1.7), so a regression in any of them surfaced either as a confusing
-downstream failure or not at all.
-
-Four of them -- ``verify_ccp4``, ``prepare_inputs``, ``read_resolution`` and
-``has_final_files`` -- are relocated by the Phase E split. Pinning them first
-means a regression there is attributed to the move rather than discovered later
-in unrelated work. ``verify_ccp4`` has since moved to ``ccp4_setup``; the tests
-followed it here rather than being split off, since what they check is the
-driver's requirement that CCP4 be complete before a run starts.
+parsing, mirror enumeration, input preparation, worker autoscaling, and the
+driver's requirement that CCP4 be complete before a run starts. Reached through
+``main.main()`` they would run only in the ``ccp4``+``slow`` lane, which CI does
+not run.
 
 Out of scope here (owned elsewhere): argument *parsing* rules
 (``test_cli_and_config``), manifest row content (``test_driver_manifest``), and
@@ -43,7 +34,6 @@ from driver import pool
 import confidence_score
 
 
-# Resume schema validation -- refusing to corrupt existing output
 def _write_header(path, columns):
     with open(path, "w", newline="", encoding="utf-8") as handle:
         csv.writer(handle).writerow(columns)
@@ -81,13 +71,8 @@ def test_absent_outputs_are_accepted(tmp_path):
     "target", ["manifest_path", "stats_path", "bonds_path", "candidates_path"]
 )
 def test_an_incompatible_header_is_refused(resume_outputs, tmp_path, target):
-    """Appending beneath a foreign header would misalign every column.
-
-    This is the check that stands between a schema migration and silently
-    corrupted output: the rows would be written, and nothing downstream could
-    tell that column N of the new rows means something else than column N of
-    the old ones.
-    """
+    """Appending beneath a foreign header would misalign every column, and
+    nothing downstream could tell that column N had changed meaning."""
     _write_header(tmp_path / os.path.basename(resume_outputs[target]), ["unexpected"])
 
     with pytest.raises(ValueError, match="incompatible schema"):
@@ -97,12 +82,10 @@ def test_an_incompatible_header_is_refused(resume_outputs, tmp_path, target):
 def test_a_manifest_without_the_reference_data_column_is_refused(
     resume_outputs, tmp_path
 ):
-    """A manifest written before the identity column cannot be resumed into.
+    """A manifest without the identity column cannot be resumed into.
 
-    This is the compatibility break the column costs, and it is deliberate:
-    the rows already in that file do not say which reference data produced
-    them, so appending rows that do would make one file two datasets with no
-    way to tell them apart.
+    Its rows do not say which reference data produced them, so appending rows
+    that do would make one file two datasets with no way to tell them apart.
     """
     older = [
         column for column in writers.MANIFEST_COLUMNS if column != "reference_data_id"
@@ -114,12 +97,8 @@ def test_a_manifest_without_the_reference_data_column_is_refused(
 
 
 def test_the_refusal_names_the_columns_that_differ(resume_outputs, tmp_path):
-    """The message has to be actionable: a header mismatch is not self-evident.
-
-    It previously blamed a Gemmi migration for every mismatch, which is one
-    cause among several -- an added provenance column reads the same way, and
-    the operator is left diffing two headers by hand.
-    """
+    """The message names the columns that differ, leaving the operator with a
+    cause rather than two headers to diff by hand."""
     _write_header(tmp_path / "manifest.csv", list(writers.MANIFEST_COLUMNS) + ["stray"])
 
     with pytest.raises(ValueError, match="unexpected stray"):
@@ -127,12 +106,8 @@ def test_the_refusal_names_the_columns_that_differ(resume_outputs, tmp_path):
 
 
 def test_a_truncated_stats_header_is_refused(resume_outputs, tmp_path):
-    """A different EDSTATS build would shift the density block.
-
-    The whole header is compared rather than its length or first few names,
-    because a dropped metric column misaligns every value after it without any
-    other symptom.
-    """
+    """A different EDSTATS build shifts the density block, and a dropped metric
+    column misaligns every value after it with no other symptom."""
     _write_header(tmp_path / "stats.csv", list(STATS_COLUMNS)[:-1])
 
     with pytest.raises(ValueError, match="incompatible schema"):
@@ -169,17 +144,14 @@ def test_an_incompatible_confidence_header_is_refused(resume_outputs, tmp_path):
         )
 
 
-# Exit-code contract
 @pytest.mark.parametrize(
     ("counts", "retryable_partials", "expected"),
     [
         ({"ok": 5, "partial": 0, "skip": 0, "error": 0}, 0, 0),
-        # A terminal partial is usable output, not an incomplete run.
         ({"ok": 4, "partial": 1, "skip": 0, "error": 0}, 0, 0),
         ({"ok": 0, "partial": 0, "skip": 0, "error": 0}, 0, 0),
         ({"ok": 4, "partial": 0, "skip": 0, "error": 1}, 0, 1),
         ({"ok": 4, "partial": 0, "skip": 1, "error": 0}, 0, 1),
-        # A retryable partial means the entry can still be repaired.
         ({"ok": 4, "partial": 1, "skip": 0, "error": 0}, 1, 1),
     ],
 )
@@ -188,10 +160,8 @@ def test_the_exit_code_reports_operational_incompleteness(
 ):
     """Nonzero exactly when something remains to be done.
 
-    The distinction that matters is between a *terminal* partial -- usable but
-    incomplete science, which no rerun can improve -- and a *retryable* one.
-    Treating the first as failure would make every database run look broken;
-    treating the second as success would hide work still outstanding.
+    A *terminal* partial is usable but incomplete science that no rerun can
+    improve, so it exits zero; a *retryable* one is work still outstanding.
     """
     assert pool._batch_exit_code(counts, retryable_partials) == expected
 
@@ -202,7 +172,6 @@ def test_a_missing_status_key_is_treated_as_zero():
     assert pool._batch_exit_code({"error": 2}, 0) == 1
 
 
-# Entry selection
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
 def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value):
     """IDs are lowercased so cache paths and manifest keys cannot diverge."""
@@ -244,16 +213,12 @@ def _make_entry(
 ):
     """Create a mirror-layout entry directory with the requested files.
 
-    ``cif`` and ``pdb`` are independent so a mirror carrying both formats can
-    be built: production prefers the authoritative mmCIF and keeps the legacy
-    PDB export only as a fallback.
+    ``cif`` and ``pdb`` are independent so a mirror carrying both can be built.
     """
     entry_dir = inputs.entry_dir_for(str(root), pdb_id)
     os.makedirs(entry_dir, exist_ok=True)
 
     def write(name, payload=b"x"):
-        # gzip.compress rather than gzip.open: it is unambiguously bytes-in,
-        # bytes-out, so both branches share one plainly binary write.
         path = os.path.join(entry_dir, name)
         if compressed:
             path += ".gz"
@@ -289,13 +254,8 @@ def test_an_entry_is_final_only_with_both_inputs(tmp_path, compressed):
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
 def test_a_legacy_pdb_export_counts_as_usable_coordinates(tmp_path, compressed):
-    """Mirrors carrying only the legacy PDB export are still analyzable.
-
-    Production accepts ``.pdb`` and ``.pdb.gz`` as a fallback when the
-    authoritative mmCIF is absent. Testing only mmCIF would let a later
-    extraction drop that fallback with every test still green, silently making
-    a class of mirror unprocessable.
-    """
+    """``.pdb`` and ``.pdb.gz`` are accepted when the authoritative mmCIF is
+    absent, so a mirror carrying only the legacy export is still analyzable."""
     entry_dir = _make_entry(
         tmp_path, "9myr", cif=False, pdb=True, compressed=compressed
     )
@@ -307,8 +267,7 @@ def test_enumeration_returns_only_complete_entries(tmp_path):
 
     Ordering is by hash directory then entry, not by PDB ID: ``9myr`` lives
     under ``my`` and ``6nlr`` under ``nl``, so ``9myr`` comes first despite
-    sorting later as a string. That is what makes ``--max-pdbs`` reproducible --
-    it takes a prefix of a directory walk, not of a sorted ID list.
+    sorting later as a string.
     """
     _make_entry(tmp_path, "9myr")  # hashdir "my"
     _make_entry(tmp_path, "6nlr")  # hashdir "nl"
@@ -342,7 +301,6 @@ def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(tmp_path, monkeypatc
     assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
 
 
-# Input preparation
 def test_missing_map_coefficients_are_reported_by_path(tmp_path):
     """The error must name the file that was looked for, not just fail."""
     entry_dir = _make_entry(tmp_path, "9myr", mtz=False)
@@ -375,11 +333,8 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(tmp_path, compressed):
 
 
 def test_the_authoritative_mmcif_wins_over_the_legacy_export(tmp_path, monkeypatch):
-    """When a mirror carries both, the mmCIF is the one converted.
-
-    The legacy export loses identifiers the mmCIF retains, so preferring it
-    would silently degrade every result for such an entry.
-    """
+    """When a mirror carries both, the mmCIF is the one converted: the legacy
+    export loses identifiers it retains."""
     entry_dir = _make_entry(tmp_path, "9myr", cif=True, pdb=True)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -432,7 +387,6 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
     assert converted, "the authoritative mmCIF should have been converted"
 
 
-# Housekeeping and autoscaling
 def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(tmp_path):
     """Old bond rows must not be mistaken for this run's output.
 
@@ -474,10 +428,9 @@ def test_removing_absent_bond_outputs_is_not_an_error(tmp_path):
 def test_worker_limits_leave_headroom_and_respect_memory(monkeypatch):
     """Both limits are floored at one, so a small machine still runs.
 
-    The CPU limit deliberately leaves two cores for the driver and the OS; the
-    memory limit exists because each worker holds whole maps in memory, and
-    oversubscribing it is what invites the OOM killer the driver has to
-    recover from.
+    The CPU limit leaves two cores for the driver and the OS; the memory limit
+    exists because each worker holds whole maps in memory, and oversubscribing
+    it invites the OOM killer.
     """
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 16)
     monkeypatch.setattr(
@@ -502,7 +455,6 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
     assert memory_limit is None
 
 
-# CCP4 tool verification
 def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
     """The message must say which tools are absent and how to fix it."""
     monkeypatch.setattr(
@@ -527,13 +479,8 @@ def test_a_complete_ccp4_installation_passes(monkeypatch):
 
 
 def test_tool_availability_agrees_with_verification(monkeypatch):
-    """``ccp4_tools_available`` and ``verify_ccp4`` must not disagree.
-
-    They were separate implementations of the same question (finding 2.2), and
-    a divergence would make the driver accept an installation the setup helper
-    rejects, or the reverse. They now share ``missing_ccp4_tools``; this pins
-    the agreement so a future edit cannot split them again.
-    """
+    """``ccp4_tools_available`` and ``verify_ccp4`` must not disagree, or the
+    driver accepts an installation the setup helper rejects."""
     monkeypatch.setattr(
         ccp4_setup.shutil,
         "which",
@@ -548,10 +495,9 @@ def test_tool_availability_agrees_with_verification(monkeypatch):
 def test_a_library_caller_never_has_to_catch_systemexit(monkeypatch):
     """``ccp4_setup`` raises an ordinary exception, not ``SystemExit``.
 
-    ``SystemExit`` derives from ``BaseException``, so a caller reusing CCP4
-    resolution outside a CLI process -- a notebook, a service -- would have its
-    interpreter torn down by a bare ``except Exception``. The CLI's own
-    conversion to an exit is covered by ``test_cli_and_config``.
+    ``SystemExit`` derives from ``BaseException``, so a caller outside a CLI
+    process -- a notebook, a service -- cannot contain it with ``except
+    Exception``. The CLI's conversion to an exit is ``test_cli_and_config``.
     """
     monkeypatch.setattr(ccp4_setup.shutil, "which", lambda tool, path=None: None)
 
@@ -560,7 +506,6 @@ def test_a_library_caller_never_has_to_catch_systemexit(monkeypatch):
     assert not isinstance(excinfo.value, SystemExit)
 
 
-# Resolution metadata
 def _minimal_mtz(path, high=1.5):
     """An MTZ whose only purpose is to carry a known resolution limit."""
     import gemmi
@@ -599,12 +544,8 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path):
     ],
 )
 def test_incomplete_metadata_falls_back_to_the_mtz(tmp_path, payload, reason):
-    """A half-populated record must not be trusted for part of the answer.
-
-    Both limits are required before data.json is believed: reporting a
-    high-resolution limit from a record missing its low-resolution counterpart
-    would silently mix a partial metadata source into DPI provenance.
-    """
+    """Both limits are required before data.json is believed, or a partial
+    metadata source is mixed into DPI provenance."""
     entry_dir = _make_entry(tmp_path, "9myr", data_json=payload)
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
@@ -625,9 +566,8 @@ def test_absent_metadata_falls_back_to_the_mtz(tmp_path):
 def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
     """``--data-json`` supplies metadata for manual inputs with no entry dir.
 
-    The override must win over any file that happens to sit beside the
-    coordinates, or a manual run inside a populated mirror would silently read
-    the wrong entry's metadata.
+    It must win over any file sitting beside the coordinates, or a manual run
+    inside a populated mirror reads the wrong entry's metadata.
     """
     entry_dir = _make_entry(
         tmp_path,
@@ -646,12 +586,8 @@ def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
     ) == pytest.approx(1.72)
 
 
-# Intermediate retention
 def test_intermediates_are_discarded_unless_asked_for():
-    """Per-entry maps are large, so retention is opt-in.
-
-    ``process`` keys its scratch cleanup off this flag; defaulting it to true
-    would fill an output directory over a database run.
-    """
+    """Per-entry maps are large, so retention is opt-in: ``process`` keys its
+    scratch cleanup off this flag."""
     assert cli.parse_args([]).keep_intermediates is False
     assert cli.parse_args(["--keep-intermediates"]).keep_intermediates is True

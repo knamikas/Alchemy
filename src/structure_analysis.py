@@ -1,15 +1,10 @@
 """Shared Gemmi structure preprocessing for Alchemy.
 
-The pipeline deliberately uses two atom sets from the first coordinate model:
-
-* ``source_atoms`` retains every deduplicated alternate position for the
-  occupancy-weighted DPI atom count.
-* ``contact_atoms`` contains one coherent, occupancy-selected conformer per
-  residue for metal-contact searches.
-
-Keeping these sets explicit avoids depending on a parser's implicit alternate-
-location selection and makes the model, occupancy, and deduplication policies
-identical for single-entry and PDB-wide runs.
+Two atom sets are built from the first coordinate model, so that no policy
+depends on a parser's implicit alternate-location selection: ``source_atoms``
+retains every deduplicated alternate position for the occupancy-weighted DPI
+count, and ``contact_atoms`` holds one occupancy-selected conformer per residue
+for metal-contact searches.
 """
 
 from __future__ import annotations
@@ -32,24 +27,21 @@ RESIDUE_REMARK_PREFIX = "REMARK 950 ALCHEMY RESIDUE"
 
 
 # Blank PDB columns, Gemmi's NUL altloc, and the two mmCIF null tokens all mean
-# "no value here". Altloc labels, insertion codes, and main.py's mmCIF
-# conversion bookkeeping share this one definition.
+# "no value here".
 MISSING_VALUE_TOKENS = ("", " ", "\x00", ".", "?")
 PDB_HYBRID36_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def blank_if_missing(value: str) -> str:
-    """Return ``value``, or blank when it is a missing-value marker."""
     return "" if value in MISSING_VALUE_TOKENS else str(value)
 
 
 def _decode_pdb_resseq(value: str) -> int:
     """Decode a four-column decimal or hybrid-36 PDB resSeq value.
 
-    Gemmi exposes the decoded integer through ``Residue.seqid.num``. Raw PDB
-    and EDSTATS identifiers must use the same representation for stable joins.
-    Gemmi treats letter case equivalently for PDB resSeq fields, so normalize to
-    upper case before decoding the base-36 range.
+    Matches the integer Gemmi exposes as ``Residue.seqid.num``, which raw PDB
+    and EDSTATS identifiers must agree with to join. Gemmi treats PDB resSeq
+    letter case as equivalent, hence the upper-casing.
     """
     text = str(value)
     if len(text) > 4:
@@ -76,9 +68,8 @@ def _decode_pdb_resseq(value: str) -> int:
 def canonical_pdb_residue_id(value: str) -> str:
     """Return a decimal residue identifier with any insertion code appended.
 
-    EDSTATS separates an insertion code with ``:``. Accept the equivalent
-    compact form as well, then decode the four-column PDB residue number using
-    the same integer representation Gemmi exposes.
+    EDSTATS separates an insertion code with ``:``; the compact form is
+    accepted too.
     """
     text = str(value).strip()
     insertion = ""
@@ -96,7 +87,6 @@ def canonical_pdb_residue_id(value: str) -> str:
 
 
 def position_distance(a: Sequence[float], b: Sequence[float]) -> float:
-    """Euclidean distance between two ``(x, y, z)`` triples."""
     ax, ay, az = a
     bx, by, bz = b
     return math.sqrt((ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2)
@@ -120,7 +110,6 @@ def _valid_occupancy(value: object) -> bool:
 
 
 def _parse_pdb_element(value: str) -> Tuple[str, str]:
-    """Return the canonical deposited PDB element and its validation status."""
     deposited = value.strip()
     if not deposited:
         return "", ElementStatus.MISSING
@@ -202,11 +191,9 @@ class AtomSite:
     is_water: bool
     is_hydrogen: bool
     gemmi_atom: gemmi.Atom = field(repr=False, compare=False)
-    # The Gemmi atom belongs to the legacy-PDB identity EDSTATS sees.  Usually
-    # that identity is also the source author identity.  Very large mmCIF
-    # structures need a packed one-character namespace, in which case these
-    # fields retain the coordinate-side half of the reversible mapping while
-    # ``chain_id``/``resnum`` above remain the source identity reported in CSVs.
+    # The Gemmi atom carries the legacy-PDB identity EDSTATS sees, which for a
+    # very large mmCIF structure is a packed one-character namespace rather than
+    # the source author identity that ``chain_id``/``resnum`` above report.
     coordinate_chain_id: str = ""
     coordinate_residue_number: Optional[int] = None
     coordinate_insertion_code: str = ""
@@ -379,11 +366,10 @@ class StructureContext:
     ) -> Tuple[bool, bool, str, str]:
         """Classify a Gemmi cell image as crystallographic and/or strict NCS.
 
-        ``setup_cell_images()`` orders the identity first, followed by the
-        remaining space-group operations. Each strict-NCS transform then adds
-        one complete block of space-group operations. A nonzero unit-cell
-        translation is also crystallographic, including when combined with NCS.
-        See https://gemmi.readthedocs.io/en/stable/analysis.html.
+        ``setup_cell_images()`` orders the identity first, then the remaining
+        space-group operations, then one complete block of those operations per
+        strict-NCS transform. See
+        https://gemmi.readthedocs.io/en/stable/analysis.html.
         """
         if image_index < 0:
             raise ValueError("Gemmi image index cannot be negative")
@@ -573,9 +559,9 @@ def _raw_pdb_residue_mapping(
 ) -> Dict[Tuple[int, str, str, str], SourceResidueIdentity]:
     """Read reversible mmCIF residue mappings embedded during conversion.
 
-    ``RESNAME`` is the original, name-only format.  ``RESIDUE`` is emitted for
-    a structure whose residues had to be packed into a PDB-safe namespace and
-    restores the source component, chain, sequence number and insertion code.
+    ``RESNAME`` records carry the source component name alone; ``RESIDUE``
+    records, written when residues had to be packed into a PDB-safe namespace,
+    also carry the source chain, sequence number and insertion code.
     """
     mapping: Dict[Tuple[int, str, str, str], SourceResidueIdentity] = {}
     with open(path, encoding="utf-8", errors="replace") as handle:
@@ -629,8 +615,6 @@ def _raw_pdb_residue_mapping(
                     polymer_position=fields[14],
                 )
             previous = mapping.get(key)
-            # A full RESIDUE record deliberately supersedes a preceding legacy
-            # RESNAME record for the same coordinate residue.
             if previous is not None:
                 compatible_legacy_upgrade = (
                     prefix == RESIDUE_REMARK_PREFIX
@@ -666,9 +650,8 @@ def _match_raw_occupancies(
 ) -> Tuple[List[Optional[RawOccupancy]], int, int]:
     """Match PDB records to Gemmi atoms without relying on traversal order.
 
-    Gemmi may merge repeated chain segments when reading a PDB file. Stable
-    author identifiers locate each record after that regrouping; atom serials
-    disambiguate malformed duplicate identifiers when possible.
+    Gemmi may merge repeated chain segments when reading a PDB file, so records
+    are located by author identity and, for malformed duplicates, atom serial.
     """
     raw_by_identity: Dict[Tuple[str, str, str, str, str, str], List[RawOccupancy]] = (
         defaultdict(list)
@@ -721,7 +704,7 @@ def _occupancy_for_atom(
 def _element_for_atom(
     atom: gemmi.Atom, analysis_format: str, raw: Optional[RawOccupancy]
 ) -> Tuple[str, bool]:
-    """Use deposited element provenance rather than a PDB atom-name guess."""
+    """Trust the deposited element field; Gemmi guesses one from the atom name."""
     if analysis_format == "pdb":
         if raw is not None and raw.element_status == ElementStatus.VALID:
             return raw.element, True
@@ -781,7 +764,7 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
         candidates.extend(named[selected_altloc])
 
     # A selected named atom supersedes a malformed blank record of the same
-    # atom name. Any remaining duplicate name is resolved by valid occupancy.
+    # atom name; any remaining duplicate name is resolved by occupancy.
     by_name: Dict[str, List[AtomSite]] = defaultdict(list)
     for atom in candidates:
         by_name[atom.atom_name].append(atom)
@@ -1023,8 +1006,8 @@ def load_structure(
                 )
                 gemmi_order += 1
 
-    # Occupancy provenance is counted before malformed exact duplicates are
-    # collapsed, so an invalid deposited record is never silently hidden.
+    # Counted before exact duplicates are collapsed below, so that an invalid
+    # deposited record cannot be hidden by a valid twin.
     missing_count = sum(
         atom.occupancy_status == OccupancyStatus.MISSING for atom in all_sites
     )
@@ -1179,9 +1162,8 @@ def count_deposited_ni(context: StructureContext) -> float:
 def count_ni(context: StructureContext) -> float:
     """Occupancy-weighted non-H/D count for the complete asymmetric unit.
 
-    Gemmi does not add strict-NCS copies to ``model``. Each non-given NCS
-    operation represents one additional full copy in the asymmetric unit, so
-    DPI must count those copies even though their atoms are not deposited.
+    Gemmi does not add strict-NCS copies to ``model``, but each non-given NCS
+    operation is one more full copy that DPI must count.
     """
     deposited = count_deposited_ni(context)
     if not math.isfinite(deposited):

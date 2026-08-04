@@ -1,20 +1,13 @@
 """Converting a deposited mmCIF into the legacy PDB that EDSTATS can read.
 
 EDSTATS consumes traditional PDB coordinates, whose chain field is one column
-wide and whose residue numbers are four decimal digits. Deposited mmCIF models
-routinely exceed both. Shortening them loses the deposited identity of every
-residue -- and with it the ability to attribute an EDSTATS row back to the
-model it came from.
-
-Everything here exists so that conversion is *reversible*: the source residue
-identity of each converted residue is recorded as a REMARK in the PDB that
-Alchemy then analyses, and every step that could silently change a residue's
-identity, ordering, or atom membership raises instead. Occupancy is handled the
-same way -- mmCIF ``.``/``?`` becomes a blank PDB column rather than Gemmi's
-default 1.0, so missingness survives the round trip.
-
-The two entry points are ``_cif_to_pdb`` (mmCIF to analysis PDB) and
-``_first_model_pdb`` (a wrapper-free single-model PDB).
+wide and whose residue numbers are four decimal digits; deposited mmCIF models
+routinely exceed both. Conversion is therefore made reversible: each converted
+residue's source identity is recorded as a REMARK in the PDB that Alchemy then
+analyses, and every step that could silently change a residue's identity,
+ordering, or atom membership raises instead. mmCIF ``.``/``?`` occupancy
+becomes a blank PDB column rather than Gemmi's default 1.0, so missingness
+survives the round trip.
 """
 
 import os
@@ -27,8 +20,7 @@ from structure_analysis import (
 )
 
 
-# The traditional PDB chain field is one column wide.  These are the portable
-# identifiers accepted by both Gemmi and the CCP4 tools used by Alchemy.
+# The one-character chain ids accepted by both Gemmi and the CCP4 tools.
 LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 LEGACY_PDB_MAX_RESIDUE_NUMBER = 9999
 
@@ -37,7 +29,7 @@ def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
     """Return raw mmCIF occupancy tokens keyed by ``_atom_site.id``.
 
     Gemmi represents ``.`` and ``?`` occupancy as 1.0 in a Structure, so the
-    raw CIF loop must be read before conversion if missingness is to survive.
+    raw CIF loop must be read before conversion.
     """
     import gemmi
 
@@ -74,11 +66,10 @@ def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
 
 
 def _residue_index_by_author(structure, label):
-    """Index residues by ``(model, chain, resnum)`` with their atom membership.
+    """Index residues by ``(model, chain, resnum)``, with the traversal order.
 
-    Returns the index and the traversal order, so a conversion can be checked
-    for reordering as well as for changed identifiers. ``label`` names the
-    structure in any error raised here.
+    The order lets a conversion be checked for reordering, not only for changed
+    identifiers.
     """
     by_author: dict[tuple[int, str, str], list[Any]] = {}
     order = []
@@ -201,8 +192,8 @@ def _legacy_identifiers_need_packing(structure):
 def _pack_legacy_pdb_residue_ids(structure):
     """Assign a unique, one-character PDB identity to every residue.
 
-    Multiple source chains may occupy one synthetic chain because EDSTATS only
-    needs an unambiguous residue key, not polymer connectivity.  Whole source
+    Multiple source chains may share one synthetic chain because EDSTATS needs
+    only an unambiguous residue key, not polymer connectivity. Whole source
     chains stay together, TER records preserve their boundaries, and sequence
     numbers never exceed the portable four-column decimal PDB range.
     """
@@ -397,9 +388,8 @@ def _cif_to_pdb(cif_path, dst):
 
     structure.setup_entities()
     source_residues = _source_residue_records(structure)
-    # EDSTATS consumes PDB coordinates, whose chain field is one character.
-    # Shorten deterministically before writing, then analyze this exact PDB so
-    # EDSTATS and Alchemy never join identifiers from different representations.
+    # Shorten before writing and then analyse this exact PDB, so EDSTATS and
+    # Alchemy never join identifiers from two different representations.
     structure.shorten_chain_names()
     identifiers_packed = _legacy_identifiers_need_packing(structure)
     if identifiers_packed:
@@ -423,9 +413,9 @@ def _first_model_pdb(pdb_path, dst):
     """Return a wrapper-free PDB containing the first coordinate model.
 
     The extraction is textual so atom records, occupancies, identifiers, and
-    ordering remain exactly as deposited. Gemmi is used only to determine and
-    verify the model count. Explicit MODEL/ENDMDL records are removed because
-    EDSTATS emits a synthetic separator residue for even a one-model wrapper.
+    ordering remain exactly as deposited; Gemmi only determines and verifies
+    the model count. MODEL/ENDMDL records are removed because EDSTATS emits a
+    synthetic separator residue for even a one-model wrapper.
     """
     import gemmi
 
@@ -460,12 +450,10 @@ def _first_model_pdb(pdb_path, dst):
     )
     if first_end is None:
         raise ValueError("the first PDB MODEL record has no matching ENDMDL")
-    else:
-        first_block = lines[first_start + 1 : first_end]
+    first_block = lines[first_start + 1 : first_end]
 
-    # NUMMDL describes the source ensemble and would be false in this
-    # first-model-only analysis file. Other crystallographic header records are
-    # retained because EDSTATS needs the same cell and symmetry metadata.
+    # NUMMDL describes the source ensemble and would be false here. The other
+    # header records stay: EDSTATS needs the same cell and symmetry metadata.
     header = [
         line for line in lines[:first_start] if line[:6].strip().upper() != "NUMMDL"
     ]

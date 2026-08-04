@@ -1,28 +1,17 @@
-"""Metal-ligand bond-distance analysis for the Alchemy pipeline.
+"""Metal-ligand bond-distance analysis for one PDB entry.
 
-For one PDB entry this finds every metal atom in the first model, uses Gemmi to
-discover broad explicit, crystallographic, and strict-NCS candidates within 4 A,
-supplements them with source ``struct_conn``/``LINK`` declarations, identifies
-first-sphere-eligible candidates in a separate stage, and computes a
-resolution-aware z-score against the consolidated
-literature reference distances in ``metal_distances_info.txt`` (Harding 2006 and
-Zheng et al. 2008 [Ni only]):
+Discovers explicit, crystallographic and strict-NCS candidates within 4 A of
+every metal, supplements them with source ``struct_conn``/``LINK``
+declarations, decides first-sphere eligibility in a separate stage, and scores
+each contact against the literature reference distances in
+``metal_distances_info.txt`` (Harding 2006, and Zheng et al. 2008 for Ni):
 
     z = (d_observed - mu) / sqrt(DPI**2 + sigma_lit**2)
 
-The DPI (Diffraction-component Precision Index, Blow 2002 eq. 7) is the model's
-per-atom coordinate uncertainty; adding it in quadrature with the literature
-spread makes the same absolute deviation more significant in a high-resolution
-structure than in a low-resolution one. A bond involves two atoms, but only one
-DPI enters the denominator: the metal is treated as well enough ordered that its
-positional uncertainty is negligible beside the donor's. See ``_zscore``.
-
-The analysis covers every configured metal element, uses exact
-``(residue, atom, metal)`` reference-distance keys, and reads DPI inputs from
-PDB-REDO ``data.json``. The asymmetric-unit volume is computed from the crystal
-cell and symmetry with gemmi. Missing inputs produce NaN derived values without
-discarding measured bond geometry. ``main.py`` calls ``run_bond_analysis`` from
-its per-entry worker and supplies edstats rows in memory for the sigma join.
+Adding the DPI (Blow 2002 eq. 7) in quadrature with the literature spread makes
+the same absolute deviation more significant in a high-resolution structure
+than in a low-resolution one. Missing inputs produce NaN derived values without
+discarding measured bond geometry.
 """
 
 import math
@@ -63,7 +52,7 @@ from structure_analysis import (
 )
 
 
-# Broad candidate-search radius. This must not be treated as a bond cutoff.
+# Candidate-search radius, not a bond cutoff.
 CUTOFF = 4.0
 SEARCH_EPSILON = 1e-6
 
@@ -73,27 +62,26 @@ SEARCH_EPSILON = 1e-6
 FIRST_SPHERE_TOLERANCE = 0.75
 
 # Gemmi's ContactSearch uses 0.8 A by default to distinguish near-coincident
-# symmetry images of an atom intended to occupy a special position.  NeighborSearch
-# returns those images unfiltered, so Alchemy applies the same cutoff explicitly.
+# symmetry images of an atom intended to occupy a special position.
+# NeighborSearch returns those images unfiltered, so apply the cutoff here.
 SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 
 
-# Bond rows
 def _bonding_key(neighbor, nb_res, metal_el):
     """Exact (residue, atom, metal) key matching metal_distances_info.txt columns."""
     name = neighbor.atom_name.strip()
     if neighbor.is_water:
         return ("HOH", "O", metal_el)
     if name in C_TERMINAL_DONOR_ATOMS:
-        # No terminal-carboxylate-specific reference is bundled. Keep these
-        # chemically typical donors eligible through the element fallback, but
-        # do not misrepresent a residue side-chain reference as exact.
+        # No terminal-carboxylate reference is bundled, so this key misses and
+        # falls through to the element fallback rather than borrowing a
+        # side-chain reference.
         return ("CTERM", "O", metal_el)
-    if name == "O":  # backbone carbonyl O -> literal "CA" row
-        return ("CA", "O", metal_el)
-    if name.startswith("O"):  # side-chain O (OD1/OE1/OG/OH/...)
+    if name == "O":
+        return ("CA", "O", metal_el)  # backbone carbonyl O is keyed "CA"
+    if name.startswith("O"):
         return (nb_res, "O", metal_el)
-    return (nb_res, neighbor.element, metal_el)  # His N, Cys S, ...
+    return (nb_res, neighbor.element, metal_el)
 
 
 def _parent_type(structure, metal, metal_res, metal_el):
@@ -102,7 +90,7 @@ def _parent_type(structure, metal, metal_res, metal_el):
     if metal_res in heme_ids():
         return "heme"
     if metal_el not in METAL_ELEMENTS:
-        return "other"  # defensive: shouldn't happen, metal_atoms is pre-filtered
+        return "other"  # unreachable while metal_atoms is pre-filtered
     residue = structure.residue_for_atom(metal)
     if residue.chemical_atom_site_count == 1:
         return "ion"
@@ -112,13 +100,11 @@ def _parent_type(structure, metal, metal_res, metal_el):
 def _zscore(dist, mu, stdev, dpi):
     """Bond-distance z-score, ``(dist - mu)/sqrt(stdev^2 + dpi^2)``.
 
-    The denominator carries **one** DPI, not the ``sqrt(2) * DPI`` that an
-    independent-error treatment of two atoms would give. This is deliberate: the
-    metal is a heavy scatterer and is normally among the best-ordered atoms in
-    the model, so its positional uncertainty is taken as negligible beside the
-    light donor's, and the single DPI stands for the donor. Do not "correct"
-    this to ``2 * dpi ** 2`` -- it would shrink every z-score by up to a factor
-    of sqrt(2) and change which contacts pass ZSCORE_OUTLIER_CUTOFF.
+    The denominator carries one DPI, not the ``sqrt(2) * DPI`` an
+    independent-error treatment of two atoms would give: the metal is a heavy
+    scatterer among the best-ordered atoms in the model, so the single DPI
+    stands for the donor. Widening it to ``2 * dpi ** 2`` would shrink every
+    z-score and change which contacts pass ZSCORE_OUTLIER_CUTOFF.
     """
     if not (math.isfinite(dpi) and math.isfinite(mu) and math.isfinite(stdev)):
         return NAN
@@ -153,12 +139,10 @@ def _merge_candidate_provenance(target, source):
 
 
 def _special_position_preference(contact):
-    """Choose a stable representative for near-coincident symmetry images.
+    """Order near-coincident symmetry images so the retained one is stable.
 
-    Prefer an explicit image when one exists so an off-axis refinement artifact
-    cannot turn an otherwise explicit contact into a symmetry-dependent one.
-    Within the same scope, retain the shortest contact and then use stable
-    symmetry provenance to break any remaining tie.
+    An explicit image sorts first, so an off-axis refinement artifact cannot
+    turn an otherwise explicit contact into a symmetry-dependent one.
     """
     return (
         contact.symmetry_contact,
@@ -174,8 +158,7 @@ def _deduplicate_special_position_contacts(candidates):
     """Collapse near-coincident images of each deposited source atom.
 
     Sorting each source-atom group before the spatial comparison makes the
-    result independent of Gemmi's NeighborSearch mark order.  Images farther
-    apart than Gemmi's special-position cutoff remain distinct contacts.
+    result independent of Gemmi's NeighborSearch mark order.
     """
     by_source: dict[Any, list[Candidate]] = {}
     for candidate in candidates:
@@ -217,10 +200,8 @@ def _first_sphere_rule(metal, neighbor):
         reference_kind = "exact"
         reference_key = exact_key
     else:
-        # The scoring table may omit a residue-specific donor while still
-        # defining the same donor element for this metal. Use the largest such
-        # target only for sphere membership; exact references remain mandatory
-        # for z-score calculation.
+        # The element fallback decides sphere membership only. An exact
+        # reference stays mandatory for the z-score.
         target = first_sphere_targets().get((metal.element, neighbor.element))
         if target is None:
             return NAN, NAN, "missing", ""
@@ -291,9 +272,8 @@ def _annotate_donor_policy(structure, candidates):
         allowed, rule = _inferred_donor_rule(structure, candidate.neighbor)
         declared = bool(candidate.declared_connections)
         # A declaration overrides the donor-atom rule only inside a residue
-        # class Alchemy can assess. Claiming the override for a donor whose
-        # class has no reference at all would label a row as a declared bond
-        # that never becomes one.
+        # class Alchemy can assess: claiming the override elsewhere would label
+        # a row as a declared bond that never becomes one.
         supported = candidate.donor_class_supported
         candidate.inferred_donor_allowed = allowed
         candidate.inferred_donor_rule = rule
@@ -303,13 +283,11 @@ def _annotate_donor_policy(structure, candidates):
 
 
 def _identify_first_sphere_candidates(candidates, metal):
-    """Identify proximal candidates eligible for the first sphere.
+    """Annotate every candidate with eligibility, and return those eligible.
 
-    Candidate discovery deliberately performs no bond assignment. This stage
-    applies the current distance-based eligibility rule after discovery and
-    keeps unsupported metal-donor pairs visible to the caller as incomplete
-    assignment evidence. Passing this rule does not by itself establish a
-    chemically assigned bond.
+    Also returns the metal-donor pairs no reference covers, which the caller
+    reports as incomplete assignment evidence. Passing the distance rule does
+    not by itself establish a chemically assigned bond.
     """
     eligible = []
     unsupported_pairs = set()
@@ -370,12 +348,10 @@ def _identify_first_sphere_candidates(candidates, metal):
 
 
 def _collect_proximal_candidates(structure, search, metal, include_symmetry):
-    """Return broad donor-like candidates within 4 A for one search scope.
+    """Return donor-like candidates within 4 A for one search scope.
 
-    This function answers only the discovery question. It does not use a
-    literature target, apply the first-sphere tolerance, or call any candidate
-    a bond. Coordination assignment is performed later by
-    ``_identify_first_sphere_candidates`` and future donor-group logic.
+    Discovery only: no literature target, no first-sphere tolerance, no
+    assignment. That happens in ``_identify_first_sphere_candidates``.
     """
     candidates = []
     marks = search.find_atoms(
@@ -385,8 +361,8 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
         neighbor = structure.atom_for_mark(mark)
         if neighbor is None:
             continue
-        # Cheapest rejections first: the donor-element test discards most marks,
-        # so the residue lookup only runs for atoms that can still qualify.
+        # Cheapest test first: the residue lookup below only runs for the few
+        # marks that can still qualify.
         if neighbor.element not in DONOR_ELEMENTS:
             continue
         if not (neighbor.occupancy_valid and neighbor.occupancy > 0.0):
@@ -402,9 +378,6 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
             transformed = structure.structure.cell.find_nearest_pbc_position(
                 metal.pos, neighbor.pos, mark.image_idx
             )
-            # Unpacked rather than comprehended: ``pbc_shift`` is a lattice
-            # triple, and spelling that out gives the field the exact
-            # ``tuple[int, int, int]`` it declares.
             shift_a, shift_b, shift_c = nearest.pbc_shift
             translation = (int(shift_a), int(shift_b), int(shift_c))
             image_index = int(nearest.sym_idx)
@@ -429,8 +402,8 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
             operation = "1_555"
             distance = position_distance(metal.xyz, neighbor.xyz)
 
-        # A symmetry copy is a distinct residue image. Exclude only the actual
-        # source residue in the explicit asymmetric unit.
+        # A symmetry copy is a distinct residue image, so only the source
+        # residue in the explicit asymmetric unit is excluded.
         if neighbor.residue_key == metal.residue_key and not symmetry_contact:
             continue
         if not (0.0 < distance <= CUTOFF + 1e-9):
@@ -475,9 +448,9 @@ def _merge_candidates(*candidate_groups):
             key = _candidate_identity(candidate)
             existing = merged.get(key)
             if existing is None:
-                # Copied, with its two provenance collections copied as well:
-                # merging appends to them, and the caller's candidate must not
-                # gain the other group's sources.
+                # The provenance collections are copied too: merging appends to
+                # them, and the caller's candidate must not gain the other
+                # group's sources.
                 merged[key] = replace(
                     candidate,
                     candidate_sources=set(candidate.candidate_sources),
@@ -498,10 +471,7 @@ def _current_contacts_from_candidates(candidates, metal):
         for candidate in candidates
         if candidate.declared_connections
         and not candidate.inferred_contact_eligible
-        and
-        # A donor class with no literature reference stays candidate evidence:
-        # it is reported with its measured distance but never scored.
-        candidate.donor_class_supported
+        and candidate.donor_class_supported
     ]
     return (
         _deduplicate_special_position_contacts(eligible + declared_not_inferred),
@@ -549,10 +519,8 @@ def _residue_image_key(contact):
 def _annotate_multi_donor_groups(contacts):
     """Annotate assigned contacts that share one donor-residue image.
 
-    There is no upper limit on group size. All bond-level z-scores and outlier
-    flags contribute normally when assessable. Group status is contextual: if
-    any member is suspect, every member records that it belongs to a suspect
-    multi-donor group, without weakening or excluding any individual result.
+    Group status is contextual: a suspect member marks every member as
+    belonging to a suspect group without weakening any individual result.
     """
     groups: dict[Any, list[Candidate]] = {}
     for contact in contacts:
@@ -740,8 +708,7 @@ def _site_summary(
     )
     # Blank where symmetry was never searched, boolean where it was: "not
     # assessed" and "assessed false" are different answers, and the columns
-    # keep them apart. Declared because the first branch would otherwise fix
-    # the inferred type at ``str``.
+    # keep them apart.
     changed: Union[str, bool]
     depends_crystallographic: Union[str, bool]
     depends_strict_ncs: Union[str, bool]
@@ -841,22 +808,15 @@ def run_bond_analysis(
 ):
     """Return contact rows, candidate rows, site summaries, and metadata.
 
-    Every external proximal candidate is retained in the candidate rows.
-    First-sphere-eligible candidates and contacts declared by source
-    ``struct_conn``/``LINK`` records are emitted as the current bond rows.
-    Declared contacts are evaluated even outside the 4 A discovery radius or
-    first-sphere cutoff. Atoms in the metal's own residue remain excluded.
-    Assigned contacts are grouped by donor-residue image for the multi-donor
-    scoring policy after every bond receives its individual z-score.
-    Image-inclusive results are primary when symmetry metadata is available.
-    Missing DPI does not prevent identification or distance reporting.
+    Bond rows come from first-sphere-eligible candidates and from source
+    ``struct_conn``/``LINK`` declarations, which are evaluated even outside the
+    4 A discovery radius. Image-inclusive results are primary wherever symmetry
+    metadata is available.
     """
     if structure is None:
         structure = load_structure(pdb_id, pdb_path)
 
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
-    # Annotated because the values are three lists and a bool: inference
-    # settles on ``object``, and every ``append`` below then looks wrong.
     metadata: dict[str, Any] = {
         "partial_reason_codes": [],
         "warning_codes": list(structure.warning_codes),

@@ -5,12 +5,6 @@ Whether a particular reference distance is right belongs to
 ``test_bond_geometry``; whether reading it costs an import, can be mutated by
 one caller for the whole process, or can be simultaneously valid and invalid
 depending on which module asked, belongs here.
-
-Regression: ``import bond_analysis`` used to read both bundled files. Every
-``--help``, every test-collection pass and every spawned worker paid for them,
-a malformed catalog raised ``ValueError`` out of an import statement, the
-results were mutable dicts shared process-wide, and the catalog was parsed
-twice by two parsers that disagreed about what a valid catalog was.
 """
 
 from __future__ import annotations
@@ -28,8 +22,11 @@ import reference_data
 from helpers import SRC_DIR
 
 
-# The modules that used to read a file merely by being imported.
-_PREVIOUSLY_EAGER = ("bond.bond_analysis", "metal_identification", "reference_data")
+_MUST_NOT_READ_AT_IMPORT = (
+    "bond.bond_analysis",
+    "metal_identification",
+    "reference_data",
+)
 
 
 def _catalog(tmp_path, lines, name="catalog.txt"):
@@ -38,13 +35,11 @@ def _catalog(tmp_path, lines, name="catalog.txt"):
     return str(path)
 
 
-# No import-time I/O
 def test_importing_the_analysis_modules_reads_no_files():
-    """Importing must not touch the disk, in a fresh interpreter.
+    """Importing must not touch the disk.
 
-    Run in a subprocess because this test process has already imported all
-    three: a second ``import`` is a dict lookup and would pass no matter what
-    the module body does.
+    Run in a subprocess: this process has already imported all three, so a
+    second ``import`` is a dict lookup that passes whatever the module does.
     """
     program = f"""
 import builtins, sys
@@ -55,7 +50,7 @@ def spy(*args, **kwargs):
     opened.append(args[0] if args else kwargs.get("file"))
     return real_open(*args, **kwargs)
 builtins.open = spy
-for name in {list(_PREVIOUSLY_EAGER)!r}:
+for name in {list(_MUST_NOT_READ_AT_IMPORT)!r}:
     __import__(name)
 builtins.open = real_open
 print("|".join(str(path) for path in opened))
@@ -65,33 +60,22 @@ print("|".join(str(path) for path in opened))
     )
     opened = [path for path in completed.stdout.strip().split("|") if path]
     assert not opened, (
-        f"importing {', '.join(_PREVIOUSLY_EAGER)} read {opened}. Bundled data "
+        f"importing {', '.join(_MUST_NOT_READ_AT_IMPORT)} read {opened}. Bundled data "
         "must be loaded on demand: --help, test collection and every spawned "
         "worker pay for anything done at import."
     )
 
 
 def test_a_malformed_catalog_raises_from_the_call_not_the_import(tmp_path):
-    """The failure has to be attributable to a caller.
-
-    Raised out of an import there is no context to report it with -- the
-    traceback names an import statement in whichever module happened to be
-    loaded first.
-    """
+    """The failure has to be attributable to a caller: raised out of an import,
+    the traceback names whichever module happened to be loaded first."""
     path = _catalog(tmp_path, ["ABC\t'C1'\t", "DEF\t'C2'\t"])
     with pytest.raises(ValueError, match="no structural classes"):
         reference_data.cofactor_ids(path)
 
 
-# One parser
 def test_ids_and_classes_come_from_one_pass_over_one_file(tmp_path):
-    """Every classified component is also a known component.
-
-    Regression: two parsers read this file under different rules -- one
-    required three tab-separated fields, the other accepted a single column --
-    so a legacy catalog loaded cleanly in ``metal_identification`` and
-    hard-failed at import in ``bond_analysis``.
-    """
+    """Every classified component is also a known component."""
     path = _catalog(
         tmp_path,
         ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme", "ZN\t'Zn'\t"],
@@ -104,14 +88,8 @@ def test_ids_and_classes_come_from_one_pass_over_one_file(tmp_path):
 
 
 def test_a_short_row_is_a_component_but_never_a_classification(tmp_path):
-    """A legacy row without a class column contributes an id and nothing else.
-
-    The two-parser era is what makes this worth pinning: a short row was a
-    valid component to one reader and skipped entirely by the other. Under one
-    parser it has to be exactly one thing -- known, unclassified -- because
-    guessing a class from a missing column would put a component into
-    ``parent_type`` on no evidence at all.
-    """
+    """A row without a class column is known and unclassified, nothing else:
+    guessing a class would fill ``parent_type`` on no evidence at all."""
     path = _catalog(
         tmp_path,
         ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme", "OLD\t'C2'", "BARE"],
@@ -137,24 +115,17 @@ def test_an_empty_catalog_is_named_as_empty(tmp_path):
         reference_data.cofactor_ids(_catalog(tmp_path, ["", "   "]))
 
 
-# Frozen, and read once
 def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path):
-    """These objects are process-wide and shared by every worker.
-
-    A mutable dict handed to every caller means one of them can change what
-    every later z-score is measured against, with nothing in the output saying
-    the reference moved.
-    """
+    """These objects are process-wide, so a mutable one would let a single
+    caller change what every later z-score is measured against."""
     assert isinstance(reference_data.cofactor_ids(), frozenset)
     assert isinstance(reference_data.cluster_ids(), frozenset)
     assert isinstance(reference_data.heme_ids(), frozenset)
     assert isinstance(reference_data.literature_distances(), MappingProxyType)
     assert isinstance(reference_data.first_sphere_targets(), MappingProxyType)
 
-    # Bound through ``Any`` deliberately. A type checker rejects assignment
-    # into a ``MappingProxyType`` outright, which is the guarantee under test:
-    # the point here is that it also fails at runtime, for a caller who never
-    # ran one.
+    # Bound through ``Any``: mypy rejects assignment into a MappingProxyType
+    # outright, and what is under test is that it also fails at runtime.
     distances: Any = reference_data.literature_distances()
     targets: Any = reference_data.first_sphere_targets()
     with pytest.raises(TypeError):
@@ -164,12 +135,8 @@ def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path):
 
 
 def test_a_file_is_read_once_however_many_callers_ask(tmp_path, monkeypatch):
-    """Caching is what makes on-demand loading affordable.
-
-    Without it, moving the read out of the import would trade one read per
-    process for one per call -- and ``literature_distances`` is consulted for
-    every contact of every metal site.
-    """
+    """Caching is what makes on-demand loading affordable: the tables are
+    consulted for every contact of every metal site."""
     path = _catalog(tmp_path, ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme"])
     reads = []
     real_open = open
@@ -186,7 +153,6 @@ def test_a_file_is_read_once_however_many_callers_ask(tmp_path, monkeypatch):
     assert reads.count(path) == 1
 
 
-# first_sphere_targets
 def test_first_sphere_targets_is_the_longest_distance_per_metal_and_donor():
     """It is exactly ``max`` over the literature table, keyed the other way."""
     expected: dict[tuple[str, str], float] = {}
@@ -200,11 +166,7 @@ def test_first_sphere_targets_is_the_longest_distance_per_metal_and_donor():
 
 
 def test_building_the_targets_leaves_nothing_in_the_module_namespace():
-    """Regression: a module-scope ``for`` loop built this and leaked four names.
-
-    ``donor``, ``metal_element``, ``target`` and ``key`` stayed bound in
-    ``bond_analysis`` afterwards, where they read as module constants.
-    """
+    """A loop variable left bound at module scope reads as a module constant."""
     from bond import bond_analysis
 
     leaked = [
@@ -215,15 +177,9 @@ def test_building_the_targets_leaves_nothing_in_the_module_namespace():
     assert not leaked, f"loop variables left in a module namespace: {leaked}"
 
 
-# Checksum verification
 def test_both_bundled_files_match_their_recorded_checksums():
-    """The shipped data is the data the tools say they wrote.
-
-    Every z-score in the database is measured against these two files, and
-    nothing else in the output records which version produced a number. A
-    checkout whose data has drifted from its sidecar is a checkout whose
-    results cannot be attributed.
-    """
+    """The shipped data is the data the sidecars record: identity, not
+    correctness. A checkout that has drifted produces unattributable results."""
     for path, (sidecar, key) in reference_data.CHECKSUM_SIDECARS.items():
         with open(sidecar, encoding="utf-8") as handle:
             recorded = json.load(handle)[key]
@@ -235,12 +191,7 @@ def test_both_bundled_files_match_their_recorded_checksums():
 
 @pytest.mark.parametrize("target", ["catalog", "distances"])
 def test_an_edited_bundled_file_is_refused_at_load(tmp_path, monkeypatch, target):
-    """A hand edit to either file stops the run rather than changing results.
-
-    This is the whole point of the sidecars. Before them the pipeline ran
-    happily against an edited catalog or a nudged reference distance, and every
-    entry afterwards was scored against something no output identified.
-    """
+    """A hand edit to either file stops the run rather than changing results."""
     if target == "catalog":
         path = reference_data.COFACTOR_CATALOG_PATH
         accessor = reference_data.cofactor_ids
@@ -259,8 +210,8 @@ def test_an_edited_bundled_file_is_refused_at_load(tmp_path, monkeypatch, target
 
     copied = tmp_path / os.path.basename(path)
     copied.write_text(edited, encoding="utf-8")
-    # Point the constant at the edited copy while leaving the sidecar mapping
-    # keyed on it, which is what a hand-edited checkout looks like.
+    # The copy keeps the original's sidecar, which is what a hand-edited
+    # checkout looks like.
     sidecar = reference_data.CHECKSUM_SIDECARS[path]
     monkeypatch.setitem(reference_data.CHECKSUM_SIDECARS, str(copied), sidecar)
     cached.cache_clear()
@@ -270,12 +221,7 @@ def test_an_edited_bundled_file_is_refused_at_load(tmp_path, monkeypatch, target
 
 
 def test_a_caller_supplied_file_is_not_checksummed(tmp_path):
-    """Only the bundled paths are verified; a path you passed is yours.
-
-    The tests above write catalogs of their own, and so would anyone running
-    against a catalog they built. Refusing those would make the check a
-    nuisance rather than a guarantee about what ships.
-    """
+    """Only the bundled paths are verified; a path you passed is yours."""
     catalog = tmp_path / "mine.txt"
     catalog.write_text("ABC\tZn\tcluster\nDEF\tFe\theme\n", encoding="utf-8")
 
@@ -297,7 +243,6 @@ def test_a_missing_sidecar_is_an_error_for_a_bundled_file(tmp_path, monkeypatch)
         reference_data.cofactor_ids(str(catalog))
 
 
-# The literature table's strict parse
 @pytest.mark.parametrize(
     "row,message",
     [
@@ -309,9 +254,8 @@ def test_a_missing_sidecar_is_an_error_for_a_bundled_file(tmp_path, monkeypatch)
 def test_a_damaged_distance_row_fails_the_parse(tmp_path, row, message):
     """A typo in a reference distance is an error, not a missing z-score.
 
-    Dropping the row produced a contact "no reference covers" -- which is a
-    legitimate outcome for a metal-donor pair genuinely absent from the
-    literature, and therefore indistinguishable from this.
+    Dropping the row yields a contact "no reference covers", which is also the
+    legitimate outcome for a pair genuinely absent from the literature.
     """
     table = tmp_path / "distances.txt"
     table.write_text(f"HOH O ZN 2.09 0.11\n{row}\n", encoding="utf-8")
@@ -321,11 +265,8 @@ def test_a_damaged_distance_row_fails_the_parse(tmp_path, row, message):
 
 
 def test_the_table_header_is_skipped_by_name():
-    """It is skipped because it is the header, not because it fails to parse.
-
-    Recognizing it explicitly is what allows every other unparseable line to be
-    an error rather than a shrug.
-    """
+    """It is skipped by name, which is what allows every other unparseable line
+    to be an error rather than a shrug."""
     assert reference_data.DISTANCE_TABLE_HEADER == (
         "residue",
         "atom",
@@ -346,7 +287,6 @@ def test_a_table_with_no_distances_is_named_as_empty(tmp_path):
         reference_data._load_literature(str(table))
 
 
-# Reference-data identity
 def _stub_reference_data(tmp_path, monkeypatch, catalog_text, distance_text):
     """Point the checksum map at a writable pair of files and their sidecars."""
     paths = {}
@@ -368,10 +308,10 @@ def _stub_reference_data(tmp_path, monkeypatch, catalog_text, distance_text):
 
 
 def test_the_identity_covers_both_files(tmp_path, monkeypatch):
-    """Editing either file changes the id; both decide what a row means.
+    """Editing either file changes the id.
 
     The catalog decides what counts as a metal cofactor and the distance table
-    sets every assignment cutoff and z-score, so an id derived from one of them
+    sets every cutoff and z-score, so an id derived from one of them alone
     would report two incomparable runs as comparable.
     """
     _stub_reference_data(

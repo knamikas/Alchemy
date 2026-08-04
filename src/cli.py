@@ -1,15 +1,8 @@
 """The command line: arguments in, exit code out.
 
-Everything a run needs before the driver can start, and everything it owes the
-user afterwards. Argument parsing and its validation live here, as do the two
-things that bracket every run: the detailed run log, which is written whatever
-happens, and the SIGTERM handler that makes a scheduler stop unwind the same
-way Ctrl-C does.
-
-``src/main.py`` is a shim over this module. It stays because it is the
-documented entry point -- the README and this package's own docstring both say
-``python src/main.py`` -- and moving a public script is a different thing from
-moving an implementation.
+Argument parsing and its validation, plus the two things that bracket every
+run: the detailed run log, written whatever happens, and the SIGTERM handler
+that makes a scheduler stop unwind the same way Ctrl-C does.
 """
 
 import argparse
@@ -190,10 +183,9 @@ def parse_args(argv=None):
             "or --id-file may restrict the retry set"
         ),
     )
-    # ArgumentDefaultsHelpFormatter appends the default of ``bonds``, not of
-    # the flag, so an unqualified help string renders "(default: True)" -- the
-    # negation of what --no-bonds does. Naming %(default)s explicitly suppresses
-    # that append and lets the value be labelled with the setting it belongs to.
+    # ArgumentDefaultsHelpFormatter would append ``bonds``' default, rendering
+    # "(default: True)" against --no-bonds; naming %(default)s in the help
+    # string suppresses that append.
     ap.add_argument(
         "--no-bonds",
         dest="bonds",
@@ -217,16 +209,11 @@ def parse_args(argv=None):
 def _install_termination_handler():
     """Route SIGTERM through the same unwind path as Ctrl-C.
 
-    SIGTERM's default disposition kills the process immediately: no ``finally``
-    runs, so the worker pool is never shut down and its children -- which are
-    daemonic but not yet signalled -- are reparented to init and keep working,
-    driving CCP4 subprocesses and holding their scratch directories open.
-    Raising ``KeyboardInterrupt`` instead makes a scheduler stop or a plain
-    ``kill`` unwind exactly like an interactive interrupt, so the pool is
-    terminated and the run log is still written.
-
-    Returns the previous handler, or ``None`` where SIGTERM cannot be trapped
-    (a non-main thread, or a platform without it).
+    SIGTERM's default disposition kills the process without running any
+    ``finally``, so the pool is never shut down and its children are reparented
+    to init still driving CCP4 subprocesses and holding scratch directories
+    open. Returns the previous handler, or ``None`` where SIGTERM cannot be
+    trapped.
     """
 
     def _raise_interrupt(signum, frame):  # noqa: ARG001 - signal API
@@ -242,17 +229,13 @@ def main(argv=None):
     """Parse arguments, execute the driver, and always emit a run log."""
     raw_args = None if argv is None else list(argv)
     args = parse_args(raw_args)
-    # Handlers are attached once, here, and nowhere else: the driver is the
-    # only process that writes them, and workers reach them over a queue.
     try:
         configure_driver_logging(
             level=level_for_verbosity(args.verbose, args.quiet),
             log_file=args.log_file,
         )
     except OSError as exc:
-        # The one failure that cannot be logged, because it *is* the logging.
-        # Reported the way the shell will see it, with the same exit code every
-        # other fixable failure uses.
+        # The one failure that cannot be logged, because it is the logging.
         print(
             f"Cannot write --log-file {args.log_file}: {exc.strerror or exc}",
             file=sys.stderr,
@@ -267,10 +250,8 @@ def main(argv=None):
         exit_code = _run(args, run_log)
         return exit_code
     except KeyboardInterrupt:
-        # Ctrl-C or SIGTERM. The pool has already been shut down by _run's
-        # own finally, so this only decides how the driver reports it: a
-        # conventional interrupt status and one line, rather than a traceback
-        # that looks like a crash.
+        # ``_run``'s own finally has already shut the pool down, so this only
+        # decides how the interrupt is reported.
         run_log.driver_error = "interrupted before completion"
         print(
             "\nInterrupted: workers stopped; rows already flushed are kept "

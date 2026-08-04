@@ -1,11 +1,8 @@
 """Collect, finalize, and apply confidence scores for Alchemy metal sites.
 
-During a complete database run, ``main.py`` calls the row-level preparation
-function while each entry's density and bond records are already in memory. The
-compact inputs are streamed to disk. At successful completion this module builds
-a frozen database reference distribution and assigns cohort-relative values.
-Later single-entry and small-batch runs load that reference once and score their
-prepared rows directly against the database rather than against themselves.
+A complete database run streams prepared rows to disk and, on success, freezes
+them into a reference distribution. Single-entry and small-batch runs load that
+reference and score against the database cohort, never against themselves.
 """
 
 import argparse
@@ -436,11 +433,9 @@ class ConfidenceReference:
         return 100.0 * (below + 0.5 * equal) / self.cohort_size
 
 
-#: How damaged geometry coverage is treated. Part of the scoring policy, and so
-#: part of ``reference_id``: a reference built before this policy existed may
-#: have scored corrupt sites into its cohort, and nothing in the artifact
-#: records whether it did. Bumping this makes ``load_reference`` refuse such a
-#: reference instead of silently accepting it.
+# Part of ``reference_id``, because nothing else in a stored reference records
+# whether corrupt sites entered its cohort. Bump it to make ``load_reference``
+# refuse references built under an earlier policy.
 COVERAGE_POLICY = "invalid_coverage_excluded_v1"
 
 
@@ -448,15 +443,10 @@ def coverage_is_valid(coverage: float) -> bool:
     """Whether ``coverage`` is usable geometry evidence.
 
     A blank, non-numeric or out-of-range coverage is damaged input, not
-    evidence that geometry is irrelevant. Coercing it to zero removed the two
-    geometry terms from the score, so a corrupt cell scored *higher* than the
-    same site with real geometry evidence. Missing data must not move the score
-    in either direction: the site is reported unscorable instead.
-
-    Shared by scoring and reference building so the cohort can never contain a
-    site that scoring itself would refuse. Those two disagreed once: the fix
-    landed only in the scoring path, leaving `finalize_database_confidence`
-    coercing non-finite coverage to zero and applying no range check at all.
+    evidence that geometry is irrelevant: coercing it to zero drops both
+    geometry terms and scores the site higher than real evidence would. Both
+    scoring and reference building apply this test, so the cohort can never
+    contain a site that scoring itself refuses.
     """
     return math.isfinite(coverage) and 0.0 <= coverage <= 1.0
 
@@ -464,12 +454,9 @@ def coverage_is_valid(coverage: float) -> bool:
 def _scoring_metadata():
     """Everything a score depends on that is not the cohort itself.
 
-    ``reference_data_id`` belongs here for the same reason the anchors do: a
-    reference is a distribution of scores, and every score in it was measured
-    against one particular catalog and one particular distance table. Change
-    either and the old distribution describes a population that no longer
-    exists -- so the identity feeds the reference id, which makes a changed
-    table produce a different reference rather than a quietly wrong percentile.
+    ``reference_data_id`` counts: every score in a distribution was measured
+    against one catalog and one distance table, so a changed table must produce
+    a different reference id rather than a quietly wrong percentile.
     """
     return {
         "density_anchors": [list(anchor) for anchor in DENSITY_ANCHORS],
@@ -553,8 +540,6 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
                 f"confidence reference {key} is incompatible with this code"
             )
     if metadata.get("reference_data_id") != expected["reference_data_id"]:
-        # Its own message: this one is not a code change but a data change, and
-        # the remedy is different. Re-freezing is an uncapped database run.
         raise ValueError(
             "confidence reference was built against reference data "
             f"{metadata.get('reference_data_id') or 'nothing recorded'}, but "
@@ -692,8 +677,6 @@ def finalize_database_confidence(
             rszd = _finite_float(row.get("rszd_magnitude", ""))
             zbond = _finite_float(row.get("max_abs_zbond", ""))
             coverage = _finite_float(row.get("geometry_coverage", ""))
-            # Same validity test the scoring path applies, so a site reported
-            # unscorable cannot also enter the cohort it is measured against.
             result = (
                 score_site(rszd, zbond, coverage)
                 if coverage_is_valid(coverage)

@@ -38,10 +38,6 @@ import sys
 from cli import main
 
 
-# ``python src/main.py`` is the documented way to run Alchemy, and eight test
-# modules import this name, so the script stays where it has always been. What
-# moved out is the implementation behind it: ``cli`` owns argument parsing, the
-# run log and signal handling, and ``driver.pool`` owns the batch itself.
 __all__ = ["main"]
 
 

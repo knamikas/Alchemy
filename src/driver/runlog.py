@@ -1,10 +1,7 @@
 """The detailed run log written once, at the end of every run.
 
-``_RunLog`` accumulates compact per-entry diagnostics during the batch -- status,
-reason codes, stage timings, map sizes -- and renders them into one
-human-readable file. It deliberately keeps its own structured state rather than
-being a logging handler: the log is a diagnostic artifact of the run, written
-whole and atomically, not a stream of records.
+``_RunLog`` accumulates compact per-entry diagnostics during the batch and
+renders them into one human-readable file, written whole and atomically.
 """
 
 import os
@@ -19,11 +16,8 @@ from driver.resources import available_cpu_count, available_memory_bytes
 
 from worker import blank_if_unmeasured
 
-#: Where run logs go when ``--log-dir`` is not given. A subdirectory rather
-#: than the output directory itself: one log per invocation accumulates, and a
-#: directory holding four result CSVs plus a year of logs is one a user has to
-#: filter by hand every time they look at it. Also the reason the startup
-#: sweep can be narrow -- nothing it might delete lives beside the results.
+# A subdirectory rather than the output directory itself: one log accumulates
+# per invocation, and the startup sweep never sees them beside the result CSVs.
 DEFAULT_LOG_DIRNAME = "logs"
 
 

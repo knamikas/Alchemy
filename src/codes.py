@@ -1,30 +1,4 @@
-"""The status and provenance words Alchemy writes, defined once.
-
-Every value here appears in an output column or a log, and most are compared
-somewhere else in the code. While they were string literals, a typo at either
-end was a silent behaviour change: nothing in the language, the tests or a type
-checker relates ``"suspect"`` written in one module to ``"suspect"`` tested for
-in another, and a misspelling simply makes a branch stop being taken.
-
-These are ``StrEnum``s, so a member *is* its string: it compares equal to the
-literal, joins, sorts and serializes as the literal, and every value below is
-exactly the value that module wrote before. This is a vocabulary, not a
-migration -- no output changes.
-
-**The two ``suspect``s are different words.** ``GeometryStatus.SUSPECT``
-describes a metal site whose scored geometry contains an outlier;
-``MultiDonorStatus.SUSPECT`` describes one donor-residue group within a site.
-They travel in two different columns, and a reader comparing the two columns
-of one row is comparing statements about different things. Keeping them in
-separate enums is the point -- ``GeometryStatus.SUSPECT`` and
-``MultiDonorStatus.SUSPECT`` are equal as strings, which is correct, but the
-names now say which question is being answered.
-
-``GeometryStatus.INSUFFICIENT_DATA`` keeps its space. It is the only value in
-any of these vocabularies that carries one, which is a wart, but it is a
-published column value: changing it would silently reclassify every site in an
-existing output file the day someone re-read it.
-"""
+"""The status and provenance words Alchemy writes, defined once."""
 
 from enum import StrEnum
 
@@ -36,8 +10,10 @@ class GeometryStatus(StrEnum):
     ``image_inclusive_geometry_status``.
     """
 
+    # INSUFFICIENT_DATA keeps its space: it is a published column value, and
+    # changing it reclassifies every site in an existing output file.
     #: No contact could be scored -- no reference covered them, or the metal
-    #: itself has zero occupancy. Not a judgement about the site.
+    #: itself has zero occupancy.
     INSUFFICIENT_DATA = "insufficient data"
     #: At least one scored contact is a geometry outlier.
     SUSPECT = "suspect"
@@ -78,7 +54,6 @@ class CandidateSource(StrEnum):
     A merged candidate carries more than one, joined by ``|`` in the output.
     """
 
-    #: Found by the broad 4 A search around the metal.
     PROXIMITY_4A = "proximity_4A"
     #: Declared by the source mmCIF's ``_struct_conn`` records.
     STRUCT_CONN = "struct_conn"
@@ -90,20 +65,16 @@ class OccupancyStatus(StrEnum):
     """Why one deposited atom's occupancy is or is not usable."""
 
     VALID = "valid"
-    #: The column was blank. Distinguished from the invalid values below
-    #: because a blank is a missing measurement, not a malformed one -- the
-    #: two are counted separately and reported separately.
+    #: The column was blank: a missing measurement, not a malformed one.
     MISSING = "missing"
     INVALID_NON_NUMERIC = "invalid_non_numeric"
     INVALID_NON_FINITE = "invalid_non_finite"
     #: Numeric and finite, but outside the physical range 0.0 to 1.0.
     INVALID_RANGE = "invalid_range"
-    #: The raw PDB record could not be joined back to the parsed atom, so no
-    #: occupancy could be read for it at all.
+    #: The raw PDB record could not be joined back to the parsed atom.
     RAW_MAPPING_FAILED = "raw_mapping_failed"
-    #: Unusable, with no raw record to say how. The three ``INVALID_*`` values
-    #: above come from reading the deposited column directly; this one is what
-    #: an mmCIF-sourced atom gets, where only the parsed value is available.
+    #: Unusable with no raw record to say how, which is all an mmCIF-sourced
+    #: atom can report.
     INVALID_VALUE = "invalid_value"
 
 
@@ -116,11 +87,7 @@ class ElementStatus(StrEnum):
 
 
 class WarningCode(StrEnum):
-    """Non-fatal observations about an entry, carried to the manifest.
-
-    A warning never fails an entry. It records something a consumer of the
-    output would want to know when interpreting it.
-    """
+    """Non-fatal observations about an entry, carried to the manifest."""
 
     MULTI_MODEL_STRUCTURE = "multi_model_structure"
     DUPLICATE_ATOM_RECORDS = "duplicate_atom_records"
@@ -138,10 +105,9 @@ class WarningCode(StrEnum):
     DECLARED_CONNECTION_CONFORMER_SUBSTITUTED = (
         "declared_connection_conformer_substituted"
     )
-    #: A declared partner is not a donor element at all.
     DECLARED_DONOR_ELEMENT_UNSUPPORTED = "declared_donor_element_unsupported"
-    #: A declared donor is outside the residue classes any bundled reference
-    #: covers, so its geometry can never be z-scored.
+    #: No bundled reference covers the donor's residue class, so its geometry
+    #: can never be z-scored.
     DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES = (
         "declared_donor_outside_supported_classes"
     )

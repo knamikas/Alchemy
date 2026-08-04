@@ -1,12 +1,9 @@
 """Getting one PDB-REDO entry ready for analysis, and reading its metadata.
 
-Locating an entry in a mirror, downloading it into the cache when it is absent,
-decompressing what arrived, converting the coordinates, and reading the
-resolution limits off the result -- everything between "here is a PDB id" and
-"here are the two files the pipeline runs on".
-
-Coordinate conversion itself lives in ``coordinate_conversion``; this module
-decides *which* files to convert and where to put them.
+Everything between "here is a PDB id" and "here are the two files the pipeline
+runs on": locating an entry in a mirror, downloading it into the cache when it
+is absent, decompressing what arrived, converting the coordinates, and reading
+the resolution limits off the result.
 """
 
 import gzip
@@ -21,9 +18,8 @@ from coordinate_conversion import _cif_to_pdb
 from run_logging import logger_for
 
 
-# The four Fourier coefficients EDSTATS' two maps are calculated from. A
-# reflection is usable only where all four are present, which is what
-# ``read_map_column_resolution`` reports the range of.
+# The four Fourier coefficients EDSTATS' two maps are calculated from; a
+# reflection is usable only where all four are present.
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 
 logger = logger_for(__name__)
@@ -49,10 +45,9 @@ def _first_existing(*paths):
 def prepare_inputs(pdb_id, entry_dir, work_dir):
     """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
 
-    Prefer the authoritative final mmCIF and convert it under Alchemy's
-    provenance-preserving policy for EDSTATS. Use the PDB compatibility export
-    only when mmCIF is unavailable. Compressed mirrors are accepted for either
-    format.
+    The authoritative final mmCIF is preferred and converted for EDSTATS; the
+    PDB compatibility export is used only when no mmCIF exists. Compressed
+    mirrors are accepted for either format.
     """
     mtz = _first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
@@ -85,10 +80,9 @@ def prepare_inputs(pdb_id, entry_dir, work_dir):
 def read_resolution(entry_dir, mtz_path, data_json_path=None):
     """Return the overall diffraction-data high-resolution limit.
 
-    Prefer a supplied data.json (or PDB-REDO data.json) when available;
-    fall back to the MTZ via gemmi. Only the high-resolution limit is reported
-    because that is what the DPI metadata records; EDSTATS is given the map
-    columns' own range by ``read_map_column_resolution`` instead.
+    Only the high-resolution limit is reported, because that is what the DPI
+    metadata records; EDSTATS is given the map columns' own range by
+    ``read_map_column_resolution`` instead.
     """
     dj = data_json_path or os.path.join(entry_dir, "data.json")
     if os.path.exists(dj):
@@ -96,8 +90,7 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
             with open(dj) as handle:
                 props = json.load(handle).get("properties", {})
             lo, hi = props.get("DATARESL"), props.get("DATARESH")
-            # Both limits are still required before trusting data.json, so a
-            # half-populated record falls back to the MTZ as it always has.
+            # A half-populated record is not trusted; fall back to the MTZ.
             if lo and hi:
                 return float(hi)
         except (ValueError, KeyError, OSError):
@@ -110,9 +103,9 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
 def read_pdb_redo_is_twin(data_json_path):
     """Return only an explicit boolean PDB-REDO ``properties.ISTWIN`` value.
 
-    Missing, malformed, and string-valued metadata are deliberately false: the
-    twin coefficient fallback is a guarded processing path, not something to
-    infer from a filename or from an MTZFIX failure alone.
+    Missing, malformed and string-valued metadata are false: the twin
+    coefficient fallback must not be inferred from a filename or from an
+    MTZFIX failure.
     """
     if not data_json_path:
         return False
@@ -155,8 +148,8 @@ def read_map_column_resolution(mtz_path):
             "MTZ map coefficient columns do not match the reflection count"
         )
 
-    # A reflection counts only where its d-spacing and all four map
-    # coefficients are finite, so the mask is built across whole rows.
+    # A reflection counts only where its d-spacing and all four coefficients
+    # are finite, so the mask spans whole rows.
     usable = np.isfinite(d_values) & (d_values > 0.0)
     for column in columns:
         usable &= np.isfinite(column.array)
@@ -189,7 +182,7 @@ def _download_stream(url, dst, timeout=30):
         response = urlopen(url, timeout=timeout)
     except HTTPError as e:
         raise FileNotFoundError(f"{url}: status {e.code}") from e
-    except (OSError, ValueError) as e:  # network/connection or invalid URL
+    except (OSError, ValueError) as e:
         raise FileNotFoundError(f"{url}: {e}") from e
 
     tmp = f"{dst}.{os.getpid()}.part"
@@ -245,20 +238,16 @@ def download_entry_to_cache(pdb_id, cache_root):
 
 
 def ensure_entry_available(pdb_id, mirror_root, cache_root):
-    """Return the root (mirror or cache) containing the final model files.
+    """Return the root containing the final model files: mirror, then cache.
 
-    Preference order: mirror_root (full local mirror) -> cache_root (auto-download).
-    Raises FileNotFoundError when unavailable.
+    A cache miss triggers a download into ``cache_root``.
     """
-    # 1) check full mirror specified by user
     mirror_entry = entry_dir_for(mirror_root, pdb_id)
     if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdb_id):
         return mirror_root
-    # 2) check cache
     cache_entry = entry_dir_for(cache_root, pdb_id)
     if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
         return cache_root
-    # 3) try to download into cache
     download_entry_to_cache(pdb_id, cache_root)
     if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
         return cache_root
@@ -300,8 +289,8 @@ def infer_pdb_id_from_path(path):
 def enumerate_entries(root, limit=None):
     """All PDB ids under ``root`` that have final model files.
 
-    If `limit` is given, stop after collecting that many (sorted) ids -- this
-    keeps small --max-pdbs debug runs fast instead of walking all ~24k entries.
+    ``limit`` stops the walk once that many sorted ids are collected, so a
+    small --max-pdbs run does not traverse all ~24k entries.
     """
     ids = []
     skipped = 0
@@ -312,8 +301,8 @@ def enumerate_entries(root, limit=None):
         try:
             entries = sorted(os.listdir(hp))
         except (PermissionError, OSError) as e:
-            # Common with partially-synced/locked-down mirrors: skip rather than
-            # aborting the whole enumeration on one unreadable hashdir.
+            # Common on a partially-synced mirror; one unreadable hashdir must
+            # not abort the whole enumeration.
             skipped += 1
             logger.warning("skipping unreadable directory %s: %s", hp, e)
             continue
