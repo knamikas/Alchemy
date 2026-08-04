@@ -37,6 +37,7 @@ from helpers import AtomRef, AtomSpec, StructureBuilder
 import bond_analysis
 import coordinate_conversion as conversion
 from structure_analysis import StructureContext, load_structure
+import reference_data
 
 
 # --------------------------------------------------------------------------- #
@@ -1138,7 +1139,7 @@ def test_declared_contact_outside_first_sphere_keeps_measured_geometry(tmp_path)
     )
 
     (row,) = result.rows_for("NE2")
-    mu, sigma = bond_analysis.LIT[("HIS", "N", "ZN")]
+    mu, sigma = reference_data.literature_distances()[("HIS", "N", "ZN")]
     assert (row["literature_distance"], row["literature_stdev"]) == (mu, sigma)
     assert math.isfinite(row["dpi"]) and row["dpi"] > 0
     expected = (3.90 - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2)

@@ -31,7 +31,7 @@ from multiprocessing import (
 from typing import Dict, Optional, Sequence
 
 from _version import __version__
-from metal_identification import load_cofactor_ids
+from reference_data import cofactor_ids
 from run_logging import (
     logger_for,
     worker_level,
@@ -557,7 +557,7 @@ class _BatchTally:
 def _load_cofactor_catalog():
     """Read the bundled metallocofactor catalog, or fail the run naming it."""
     try:
-        return load_cofactor_ids()
+        return cofactor_ids()
     except (OSError, UnicodeError, ValueError) as exc:
         raise _DriverError(f"Invalid bundled metallocofactor catalog: {exc}") from None
 

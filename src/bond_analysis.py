@@ -26,17 +26,16 @@ its per-entry worker and supplies edstats rows in memory for the sigma join.
 """
 
 import math
-import os
 from typing import Any, Mapping, Optional
 
 from dpi import _calculate_dpi_details
 from metal_elements import METAL_ELEMENTS
-from metal_identification import (
-    COFACTOR_CATALOG_PATH,
-    DATA_DIR,
-    _sigma_for,
-    _sigma_index,
-    _zd_indices,
+from metal_identification import _sigma_for, _sigma_index, _zd_indices
+from reference_data import (
+    cluster_ids,
+    first_sphere_targets,
+    heme_ids,
+    literature_distances,
 )
 from structure_analysis import (
     NAN,
@@ -47,34 +46,33 @@ from structure_analysis import (
     position_distance,
 )
 
-# Derived from the shared DATA_DIR rather than recomputed, so the bundled data
-# location has one definition (see metal_identification.DATA_DIR).
-DONOR_DISTANCE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
 
 # Recognized amino-acid donors. Waters are recognized separately with Gemmi's
 # Residue.is_water(), which also handles WAT, H2O, and DOD.
-AA = {
-    "ALA",
-    "ARG",
-    "ASN",
-    "ASP",
-    "CYS",
-    "GLN",
-    "GLU",
-    "GLY",
-    "HIS",
-    "ILE",
-    "LEU",
-    "LYS",
-    "MET",
-    "PHE",
-    "PRO",
-    "SER",
-    "THR",
-    "TRP",
-    "TYR",
-    "VAL",
-}
+AA = frozenset(
+    {
+        "ALA",
+        "ARG",
+        "ASN",
+        "ASP",
+        "CYS",
+        "GLN",
+        "GLU",
+        "GLY",
+        "HIS",
+        "ILE",
+        "LEU",
+        "LYS",
+        "MET",
+        "PHE",
+        "PRO",
+        "SER",
+        "THR",
+        "TRP",
+        "TYR",
+        "VAL",
+    }
+)
 
 # Typical protein donors that Alchemy may infer from geometry alone. Every
 # standard amino acid can donate through its backbone carbonyl O. The listed
@@ -130,37 +128,6 @@ SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 # Conservative cutoff for a reference-covered geometry outlier.
 ZSCORE_OUTLIER_CUTOFF = 6.0
 
-
-def _load_cofactor_classes(path):
-    """Return ``(cluster_ids, heme_ids)`` from the bundled catalog.
-
-    Structural classes are derived from CCD connectivity when the catalog is built
-    by ``tools/build_metallocofactor_catalog.py``, so they track the CCD rather
-    than drifting behind a list maintained by hand here. They tag each metal's
-    environment in ``parent_type``; CLUSTER takes precedence in
-    ``_parent_type`` for any component present in both.
-    """
-    cluster, heme = set(), set()
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 3 or not fields[0].strip():
-                continue
-            component_id = fields[0].strip()
-            structural_class = fields[2].strip()
-            if structural_class == "cluster":
-                cluster.add(component_id)
-            elif structural_class == "heme":
-                heme.add(component_id)
-    if not cluster or not heme:
-        raise ValueError(
-            f"{os.path.basename(path)} carries no structural classes; rebuild "
-            "it with tools/build_metallocofactor_catalog.py"
-        )
-    return frozenset(cluster), frozenset(heme)
-
-
-CLUSTER, HEMES = _load_cofactor_classes(COFACTOR_CATALOG_PATH)
 
 # Fixed output schema; main.py imports this so the module and driver never
 # drift. Legacy "candidate" field names are retained for CSV compatibility,
@@ -419,34 +386,6 @@ STATS_EXTRA_COLUMNS = [
 ]
 
 
-def _load_literature(path):
-    """Parse metal_distances_info.txt -> {(residue, atom, metal): (mu, stdev)}.
-
-    Space-delimited ``residue atom metal avg_bond_dist st_dev``. The header line
-    and blank separator lines are skipped naturally because their 4th/5th tokens
-    do not parse as floats.
-    """
-    lit = {}
-    with open(path) as f:
-        for line in f:
-            parts = line.split()
-            if len(parts) < 5:
-                continue
-            try:
-                mu, stdev = float(parts[3]), float(parts[4])
-            except ValueError:
-                continue  # header ("avg_bond_dist") or malformed line
-            lit[(parts[0], parts[1], parts[2])] = (mu, stdev)
-    return lit
-
-
-LIT = _load_literature(DONOR_DISTANCE_PATH)
-FIRST_SPHERE_TARGETS = {}
-for (_, donor, metal_element), (target, _) in LIT.items():
-    key = (metal_element, donor)
-    FIRST_SPHERE_TARGETS[key] = max(target, FIRST_SPHERE_TARGETS.get(key, -math.inf))
-
-
 # --------------------------------------------------------------------------- #
 # Bond rows
 # --------------------------------------------------------------------------- #
@@ -468,9 +407,9 @@ def _bonding_key(neighbor, nb_res, metal_el):
 
 
 def _parent_type(structure, metal, metal_res, metal_el):
-    if metal_res in CLUSTER:
+    if metal_res in cluster_ids():
         return "cluster"
-    if metal_res in HEMES:
+    if metal_res in heme_ids():
         return "heme"
     if metal_el not in METAL_ELEMENTS:
         return "other"  # defensive: shouldn't happen, metal_atoms is pre-filtered
@@ -589,7 +528,7 @@ def _deduplicate_special_position_contacts(candidates):
 def _first_sphere_rule(metal, neighbor):
     """Return target, cutoff, and provenance for proximity eligibility."""
     exact_key = _bonding_key(neighbor, neighbor.residue_name, metal.element)
-    literature = LIT.get(exact_key)
+    literature = literature_distances().get(exact_key)
     if literature is not None:
         target = literature[0]
         reference_kind = "exact"
@@ -599,7 +538,7 @@ def _first_sphere_rule(metal, neighbor):
         # defining the same donor element for this metal. Use the largest such
         # target only for sphere membership; exact references remain mandatory
         # for z-score calculation.
-        target = FIRST_SPHERE_TARGETS.get((metal.element, neighbor.element))
+        target = first_sphere_targets().get((metal.element, neighbor.element))
         if target is None:
             return NAN, NAN, "missing", ""
         reference_kind = "element_fallback"
@@ -1302,7 +1241,7 @@ def _annotate_contacts(contacts, metal_element, dpi):
     for contact in contacts:
         neighbor = contact["neighbor"]
         reported_distance = round(contact["distance_raw"], 3)
-        literature = LIT.get(
+        literature = literature_distances().get(
             _bonding_key(neighbor, neighbor.residue_name, metal_element)
         )
         if literature is None:

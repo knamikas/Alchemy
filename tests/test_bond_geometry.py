@@ -27,6 +27,7 @@ import pytest
 import bond_analysis as ba
 import dpi as dpi_module
 import helpers
+import reference_data
 from helpers import AtomSpec, EDSTATS_HEADER, StructureBuilder
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import count_ni, load_structure
@@ -180,11 +181,12 @@ class _StubAtom:
 def _parse_reference_table(path):
     """Strict, independent parse of metal_distances_info.txt -> list of records.
 
-    ``bond_analysis._load_literature`` skips any line whose 4th/5th tokens do
+    ``reference_data._load_literature`` skips any line whose 4th/5th tokens do
     not parse as floats, which is how it drops the header. Copying that rule
-    here would make ``parsed == ba.LIT`` a tautology: a corrupted ``CYS S CU``
-    row would be dropped by both parsers alike, and the pair would silently
-    degrade to the element fallback with the whole suite still green.
+    here would make the comparison against ``literature_distances()`` a
+    tautology: a corrupted ``CYS S CU`` row would be dropped by both parsers
+    alike, and the pair would silently degrade to the element fallback with
+    the whole suite still green.
 
     So this parser skips nothing. The first line must be the documented header,
     every other line must be blank or exactly five well-formed columns, and
@@ -302,7 +304,9 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(tmp_path, resname
     assert row["neighbor_resname"] == resname
     assert row["neighbor_class"] == "amino_acid"
     assert row["bonded_to"] == "P"
-    assert row["literature_distance"] == pytest.approx(ba.LIT[("CA", "O", "ZN")][0])
+    assert row["literature_distance"] == pytest.approx(
+        reference_data.literature_distances()[("CA", "O", "ZN")][0]
+    )
 
 
 def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path):
@@ -533,7 +537,7 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     neighbor = _StubAtom(
         element, residue_name=residue, atom_name=atom, is_water=is_water
     )
-    mu = ba.LIT[expected_key][0]
+    mu = reference_data.literature_distances()[expected_key][0]
 
     target, cutoff, kind, key = ba._first_sphere_rule(stub_metal, neighbor)
 
@@ -555,7 +559,7 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     neighbor = _StubAtom("O", residue_name="ASN", atom_name="OD1")
     widest_zn_o = max(
         mu
-        for (_, atom, metal), (mu, _sd) in ba.LIT.items()
+        for (_, atom, metal), (mu, _sd) in reference_data.literature_distances().items()
         if metal == "ZN" and atom == "O"
     )
 
@@ -566,16 +570,19 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     assert target == pytest.approx(widest_zn_o)
     assert cutoff == pytest.approx(widest_zn_o + 0.75)
     # Strictly wider than the exact Zn-Asp cutoff, which is the point of "largest".
-    exact_asp = ba.LIT[("ASP", "O", "ZN")][0]
+    exact_asp = reference_data.literature_distances()[("ASP", "O", "ZN")][0]
     assert cutoff > exact_asp + 0.75
 
 
 def test_first_sphere_targets_index_is_the_maximum_per_metal_and_donor_element():
     """``FIRST_SPHERE_TARGETS`` is exactly ``max`` over the reference table."""
     expected = {}
-    for (_residue, atom, metal), (mu, _sd) in ba.LIT.items():
+    for (_residue, atom, metal), (
+        mu,
+        _sd,
+    ) in reference_data.literature_distances().items():
         expected[(metal, atom)] = max(mu, expected.get((metal, atom), -math.inf))
-    assert ba.FIRST_SPHERE_TARGETS == expected
+    assert reference_data.first_sphere_targets() == expected
 
 
 def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path):
@@ -786,7 +793,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):
 
     assert metadata["partial_reason_codes"] == []
     row = _only(rows, "OD1")
-    mu, sigma = ba.LIT[("ASP", "O", "ZN")]
+    mu, sigma = reference_data.literature_distances()[("ASP", "O", "ZN")]
     assert (mu, sigma) == (1.99, 0.05)
     assert row["literature_distance"] == pytest.approx(mu)
     assert row["literature_stdev"] == pytest.approx(sigma)
@@ -1103,7 +1110,7 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path):
     assert row["dpi"] == pytest.approx(0.048, abs=DPI_ROUNDING)
     assert row["resolution"] == pytest.approx(1.90)
 
-    mu, sigma = ba.LIT[("HOH", "O", "ZN")]
+    mu, sigma = reference_data.literature_distances()[("HOH", "O", "ZN")]
     assert (mu, sigma) == (2.09, 0.05)
     expected = round((2.20 - mu) / math.sqrt(0.048**2 + sigma**2), 4)
     assert expected == pytest.approx(1.5871, abs=1e-4)
@@ -1921,12 +1928,12 @@ def test_reference_table_holds_exactly_the_expected_rows_and_keys():
         assert key in keys, f"{key} is missing from {REFERENCE_TABLE}"
 
     # And the loader really exposes all of them, with the same numbers.
-    assert len(ba.LIT) == EXPECTED_REFERENCE_ROW_COUNT
-    assert set(ba.LIT) == keys
+    assert len(reference_data.literature_distances()) == EXPECTED_REFERENCE_ROW_COUNT
+    assert set(reference_data.literature_distances()) == keys
     assert {
         (residue, atom, metal): (mu, stdev)
         for _lineno, residue, atom, metal, mu, stdev in records
-    } == ba.LIT
+    } == reference_data.literature_distances()
 
 
 @pytest.mark.parametrize(
@@ -1956,7 +1963,7 @@ def test_the_strict_parser_rejects_a_corrupted_row(tmp_path, corruption):
     # src, by contrast, accepts the damaged file without a word: the bad row is
     # either dropped or -- for the extra-column form -- silently overwrites the
     # real CYS/S/CU numbers. That is exactly why the parser above is strict.
-    loaded = ba._load_literature(str(damaged))
+    loaded = reference_data._load_literature(str(damaged))
     assert len(loaded) == EXPECTED_REFERENCE_ROW_COUNT
 
 
@@ -1976,8 +1983,8 @@ def test_reference_table_has_no_duplicate_keys():
         seen[key] = lineno
 
     assert duplicates == []
-    assert len(records) == len(ba.LIT)
-    assert set(seen) == set(ba.LIT)
+    assert len(records) == len(reference_data.literature_distances())
+    assert set(seen) == set(reference_data.literature_distances())
 
 
 def test_reference_table_values_are_physically_plausible():
@@ -2005,7 +2012,7 @@ def test_reference_table_values_are_physically_plausible():
         (residue, atom, metal): (mu, stdev)
         for _lineno, residue, atom, metal, mu, stdev in records
     }
-    assert parsed == ba.LIT
+    assert parsed == reference_data.literature_distances()
 
 
 def test_reference_table_is_internally_consistent_by_donor_element():
@@ -2016,7 +2023,10 @@ def test_reference_table_is_internally_consistent_by_donor_element():
     break if a row's metal or donor column were transposed.
     """
     by_metal = defaultdict(lambda: defaultdict(list))
-    for (_residue, atom, metal), (mu, _sd) in ba.LIT.items():
+    for (_residue, atom, metal), (
+        mu,
+        _sd,
+    ) in reference_data.literature_distances().items():
         by_metal[metal][atom].append(mu)
 
     assert set(by_metal) >= {"ZN", "CA", "MG", "K", "NA", "FE", "CU", "MN", "CO", "NI"}
@@ -2032,7 +2042,7 @@ def test_reference_table_is_internally_consistent_by_donor_element():
             )
         # Water is the reference every metal must define, since it is the most
         # common first-sphere donor in the PDB.
-        assert ("HOH", "O", metal) in ba.LIT
+        assert ("HOH", "O", metal) in reference_data.literature_distances()
 
 
 def test_reference_table_ranks_ions_by_size():
@@ -2042,11 +2052,13 @@ def test_reference_table_ranks_ions_by_size():
     metal column that the per-row range checks would let through.
     """
     water = {
-        metal: ba.LIT[("HOH", "O", metal)][0]
+        metal: reference_data.literature_distances()[("HOH", "O", metal)][0]
         for metal in ("K", "NA", "CA", "MN", "ZN", "MG")
     }
     assert (
         water["K"] > water["NA"] > water["CA"] > water["MN"] > water["ZN"] > water["MG"]
     )
     assert water["ZN"] == pytest.approx(2.09)
-    assert ba.LIT[("HIS", "N", "ZN")][0] == pytest.approx(2.03)
+    assert reference_data.literature_distances()[("HIS", "N", "ZN")][
+        0
+    ] == pytest.approx(2.03)

@@ -46,7 +46,7 @@ from driver import runlog, writers
 from driver.writers import MANIFEST_COLUMNS
 import cli
 from driver import pool as driver_pool
-import metal_identification
+import reference_data
 
 
 # Killing a worker outright, and forking the driver so the parent can time it
@@ -105,7 +105,7 @@ def _reference_cfg(output_dir, manual_inputs=None):
         "cache_root": os.path.join(output_dir, "cache"),
         "env": env,
         "output_dir": output_dir,
-        "cofactors": metal_identification.load_cofactor_ids(),
+        "cofactors": reference_data.cofactor_ids(),
         "keep": False,
         "bonds": True,
         "density_map_scope": "model-envelope",

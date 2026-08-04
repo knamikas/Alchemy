@@ -8,29 +8,9 @@
 # cofactors; `main.py` aggregates these across many structures.
 
 import math
-import os
 from typing import Any, Iterable, Optional
 
 from structure_analysis import NAN, canonical_pdb_residue_id
-
-
-# Single source for the bundled reference-data directory. Every file under it
-# is named relative to this constant so the location is defined once; the
-# directory travels with the checkout, which is how Alchemy is distributed.
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-
-COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
-
-
-def load_cofactor_ids() -> set[str]:
-    """Load component IDs from Alchemy's fixed bundled catalog."""
-    with open(COFACTOR_CATALOG_PATH, encoding="utf-8") as handle:
-        cofactor_ids = {
-            line.partition("\t")[0].strip() for line in handle if line.strip()
-        }
-    if not cofactor_ids:
-        raise ValueError("bundled metallocofactor catalog is empty")
-    return cofactor_ids
 
 
 # EDSTATS 1.0.9 standard residue-table schema. The twelve metrics are repeated
