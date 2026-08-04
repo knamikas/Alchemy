@@ -1158,8 +1158,10 @@ class TestOutputWriters:
 
         assert _read_csv(tmp_path / "manifest.csv") == [MANIFEST_COLUMNS]
         assert _read_csv(tmp_path / "stats.csv") == [list(STATS_COLUMNS)]
-        assert _read_csv(tmp_path / "bonds.csv") == [list(main.BOND_COLUMNS)]
-        assert _read_csv(tmp_path / "candidates.csv") == [list(main.CANDIDATE_COLUMNS)]
+        assert _read_csv(tmp_path / "bonds.csv") == [list(bond_analysis.BOND_COLUMNS)]
+        assert _read_csv(tmp_path / "candidates.csv") == [
+            list(bond_analysis.CANDIDATE_COLUMNS)
+        ]
         assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
 
     def test_running_counts_track_the_rows_actually_written(self, tmp_path):
@@ -1174,8 +1176,10 @@ class TestOutputWriters:
             }
             for _ in range(3)
         ]
-        bond_rows = [dict.fromkeys(main.BOND_COLUMNS, "") for _ in range(4)]
-        candidate_rows = [dict.fromkeys(main.CANDIDATE_COLUMNS, "") for _ in range(2)]
+        bond_rows = [dict.fromkeys(bond_analysis.BOND_COLUMNS, "") for _ in range(4)]
+        candidate_rows = [
+            dict.fromkeys(bond_analysis.CANDIDATE_COLUMNS, "") for _ in range(2)
+        ]
         writers.write_stats_rows(stats_rows)
         writers.write_bond_rows(bond_rows)
         writers.write_candidate_rows(candidate_rows)
@@ -1206,20 +1210,22 @@ class TestOutputWriters:
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = {column: f"v-{column}" for column in main.BOND_COLUMNS}
+        row = {column: f"v-{column}" for column in bond_analysis.BOND_COLUMNS}
         # Feed it in a deliberately different key order.
         shuffled = {key: row[key] for key in reversed(list(row))}
         writers.write_bond_rows([shuffled])
         self._close(handles)
         written = _read_csv(tmp_path / "bonds.csv")[1]
-        assert written == [f"v-{column}" for column in main.BOND_COLUMNS]
+        assert written == [f"v-{column}" for column in bond_analysis.BOND_COLUMNS]
 
     def test_disabled_bond_outputs_are_a_no_op_not_a_crash(self, tmp_path):
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
         writers = _OutputWriters(*handles)
-        writers.write_bond_rows([dict.fromkeys(main.BOND_COLUMNS, "")])
-        writers.write_candidate_rows([dict.fromkeys(main.CANDIDATE_COLUMNS, "")])
+        writers.write_bond_rows([dict.fromkeys(bond_analysis.BOND_COLUMNS, "")])
+        writers.write_candidate_rows(
+            [dict.fromkeys(bond_analysis.CANDIDATE_COLUMNS, "")]
+        )
         self._close(handles)
         assert writers.n_bonds == 0
         assert writers.n_candidates == 0
@@ -1237,7 +1243,7 @@ class TestOutputWriters:
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = dict.fromkeys(getattr(main, columns_name), "")
+        row = dict.fromkeys(getattr(bond_analysis, columns_name), "")
         if mutate == "drop":
             row.pop(next(iter(row)))
         else:
@@ -1254,7 +1260,7 @@ class TestOutputWriters:
         """Same guard on the candidate stream, named for its own file."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = dict.fromkeys(main.CANDIDATE_COLUMNS, "")
+        row = dict.fromkeys(bond_analysis.CANDIDATE_COLUMNS, "")
         row["bogus"] = ""
         try:
             with pytest.raises(RuntimeError) as excinfo:
@@ -1379,7 +1385,7 @@ class TestOutputWriters:
                 }
             ]
         )
-        writers.write_bond_rows([dict.fromkeys(main.BOND_COLUMNS, "")])
+        writers.write_bond_rows([dict.fromkeys(bond_analysis.BOND_COLUMNS, "")])
         writers.write_manifest_row(
             _manifest_row(_result(status="ok"), False, True, {}, {})
         )
@@ -1388,6 +1394,128 @@ class TestOutputWriters:
         assert len(_read_csv(tmp_path / "bonds.csv")) == 2
         assert len(_read_csv(tmp_path / "manifest.csv")) == 2
         self._close(handles)
+
+
+# --------------------------------------------------------------------------- #
+# Run phases
+# --------------------------------------------------------------------------- #
+class TestScheduleEntries:
+    """The work list is reduced by resume first and capped by --max-pdbs after.
+
+    The order is the whole point. Capping first would hand a resumed run the
+    same already-finished prefix on every attempt, filter all of it away, and
+    schedule nothing -- so a capped resume would never reach the tail of a
+    mirror no matter how many times it was run.
+    """
+
+    @staticmethod
+    def _args(tmp_path, ids, **overrides):
+        id_file = tmp_path / "ids.txt"
+        id_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
+        fields = {
+            "id": None,
+            "id_file": str(id_file),
+            "pdb_file": None,
+            "mtz_file": None,
+            "cif_file": None,
+            "data_json": None,
+            "pdb_redo_root": str(tmp_path),
+            "resume": False,
+            "retry_partials": False,
+            "bonds": True,
+            "max_pdbs": None,
+        }
+        fields.update(overrides)
+        return SimpleNamespace(**fields)
+
+    @staticmethod
+    def _manifest(tmp_path, done_ids):
+        path = tmp_path / "manifest.csv"
+        with open(path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=MANIFEST_COLUMNS)
+            writer.writeheader()
+            for pdb_id in done_ids:
+                row = dict.fromkeys(MANIFEST_COLUMNS, "")
+                row.update(pdbID=pdb_id, status="ok", n_bonds="0", n_candidates="0")
+                writer.writerow(row)
+        return path
+
+    def _schedule(self, tmp_path, args):
+        run_log = SimpleNamespace(details={})
+        layout = main._OutputLayout(str(tmp_path))
+        ids, _root, _manual = main._schedule_entries(
+            args, layout, str(tmp_path), run_log
+        )
+        return ids, run_log
+
+    def test_a_capped_resume_reaches_entries_past_the_finished_prefix(self, tmp_path):
+        """Two already-done entries must not consume the --max-pdbs budget."""
+        all_ids = ["1abc", "2abc", "3abc", "4abc", "5abc"]
+        self._manifest(tmp_path, ["1abc", "2abc"])
+        (tmp_path / "metal_bonds_all.csv").write_text("", encoding="utf-8")
+        (tmp_path / "metal_candidates_all.csv").write_text("", encoding="utf-8")
+        args = self._args(tmp_path, all_ids, resume=True, max_pdbs=2)
+
+        ids, run_log = self._schedule(tmp_path, args)
+        assert ids == ["3abc", "4abc"]
+        assert run_log.details["entries_selected_before_resume"] == 5
+        assert run_log.details["entries_scheduled"] == 2
+
+    def test_without_resume_the_cap_takes_the_first_entries(self, tmp_path):
+        """A fresh capped run is a plain prefix; nothing is filtered out."""
+        args = self._args(tmp_path, ["1abc", "2abc", "3abc"], max_pdbs=2)
+        ids, _run_log = self._schedule(tmp_path, args)
+        assert ids == ["1abc", "2abc"]
+
+
+class TestWriteEntry:
+    """One entry's rows, with the manifest row written last.
+
+    The manifest is the completion marker ``--resume`` reads. Writing it before
+    the data rows would make an interruption in between mark an entry finished
+    whose statistics never reached disk -- and a later resume would skip it
+    permanently.
+    """
+
+    class _RecordingWriters:
+        def __init__(self):
+            self.calls = []
+
+        def __getattr__(self, name):
+            def record(*args):
+                self.calls.append(name)
+
+            return record
+
+    @staticmethod
+    def _args(**overrides):
+        fields = {"resume": False, "bonds": True}
+        fields.update(overrides)
+        return SimpleNamespace(**fields)
+
+    def test_the_manifest_row_is_written_after_every_data_row(self):
+        writers = self._RecordingWriters()
+        plan = main._ConfidencePlan()
+        main._write_entry(_result(), self._args(), plan, writers, None, ({}, {}))
+        assert writers.calls[-1] == "write_manifest_row"
+        assert set(writers.calls[:-1]) == {
+            "write_stats_rows",
+            "write_bond_rows",
+            "write_candidate_rows",
+        }
+
+    def test_a_staged_entry_is_registered_for_replacement(self):
+        """Staging replaces rows by id, so every written entry must be listed."""
+        staging = SimpleNamespace(replacement_ids=set())
+        main._write_entry(
+            _result(),
+            self._args(resume=True),
+            main._ConfidencePlan(),
+            self._RecordingWriters(),
+            staging,
+            ({}, {}),
+        )
+        assert staging.replacement_ids == {"109m"}
 
 
 # --------------------------------------------------------------------------- #

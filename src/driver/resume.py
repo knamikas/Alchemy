@@ -1,0 +1,272 @@
+"""Resuming a run over output a previous run left behind.
+
+``--resume`` exists because a database run takes hours and gets interrupted:
+by a scheduler, a reboot, or an entry that made a CCP4 program fall over. The
+rules here are all about not making an interruption worse than it was.
+
+Three of them carry the weight.
+
+*The manifest is the completion marker.* An entry counts as finished only when
+its manifest row says so, and that row is written after the entry's data rows
+have already been flushed. An interruption between the two costs a repeated
+entry, never a lost one.
+
+*Blank is not zero.* A blank ``n_bonds`` means the bond stage never ran; a
+``0`` means it ran and found nothing. Reading the first as the second would
+mark an unanalysed entry permanently done.
+
+*Retried rows are staged, not overwritten.* ``_ResumeStaging`` writes a retry
+batch to a temporary directory and merges it into the real files only once the
+batch has completed, so a retry that fails halfway leaves the previous run's
+results exactly as they were.
+"""
+
+import csv
+import os
+import shutil
+import tempfile
+
+from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
+from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
+
+
+def load_done(
+    manifest_path,
+    bonds_required=False,
+    bond_output_present=True,
+    candidate_output_present=True,
+    retry_partial_ids=(),
+):
+    """PDB IDs whose requested result is terminal in an existing manifest.
+
+    Blank ``n_bonds`` and ``n_candidates`` values mean bond analysis was
+    disabled, while ``0`` means it ran successfully and found no rows of that
+    type. When bonds are requested, a terminal density result with either blank
+    count still needs processing. Absent bond or candidate CSVs also make
+    bond-stage results incomplete. IDs in ``retry_partial_ids`` are removed
+    from the done set only when their row is a non-retryable ``partial``;
+    successful ``ok`` rows remain protected from accidental reprocessing.
+    """
+    retry_partial_ids = {
+        str(pdb_id).strip().lower()
+        for pdb_id in retry_partial_ids
+        if str(pdb_id).strip()
+    }
+    done = set()
+    if os.path.exists(manifest_path):
+        with open(manifest_path, newline="") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames and {"pdbID", "status"}.issubset(reader.fieldnames):
+                for row in reader:
+                    status = row.get("status", "").strip().lower()
+                    retryable = row.get("retryable", "").strip().lower()
+                    terminal_partial = status == "partial" and retryable in (
+                        "false",
+                        "0",
+                        "no",
+                    )
+                    pdb_id = row.get("pdbID", "").strip().lower()
+                    bonds_complete = not bonds_required or (
+                        bond_output_present
+                        and candidate_output_present
+                        and row.get("n_bonds", "").strip() != ""
+                        and row.get("n_candidates", "").strip() != ""
+                    )
+                    protected_terminal = status == "ok" or (
+                        terminal_partial and pdb_id not in retry_partial_ids
+                    )
+                    if protected_terminal and bonds_complete and pdb_id:
+                        done.add(pdb_id)
+    return done
+
+
+def _resume_replacement_succeeded(result):
+    """Whether a retry produced a terminal result suitable for replacement."""
+    status = str(result.get("status", "")).strip().lower()
+    return status == "ok" or (
+        status == "partial" and not bool(result.get("retryable", True))
+    )
+
+
+def _manifest_values_by_id(path, column):
+    """Return one manifest column keyed by normalized PDB ID."""
+    values = {}
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return values
+    with open(path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            pdb_id = row.get("pdbID", "").strip().lower()
+            if pdb_id:
+                values[pdb_id] = row.get(column, "")
+    return values
+
+
+def _csv_header(path):
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    with open(path, newline="") as handle:
+        return next(csv.reader(handle), None)
+
+
+def validate_resume_schemas(
+    manifest_path,
+    stats_path,
+    bonds_path,
+    candidates_path,
+    bonds_enabled=True,
+    confidence_path=None,
+    confidence_columns=None,
+):
+    """Refuse to append migration rows beneath an incompatible old header.
+
+    Whole headers are compared, including the EDSTATS block of
+    metal_stats_all.csv. Appending rows beneath a header from a different
+    EDSTATS build would misalign every density column without any other
+    symptom.
+    """
+    checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
+    if bonds_enabled:
+        checks.extend(
+            ((bonds_path, BOND_COLUMNS), (candidates_path, CANDIDATE_COLUMNS))
+        )
+    if confidence_path is not None:
+        if confidence_columns is None:
+            raise ValueError("confidence columns are required with a confidence output")
+        checks.append((confidence_path, list(confidence_columns)))
+    for path, expected in checks:
+        header = _csv_header(path)
+        if header is not None and header != expected:
+            raise ValueError(
+                f"Existing {os.path.basename(path)} uses an incompatible "
+                "schema; choose a new --output-dir for this Gemmi migration "
+                "run."
+            )
+
+
+def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
+    """Remove previous bond-stage CSVs before a fresh disabled run.
+
+    A non-resume run replaces the manifest and statistics outputs, so retaining
+    older bond-stage files would falsely associate them with the new run.
+    Resume mode is different: completed entries and their existing rows are
+    retained.
+    """
+    if resume or bonds_enabled:
+        return []
+    removed = []
+    for path in paths:
+        if os.path.lexists(path):
+            os.unlink(path)
+            removed.append(path)
+    return removed
+
+
+def _merge_csv_replacements(path, staged_path, pdb_ids):
+    """Atomically replace selected IDs with rows from a completed staging file.
+
+    The existing destination is never changed until the full replacement file
+    has been written successfully. Rows for IDs absent from ``pdb_ids`` are
+    copied verbatim.
+    """
+    replacement_ids = {pdb_id.lower() for pdb_id in pdb_ids}
+    if not replacement_ids:
+        return
+
+    directory = os.path.dirname(os.path.abspath(path))
+    original_mode = os.stat(path).st_mode if os.path.exists(path) else None
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory, text=True
+    )
+    try:
+        # os.fdopen takes ownership of the descriptor and closes it on exit, so
+        # it is closed here only if the wrapping itself failed. Closing it again
+        # afterwards could target a descriptor the runtime has since reused.
+        try:
+            staged = os.fdopen(fd, "w", newline="")
+        except BaseException:
+            os.close(fd)
+            raise
+        destination_header = None
+        with staged as dst:
+            writer = csv.writer(dst)
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                with open(path, newline="") as src:
+                    reader = csv.reader(src)
+                    destination_header = next(reader, None)
+                    if destination_header is not None:
+                        writer.writerow(destination_header)
+                    for row in reader:
+                        if row and row[0].strip().lower() in replacement_ids:
+                            continue
+                        writer.writerow(row)
+
+            if os.path.exists(staged_path) and os.path.getsize(staged_path) > 0:
+                with open(staged_path, newline="") as staged:
+                    reader = csv.reader(staged)
+                    staged_header = next(reader, None)
+                    if destination_header is None and staged_header is not None:
+                        destination_header = staged_header
+                        writer.writerow(staged_header)
+                    elif (
+                        staged_header is not None
+                        and staged_header != destination_header
+                    ):
+                        raise ValueError(f"staged CSV schema does not match {path}")
+                    for row in reader:
+                        if row and row[0].strip().lower() in replacement_ids:
+                            writer.writerow(row)
+            dst.flush()
+            os.fsync(dst.fileno())
+
+        if original_mode is not None:
+            os.chmod(tmp_path, original_mode)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+class _ResumeStaging:
+    """Holds retried entries' rows until the whole retry batch has succeeded.
+
+    Rows go to a temporary directory and are merged into the real outputs only
+    once the batch completes, so a failed or interrupted retry leaves the
+    previous rows untouched.
+    """
+
+    def __init__(self, output_dir, targets):
+        self.targets = targets
+        self.dir = tempfile.mkdtemp(prefix=".alchemy-resume-", dir=output_dir)
+        self.staged = tuple(
+            os.path.join(self.dir, os.path.basename(path)) for path in targets
+        )
+        self.replacement_ids = set()
+
+    def commit(self, bonds_enabled, confidence_enabled=False):
+        """Replace the retried entries' rows in the real output files."""
+        if not self.replacement_ids:
+            return
+        manifest_path, stats_path, bonds_path, candidates_path = self.targets[:4]
+        (staged_manifest, staged_stats, staged_bonds, staged_candidates) = self.staged[
+            :4
+        ]
+        # Data files are committed before the manifest completion marker. If an
+        # interruption occurs between replacements, the old manifest causes the
+        # entry to be retried safely.
+        _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
+        if bonds_enabled:
+            _merge_csv_replacements(bonds_path, staged_bonds, self.replacement_ids)
+            _merge_csv_replacements(
+                candidates_path, staged_candidates, self.replacement_ids
+            )
+        if confidence_enabled:
+            for target, staged in zip(self.targets[4:], self.staged[4:]):
+                _merge_csv_replacements(target, staged, self.replacement_ids)
+        _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
+
+    def discard(self):
+        if os.path.isdir(self.dir):
+            shutil.rmtree(self.dir, ignore_errors=True)

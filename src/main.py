@@ -35,7 +35,6 @@ Examples
 
 import argparse
 import contextlib
-import csv
 import json
 import os
 import re
@@ -44,7 +43,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from multiprocessing import (
@@ -52,7 +50,7 @@ from multiprocessing import (
     SimpleQueue,
     TimeoutError as MultiprocessingTimeoutError,
 )
-from typing import Dict
+from typing import Dict, Optional, Sequence
 
 from _version import __version__
 from density_analysis import (
@@ -61,7 +59,6 @@ from density_analysis import (
     MODEL_ENVELOPE_BORDER_ANGSTROM,
 )
 from metal_identification import load_cofactor_ids
-from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
 from run_logging import (
     configure_driver_logging,
     level_for_verbosity,
@@ -92,17 +89,21 @@ from worker import (
 )
 from driver.progress import _ProgressReporter
 from driver.resources import automatic_worker_limits
-from driver.runlog import _RunLog
-from driver.writers import (
-    MANIFEST_COLUMNS,
-    STATS_COLUMNS,
-    _manifest_row,
-    _OutputWriters,
+from driver.resume import (
+    _ResumeStaging,
+    _manifest_values_by_id,
+    _resume_replacement_succeeded,
+    load_done,
+    remove_stale_disabled_bond_outputs,
+    validate_resume_schemas,
 )
+from driver.runlog import _RunLog
+from driver.writers import STATS_COLUMNS, _manifest_row, _OutputWriters
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
     CONFIDENCE_INPUT_COLUMNS,
     REFERENCE_METADATA_FILE,
+    ConfidenceReference,
     finalize_database_confidence,
     complete_confidence_site_count,
     load_reference as load_confidence_reference,
@@ -418,56 +419,6 @@ def _shutdown_pool(pool):
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-def load_done(
-    manifest_path,
-    bonds_required=False,
-    bond_output_present=True,
-    candidate_output_present=True,
-    retry_partial_ids=(),
-):
-    """PDB IDs whose requested result is terminal in an existing manifest.
-
-    Blank ``n_bonds`` and ``n_candidates`` values mean bond analysis was
-    disabled, while ``0`` means it ran successfully and found no rows of that
-    type. When bonds are requested, a terminal density result with either blank
-    count still needs processing. Absent bond or candidate CSVs also make
-    bond-stage results incomplete. IDs in ``retry_partial_ids`` are removed
-    from the done set only when their row is a non-retryable ``partial``;
-    successful ``ok`` rows remain protected from accidental reprocessing.
-    """
-    retry_partial_ids = {
-        str(pdb_id).strip().lower()
-        for pdb_id in retry_partial_ids
-        if str(pdb_id).strip()
-    }
-    done = set()
-    if os.path.exists(manifest_path):
-        with open(manifest_path, newline="") as f:
-            reader = csv.DictReader(f)
-            if reader.fieldnames and {"pdbID", "status"}.issubset(reader.fieldnames):
-                for row in reader:
-                    status = row.get("status", "").strip().lower()
-                    retryable = row.get("retryable", "").strip().lower()
-                    terminal_partial = status == "partial" and retryable in (
-                        "false",
-                        "0",
-                        "no",
-                    )
-                    pdb_id = row.get("pdbID", "").strip().lower()
-                    bonds_complete = not bonds_required or (
-                        bond_output_present
-                        and candidate_output_present
-                        and row.get("n_bonds", "").strip() != ""
-                        and row.get("n_candidates", "").strip() != ""
-                    )
-                    protected_terminal = status == "ok" or (
-                        terminal_partial and pdb_id not in retry_partial_ids
-                    )
-                    if protected_terminal and bonds_complete and pdb_id:
-                        done.add(pdb_id)
-    return done
-
-
 def resolve_confidence_reference_dir(output_dir, configured_dir=None):
     """Find a frozen confidence reference, honoring an explicit override."""
     if configured_dir is not None:
@@ -484,161 +435,12 @@ def resolve_confidence_reference_dir(output_dir, configured_dir=None):
     return None, candidates
 
 
-def _resume_replacement_succeeded(result):
-    """Whether a retry produced a terminal result suitable for replacement."""
-    status = str(result.get("status", "")).strip().lower()
-    return status == "ok" or (
-        status == "partial" and not bool(result.get("retryable", True))
-    )
-
-
-def _manifest_values_by_id(path, column):
-    """Return one manifest column keyed by normalized PDB ID."""
-    values = {}
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
-        return values
-    with open(path, newline="") as handle:
-        for row in csv.DictReader(handle):
-            pdb_id = row.get("pdbID", "").strip().lower()
-            if pdb_id:
-                values[pdb_id] = row.get(column, "")
-    return values
-
-
-def _merge_csv_replacements(path, staged_path, pdb_ids):
-    """Atomically replace selected IDs with rows from a completed staging file.
-
-    The existing destination is never changed until the full replacement file
-    has been written successfully. Rows for IDs absent from ``pdb_ids`` are
-    copied verbatim.
-    """
-    replacement_ids = {pdb_id.lower() for pdb_id in pdb_ids}
-    if not replacement_ids:
-        return
-
-    directory = os.path.dirname(os.path.abspath(path))
-    original_mode = os.stat(path).st_mode if os.path.exists(path) else None
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory, text=True
-    )
-    try:
-        # os.fdopen takes ownership of the descriptor and closes it on exit, so
-        # it is closed here only if the wrapping itself failed. Closing it again
-        # afterwards could target a descriptor the runtime has since reused.
-        try:
-            staged = os.fdopen(fd, "w", newline="")
-        except BaseException:
-            os.close(fd)
-            raise
-        destination_header = None
-        with staged as dst:
-            writer = csv.writer(dst)
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                with open(path, newline="") as src:
-                    reader = csv.reader(src)
-                    destination_header = next(reader, None)
-                    if destination_header is not None:
-                        writer.writerow(destination_header)
-                    for row in reader:
-                        if row and row[0].strip().lower() in replacement_ids:
-                            continue
-                        writer.writerow(row)
-
-            if os.path.exists(staged_path) and os.path.getsize(staged_path) > 0:
-                with open(staged_path, newline="") as staged:
-                    reader = csv.reader(staged)
-                    staged_header = next(reader, None)
-                    if destination_header is None and staged_header is not None:
-                        destination_header = staged_header
-                        writer.writerow(staged_header)
-                    elif (
-                        staged_header is not None
-                        and staged_header != destination_header
-                    ):
-                        raise ValueError(f"staged CSV schema does not match {path}")
-                    for row in reader:
-                        if row and row[0].strip().lower() in replacement_ids:
-                            writer.writerow(row)
-            dst.flush()
-            os.fsync(dst.fileno())
-
-        if original_mode is not None:
-            os.chmod(tmp_path, original_mode)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _csv_header(path):
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
-        return None
-    with open(path, newline="") as handle:
-        return next(csv.reader(handle), None)
-
-
 def _batch_exit_code(counts, retryable_partial_count):
     """Return failure when one or more entries remain operationally incomplete."""
     incomplete = (
         counts.get("error", 0) + counts.get("skip", 0) + retryable_partial_count
     )
     return 1 if incomplete else 0
-
-
-def validate_resume_schemas(
-    manifest_path,
-    stats_path,
-    bonds_path,
-    candidates_path,
-    bonds_enabled=True,
-    confidence_path=None,
-    confidence_columns=None,
-):
-    """Refuse to append migration rows beneath an incompatible old header.
-
-    Whole headers are compared, including the EDSTATS block of
-    metal_stats_all.csv. Appending rows beneath a header from a different
-    EDSTATS build would misalign every density column without any other
-    symptom.
-    """
-    checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
-    if bonds_enabled:
-        checks.extend(
-            ((bonds_path, BOND_COLUMNS), (candidates_path, CANDIDATE_COLUMNS))
-        )
-    if confidence_path is not None:
-        if confidence_columns is None:
-            raise ValueError("confidence columns are required with a confidence output")
-        checks.append((confidence_path, list(confidence_columns)))
-    for path, expected in checks:
-        header = _csv_header(path)
-        if header is not None and header != expected:
-            raise ValueError(
-                f"Existing {os.path.basename(path)} uses an incompatible "
-                "schema; choose a new --output-dir for this Gemmi migration "
-                "run."
-            )
-
-
-def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
-    """Remove previous bond-stage CSVs before a fresh disabled run.
-
-    A non-resume run replaces the manifest and statistics outputs, so retaining
-    older bond-stage files would falsely associate them with the new run.
-    Resume mode is different: completed entries and their existing rows are
-    retained.
-    """
-    if resume or bonds_enabled:
-        return []
-    removed = []
-    for path in paths:
-        if os.path.lexists(path):
-            os.unlink(path)
-            removed.append(path)
-    return removed
 
 
 def parse_pdb_id(value):
@@ -888,82 +690,115 @@ def _select_entry_ids(args, cache_root):
     return enumerate_entries(root, limit=limit), root, None
 
 
-class _ResumeStaging:
-    """Holds retried entries' rows until the whole retry batch has succeeded.
+# --------------------------------------------------------------------------- #
+# Run phases
+# --------------------------------------------------------------------------- #
+# ``_run`` below is an orchestrator: it names the phases in order and does
+# nothing else. Each phase is a function here, and each one either produces the
+# value the next phase needs or raises ``_DriverError`` with the message the
+# user should see. That is what makes the order of a run readable -- the shape
+# of a batch is the sequence of calls in ``_run``, not a 600-line function whose
+# phases are only visible as blank lines.
 
-    Rows go to a temporary directory and are merged into the real outputs only
-    once the batch completes, so a failed or interrupted retry leaves the
-    previous rows untouched.
+
+class _OutputLayout:
+    """Every path a run reads or writes, all derived from ``--output-dir``.
+
+    Grouped because they travel together through every later phase, and because
+    a run that resumes has to name the *same* files a previous run wrote.
     """
 
-    def __init__(self, output_dir, targets):
-        self.targets = targets
-        self.dir = tempfile.mkdtemp(prefix=".alchemy-resume-", dir=output_dir)
-        self.staged = tuple(
-            os.path.join(self.dir, os.path.basename(path)) for path in targets
-        )
-        self.replacement_ids = set()
+    def __init__(self, output_dir):
+        self.output_dir = output_dir
+        self.manifest = os.path.join(output_dir, "manifest.csv")
+        self.stats = os.path.join(output_dir, "metal_stats_all.csv")
+        self.bonds = os.path.join(output_dir, "metal_bonds_all.csv")
+        self.candidates = os.path.join(output_dir, "metal_candidates_all.csv")
+        self.confidence_inputs = os.path.join(output_dir, "confidence_inputs_all.csv")
+        self.confidence_scores = os.path.join(output_dir, "confidence_scores_all.csv")
+        self.reference_dir = os.path.join(output_dir, "confidence_reference")
 
-    def commit(self, bonds_enabled, confidence_enabled=False):
-        """Replace the retried entries' rows in the real output files."""
-        if not self.replacement_ids:
-            return
-        manifest_path, stats_path, bonds_path, candidates_path = self.targets[:4]
-        (staged_manifest, staged_stats, staged_bonds, staged_candidates) = self.staged[
-            :4
-        ]
-        # Data files are committed before the manifest completion marker. If an
-        # interruption occurs between replacements, the old manifest causes the
-        # entry to be retried safely.
-        _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
-        if bonds_enabled:
-            _merge_csv_replacements(bonds_path, staged_bonds, self.replacement_ids)
-            _merge_csv_replacements(
-                candidates_path, staged_candidates, self.replacement_ids
-            )
-        if confidence_enabled:
-            for target, staged in zip(self.targets[4:], self.staged[4:]):
-                _merge_csv_replacements(target, staged, self.replacement_ids)
-        _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
-
-    def discard(self):
-        if os.path.isdir(self.dir):
-            shutil.rmtree(self.dir, ignore_errors=True)
+    @property
+    def core(self):
+        """The four always-written outputs, in resume-validation order."""
+        return (self.manifest, self.stats, self.bonds, self.candidates)
 
 
-def _run(args, run_log):
+class _ConfidencePlan:
+    """Whether this run scores confidence, and against what.
 
+    Three states, decided once before any entry runs. ``database`` streams the
+    inputs an uncapped full-database run finalizes into a new reference at the
+    end. ``reference`` scores each entry against a reference that already
+    exists. ``None`` means the bond stage is off, or no reference was found --
+    the expected state on a fresh checkout, since none is distributed.
+    """
+
+    #: The two names ``mode`` takes when scoring is on. Annotated rather than
+    #: left to inference: every field starts at ``None`` for the disabled case,
+    #: so an unannotated ``self.mode = None`` types the attribute as ``None``
+    #: and makes every later assignment an error.
+    def __init__(self):
+        self.mode: Optional[str] = None
+        self.reference: Optional[ConfidenceReference] = None
+        self.stream_path: Optional[str] = None
+        self.columns: Optional[Sequence[str]] = None
+        self.synchronize_inputs: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode is not None
+
+
+class _BatchTally:
+    """Running totals for the batch and the exit code they imply."""
+
+    def __init__(self):
+        self.counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
+        self.no_metals = 0
+        self.retryable_partials = 0
+
+    def record(self, result):
+        status = result["status"]
+        self.counts[status] = self.counts.get(status, 0) + 1
+        if result.get("no_metals", False):
+            self.no_metals += 1
+        if status == "partial" and result.get("retryable", False):
+            self.retryable_partials += 1
+
+    def exit_code(self):
+        return _batch_exit_code(self.counts, self.retryable_partials)
+
+
+def _load_cofactor_catalog():
+    """Read the bundled metallocofactor catalog, or fail the run naming it."""
     try:
-        cofactors = load_cofactor_ids()
+        return load_cofactor_ids()
     except (OSError, UnicodeError, ValueError) as exc:
-        message = f"Invalid bundled metallocofactor catalog: {exc}"
-        run_log.driver_error = message
-        logger.error("%s", message)
-        return 1
+        raise _DriverError(f"Invalid bundled metallocofactor catalog: {exc}") from None
 
-    env, _ = resolve_ccp4_environment(args)
-    if env is None:
-        return 0
+
+def _prepare_output_directory(output_dir):
+    """Create ``--output-dir`` and remove scratch a previous run abandoned."""
     try:
-        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
     except OSError as exc:
         # A read-only mount or someone else's directory is a fixable user
         # mistake, so it exits the way every other unusable input does rather
         # than as a traceback that reads like an Alchemy bug.
         raise SystemExit(
-            f"Cannot use --output-dir {args.output_dir}: {exc.strerror or exc}"
+            f"Cannot use --output-dir {output_dir}: {exc.strerror or exc}"
         ) from None
-    _sweep_leaked_work_dirs(args.output_dir)
+    _sweep_leaked_work_dirs(output_dir)
 
-    cache_root = args.pdb_redo_cache
-    manifest_path = os.path.join(args.output_dir, "manifest.csv")
-    stats_path = os.path.join(args.output_dir, "metal_stats_all.csv")
-    bonds_path = os.path.join(args.output_dir, "metal_bonds_all.csv")
-    candidates_path = os.path.join(args.output_dir, "metal_candidates_all.csv")
-    confidence_inputs_path = os.path.join(args.output_dir, "confidence_inputs_all.csv")
-    confidence_scores_path = os.path.join(args.output_dir, "confidence_scores_all.csv")
-    database_reference_dir = os.path.join(args.output_dir, "confidence_reference")
 
+def _classify_run(args):
+    """Return ``(run_mode, database_run)`` for this invocation.
+
+    ``database_run`` is the uncapped full-mirror case, and it is the only one
+    that may finalize a confidence reference: a capped or hand-picked run is
+    not a cohort.
+    """
     manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
     database_run = (
         not args.id
@@ -971,7 +806,7 @@ def _run(args, run_log):
         and not manual_requested
         and args.max_pdbs is None
     )
-    run_log.details["run_mode"] = (
+    run_mode = (
         "manual"
         if manual_requested
         else "single"
@@ -982,119 +817,112 @@ def _run(args, run_log):
         if database_run
         else "capped_database"
     )
-    confidence_mode = None
-    confidence_reference = None
-    confidence_stream_path = None
-    confidence_columns = None
-    synchronize_confidence_inputs = False
-    if args.bonds and database_run:
-        confidence_mode = "database"
-        confidence_stream_path = confidence_inputs_path
-        confidence_columns = CONFIDENCE_INPUT_COLUMNS
-    elif args.bonds:
-        confidence_reference_dir, searched_reference_dirs = (
-            resolve_confidence_reference_dir(
-                args.output_dir, args.confidence_reference_dir
-            )
+    return run_mode, database_run
+
+
+def _plan_confidence(args, layout, database_run, run_log):
+    """Decide this run's confidence mode before any entry is processed."""
+    plan = _ConfidencePlan()
+    if not args.bonds:
+        return plan
+    if database_run:
+        plan.mode = "database"
+        plan.stream_path = layout.confidence_inputs
+        plan.columns = CONFIDENCE_INPUT_COLUMNS
+        return plan
+
+    reference_dir, searched_dirs = resolve_confidence_reference_dir(
+        args.output_dir, args.confidence_reference_dir
+    )
+    if reference_dir is None:
+        # Expected on a fresh checkout: no reference is distributed with
+        # Alchemy because the confidence score is not finalized. Say so
+        # plainly -- naming the searched directories alone read as a
+        # misconfiguration the user was supposed to fix.
+        logger.info(
+            "confidence scoring is not enabled: no frozen reference is "
+            "distributed with Alchemy, because the score is not yet "
+            "finalized. All other outputs are unaffected. To enable it, "
+            "complete an uncapped full-database run or pass "
+            "--confidence-reference-dir. (searched: %s)",
+            ", ".join(searched_dirs),
         )
-        if confidence_reference_dir is not None:
-            try:
-                confidence_reference = load_confidence_reference(
-                    confidence_reference_dir
-                )
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                message = f"Invalid confidence reference: {exc}"
-                run_log.driver_error = message
-                logger.error("%s", message)
-                return 1
-            run_log.details["confidence_reference_dir"] = confidence_reference_dir
-            confidence_mode = "reference"
-            confidence_stream_path = confidence_scores_path
-            confidence_columns = (
-                *CONFIDENCE_INPUT_COLUMNS,
-                *CONFIDENCE_ANALYSIS_COLUMNS,
-            )
-        else:
-            # Expected on a fresh checkout: no reference is distributed with
-            # Alchemy because the confidence score is not finalized. Say so
-            # plainly -- naming the searched directories alone read as a
-            # misconfiguration the user was supposed to fix.
-            logger.info(
-                "confidence scoring is not enabled: no frozen reference is "
-                "distributed with Alchemy, because the score is not yet "
-                "finalized. All other outputs are unaffected. To enable it, "
-                "complete an uncapped full-database run or pass "
-                "--confidence-reference-dir. (searched: %s)",
-                ", ".join(searched_reference_dirs),
-            )
-    if args.resume:
-        if confidence_mode is not None and (
-            confidence_stream_path is None or not os.path.isfile(confidence_stream_path)
-        ):
-            message = (
-                "Cannot resume confidence-aware output because "
-                f"{confidence_stream_path} is missing; use a fresh output "
-                "directory."
-            )
-            run_log.driver_error = message
-            logger.error("%s", message)
-            return 1
-        try:
-            validate_resume_schemas(
-                manifest_path,
-                stats_path,
-                bonds_path,
-                candidates_path,
-                bonds_enabled=args.bonds,
-                confidence_path=confidence_stream_path,
-                confidence_columns=confidence_columns,
-            )
-            synchronize_confidence_inputs = (
-                confidence_mode == "reference"
-                and os.path.isfile(confidence_inputs_path)
-            )
-            if synchronize_confidence_inputs:
-                validate_resume_schemas(
-                    manifest_path,
-                    stats_path,
-                    bonds_path,
-                    candidates_path,
-                    bonds_enabled=args.bonds,
-                    confidence_path=confidence_inputs_path,
-                    confidence_columns=CONFIDENCE_INPUT_COLUMNS,
-                )
-        except ValueError as exc:
-            run_log.driver_error = str(exc)
-            logger.error("%s", exc)
-            return 1
-        if confidence_mode == "reference":
-            try:
-                validate_scored_reference(confidence_stream_path, confidence_reference)
-            except (OSError, ValueError) as exc:
-                message = f"Cannot resume confidence output: {exc}"
-                run_log.driver_error = message
-                logger.error("%s", message)
-                return 1
+        return plan
 
     try:
-        ids, root, manual_inputs = _select_entry_ids(args, cache_root)
-    except _DriverError as exc:
-        run_log.driver_error = str(exc)
-        logger.error("%s", exc)
-        return 1
+        plan.reference = load_confidence_reference(reference_dir)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise _DriverError(f"Invalid confidence reference: {exc}") from None
+    run_log.details["confidence_reference_dir"] = reference_dir
+    plan.mode = "reference"
+    plan.stream_path = layout.confidence_scores
+    plan.columns = (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
+    return plan
 
+
+def _check_resume_is_compatible(args, layout, plan):
+    """Refuse to resume onto output this run cannot safely extend.
+
+    Every check here is about appending rows beneath a header that no longer
+    means what it did. Sets ``plan.synchronize_inputs`` as a side effect, since
+    whether the streamed inputs are also being extended is part of the answer.
+    """
+    if not args.resume:
+        return
+    if plan.enabled and (
+        plan.stream_path is None or not os.path.isfile(plan.stream_path)
+    ):
+        raise _DriverError(
+            "Cannot resume confidence-aware output because "
+            f"{plan.stream_path} is missing; use a fresh output directory."
+        )
+    try:
+        validate_resume_schemas(
+            *layout.core,
+            bonds_enabled=args.bonds,
+            confidence_path=plan.stream_path,
+            confidence_columns=plan.columns,
+        )
+        plan.synchronize_inputs = plan.mode == "reference" and os.path.isfile(
+            layout.confidence_inputs
+        )
+        if plan.synchronize_inputs:
+            validate_resume_schemas(
+                *layout.core,
+                bonds_enabled=args.bonds,
+                confidence_path=layout.confidence_inputs,
+                confidence_columns=CONFIDENCE_INPUT_COLUMNS,
+            )
+    except ValueError as exc:
+        raise _DriverError(str(exc)) from None
+    if plan.mode == "reference":
+        try:
+            validate_scored_reference(plan.stream_path, plan.reference)
+        except (OSError, ValueError) as exc:
+            raise _DriverError(f"Cannot resume confidence output: {exc}") from None
+
+
+def _schedule_entries(args, layout, cache_root, run_log):
+    """Return ``(ids, root, manual_inputs)`` for the entries this run will do.
+
+    The work list is selected first and then reduced: ``--resume`` removes what
+    an existing manifest already reports as finished, and ``--max-pdbs`` caps
+    what is left. That order matters -- capping first would let a resumed run
+    keep re-offering the same finished prefix and never reach the tail.
+    """
+    ids, root, manual_inputs = _select_entry_ids(args, cache_root)
     run_log.details["entries_selected_before_resume"] = len(ids)
     run_log.details["resolved_input_root"] = root
 
     if args.resume:
         done_kwargs = {
             "bonds_required": args.bonds,
-            "bond_output_present": os.path.isfile(bonds_path),
-            "candidate_output_present": os.path.isfile(candidates_path),
+            "bond_output_present": os.path.isfile(layout.bonds),
+            "candidate_output_present": os.path.isfile(layout.candidates),
         }
-        normally_done = load_done(manifest_path, **done_kwargs)
+        normally_done = load_done(layout.manifest, **done_kwargs)
         if args.retry_partials:
-            done = load_done(manifest_path, retry_partial_ids=ids, **done_kwargs)
+            done = load_done(layout.manifest, retry_partial_ids=ids, **done_kwargs)
             reselected = normally_done - done
             run_log.details["terminal_partials_reselected"] = len(reselected)
             logger.info(
@@ -1108,83 +936,90 @@ def _run(args, run_log):
     if args.max_pdbs is not None:
         ids = ids[: args.max_pdbs]
     run_log.details["entries_scheduled"] = len(ids)
+    return ids, root, manual_inputs
 
-    if not ids:
-        if (
-            args.resume
-            and confidence_mode == "database"
-            and os.path.isfile(confidence_inputs_path)
-        ):
-            try:
-                total, scored, cohort = finalize_database_confidence(
-                    confidence_inputs_path,
-                    confidence_scores_path,
-                    database_reference_dir,
-                )
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                message = f"Confidence finalization failed: {exc}"
-                run_log.driver_error = message
-                logger.error("%s", message)
-                return 1
-            logger.info(
-                "no entries required retry; finalized %d confidence rows "
-                "(%d scored; database cohort %d) -> %s",
-                total,
-                scored,
-                cohort,
-                confidence_scores_path,
-            )
-            logger.info("confidence reference -> %s", database_reference_dir)
-            return 0
-        logger.info("no entries to process")
-        return 0
 
+def _finalize_confidence_reference(layout):
+    """Score the streamed inputs and freeze the database reference."""
     try:
-        removed_stale_bond_outputs = remove_stale_disabled_bond_outputs(
-            (bonds_path, candidates_path), resume=args.resume, bonds_enabled=args.bonds
+        return finalize_database_confidence(
+            layout.confidence_inputs, layout.confidence_scores, layout.reference_dir
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise _DriverError(f"Confidence finalization failed: {exc}") from None
+
+
+def _finish_without_entries(args, layout, plan):
+    """Exit code for a run whose work list came back empty.
+
+    A resumed database run with nothing left is the normal way a long batch
+    ends: its last chunk finished, and finalizing the reference is the only
+    remaining step.
+    """
+    if (
+        args.resume
+        and plan.mode == "database"
+        and os.path.isfile(layout.confidence_inputs)
+    ):
+        total, scored, cohort = _finalize_confidence_reference(layout)
+        logger.info(
+            "no entries required retry; finalized %d confidence rows "
+            "(%d scored; database cohort %d) -> %s",
+            total,
+            scored,
+            cohort,
+            layout.confidence_scores,
+        )
+        logger.info("confidence reference -> %s", layout.reference_dir)
+        return 0
+    logger.info("no entries to process")
+    return 0
+
+
+def _clear_stale_outputs(args, layout, plan):
+    """Remove output from a previous run that this one is about to contradict."""
+    try:
+        removed = remove_stale_disabled_bond_outputs(
+            (layout.bonds, layout.candidates),
+            resume=args.resume,
+            bonds_enabled=args.bonds,
         )
     except OSError as exc:
-        message = f"Could not remove stale bond-stage output: {exc}"
-        run_log.driver_error = message
-        logger.error("%s", message)
-        return 1
-    for removed_path in removed_stale_bond_outputs:
+        raise _DriverError(f"Could not remove stale bond-stage output: {exc}") from None
+    for removed_path in removed:
         logger.info("removed stale bond-stage output: %s", removed_path)
-    if not args.resume:
-        # Reference metadata is its completion marker. Fresh runs must not leave
-        # incompatible confidence artifacts beside newly replaced core output.
-        if confidence_mode == "database":
-            stale_confidence_paths = (
-                confidence_scores_path,
-                os.path.join(database_reference_dir, REFERENCE_METADATA_FILE),
-            )
-        elif confidence_mode == "reference":
-            stale_confidence_paths = (confidence_inputs_path,)
-        else:
-            stale_confidence_paths = (
-                confidence_inputs_path,
-                confidence_scores_path,
-                os.path.join(database_reference_dir, REFERENCE_METADATA_FILE),
-            )
-        try:
-            for path in stale_confidence_paths:
-                if os.path.isfile(path):
-                    os.unlink(path)
-        except OSError as exc:
-            message = f"Could not clear stale confidence output: {exc}"
-            run_log.driver_error = message
-            logger.error("%s", message)
-            return 1
+    if args.resume:
+        return
+    # Reference metadata is its completion marker. Fresh runs must not leave
+    # incompatible confidence artifacts beside newly replaced core output.
+    reference_marker = os.path.join(layout.reference_dir, REFERENCE_METADATA_FILE)
+    if plan.mode == "database":
+        stale = (layout.confidence_scores, reference_marker)
+    elif plan.mode == "reference":
+        stale = (layout.confidence_inputs,)
+    else:
+        stale = (layout.confidence_inputs, layout.confidence_scores, reference_marker)
+    try:
+        for path in stale:
+            if os.path.isfile(path):
+                os.unlink(path)
+    except OSError as exc:
+        raise _DriverError(f"Could not clear stale confidence output: {exc}") from None
 
-    # A Pool creates every worker up front, so asking for more than there are
-    # entries just pays each one's startup for no work. Costly under the spawn
-    # start method, where each worker re-imports gemmi into its own interpreter.
+
+def _choose_worker_count(args, entry_count, run_log):
+    """Size the pool, never above the number of entries there are to run.
+
+    A Pool creates every worker up front, so asking for more than there are
+    entries just pays each one's startup for no work. Costly under the spawn
+    start method, where each worker re-imports gemmi into its own interpreter.
+    """
     if args.workers is None:
         cpu_limit, memory_limit = automatic_worker_limits()
         automatic_limit = cpu_limit
         if memory_limit is not None:
             automatic_limit = min(automatic_limit, memory_limit)
-        workers = min(automatic_limit, len(ids))
+        workers = min(automatic_limit, entry_count)
         run_log.details["worker_selection"] = "automatic"
         run_log.details["CPU worker limit"] = cpu_limit
         run_log.details["Memory worker limit"] = (
@@ -1199,16 +1034,22 @@ def _run(args, run_log):
         )
         logger.info("  selected workers: %s", workers)
     else:
-        workers = min(args.workers, len(ids))
+        workers = min(args.workers, entry_count)
         run_log.details["worker_selection"] = "explicit"
         run_log.details["Selected workers"] = workers
     logger.info(
         "processing %d entr%s with %d worker(s)",
-        len(ids),
-        "y" if len(ids) == 1 else "ies",
+        entry_count,
+        "y" if entry_count == 1 else "ies",
         workers,
     )
+    return workers
 
+
+def _worker_config(
+    args, env, root, cache_root, cofactors, manual_inputs, plan, run_log
+):
+    """Build the config every worker is initialized with, once per run."""
     cfg = {
         "root": root,
         "mirror_root": args.pdb_redo_root,
@@ -1233,271 +1074,296 @@ def _run(args, run_log):
         alchemy_version=ALCHEMY_VERSION,
         gemmi_version=cfg["gemmi_version"],
         ccp4_version=cfg["ccp4_version"],
-        confidence_mode=confidence_mode or "disabled",
+        confidence_mode=plan.mode or "disabled",
+    )
+    return cfg
+
+
+def _output_targets(args, layout, plan):
+    """The output files this run writes, in the order staging expects them."""
+    paths = [*layout.core]
+    if plan.enabled:
+        if plan.stream_path is None:
+            raise RuntimeError("confidence output path is not configured")
+        paths.append(plan.stream_path)
+    if plan.synchronize_inputs:
+        paths.append(layout.confidence_inputs)
+    return tuple(paths)
+
+
+def _open_writers(handles, args, plan, write_paths):
+    """Open every output stream this run writes and give them their headers."""
+    manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
+    confidence_path = write_paths[4] if plan.enabled else None
+    confidence_inputs_path = write_paths[5] if plan.synchronize_inputs else None
+
+    def opened(path):
+        return handles.enter_context(open(path, "w", newline=""))
+
+    return _OutputWriters(
+        opened(manifest_path),
+        opened(stats_path),
+        opened(bonds_path) if args.bonds else None,
+        opened(candidates_path) if args.bonds else None,
+        opened(confidence_path) if confidence_path is not None else None,
+        plan.columns,
+        opened(confidence_inputs_path) if confidence_inputs_path is not None else None,
     )
 
-    prior_bond_counts = (
-        _manifest_values_by_id(manifest_path, "n_bonds")
-        if args.resume and not args.bonds
-        else {}
+
+def _confidence_rows_for(result, plan):
+    """The confidence rows one entry contributes, scored where a reference is."""
+    rows = prepare_result_confidence_inputs(
+        result["rows"], result["bond_rows"], STATS_COLUMNS
     )
-    prior_candidate_counts = (
-        _manifest_values_by_id(manifest_path, "n_candidates")
-        if args.resume and not args.bonds
-        else {}
+    rows = complete_confidence_site_count(
+        rows,
+        result["pdbID"],
+        result["n"],
+        result.get("confidence_inputs_missing_reason", ""),
     )
-    output_paths = [manifest_path, stats_path, bonds_path, candidates_path]
-    if confidence_mode is not None:
-        if confidence_stream_path is None:
-            raise RuntimeError("confidence output path is not configured")
-        output_paths.append(confidence_stream_path)
-    if synchronize_confidence_inputs:
-        output_paths.append(confidence_inputs_path)
-    output_paths = tuple(output_paths)
+    # Equivalent to `plan.mode == "reference"`: the mode is set only where a
+    # reference has just been loaded. Testing the reference itself says what
+    # the call actually needs.
+    if plan.reference is not None:
+        rows = score_against_reference(rows, plan.reference)
+    return rows
+
+
+def _write_entry(result, args, plan, writers, staging, prior_counts):
+    """Write one entry's rows, manifest row last.
+
+    The manifest is the completion marker, so it is written only after this
+    entry's data rows have flushed: an interruption between the two costs a
+    repeated entry on the next resume, never a lost one.
+    """
+    prior_bond_counts, prior_candidate_counts = prior_counts
+    writers.write_stats_rows(result["rows"])
+    writers.write_bond_rows(result["bond_rows"])
+    writers.write_candidate_rows(result["candidate_rows"])
+    if plan.enabled:
+        writers.write_confidence_rows(_confidence_rows_for(result, plan))
+    writers.write_manifest_row(
+        _manifest_row(
+            result, args.resume, args.bonds, prior_bond_counts, prior_candidate_counts
+        )
+    )
+    if staging is not None:
+        staging.replacement_ids.add(result["pdbID"].lower())
+
+
+def _dispatch_entries(
+    args, ids, cfg, workers, writers, plan, staging, prior_counts, run_log
+):
+    """Run every entry across a worker pool and write the results as they land.
+
+    Returns the batch tally. The loop does three things at once, which is why
+    it does not simply iterate the pool's results: it collects finished entries,
+    it watches the pool roster for workers that died without returning anything,
+    and it renders progress. A killed worker never delivers a result, so waiting
+    on the pool alone would hang the batch forever on the entry it was holding.
+    """
+    tally = _BatchTally()
+    progress = _ProgressReporter(len(ids))
+    inflight = SimpleQueue()
+    assignments: Dict[int, str] = {}
+    worker_pids: set = set()
+    lost_ids: set = set()
+    completed_ids: set = set()
+    unattributed_deaths = 0
+    last_progress = time.monotonic()
+    # Not a ``with`` block: ``Pool.__exit__`` calls the same ``terminate`` that
+    # a killed idle worker can wedge forever, so shutdown is bounded explicitly
+    # in the ``finally`` below.
+    # Worker records travel over this queue and are re-emitted by the driver, so
+    # only one process ever writes to a handler. The queue is created before the
+    # pool but the listener thread is started after it: forking a process that
+    # already has running threads risks the child deadlocking on a lock no
+    # thread there holds.
+    log_queue = create_worker_log_queue()
+    pool = Pool(workers, initializer=_init_worker, initargs=(cfg, inflight, log_queue))
+    log_listener = start_worker_log_listener(log_queue)
+    try:
+        results = pool.imap_unordered(process, ids, chunksize=1)
+        completed = 0
+        progress.render(completed, tally.counts, tally.no_metals, force=True)
+        while completed < len(ids):
+            batch = []
+            try:
+                batch.append(results.next(timeout=1.0))
+            except MultiprocessingTimeoutError:
+                pass
+            # A killed worker never delivers a result, so its entry is
+            # recovered from the pool roster rather than waited on.
+            _drain_inflight(inflight, assignments)
+            for dead_pid in _dead_worker_pids(pool, worker_pids):
+                dead_id = assignments.pop(dead_pid, None)
+                if dead_id is None:
+                    unattributed_deaths += 1
+                elif dead_id not in lost_ids:
+                    lost_ids.add(dead_id)
+                    batch.append(_worker_death_result(dead_id, cfg, dead_pid))
+            if not batch:
+                stalled = time.monotonic() - last_progress
+                remaining = len(ids) - completed
+                if (
+                    unattributed_deaths
+                    and stalled > WORKER_STALL_GRACE_S
+                    and remaining <= unattributed_deaths
+                ):
+                    # Every entry still outstanding can only be held by a
+                    # process that died before naming its entry. Entries that
+                    # already returned a result are not outstanding: blaming
+                    # one of those would write a second, failed row for an
+                    # entry that succeeded and leave the entry that actually
+                    # died unreported.
+                    for stuck_id in ids:
+                        if stuck_id in lost_ids or stuck_id in completed_ids:
+                            continue
+                        lost_ids.add(stuck_id)
+                        batch.append(_worker_death_result(stuck_id, cfg, 0))
+                        if len(batch) >= remaining:
+                            break
+                else:
+                    progress.render(completed, tally.counts, tally.no_metals)
+                    continue
+            last_progress = time.monotonic()
+            for r in batch:
+                if r["pdbID"] in lost_ids and r.get("reason_codes") != [
+                    "worker_process_died"
+                ]:
+                    # A real result arrived for an entry already declared lost.
+                    # The synthesized row stands, so this one is dropped rather
+                    # than written twice.
+                    continue
+                completed += 1
+                completed_ids.add(r["pdbID"])
+                run_log.record_entry(r)
+                if not args.resume or _resume_replacement_succeeded(r):
+                    _write_entry(r, args, plan, writers, staging, prior_counts)
+                tally.record(r)
+                finished = completed == len(ids)
+                progress.render(
+                    completed,
+                    tally.counts,
+                    tally.no_metals,
+                    force=progress.terminal or finished,
+                    final=finished,
+                )
+    finally:
+        forced = _shutdown_pool(pool)
+        # Stopped only after the pool is gone, so records emitted during
+        # shutdown are still forwarded.
+        log_listener.stop()
+        log_queue.close()
+        if forced:
+            run_log.summary["worker_pool_forced_shutdown"] = True
+            logger.warning(
+                "a worker pool shutdown had to be forced after a worker died "
+                "holding the task-queue lock; results above are complete"
+            )
+        progress.close()
+    return tally
+
+
+def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
+    """Open the outputs, run the batch, and commit any staged retry rows.
+
+    Returns ``(tally, writers)``. Staging is discarded rather than committed
+    unless the batch ran to completion, so an interrupted retry leaves the
+    previous run's rows exactly as they were.
+    """
+    prior_counts = (
+        _manifest_values_by_id(layout.manifest, "n_bonds")
+        if args.resume and not args.bonds
+        else {},
+        _manifest_values_by_id(layout.manifest, "n_candidates")
+        if args.resume and not args.bonds
+        else {},
+    )
+    output_paths = _output_targets(args, layout, plan)
     staging = _ResumeStaging(args.output_dir, output_paths) if args.resume else None
     write_paths = staging.staged if staging is not None else output_paths
-    (write_manifest_path, write_stats_path, write_bonds_path, write_candidates_path) = (
-        write_paths[:4]
-    )
-    write_confidence_path = write_paths[4] if confidence_mode is not None else None
-    write_confidence_inputs_path = (
-        write_paths[5] if synchronize_confidence_inputs else None
-    )
 
-    counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
-    no_metal_count = 0
-    retryable_partial_count = 0
-    processing_completed = False
     writers = None
-    progress = _ProgressReporter(len(ids))
+    processing_completed = False
     try:
         # ExitStack closes whichever handles were opened, so a failure partway
         # through opening them cannot leak the earlier ones.
         with contextlib.ExitStack() as handles:
-            writers = _OutputWriters(
-                handles.enter_context(open(write_manifest_path, "w", newline="")),
-                handles.enter_context(open(write_stats_path, "w", newline="")),
-                handles.enter_context(open(write_bonds_path, "w", newline=""))
-                if args.bonds
-                else None,
-                handles.enter_context(open(write_candidates_path, "w", newline=""))
-                if args.bonds
-                else None,
-                handles.enter_context(open(write_confidence_path, "w", newline=""))
-                if write_confidence_path is not None
-                else None,
-                confidence_columns,
-                handles.enter_context(
-                    open(write_confidence_inputs_path, "w", newline="")
-                )
-                if write_confidence_inputs_path is not None
-                else None,
-            )
-            inflight = SimpleQueue()
-            assignments: Dict[int, str] = {}
-            worker_pids: set = set()
-            lost_ids: set = set()
-            completed_ids: set = set()
-            unattributed_deaths = 0
-            last_progress = time.monotonic()
-            # Not a ``with`` block: ``Pool.__exit__`` calls the same
-            # ``terminate`` that a killed idle worker can wedge forever, so
-            # shutdown is bounded explicitly in the ``finally`` below.
-            # Worker records travel over this queue and are re-emitted by the
-            # driver, so only one process ever writes to a handler. The queue
-            # is created before the pool but the listener thread is started
-            # after it: forking a process that already has running threads
-            # risks the child deadlocking on a lock no thread there holds.
-            log_queue = create_worker_log_queue()
-            pool = Pool(
+            writers = _open_writers(handles, args, plan, write_paths)
+            tally = _dispatch_entries(
+                args,
+                ids,
+                cfg,
                 workers,
-                initializer=_init_worker,
-                initargs=(cfg, inflight, log_queue),
+                writers,
+                plan,
+                staging,
+                prior_counts,
+                run_log,
             )
-            log_listener = start_worker_log_listener(log_queue)
-            try:
-                results = pool.imap_unordered(process, ids, chunksize=1)
-                completed = 0
-                progress.render(completed, counts, no_metal_count, force=True)
-                while completed < len(ids):
-                    batch = []
-                    try:
-                        batch.append(results.next(timeout=1.0))
-                    except MultiprocessingTimeoutError:
-                        pass
-                    # A killed worker never delivers a result, so its entry is
-                    # recovered from the pool roster rather than waited on.
-                    _drain_inflight(inflight, assignments)
-                    for dead_pid in _dead_worker_pids(pool, worker_pids):
-                        dead_id = assignments.pop(dead_pid, None)
-                        if dead_id is None:
-                            unattributed_deaths += 1
-                        elif dead_id not in lost_ids:
-                            lost_ids.add(dead_id)
-                            batch.append(_worker_death_result(dead_id, cfg, dead_pid))
-                    if not batch:
-                        stalled = time.monotonic() - last_progress
-                        remaining = len(ids) - completed
-                        if (
-                            unattributed_deaths
-                            and stalled > WORKER_STALL_GRACE_S
-                            and remaining <= unattributed_deaths
-                        ):
-                            # Every entry still outstanding can only be held by
-                            # a process that died before naming its entry.
-                            # Entries that already returned a result are not
-                            # outstanding: blaming one of those would write a
-                            # second, failed row for an entry that succeeded and
-                            # leave the entry that actually died unreported.
-                            for stuck_id in ids:
-                                if stuck_id in lost_ids or stuck_id in completed_ids:
-                                    continue
-                                lost_ids.add(stuck_id)
-                                batch.append(_worker_death_result(stuck_id, cfg, 0))
-                                if len(batch) >= remaining:
-                                    break
-                        else:
-                            progress.render(completed, counts, no_metal_count)
-                            continue
-                    last_progress = time.monotonic()
-                    for r in batch:
-                        if r["pdbID"] in lost_ids and r.get("reason_codes") != [
-                            "worker_process_died"
-                        ]:
-                            # A real result arrived for an entry already
-                            # declared lost. The synthesized row stands, so
-                            # this one is dropped rather than written twice.
-                            continue
-                        completed += 1
-                        completed_ids.add(r["pdbID"])
-                        run_log.record_entry(r)
-                        if not args.resume or _resume_replacement_succeeded(r):
-                            writers.write_stats_rows(r["rows"])
-                            writers.write_bond_rows(r["bond_rows"])
-                            writers.write_candidate_rows(r["candidate_rows"])
-                            confidence_rows = []
-                            if confidence_mode is not None:
-                                confidence_rows = prepare_result_confidence_inputs(
-                                    r["rows"], r["bond_rows"], STATS_COLUMNS
-                                )
-                                confidence_rows = complete_confidence_site_count(
-                                    confidence_rows,
-                                    r["pdbID"],
-                                    r["n"],
-                                    r.get("confidence_inputs_missing_reason", ""),
-                                )
-                                # Equivalent to `confidence_mode == "reference"`:
-                                # the mode is set only where a reference has
-                                # just been loaded. Testing the reference
-                                # itself says what the call actually needs.
-                                if confidence_reference is not None:
-                                    confidence_rows = score_against_reference(
-                                        confidence_rows, confidence_reference
-                                    )
-                                writers.write_confidence_rows(confidence_rows)
-                            # The manifest is the completion marker, so write
-                            # it only after this entry's rows have flushed.
-                            writers.write_manifest_row(
-                                _manifest_row(
-                                    r,
-                                    args.resume,
-                                    args.bonds,
-                                    prior_bond_counts,
-                                    prior_candidate_counts,
-                                )
-                            )
-                            if staging is not None:
-                                staging.replacement_ids.add(r["pdbID"].lower())
-                        counts[r["status"]] = counts.get(r["status"], 0) + 1
-                        if r.get("no_metals", False):
-                            no_metal_count += 1
-                        if r["status"] == "partial" and r.get("retryable", False):
-                            retryable_partial_count += 1
-                        finished = completed == len(ids)
-                        progress.render(
-                            completed,
-                            counts,
-                            no_metal_count,
-                            force=progress.terminal or finished,
-                            final=finished,
-                        )
-            finally:
-                forced = _shutdown_pool(pool)
-                # Stopped only after the pool is gone, so records emitted
-                # during shutdown are still forwarded.
-                log_listener.stop()
-                log_queue.close()
-                if forced:
-                    run_log.summary["worker_pool_forced_shutdown"] = True
-                    logger.warning(
-                        "a worker pool shutdown had to be forced after a "
-                        "worker died holding the task-queue lock; results "
-                        "above are complete"
-                    )
             processing_completed = True
     finally:
-        progress.close()
         if staging is not None and not processing_completed:
             staging.discard()
 
-    n_rows = writers.n_rows if writers is not None else 0
-    n_bonds = writers.n_bonds if writers is not None else 0
-    n_candidates = writers.n_candidates if writers is not None else 0
     run_log.summary.update(
-        metal_rows_written=n_rows,
-        bond_rows_written=n_bonds,
-        candidate_rows_written=n_candidates,
-        confidence_rows_written=(writers.n_confidence if writers is not None else 0),
-        manifest_path=manifest_path,
-        metal_stats_path=stats_path,
-        metal_bonds_path=bonds_path if args.bonds else "disabled",
-        metal_candidates_path=(candidates_path if args.bonds else "disabled"),
+        metal_rows_written=writers.n_rows,
+        bond_rows_written=writers.n_bonds,
+        candidate_rows_written=writers.n_candidates,
+        confidence_rows_written=writers.n_confidence,
+        manifest_path=layout.manifest,
+        metal_stats_path=layout.stats,
+        metal_bonds_path=layout.bonds if args.bonds else "disabled",
+        metal_candidates_path=layout.candidates if args.bonds else "disabled",
     )
-
     if staging is not None:
         try:
-            staging.commit(args.bonds, confidence_enabled=confidence_mode is not None)
+            staging.commit(args.bonds, confidence_enabled=plan.enabled)
         finally:
             staging.discard()
+    return tally, writers
 
+
+def _report_batch(args, layout, plan, tally, writers, run_log):
+    """Print the human summary, finalize confidence, and return the exit code.
+
+    Confidence is finalized only on a clean batch: a reference built from a run
+    with incomplete entries would silently become the cohort every later run is
+    scored against.
+    """
     print(
-        f"Done. ok={counts['ok']} partial={counts['partial']} "
-        f"skip={counts['skip']} error={counts['error']} "
-        f"no_metals={no_metal_count}; "
-        f"{n_rows} metal/cofactor rows -> {stats_path}",
+        f"Done. ok={tally.counts['ok']} partial={tally.counts['partial']} "
+        f"skip={tally.counts['skip']} error={tally.counts['error']} "
+        f"no_metals={tally.no_metals}; "
+        f"{writers.n_rows} metal/cofactor rows -> {layout.stats}",
         flush=True,
     )
     if args.bonds:
-        print(f"      {n_bonds} bond rows -> {bonds_path}", flush=True)
-        print(f"      {n_candidates} candidate rows -> {candidates_path}", flush=True)
-    exit_code = _batch_exit_code(counts, retryable_partial_count)
-    if confidence_mode == "database":
+        print(f"      {writers.n_bonds} bond rows -> {layout.bonds}", flush=True)
+        print(
+            f"      {writers.n_candidates} candidate rows -> {layout.candidates}",
+            flush=True,
+        )
+    exit_code = tally.exit_code()
+    if plan.mode == "database":
         if exit_code == 0:
-            try:
-                total, scored, cohort = finalize_database_confidence(
-                    confidence_inputs_path,
-                    confidence_scores_path,
-                    database_reference_dir,
-                )
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                message = f"Confidence finalization failed: {exc}"
-                run_log.driver_error = message
-                logger.error("%s", message)
-                return 1
+            total, scored, cohort = _finalize_confidence_reference(layout)
             run_log.summary.update(
                 confidence_status="finalized",
                 confidence_rows=total,
                 confidence_scored_rows=scored,
                 confidence_reference_cohort=cohort,
-                confidence_scores_path=confidence_scores_path,
-                confidence_reference_path=database_reference_dir,
+                confidence_scores_path=layout.confidence_scores,
+                confidence_reference_path=layout.reference_dir,
             )
             print(
                 f"      {total} confidence rows ({scored} scored; "
-                f"reference cohort {cohort}) -> {confidence_scores_path}",
+                f"reference cohort {cohort}) -> {layout.confidence_scores}",
                 flush=True,
             )
-            print(f"      confidence reference -> {database_reference_dir}", flush=True)
+            print(f"      confidence reference -> {layout.reference_dir}", flush=True)
         else:
             run_log.summary["confidence_status"] = "not_finalized_incomplete_run"
             print(
@@ -1505,29 +1371,70 @@ def _run(args, run_log):
                 "reference was not finalized because the run is incomplete.",
                 flush=True,
             )
-    elif confidence_mode == "reference":
-        if confidence_reference is None:
+    elif plan.mode == "reference":
+        if plan.reference is None:
             raise RuntimeError("confidence reference is not configured")
         print(
             f"      {writers.n_confidence} confidence rows compared with "
-            f"database cohort {confidence_reference.cohort_size} -> "
-            f"{confidence_scores_path}",
+            f"database cohort {plan.reference.cohort_size} -> "
+            f"{layout.confidence_scores}",
             flush=True,
         )
         run_log.summary.update(
             confidence_status="scored_against_reference",
-            confidence_reference_cohort=confidence_reference.cohort_size,
-            confidence_scores_path=confidence_scores_path,
+            confidence_reference_cohort=plan.reference.cohort_size,
+            confidence_scores_path=layout.confidence_scores,
         )
     if exit_code:
         logger.warning(
             "completed with incomplete entries: errors=%d, skips=%d, "
             "retryable_partials=%d",
-            counts["error"],
-            counts["skip"],
-            retryable_partial_count,
+            tally.counts["error"],
+            tally.counts["skip"],
+            tally.retryable_partials,
         )
     return exit_code
+
+
+def _run(args, run_log):
+    """Execute one batch, returning its exit code."""
+    try:
+        return _execute(args, run_log)
+    except _DriverError as exc:
+        run_log.driver_error = str(exc)
+        logger.error("%s", exc)
+        return 1
+
+
+def _execute(args, run_log):
+    """The order of a run, phase by phase."""
+    cofactors = _load_cofactor_catalog()
+    env, _ = resolve_ccp4_environment(args)
+    if env is None:
+        return 0  # --configure-ccp4 saved a setup path and ran nothing else.
+    _prepare_output_directory(args.output_dir)
+
+    layout = _OutputLayout(args.output_dir)
+    run_mode, database_run = _classify_run(args)
+    run_log.details["run_mode"] = run_mode
+
+    plan = _plan_confidence(args, layout, database_run, run_log)
+    _check_resume_is_compatible(args, layout, plan)
+
+    ids, root, manual_inputs = _schedule_entries(
+        args, layout, args.pdb_redo_cache, run_log
+    )
+    if not ids:
+        return _finish_without_entries(args, layout, plan)
+
+    _clear_stale_outputs(args, layout, plan)
+    workers = _choose_worker_count(args, len(ids), run_log)
+    cfg = _worker_config(
+        args, env, root, args.pdb_redo_cache, cofactors, manual_inputs, plan, run_log
+    )
+
+    tally, writers = _process_entries(args, ids, cfg, workers, layout, plan, run_log)
+    return _report_batch(args, layout, plan, tally, writers, run_log)
 
 
 def main(argv=None):

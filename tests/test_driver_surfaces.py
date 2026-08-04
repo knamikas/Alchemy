@@ -31,6 +31,7 @@ import os
 
 import pytest
 
+import bond_analysis
 import ccp4_setup
 import inputs
 import main
@@ -53,9 +54,9 @@ def resume_outputs(tmp_path):
     return {
         "manifest_path": _write_header(tmp_path / "manifest.csv", MANIFEST_COLUMNS),
         "stats_path": _write_header(tmp_path / "stats.csv", STATS_COLUMNS),
-        "bonds_path": _write_header(tmp_path / "bonds.csv", main.BOND_COLUMNS),
+        "bonds_path": _write_header(tmp_path / "bonds.csv", bond_analysis.BOND_COLUMNS),
         "candidates_path": _write_header(
-            tmp_path / "candidates.csv", main.CANDIDATE_COLUMNS
+            tmp_path / "candidates.csv", bond_analysis.CANDIDATE_COLUMNS
         ),
     }
 

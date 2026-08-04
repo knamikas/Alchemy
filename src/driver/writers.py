@@ -8,6 +8,7 @@ here, is what keeps the written header and the resume check from disagreeing.
 """
 
 import csv
+from typing import Optional
 
 from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS, STATS_EXTRA_COLUMNS
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
@@ -116,8 +117,11 @@ class _OutputWriters:
         )
         if confidence_fh is not None and confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
-        self._confidence = None
-        self._confidence_inputs = None
+        # Annotated because both start ``None`` and are assigned a writer
+        # below: left to inference the attribute types would be ``None``, and
+        # every assignment after this point an error.
+        self._confidence: Optional[csv.DictWriter] = None
+        self._confidence_inputs: Optional[csv.DictWriter] = None
         if confidence_fh is not None and confidence_columns is not None:
             self._confidence = csv.DictWriter(
                 confidence_fh, fieldnames=confidence_columns
