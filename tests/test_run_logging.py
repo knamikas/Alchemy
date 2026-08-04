@@ -5,7 +5,7 @@ the handlers, that worker processes reach them over a queue rather than writing
 concurrently, and that no single record can grow without limit.
 
 Out of scope here (owned elsewhere): what individual modules choose to log, and
-the structured per-run report written by ``main._RunLog``, which is a separate
+the structured per-run report written by ``driver.runlog._RunLog``, which is a separate
 artifact rather than a transcript.
 """
 

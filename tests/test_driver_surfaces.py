@@ -34,6 +34,8 @@ import pytest
 import ccp4_setup
 import inputs
 import main
+from driver import resources
+from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
 
 # --------------------------------------------------------------------------- #
@@ -49,10 +51,8 @@ def _write_header(path, columns):
 def resume_outputs(tmp_path):
     """A set of output files whose headers all match the current schema."""
     return {
-        "manifest_path": _write_header(
-            tmp_path / "manifest.csv", main.MANIFEST_COLUMNS
-        ),
-        "stats_path": _write_header(tmp_path / "stats.csv", main.STATS_COLUMNS),
+        "manifest_path": _write_header(tmp_path / "manifest.csv", MANIFEST_COLUMNS),
+        "stats_path": _write_header(tmp_path / "stats.csv", STATS_COLUMNS),
         "bonds_path": _write_header(tmp_path / "bonds.csv", main.BOND_COLUMNS),
         "candidates_path": _write_header(
             tmp_path / "candidates.csv", main.CANDIDATE_COLUMNS
@@ -98,7 +98,7 @@ def test_a_truncated_stats_header_is_refused(resume_outputs, tmp_path):
     because a dropped metric column misaligns every value after it without any
     other symptom.
     """
-    _write_header(tmp_path / "stats.csv", list(main.STATS_COLUMNS)[:-1])
+    _write_header(tmp_path / "stats.csv", list(STATS_COLUMNS)[:-1])
 
     with pytest.raises(ValueError, match="incompatible schema"):
         main.validate_resume_schemas(**resume_outputs)
@@ -448,23 +448,25 @@ def test_worker_limits_leave_headroom_and_respect_memory(monkeypatch):
     oversubscribing it is what invites the OOM killer the driver has to
     recover from.
     """
-    monkeypatch.setattr(main, "available_cpu_count", lambda: 16)
+    monkeypatch.setattr(resources, "available_cpu_count", lambda: 16)
     monkeypatch.setattr(
-        main, "available_memory_bytes", lambda: 8 * main.AUTO_WORKER_MEMORY_BYTES
+        resources,
+        "available_memory_bytes",
+        lambda: 8 * resources.AUTO_WORKER_MEMORY_BYTES,
     )
-    assert main.automatic_worker_limits() == (14, 8)
+    assert resources.automatic_worker_limits() == (14, 8)
 
-    monkeypatch.setattr(main, "available_cpu_count", lambda: 1)
-    monkeypatch.setattr(main, "available_memory_bytes", lambda: 0)
-    assert main.automatic_worker_limits() == (1, 1)
+    monkeypatch.setattr(resources, "available_cpu_count", lambda: 1)
+    monkeypatch.setattr(resources, "available_memory_bytes", lambda: 0)
+    assert resources.automatic_worker_limits() == (1, 1)
 
 
 def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
     """An unreadable ``/proc/meminfo`` must not silently cap parallelism."""
-    monkeypatch.setattr(main, "available_cpu_count", lambda: 8)
-    monkeypatch.setattr(main, "available_memory_bytes", lambda: None)
+    monkeypatch.setattr(resources, "available_cpu_count", lambda: 8)
+    monkeypatch.setattr(resources, "available_memory_bytes", lambda: None)
 
-    cpu_limit, memory_limit = main.automatic_worker_limits()
+    cpu_limit, memory_limit = resources.automatic_worker_limits()
     assert cpu_limit == 6
     assert memory_limit is None
 

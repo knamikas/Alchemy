@@ -36,7 +36,8 @@ def test_src_modules_import():
     ``src/`` is not a package, so this only works because ``conftest.py`` puts
     it on ``sys.path`` at import time. If that wiring breaks, every other module
     in the suite fails with a confusing ``ModuleNotFoundError``; failing here
-    first names the real cause.
+    first names the real cause. ``driver`` *is* a package, reached the same way,
+    so it is covered here too.
     """
     import bond_analysis
     import ccp4_setup
@@ -47,12 +48,17 @@ def test_src_modules_import():
     import metal_identification  # noqa: F401 - imported to prove it loads
     import structure_analysis
     import worker
+    from driver import progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert bond_analysis.CUTOFF == 4.0
     assert callable(structure_analysis.load_structure)
     assert callable(main.main)
     assert callable(worker.process)
+    assert writers.MANIFEST_COLUMNS[0] == "pdbID"
+    assert callable(progress._ProgressReporter)
+    assert callable(runlog._RunLog)
+    assert resources.available_cpu_count() >= 1
     assert callable(density_analysis.run_density_analysis)
     assert callable(confidence_score.score_site)
     # Named explicitly rather than asserted truthy: a non-empty tuple literal is

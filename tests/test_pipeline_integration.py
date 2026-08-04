@@ -49,6 +49,7 @@ import confidence_score
 import helpers
 import inputs
 import main
+from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
 
 
@@ -494,8 +495,8 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     # Per-entry working directories are removed once their rows are extracted.
     assert [name for name in written if name.startswith(".alchemy-")] == []
 
-    assert read_header(output_dir, "manifest.csv") == main.MANIFEST_COLUMNS
-    assert read_header(output_dir, "metal_stats_all.csv") == main.STATS_COLUMNS
+    assert read_header(output_dir, "manifest.csv") == MANIFEST_COLUMNS
+    assert read_header(output_dir, "metal_stats_all.csv") == STATS_COLUMNS
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
     assert read_header(output_dir, "metal_candidates_all.csv") == CANDIDATE_COLUMNS
 
@@ -545,7 +546,7 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
         "retryable",
         "reason_codes",
         "runtime_s",
-    } <= set(main.MANIFEST_COLUMNS)
+    } <= set(MANIFEST_COLUMNS)
 
 
 # --------------------------------------------------------------------------- #
@@ -779,7 +780,7 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
     assert rows_for(batch.candidates, "9nxl") == []
 
     # Headers survive even when an entry contributes no rows.
-    assert read_header(batch.output_dir, "metal_stats_all.csv") == main.STATS_COLUMNS
+    assert read_header(batch.output_dir, "metal_stats_all.csv") == STATS_COLUMNS
 
     # The density stages are skipped entirely for a metal-free entry.
     log_text = open(log_paths(batch.output_dir)[0], encoding="utf-8").read()

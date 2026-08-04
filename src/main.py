@@ -34,13 +34,10 @@ Examples
 """
 
 import argparse
-from collections import Counter
 import contextlib
 import csv
-from datetime import datetime, timezone
 import json
 import os
-import platform
 import re
 import shlex
 import shutil
@@ -54,7 +51,6 @@ from multiprocessing import (
     Pool,
     SimpleQueue,
     TimeoutError as MultiprocessingTimeoutError,
-    cpu_count,
 )
 from typing import Dict
 
@@ -64,15 +60,8 @@ from density_analysis import (
     DENSITY_MAP_SCOPES,
     MODEL_ENVELOPE_BORDER_ANGSTROM,
 )
-from metal_identification import (
-    EDSTATS_COLUMNS,
-    load_cofactor_ids,
-)
-from bond_analysis import (
-    BOND_COLUMNS,
-    CANDIDATE_COLUMNS,
-    STATS_EXTRA_COLUMNS,
-)
+from metal_identification import load_cofactor_ids
+from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS
 from run_logging import (
     configure_driver_logging,
     level_for_verbosity,
@@ -97,10 +86,18 @@ from inputs import (
     infer_pdb_id_from_path,
 )
 from worker import (
-    _check_row_schema,
     _init_worker,
     _worker_death_result,
     process,
+)
+from driver.progress import _ProgressReporter
+from driver.resources import automatic_worker_limits
+from driver.runlog import _RunLog
+from driver.writers import (
+    MANIFEST_COLUMNS,
+    STATS_COLUMNS,
+    _manifest_row,
+    _OutputWriters,
 )
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
@@ -120,7 +117,6 @@ DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
 DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(REPO_DIR, "confidence_reference")
 
 ALCHEMY_VERSION = __version__
-AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
 # Seconds of no completed entry, after a worker died without naming the entry
 # it held, before the remaining outstanding entries are failed retryably.
 WORKER_STALL_GRACE_S = 600.0
@@ -137,52 +133,6 @@ WORKER_SHUTDOWN_GRACE_S = 5.0
 # hash rather than the run.
 PROVENANCE_COMMAND_TIMEOUT_S = 1
 
-
-# CSV column names keep the deposited-data spelling ``pdbID`` even though every
-# Python identifier is ``pdb_id``. The columns are an external contract: users'
-# scripts, notebooks and downstream joins address them by name, and renaming
-# one would break those silently while gaining nothing. The two spellings meet
-# only where a row dict is built, e.g. ``{"pdbID": pdb_id}``.
-MANIFEST_COLUMNS = [
-    "pdbID",
-    "status",
-    "retryable",
-    "n_metals",
-    "n_bonds",
-    "n_candidates",
-    "runtime_s",
-    "reason_codes",
-    "warning_codes",
-    "error",
-    "alchemy_version",
-    "alchemy_commit",
-    "gemmi_version",
-    "ccp4_version",
-    "refinement_state",
-    "source_coordinate_format",
-    "analysis_coordinate_format",
-    "coordinate_conversion_performed",
-    "source_coordinate_path",
-    "analysis_coordinate_path",
-    "model_policy",
-    "input_model_count",
-    "model_analyzed",
-    "multi_model_structure",
-    "altloc_policy",
-    "symmetry_contact_policy",
-]
-
-# metal_stats_all.csv schema. The middle block is the EDSTATS residue table,
-# whose column set and order `extract_metal_statistics` validates against
-# EDSTATS_COLUMNS before emitting any row, so the full header is fixed. Defining
-# it once keeps the written header and the --resume compatibility check from
-# disagreeing about the columns between them.
-STATS_COLUMNS = (
-    ["pdbID", "category"]
-    + list(EDSTATS_COLUMNS)
-    + ["aa_geometry_coverage"]
-    + list(STATS_EXTRA_COLUMNS)
-)
 
 logger = logger_for(__name__)
 
@@ -691,95 +641,6 @@ def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
     return removed
 
 
-def available_cpu_count():
-    """Return the number of CPUs this process is actually permitted to use.
-
-    ``multiprocessing.cpu_count()`` reports every logical CPU on the machine
-    and ignores CPU affinity, so inside a container or under a scheduler
-    allocation it can report far more than the job was granted -- defaulting a
-    batch run to dozens of workers on a handful of cores. The affinity-aware
-    interfaces are preferred where the platform provides them.
-    """
-    process_cpu_count = getattr(os, "process_cpu_count", None)  # Python 3.13+
-    if process_cpu_count is not None:
-        count = process_cpu_count()
-        if count:
-            return count
-    if hasattr(os, "sched_getaffinity"):  # Linux
-        try:
-            count = len(os.sched_getaffinity(0))
-        except OSError:
-            count = 0
-        if count:
-            return count
-    try:
-        return cpu_count()
-    except NotImplementedError:
-        return 1
-
-
-def available_memory_bytes():
-    """Return currently available physical memory, or ``None`` if unknown.
-
-    Available memory is used instead of total RAM so an automatic batch run
-    does not compete with memory already committed to other applications. Keep
-    this dependency-free because worker selection happens before the analysis
-    environment is initialized.
-    """
-    if sys.platform.startswith("linux"):
-        try:
-            with open("/proc/meminfo", encoding="ascii") as handle:
-                for line in handle:
-                    if line.startswith("MemAvailable:"):
-                        return int(line.split()[1]) * 1024
-        except (OSError, ValueError, IndexError):
-            pass
-
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            class MemoryStatus(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            status = MemoryStatus()
-            status.dwLength = ctypes.sizeof(status)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-                return int(status.ullAvailPhys)
-        except (AttributeError, OSError, ValueError):
-            pass
-
-    if hasattr(os, "sysconf"):
-        try:
-            page_size = os.sysconf("SC_PAGE_SIZE")
-            available_pages = os.sysconf("SC_AVPHYS_PAGES")
-            if page_size > 0 and available_pages > 0:
-                return int(page_size * available_pages)
-        except (OSError, TypeError, ValueError):
-            pass
-    return None
-
-
-def automatic_worker_limits():
-    """Return the CPU and optional memory limits for automatic parallelism."""
-    cpu_limit = max(1, available_cpu_count() - 2)
-    available_memory = available_memory_bytes()
-    memory_limit = None
-    if available_memory is not None:
-        memory_limit = max(1, available_memory // AUTO_WORKER_MEMORY_BYTES)
-    return cpu_limit, memory_limit
-
-
 def parse_pdb_id(value):
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
@@ -1027,29 +888,6 @@ def _select_entry_ids(args, cache_root):
     return enumerate_entries(root, limit=limit), root, None
 
 
-def _manifest_row(
-    result, resume, bonds_enabled, prior_bond_counts, prior_candidate_counts
-):
-    """Project one worker result onto the manifest schema."""
-    row = {column: result.get(column, "") for column in MANIFEST_COLUMNS}
-    n_bonds = result["n_bonds"]
-    n_candidates = result["n_candidates"]
-    if not bonds_enabled:
-        n_bonds = prior_bond_counts.get(result["pdbID"].lower(), "") if resume else ""
-        n_candidates = (
-            prior_candidate_counts.get(result["pdbID"].lower(), "") if resume else ""
-        )
-    row.update(
-        n_metals=result["n"],
-        n_bonds=n_bonds,
-        n_candidates=n_candidates,
-        runtime_s=result["runtime"],
-        reason_codes="|".join(result.get("reason_codes", [])),
-        warning_codes="|".join(result.get("warning_codes", [])),
-    )
-    return row
-
-
 class _ResumeStaging:
     """Holds retried entries' rows until the whole retry batch has succeeded.
 
@@ -1091,433 +929,6 @@ class _ResumeStaging:
     def discard(self):
         if os.path.isdir(self.dir):
             shutil.rmtree(self.dir, ignore_errors=True)
-
-
-class _OutputWriters:
-    """The streamed CSV outputs, with running row counts.
-
-    Each stream is flushed after every entry so an interrupted batch run
-    retains the results it already completed. Headers are written on creation.
-    """
-
-    def __init__(
-        self,
-        manifest_fh,
-        stats_fh,
-        bonds_fh,
-        candidates_fh,
-        confidence_fh=None,
-        confidence_columns=None,
-        confidence_inputs_fh=None,
-    ):
-        self._manifest_fh = manifest_fh
-        self._stats_fh = stats_fh
-        self._bonds_fh = bonds_fh
-        self._candidates_fh = candidates_fh
-        self._confidence_fh = confidence_fh
-        self._confidence_inputs_fh = confidence_inputs_fh
-        self._manifest = csv.DictWriter(manifest_fh, fieldnames=MANIFEST_COLUMNS)
-        self._stats = csv.writer(stats_fh)
-        self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
-        self._candidates = (
-            csv.writer(candidates_fh) if candidates_fh is not None else None
-        )
-        if confidence_fh is not None and confidence_columns is None:
-            raise ValueError("confidence columns are required with a confidence output")
-        self._confidence = None
-        self._confidence_inputs = None
-        if confidence_fh is not None and confidence_columns is not None:
-            self._confidence = csv.DictWriter(
-                confidence_fh, fieldnames=confidence_columns
-            )
-        if confidence_inputs_fh is not None:
-            if confidence_fh is None:
-                raise ValueError(
-                    "confidence inputs synchronization requires scored output"
-                )
-            self._confidence_inputs = csv.DictWriter(
-                confidence_inputs_fh, fieldnames=CONFIDENCE_INPUT_COLUMNS
-            )
-        self._confidence_columns = confidence_columns
-        self.n_rows = 0
-        self.n_bonds = 0
-        self.n_candidates = 0
-        self.n_confidence = 0
-        self._manifest.writeheader()
-        self._stats.writerow(STATS_COLUMNS)
-        if self._bonds is not None:
-            self._bonds.writerow(BOND_COLUMNS)
-        if self._candidates is not None:
-            self._candidates.writerow(CANDIDATE_COLUMNS)
-        if self._confidence is not None:
-            self._confidence.writeheader()
-        if self._confidence_inputs is not None:
-            self._confidence_inputs.writeheader()
-
-    def write_stats_rows(self, rows):
-        if not rows:
-            return
-        for row in rows:
-            self._stats.writerow([row["pdbID"], row["category"]] + row["fields"])
-            self.n_rows += 1
-        self._stats_fh.flush()
-
-    def write_bond_rows(self, bond_rows):
-        if self._bonds is None or not bond_rows:
-            return
-        _check_row_schema(bond_rows[0], BOND_COLUMNS, "metal_bonds_all.csv")
-        for bond in bond_rows:
-            self._bonds.writerow([bond[column] for column in BOND_COLUMNS])
-            self.n_bonds += 1
-        self._bonds_fh.flush()
-
-    def write_candidate_rows(self, candidate_rows):
-        if self._candidates is None or not candidate_rows:
-            return
-        _check_row_schema(
-            candidate_rows[0], CANDIDATE_COLUMNS, "metal_candidates_all.csv"
-        )
-        for candidate in candidate_rows:
-            self._candidates.writerow(
-                [candidate[column] for column in CANDIDATE_COLUMNS]
-            )
-            self.n_candidates += 1
-        self._candidates_fh.flush()
-
-    def write_manifest_row(self, row):
-        self._manifest.writerow(row)
-        self._manifest_fh.flush()
-
-    def write_confidence_rows(self, rows):
-        if self._confidence is None or not rows:
-            return
-        if self._confidence_columns is None or self._confidence_fh is None:
-            raise RuntimeError("confidence output is not fully configured")
-        expected = set(self._confidence_columns)
-        if rows[0].keys() != expected:
-            raise RuntimeError("confidence row does not match its output schema")
-        self._confidence.writerows(rows)
-        if self._confidence_inputs is not None:
-            self._confidence_inputs.writerows(
-                {column: row[column] for column in CONFIDENCE_INPUT_COLUMNS}
-                for row in rows
-            )
-        self.n_confidence += len(rows)
-        self._confidence_fh.flush()
-        if self._confidence_inputs_fh is not None:
-            self._confidence_inputs_fh.flush()
-
-
-class _ProgressReporter:
-    """Render a throttled parent-process heartbeat without worker overhead."""
-
-    TERMINAL_INTERVAL_S = 1.0
-    REDIRECTED_INTERVAL_S = 30.0
-
-    def __init__(self, total, stream=None, clock=None):
-        self.total = total
-        self.stream = stream if stream is not None else sys.stdout
-        self.clock = clock if clock is not None else time.monotonic
-        self.started = self.clock()
-        self.last_rendered = float("-inf")
-        self.last_width = 0
-        self.terminal = bool(self.stream.isatty())
-        self.line_open = False
-
-    @staticmethod
-    def _elapsed_text(elapsed_s):
-        elapsed = max(0, int(elapsed_s))
-        hours, remainder = divmod(elapsed, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        if hours:
-            return f"{hours}:{minutes:02d}:{seconds:02d}"
-        return f"{minutes:02d}:{seconds:02d}"
-
-    def render(self, completed, counts, no_metal_count, force=False, final=False):
-        now = self.clock()
-        interval = (
-            self.TERMINAL_INTERVAL_S if self.terminal else self.REDIRECTED_INTERVAL_S
-        )
-        if not force and now - self.last_rendered < interval:
-            return
-        percent = 100.0 * completed / self.total if self.total else 100.0
-        line = (
-            f"[{completed}/{self.total} {percent:5.1f}%] "
-            f"elapsed={self._elapsed_text(now - self.started)} | "
-            f"ok={counts['ok']} partial={counts['partial']} "
-            f"skip={counts['skip']} error={counts['error']} | "
-            f"no_metals={no_metal_count}"
-        )
-        if self.terminal:
-            padded = line.ljust(self.last_width)
-            print(
-                f"\r{padded}", end="\n" if final else "", file=self.stream, flush=True
-            )
-            self.last_width = len(line)
-            self.line_open = not final
-        else:
-            print(line, file=self.stream, flush=True)
-        self.last_rendered = now
-
-    def close(self):
-        """Finish an in-place terminal line after success or an exception."""
-        if self.terminal and self.line_open:
-            print(file=self.stream, flush=True)
-            self.line_open = False
-
-
-class _RunLog:
-    """Collect compact run diagnostics and write one human-readable log."""
-
-    def __init__(self, args, command):
-        self.args = args
-        self.command = command
-        self.started_at = datetime.now(timezone.utc)
-        self.started_monotonic = time.monotonic()
-        self.details = {
-            "initial_available_memory_bytes": available_memory_bytes(),
-        }
-        self.summary = {}
-        self.entries = []
-        self.driver_error = ""
-
-    def record_entry(self, result):
-        """Retain diagnostic fields without keeping large result-row payloads."""
-        self.entries.append(
-            {
-                "pdbID": result.get("pdbID", ""),
-                "status": result.get("status", "unknown"),
-                "retryable": bool(result.get("retryable", False)),
-                "no_metals": bool(result.get("no_metals", False)),
-                "n_metals": result.get("n", 0),
-                "n_bonds": result.get("n_bonds", 0),
-                "n_candidates": result.get("n_candidates", 0),
-                "runtime_s": float(result.get("runtime", 0.0)),
-                "timings": dict(result.get("timings", {})),
-                "reason_codes": list(result.get("reason_codes", [])),
-                "warning_codes": list(result.get("warning_codes", [])),
-                "error": str(result.get("error", "")),
-                "density_map_scope_used": result.get("density_map_scope_used", ""),
-                "density_full_map_bytes": result.get("density_full_map_bytes", 0),
-                "density_edstats_map_bytes": result.get("density_edstats_map_bytes", 0),
-            }
-        )
-
-    @staticmethod
-    def _clean(value):
-        if value is None:
-            return "none"
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        return str(value).replace("\r", " ").replace("\n", " ")
-
-    @staticmethod
-    def _counter_text(counter):
-        if not counter:
-            return "none"
-        return ", ".join(
-            f"{name}={count}"
-            for name, count in sorted(
-                counter.items(), key=lambda item: (-item[1], item[0])
-            )
-        )
-
-    def _render(self, exit_code, finished_at, elapsed_s):
-        lines = [
-            "Alchemy detailed run log",
-            "========================",
-            f"Started (UTC): {self.started_at.isoformat()}",
-            f"Finished (UTC): {finished_at.isoformat()}",
-            f"Wall time: {elapsed_s:.3f} s",
-            f"Exit code: {exit_code}",
-            f"Command: {self.command}",
-            "",
-            "System",
-            "------",
-            f"Platform: {platform.platform()}",
-            f"Python: {platform.python_version()}",
-            f"Available CPUs at startup: {available_cpu_count()}",
-        ]
-        initial_memory = self.details.get("initial_available_memory_bytes")
-        if initial_memory is None:
-            lines.append("Available memory at startup: unknown")
-        else:
-            lines.append(
-                f"Available memory at startup: {initial_memory / (1024**3):.2f} GiB"
-            )
-        final_memory = available_memory_bytes()
-        lines.append(
-            "Available memory at finish: "
-            + (
-                f"{final_memory / (1024**3):.2f} GiB"
-                if final_memory is not None
-                else "unknown"
-            )
-        )
-
-        lines.extend(["", "Configuration", "-------------"])
-        for name, value in sorted(vars(self.args).items()):
-            lines.append(f"{name}: {self._clean(value)}")
-        for name, value in sorted(self.details.items()):
-            if name == "initial_available_memory_bytes":
-                continue
-            lines.append(f"{name}: {self._clean(value)}")
-
-        status_counts = Counter(entry["status"] for entry in self.entries)
-        reason_counts = Counter(
-            reason for entry in self.entries for reason in entry["reason_codes"]
-        )
-        warning_counts = Counter(
-            warning for entry in self.entries for warning in entry["warning_codes"]
-        )
-        retryable_count = sum(entry["retryable"] for entry in self.entries)
-        no_metal_count = sum(entry["no_metals"] for entry in self.entries)
-        map_scope_counts = Counter(
-            entry["density_map_scope_used"]
-            for entry in self.entries
-            if entry["density_map_scope_used"]
-        )
-        total_entry_s = sum(entry["runtime_s"] for entry in self.entries)
-        throughput = len(self.entries) * 60.0 / elapsed_s if elapsed_s > 0 else 0.0
-
-        lines.extend(
-            [
-                "",
-                "Summary",
-                "-------",
-                f"Entries returned: {len(self.entries)}",
-                f"Status counts: {self._counter_text(status_counts)}",
-                f"Retryable entries: {retryable_count}",
-                f"Metal-free entries: {no_metal_count}",
-                f"Summed entry runtime: {total_entry_s:.3f} s",
-                f"Throughput: {throughput:.2f} entries/minute",
-                f"Reason codes: {self._counter_text(reason_counts)}",
-                f"Warning codes: {self._counter_text(warning_counts)}",
-                f"Density map scopes used: {self._counter_text(map_scope_counts)}",
-            ]
-        )
-        for name, value in sorted(self.summary.items()):
-            lines.append(f"{name}: {self._clean(value)}")
-        if self.driver_error:
-            lines.append(f"Driver error: {self._clean(self.driver_error)}")
-
-        stage_values = {}
-        for entry in self.entries:
-            for name, value in entry["timings"].items():
-                try:
-                    stage_values.setdefault(name, []).append(float(value))
-                except (TypeError, ValueError):
-                    continue
-        lines.extend(["", "Stage timing", "------------"])
-        if not stage_values:
-            lines.append("No completed stage timings were recorded.")
-        else:
-            lines.append(
-                "Totals sum per-entry measurements; density_total_s contains "
-                "its subprocess stages, and parallel totals are not wall time."
-            )
-            lines.append("stage | entries | total_s | mean_s | max_s | max_entry")
-            for name in sorted(stage_values):
-                values = stage_values[name]
-                stage_entries = [
-                    entry for entry in self.entries if name in entry["timings"]
-                ]
-                max_entry = max(
-                    stage_entries, key=lambda entry: float(entry["timings"][name])
-                )
-                lines.append(
-                    f"{name} | {len(values)} | {sum(values):.3f} | "
-                    f"{sum(values) / len(values):.3f} | {max(values):.3f} | "
-                    f"{max_entry['pdbID']}"
-                )
-
-        incomplete_entries = [
-            entry for entry in self.entries if entry["status"] != "ok"
-        ]
-        lines.extend(["", "Incomplete entries", "------------------"])
-        if not incomplete_entries:
-            lines.append("None.")
-        else:
-            lines.append("pdbID | status | retryable | reasons | error")
-            for entry in incomplete_entries:
-                lines.append(
-                    f"{entry['pdbID']} | {entry['status']} | "
-                    f"{self._clean(entry['retryable'])} | "
-                    f"{'|'.join(entry['reason_codes']) or '-'} | "
-                    f"{self._clean(entry['error']) or '-'}"
-                )
-
-        lines.extend(["", "Slowest entries", "---------------"])
-        if not self.entries:
-            lines.append("No entries were processed.")
-        else:
-            lines.append(
-                "pdbID | status | runtime_s | metals | bonds | candidates | reasons"
-            )
-            for entry in sorted(
-                self.entries, key=lambda item: item["runtime_s"], reverse=True
-            )[:20]:
-                lines.append(
-                    f"{entry['pdbID']} | {entry['status']} | "
-                    f"{entry['runtime_s']:.2f} | {entry['n_metals']} | "
-                    f"{entry['n_bonds']} | {entry['n_candidates']} | "
-                    f"{'|'.join(entry['reason_codes']) or '-'}"
-                )
-
-        lines.extend(["", "Per-entry results", "-----------------"])
-        if not self.entries:
-            lines.append("No entries were processed.")
-        for entry in self.entries:
-            timing_text = (
-                ",".join(
-                    f"{name}={float(value):.3f}"
-                    for name, value in sorted(entry["timings"].items())
-                )
-                or "-"
-            )
-            lines.append(
-                f"{entry['pdbID']} | status={entry['status']} | "
-                f"retryable={self._clean(entry['retryable'])} | "
-                f"no_metals={self._clean(entry['no_metals'])} | "
-                f"runtime_s={entry['runtime_s']:.2f} | "
-                f"metals={entry['n_metals']} | bonds={entry['n_bonds']} | "
-                f"candidates={entry['n_candidates']} | timings={timing_text} | "
-                f"density_map_scope={entry['density_map_scope_used'] or '-'} | "
-                f"full_map_bytes={entry['density_full_map_bytes']} | "
-                f"edstats_map_bytes={entry['density_edstats_map_bytes']} | "
-                f"reasons={'|'.join(entry['reason_codes']) or '-'} | "
-                f"warnings={'|'.join(entry['warning_codes']) or '-'} | "
-                f"error={self._clean(entry['error']) or '-'}"
-            )
-        lines.append("")
-        return "\n".join(lines)
-
-    def write(self, exit_code):
-        """Atomically write the final timestamped log and return its path."""
-        os.makedirs(self.args.output_dir, exist_ok=True)
-        finished_at = datetime.now(timezone.utc)
-        elapsed_s = time.monotonic() - self.started_monotonic
-        run_date = self.started_at.strftime("%Y%m%d")
-        log_stem = f"alchemy_run_{run_date}"
-        path = os.path.join(self.args.output_dir, f"{log_stem}.log")
-        suffix = 2
-        while os.path.lexists(path):
-            path = os.path.join(self.args.output_dir, f"{log_stem}_{suffix}.log")
-            suffix += 1
-        handle, temporary_path = tempfile.mkstemp(
-            prefix=".alchemy-run-log-", dir=self.args.output_dir, text=True
-        )
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:
-                log.write(self._render(exit_code, finished_at, elapsed_s))
-            os.replace(temporary_path, path)
-        except BaseException:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
-            raise
-        return path
 
 
 def _run(args, run_log):

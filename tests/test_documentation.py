@@ -80,14 +80,40 @@ def _documented_dependencies() -> Set[str]:
     return documented
 
 
+def _local_module_names() -> Set[str]:
+    """Every name ``src/`` itself provides: flat modules and sub-packages.
+
+    Sub-packages count because ``src`` is on ``sys.path`` rather than being a
+    package, so ``import driver.writers`` resolves to ``src/driver/`` exactly
+    the way ``import worker`` resolves to ``src/worker.py``. Missing them would
+    report Alchemy's own modules as undeclared third-party distributions.
+    """
+    local: Set[str] = set()
+    for name in os.listdir(SRC_DIR):
+        path = os.path.join(SRC_DIR, name)
+        if name.endswith(".py"):
+            local.add(name[:-3])
+        elif os.path.isfile(os.path.join(path, "__init__.py")):
+            local.add(name)
+    return local
+
+
+def _source_files() -> list[str]:
+    """Every ``.py`` file under ``src/``, sub-packages included."""
+    found = []
+    for directory, _subdirs, names in os.walk(SRC_DIR):
+        found.extend(
+            os.path.join(directory, name) for name in names if name.endswith(".py")
+        )
+    return sorted(found)
+
+
 def _third_party_imports() -> Set[str]:
     """Distributions imported by ``src/``, whether at module or function scope."""
     found: Set[str] = set()
-    local = {name[:-3] for name in os.listdir(SRC_DIR) if name.endswith(".py")}
-    for name in sorted(os.listdir(SRC_DIR)):
-        if not name.endswith(".py"):
-            continue
-        tree = ast.parse(_read(os.path.join(SRC_DIR, name)))
+    local = _local_module_names()
+    for path in _source_files():
+        tree = ast.parse(_read(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 roots = [alias.name.split(".")[0] for alias in node.names]

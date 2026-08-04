@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import os
 from types import SimpleNamespace
 from typing import List
@@ -30,6 +31,14 @@ import main
 import metal_identification
 import structure_analysis
 import worker
+from driver.progress import _ProgressReporter
+from driver.runlog import _RunLog
+from driver.writers import (
+    MANIFEST_COLUMNS,
+    STATS_COLUMNS,
+    _manifest_row,
+    _OutputWriters,
+)
 from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 
 
@@ -65,7 +74,7 @@ def _result(pdb_id="109m", **overrides):
 
 def _write_manifest(path, rows, columns=None):
     """Write a manifest CSV with the real schema and the given partial rows."""
-    columns = list(columns if columns is not None else main.MANIFEST_COLUMNS)
+    columns = list(columns if columns is not None else MANIFEST_COLUMNS)
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
@@ -603,7 +612,7 @@ class TestInitialResult:
     def test_every_non_derived_manifest_column_is_present_up_front(self):
         """A failure at any stage still projects onto a complete row."""
         result = worker._initial_result("109m", CFG, None)
-        required = set(main.MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
+        required = set(MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
         assert required.issubset(result.keys())
 
     def test_supplies_the_keys_manifest_row_reads_directly(self):
@@ -660,8 +669,8 @@ class TestManifestRow:
 
     def test_projects_exactly_the_manifest_columns(self):
         """No worker-internal key leaks into the CSV and none is missing."""
-        row = main._manifest_row(_result(), False, True, {}, {})
-        assert set(row) == set(main.MANIFEST_COLUMNS)
+        row = _manifest_row(_result(), False, True, {}, {})
+        assert set(row) == set(MANIFEST_COLUMNS)
         assert "rows" not in row
         assert "bond_rows" not in row
         assert "timings" not in row
@@ -676,7 +685,7 @@ class TestManifestRow:
             reason_codes=["a", "b"],
             warning_codes=["w"],
         )
-        row = main._manifest_row(result, False, True, {}, {})
+        row = _manifest_row(result, False, True, {}, {})
         assert row["n_metals"] == 3
         assert row["runtime_s"] == 12.5
         assert row["n_bonds"] == 7
@@ -686,21 +695,19 @@ class TestManifestRow:
 
     def test_empty_code_lists_render_blank(self):
         """No codes must not become a spurious separator or literal '[]'."""
-        row = main._manifest_row(_result(), False, True, {}, {})
+        row = _manifest_row(_result(), False, True, {}, {})
         assert row["reason_codes"] == ""
         assert row["warning_codes"] == ""
 
     def test_bonds_enabled_reports_the_measured_zero(self):
         """A bond run that found nothing records 0, distinct from blank."""
-        row = main._manifest_row(
-            _result(n_bonds=0, n_candidates=0), False, True, {}, {}
-        )
+        row = _manifest_row(_result(n_bonds=0, n_candidates=0), False, True, {}, {})
         assert row["n_bonds"] == 0
         assert row["n_candidates"] == 0
 
     def test_fresh_no_bonds_run_writes_blank_counts(self):
         """Without --resume there is no prior stage to carry forward."""
-        row = main._manifest_row(
+        row = _manifest_row(
             _result(n_bonds=4, n_candidates=6),
             False,
             False,
@@ -712,29 +719,25 @@ class TestManifestRow:
 
     def test_resume_no_bonds_carries_the_prior_counts_forward(self):
         """--resume --no-bonds preserves an earlier run's bond-stage counts."""
-        row = main._manifest_row(
-            _result("109M"), True, False, {"109m": "6"}, {"109m": "8"}
-        )
+        row = _manifest_row(_result("109M"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == "6"
         assert row["n_candidates"] == "8"
 
     def test_resume_no_bonds_carry_forward_preserves_a_prior_zero(self):
         """A prior measured zero stays a zero, not a blank."""
-        row = main._manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
+        row = _manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
         assert row["n_bonds"] == "0"
         assert row["n_candidates"] == "0"
 
     def test_resume_no_bonds_without_a_prior_row_stays_blank(self):
         """An entry new to this output dir has no bond stage to inherit."""
-        row = main._manifest_row(
-            _result("1cll"), True, False, {"109m": "6"}, {"109m": "8"}
-        )
+        row = _manifest_row(_result("1cll"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
     def test_prior_blank_counts_are_not_upgraded(self):
         """Carrying forward a blank must keep it blank, never zero."""
-        row = main._manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
+        row = _manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
@@ -756,7 +759,7 @@ class TestUnrunBondStageChain:
     @staticmethod
     def _write_rows(path, rows):
         with open(path, "w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=main.MANIFEST_COLUMNS)
+            writer = csv.DictWriter(handle, fieldnames=MANIFEST_COLUMNS)
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
@@ -766,7 +769,7 @@ class TestUnrunBondStageChain:
         result = _result(
             "109m", status="error", retryable=True, error="density stage failed"
         )
-        row = main._manifest_row(result, False, True, {}, {})
+        row = _manifest_row(result, False, True, {}, {})
         manifest = tmp_path / "manifest.csv"
         self._write_rows(manifest, [row])
 
@@ -788,7 +791,7 @@ class TestUnrunBondStageChain:
         manifest = tmp_path / "manifest.csv"
 
         # Run 1: bonds enabled, but the entry fails before the bond stage.
-        failed = main._manifest_row(
+        failed = _manifest_row(
             _result("109m", status="error", retryable=True, error="edstats failed"),
             resume=False,
             bonds_enabled=True,
@@ -803,7 +806,7 @@ class TestUnrunBondStageChain:
         prior_bonds = main._manifest_values_by_id(str(manifest), "n_bonds")
         prior_candidates = main._manifest_values_by_id(str(manifest), "n_candidates")
 
-        recovered = main._manifest_row(
+        recovered = _manifest_row(
             _result("109m", status="ok", retryable=False, n=2),
             resume=True,
             bonds_enabled=False,
@@ -822,7 +825,7 @@ class TestUnrunBondStageChain:
 
         # Run 3 completes the bond stage with a genuine measured zero; only
         # now may a later bond-enabled resume skip the entry.
-        completed = main._manifest_row(
+        completed = _manifest_row(
             _result(
                 "109m", status="ok", retryable=False, n=2, n_bonds=0, n_candidates=0
             ),
@@ -1147,14 +1150,14 @@ class TestOutputWriters:
     def test_headers_survive_a_run_that_produced_no_rows(self, tmp_path):
         """README: the CSVs keep their headers when nothing was found."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         writers.write_stats_rows([])
         writers.write_bond_rows([])
         writers.write_candidate_rows([])
         self._close(handles)
 
-        assert _read_csv(tmp_path / "manifest.csv") == [main.MANIFEST_COLUMNS]
-        assert _read_csv(tmp_path / "stats.csv") == [list(main.STATS_COLUMNS)]
+        assert _read_csv(tmp_path / "manifest.csv") == [MANIFEST_COLUMNS]
+        assert _read_csv(tmp_path / "stats.csv") == [list(STATS_COLUMNS)]
         assert _read_csv(tmp_path / "bonds.csv") == [list(main.BOND_COLUMNS)]
         assert _read_csv(tmp_path / "candidates.csv") == [list(main.CANDIDATE_COLUMNS)]
         assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
@@ -1162,12 +1165,12 @@ class TestOutputWriters:
     def test_running_counts_track_the_rows_actually_written(self, tmp_path):
         """The end-of-run totals come from these counters, not from re-reading."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         stats_rows = [
             {
                 "pdbID": "109m",
                 "category": "metal",
-                "fields": ["x"] * (len(main.STATS_COLUMNS) - 2),
+                "fields": ["x"] * (len(STATS_COLUMNS) - 2),
             }
             for _ in range(3)
         ]
@@ -1189,20 +1192,20 @@ class TestOutputWriters:
     def test_stats_rows_are_projected_onto_the_fixed_schema(self, tmp_path):
         """id and category lead each row; the EDSTATS block follows verbatim."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
-        fields = [str(i) for i in range(len(main.STATS_COLUMNS) - 2)]
+        writers = _OutputWriters(*handles)
+        fields = [str(i) for i in range(len(STATS_COLUMNS) - 2)]
         writers.write_stats_rows(
             [{"pdbID": "109m", "category": "cofactor", "fields": fields}]
         )
         self._close(handles)
         rows = _read_csv(tmp_path / "stats.csv")
         assert rows[1] == ["109m", "cofactor"] + fields
-        assert len(rows[1]) == len(main.STATS_COLUMNS)
+        assert len(rows[1]) == len(STATS_COLUMNS)
 
     def test_bond_rows_are_written_in_schema_order(self, tmp_path):
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         row = {column: f"v-{column}" for column in main.BOND_COLUMNS}
         # Feed it in a deliberately different key order.
         shuffled = {key: row[key] for key in reversed(list(row))}
@@ -1214,7 +1217,7 @@ class TestOutputWriters:
     def test_disabled_bond_outputs_are_a_no_op_not_a_crash(self, tmp_path):
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         writers.write_bond_rows([dict.fromkeys(main.BOND_COLUMNS, "")])
         writers.write_candidate_rows([dict.fromkeys(main.CANDIDATE_COLUMNS, "")])
         self._close(handles)
@@ -1233,7 +1236,7 @@ class TestOutputWriters:
     def test_bond_row_schema_drift_fails_loudly(self, tmp_path, mutate, columns_name):
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         row = dict.fromkeys(getattr(main, columns_name), "")
         if mutate == "drop":
             row.pop(next(iter(row)))
@@ -1250,7 +1253,7 @@ class TestOutputWriters:
     def test_candidate_row_schema_drift_fails_loudly(self, tmp_path):
         """Same guard on the candidate stream, named for its own file."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         row = dict.fromkeys(main.CANDIDATE_COLUMNS, "")
         row["bogus"] = ""
         try:
@@ -1265,7 +1268,7 @@ class TestOutputWriters:
         handles = self._handles(tmp_path, confidence=True)
         try:
             with pytest.raises(ValueError):
-                main._OutputWriters(
+                _OutputWriters(
                     *handles[:4], confidence_fh=handles[4], confidence_columns=None
                 )
         finally:
@@ -1275,7 +1278,7 @@ class TestOutputWriters:
         """The optional fifth stream behaves like the others."""
         columns = list(main.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = main._OutputWriters(
+        writers = _OutputWriters(
             *handles[:4], confidence_fh=handles[4], confidence_columns=columns
         )
         writers.write_confidence_rows([])
@@ -1298,7 +1301,7 @@ class TestOutputWriters:
         handles = self._handles(tmp_path, confidence=True)
         inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
         try:
-            writers = main._OutputWriters(
+            writers = _OutputWriters(
                 *handles[:4],
                 confidence_fh=handles[4],
                 confidence_columns=scored_columns,
@@ -1320,7 +1323,7 @@ class TestOutputWriters:
         """A drifted confidence row must not be written under the old header."""
         columns = list(main.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = main._OutputWriters(
+        writers = _OutputWriters(
             *handles[:4], confidence_fh=handles[4], confidence_columns=columns
         )
         row = dict.fromkeys(columns, "")
@@ -1335,9 +1338,9 @@ class TestOutputWriters:
     def test_manifest_rows_round_trip_through_the_real_projection(self, tmp_path):
         """A written manifest is readable by load_done without reinterpretation."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         writers.write_manifest_row(
-            main._manifest_row(
+            _manifest_row(
                 _result(
                     "109m",
                     status="ok",
@@ -1354,7 +1357,7 @@ class TestOutputWriters:
             )
         )
         writers.write_manifest_row(
-            main._manifest_row(
+            _manifest_row(
                 _result("1cll", status="error", retryable=True), False, True, {}, {}
             )
         )
@@ -1366,25 +1369,124 @@ class TestOutputWriters:
     def test_each_stream_is_flushed_before_the_manifest_marker(self, tmp_path):
         """An interrupted batch must retain the rows of completed entries."""
         handles = self._handles(tmp_path)
-        writers = main._OutputWriters(*handles)
+        writers = _OutputWriters(*handles)
         writers.write_stats_rows(
             [
                 {
                     "pdbID": "109m",
                     "category": "metal",
-                    "fields": ["x"] * (len(main.STATS_COLUMNS) - 2),
+                    "fields": ["x"] * (len(STATS_COLUMNS) - 2),
                 }
             ]
         )
         writers.write_bond_rows([dict.fromkeys(main.BOND_COLUMNS, "")])
         writers.write_manifest_row(
-            main._manifest_row(_result(status="ok"), False, True, {}, {})
+            _manifest_row(_result(status="ok"), False, True, {}, {})
         )
         # Without closing the handles, the data must already be on disk.
         assert len(_read_csv(tmp_path / "stats.csv")) == 2
         assert len(_read_csv(tmp_path / "bonds.csv")) == 2
         assert len(_read_csv(tmp_path / "manifest.csv")) == 2
         self._close(handles)
+
+
+# --------------------------------------------------------------------------- #
+# _ProgressReporter
+# --------------------------------------------------------------------------- #
+class TestProgressReporter:
+    """The heartbeat is throttled differently for a terminal and a log file."""
+
+    class _Stream(io.StringIO):
+        def __init__(self, terminal):
+            super().__init__()
+            self._terminal = terminal
+
+        def isatty(self):
+            return self._terminal
+
+    @staticmethod
+    def _counts():
+        return {"ok": 1, "partial": 0, "skip": 0, "error": 0}
+
+    def _reporter(self, terminal, clock):
+        stream = self._Stream(terminal)
+        return _ProgressReporter(total=10, stream=stream, clock=clock), stream
+
+    def test_a_redirected_run_renders_far_less_often_than_a_terminal(self):
+        """A run redirected to a file must not grow it by a line per second.
+
+        The two intervals differ by 30x on purpose: a terminal wants a line
+        that moves, a log wants a file that stays readable over a database run.
+        A single shared interval would have to be wrong for one of them.
+        """
+        now = [1000.0]
+        for terminal, expected in ((True, 3), (False, 1)):
+            reporter, stream = self._reporter(terminal, lambda: now[0])
+            for _ in range(3):
+                reporter.render(1, self._counts(), 0)
+                now[0] += _ProgressReporter.TERMINAL_INTERVAL_S
+            assert stream.getvalue().count("elapsed=") == expected, (
+                f"terminal={terminal} rendered the wrong number of lines"
+            )
+
+    def test_force_renders_regardless_of_the_interval(self):
+        """The final line has to appear even when nothing has elapsed."""
+        reporter, stream = self._reporter(False, lambda: 1000.0)
+        reporter.render(1, self._counts(), 0)
+        reporter.render(2, self._counts(), 0)
+        assert stream.getvalue().count("elapsed=") == 1
+        reporter.render(10, self._counts(), 0, force=True, final=True)
+        assert stream.getvalue().count("elapsed=") == 2
+        assert "[10/10 100.0%]" in stream.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# _RunLog
+# --------------------------------------------------------------------------- #
+class TestRunLog:
+    """The written log is the only record of how a finished run behaved."""
+
+    @staticmethod
+    def _log(tmp_path, runtimes):
+        run_log = _RunLog(
+            SimpleNamespace(output_dir=str(tmp_path), workers=1), "pytest"
+        )
+        for index, runtime in enumerate(runtimes):
+            run_log.record_entry(
+                {
+                    "pdbID": f"e{index}",
+                    "status": "ok",
+                    "runtime": runtime,
+                    "n": 1,
+                    "n_bonds": 0,
+                    "n_candidates": 0,
+                }
+            )
+        return run_log
+
+    def test_the_slowest_entries_table_is_ordered_slowest_first(self, tmp_path):
+        """It is the table an operator reads to find what to investigate.
+
+        Sorted the other way it still lists twenty entries and still looks
+        plausible, while naming the twenty entries that mattered least.
+        """
+        text = open(self._log(tmp_path, [0.5, 9.0, 3.0]).write(0)).read()
+        section = text.split("Slowest entries")[1].split("Per-entry results")[0]
+        listed = [
+            line.split(" | ")[0]
+            for line in section.splitlines()
+            if line.startswith("e")
+        ]
+        assert listed == ["e1", "e2", "e0"]
+
+    def test_an_existing_log_is_never_overwritten(self, tmp_path):
+        """Two runs on one output directory each keep their own log."""
+        first = self._log(tmp_path, [1.0]).write(0)
+        second = self._log(tmp_path, [2.0]).write(1)
+        assert first != second
+        assert os.path.isfile(first) and os.path.isfile(second)
+        assert "Exit code: 0" in open(first).read()
+        assert "Exit code: 1" in open(second).read()
 
 
 # --------------------------------------------------------------------------- #

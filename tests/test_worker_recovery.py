@@ -42,6 +42,8 @@ import pytest
 
 import main
 import worker
+from driver import runlog, writers
+from driver.writers import MANIFEST_COLUMNS
 
 
 # Killing a worker outright, and forking the driver so the parent can time it
@@ -309,14 +311,14 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     assert result["gemmi_version"] == cfg["gemmi_version"]
     assert result["ccp4_version"] == cfg["ccp4_version"]
 
-    row = main._manifest_row(
+    row = writers._manifest_row(
         result,
         resume=False,
         bonds_enabled=True,
         prior_bond_counts={},
         prior_candidate_counts={},
     )
-    assert set(row) == set(main.MANIFEST_COLUMNS)
+    assert set(row) == set(MANIFEST_COLUMNS)
     assert row["status"] == "error"
     assert row["retryable"] is True
     assert row["reason_codes"] == "worker_process_died"
@@ -335,7 +337,7 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
     assert result["n_bonds"] == ""
     assert result["n_candidates"] == ""
 
-    row = main._manifest_row(
+    row = writers._manifest_row(
         result,
         resume=False,
         bonds_enabled=True,
@@ -514,7 +516,7 @@ def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready)
         if stall_grace is not None:
             main.WORKER_STALL_GRACE_S = stall_grace
         args = main.parse_args(argv)
-        run_log = main._RunLog(args, "pytest")
+        run_log = runlog._RunLog(args, "pytest")
         channel.put(("exit_code", main._run(args, run_log)))
     except BaseException as exc:  # noqa: BLE001 - reported to the parent
         channel.put(("crash", f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
@@ -602,7 +604,7 @@ def _run_driver(tmp_path, script, stall_grace=None, workers=None):
 def _read_manifest(output_dir):
     with open(output_dir / "manifest.csv", newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
-        assert reader.fieldnames == main.MANIFEST_COLUMNS
+        assert reader.fieldnames == MANIFEST_COLUMNS
         return list(reader)
 
 
