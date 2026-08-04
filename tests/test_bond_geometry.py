@@ -25,6 +25,7 @@ import gemmi
 import pytest
 
 import bond_analysis as ba
+import donor_chemistry
 import dpi as dpi_module
 import helpers
 import reference_data
@@ -234,14 +235,17 @@ def test_inferred_donor_table_matches_the_documented_atom_list():
         residue: {"O"} | README_SIDE_CHAIN_DONORS.get(residue, set())
         for residue in helpers.STANDARD_AMINO_ACIDS
     }
-    actual = {residue: set(atoms) for residue, atoms in ba.INFERRED_DONOR_ATOMS.items()}
+    actual = {
+        residue: set(atoms)
+        for residue, atoms in donor_chemistry.INFERRED_DONOR_ATOMS.items()
+    }
 
     assert actual == expected
     # The excluded atoms README calls out must not have crept in.
     for residue, atom in README_EXCLUDED_ATOMS:
-        assert atom not in ba.INFERRED_DONOR_ATOMS[residue]
-    assert set(ba.N_TERMINAL_DONOR_ATOMS) == {"N"}
-    assert set(ba.C_TERMINAL_DONOR_ATOMS) == {"OXT", "OT1", "OT2"}
+        assert atom not in donor_chemistry.INFERRED_DONOR_ATOMS[residue]
+    assert set(donor_chemistry.N_TERMINAL_DONOR_ATOMS) == {"N"}
+    assert set(donor_chemistry.C_TERMINAL_DONOR_ATOMS) == {"OXT", "OT1", "OT2"}
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-"""Declared ``_struct_conn`` / ``LINK`` handling in ``bond_analysis``.
+"""Declared ``_struct_conn`` / ``LINK`` handling in ``declared_connections``.
 
 Alchemy reads coordination declarations from the authoritative source file --
 ``_struct_conn`` in an mmCIF, ``LINK`` records in a legacy PDB -- and resolves
@@ -36,6 +36,7 @@ from helpers import AtomRef, AtomSpec, StructureBuilder
 
 import bond_analysis
 import coordinate_conversion as conversion
+import declared_connections
 from structure_analysis import StructureContext, load_structure
 import reference_data
 
@@ -163,6 +164,20 @@ def partner_address(
     )
 
 
+def declared_address(resname: str, atom_name: str) -> SimpleNamespace:
+    """A stand-in for the ``AtomAddress`` a declaration names its partner by."""
+    return SimpleNamespace(
+        res_id=SimpleNamespace(name=resname), atom_name=atom_name, altloc=""
+    )
+
+
+class UnresolvableModel:
+    """A source model whose ``find_cra`` always raises, as gemmi's can."""
+
+    def find_cra(self, address, ignore_segment=False):
+        raise RuntimeError("unresolvable address")
+
+
 class AmbiguousStructure:
     """A structure whose author lookup deliberately reports ``n`` matches."""
 
@@ -206,7 +221,7 @@ def test_connection_source_dispatches_on_coordinate_format(path, expected):
     provenance must follow the file it was actually read from -- including
     through a ``.gz`` suffix and regardless of case.
     """
-    assert bond_analysis._connection_source(path) == expected
+    assert declared_connections._connection_source(path) == expected
 
 
 def test_connection_source_labels_reach_the_bond_row(tmp_path):
@@ -246,7 +261,7 @@ def test_analysis_chain_names_reverses_conversion_shortening(tmp_path):
     builder.add_metal("ZN", 1, chain="BBB", pos=(0.0, 0.0, 0.0))
     source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
 
-    mapping = bond_analysis._analysis_chain_names(source)
+    mapping = declared_connections._analysis_chain_names(source)
     context = load_structure("test", analysis_pdb)
     converted_chains = {residue.chain_id for residue in context.residues}
 
@@ -262,21 +277,21 @@ def test_analysis_chain_names_is_empty_for_a_pdb_source(tmp_path):
     """
     builder, his, zinc = zinc_histidine_site()
     source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
-    assert bond_analysis._analysis_chain_names(source) == {}
+    assert declared_connections._analysis_chain_names(source) == {}
 
 
 def test_analysis_chain_names_omits_chains_conversion_leaves_alone(tmp_path):
     """Short mmCIF chain names survive conversion, so the mapping stays empty."""
     builder, his, zinc = zinc_histidine_site()
     source, _ = write_source_and_analysis(builder, tmp_path, "cif")
-    assert bond_analysis._analysis_chain_names(source) == {}
+    assert declared_connections._analysis_chain_names(source) == {}
 
 
 def test_analysis_chain_names_tolerates_a_model_free_file(tmp_path):
     """A coordinate file with no model yields an empty mapping, not an error."""
     empty = tmp_path / "empty.cif"
     empty.write_text("data_empty\n_entry.id EMPTY\n", encoding="utf-8")
-    assert bond_analysis._analysis_chain_names(str(empty)) == {}
+    assert declared_connections._analysis_chain_names(str(empty)) == {}
 
 
 # --------------------------------------------------------------------------- #
@@ -303,10 +318,10 @@ def test_analysis_atom_for_partner_resolves_author_identity(tmp_path):
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
 
-    plain = bond_analysis._analysis_atom_for_partner(
+    plain = declared_connections._analysis_atom_for_partner(
         context, partner_address("A", "HIS", 10, "NE2"), {}
     )
-    with_icode = bond_analysis._analysis_atom_for_partner(
+    with_icode = declared_connections._analysis_atom_for_partner(
         context, partner_address("A", "HIS", 10, "NE2", icode="A"), {}
     )
 
@@ -331,9 +346,9 @@ def test_analysis_atom_for_partner_applies_the_chain_name_mapping(tmp_path):
     context = load_structure("test", analysis_pdb)
     address = partner_address("AAA", "HIS", 10, "NE2")
 
-    assert bond_analysis._analysis_atom_for_partner(context, address, {}) is None
-    resolved = bond_analysis._analysis_atom_for_partner(
-        context, address, bond_analysis._analysis_chain_names(source)
+    assert declared_connections._analysis_atom_for_partner(context, address, {}) is None
+    resolved = declared_connections._analysis_atom_for_partner(
+        context, address, declared_connections._analysis_chain_names(source)
     )
     assert resolved is not None
     assert (resolved.chain_id, resolved.atom_name) == ("A", "NE2")
@@ -367,9 +382,9 @@ def test_analysis_atom_for_partner_returns_none_for_unmatched_identity(
     """
     builder, his, zinc = zinc_histidine_site()
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
-    assert bond_analysis._analysis_atom_for_partner(context, address, {}) is None, (
-        reason
-    )
+    assert (
+        declared_connections._analysis_atom_for_partner(context, address, {}) is None
+    ), reason
 
 
 def test_analysis_atom_for_partner_refuses_an_ambiguous_residue(tmp_path):
@@ -380,13 +395,15 @@ def test_analysis_atom_for_partner_refuses_an_ambiguous_residue(tmp_path):
     builder, his, zinc = zinc_histidine_site()
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
     address = partner_address("A", "HIS", 10, "NE2")
-    single = bond_analysis._analysis_atom_for_partner(context, address, {})
+    single = declared_connections._analysis_atom_for_partner(context, address, {})
     assert single is not None
 
     duplicated = AmbiguousStructure(context, [context.residues[0], context.residues[0]])
-    assert bond_analysis._analysis_atom_for_partner(duplicated, address, {}) is None
     assert (
-        bond_analysis._analysis_atom_for_partner(
+        declared_connections._analysis_atom_for_partner(duplicated, address, {}) is None
+    )
+    assert (
+        declared_connections._analysis_atom_for_partner(
             AmbiguousStructure(context, []), address, {}
         )
         is None
@@ -405,7 +422,7 @@ def test_analysis_atom_for_partner_tolerates_an_unresolvable_address(tmp_path, c
     """A partner gemmi could not locate at all resolves to None without raising."""
     builder, his, zinc = zinc_histidine_site()
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
-    assert bond_analysis._analysis_atom_for_partner(context, cra, {}) is None
+    assert declared_connections._analysis_atom_for_partner(context, cra, {}) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -447,7 +464,7 @@ def test_selected_conformer_atom_repoints_a_deselected_record(tmp_path):
         if atom.atom_name == "NE2" and atom.altloc == "A"
     )
 
-    selected = bond_analysis._selected_conformer_atom(context, deselected)
+    selected = declared_connections._selected_conformer_atom(context, deselected)
 
     assert selected is not None
     assert (selected.atom_name, selected.altloc) == ("NE2", "B")
@@ -459,7 +476,7 @@ def test_selected_conformer_atom_returns_a_selected_record_unchanged(tmp_path):
     _, context = conformer_context(tmp_path)
     residue = context.residues_for_author("HIS", "A", "10")[0]
     chosen = next(atom for atom in residue.contact_atoms if atom.atom_name == "NE2")
-    assert bond_analysis._selected_conformer_atom(context, chosen) is chosen
+    assert declared_connections._selected_conformer_atom(context, chosen) is chosen
 
 
 def test_selected_conformer_atom_is_none_when_the_conformer_lacks_the_atom(tmp_path):
@@ -474,8 +491,8 @@ def test_selected_conformer_atom_is_none_when_the_conformer_lacks_the_atom(tmp_p
     assert residue.selected_altloc == "B"
     orphan = next(atom for atom in residue.source_atoms if atom.atom_name == "NE2")
 
-    assert bond_analysis._selected_conformer_atom(context, orphan) is None
-    assert bond_analysis._selected_conformer_atom(context, None) is None
+    assert declared_connections._selected_conformer_atom(context, orphan) is None
+    assert declared_connections._selected_conformer_atom(context, None) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -942,6 +959,96 @@ def test_partner_absent_from_the_analyzed_model_is_reported(tmp_path):
     )
 
 
+def test_cluster_metal_absent_from_the_model_is_reported(tmp_path):
+    """The metal test consults the *resolved* atom, not only the identifiers.
+
+    ``FES``/``FE1`` names no element on its face -- neither string is a metal
+    symbol -- so the declaration looks like ordinary chemistry until the atom
+    ``find_cra`` returned is asked for its element. Without that second look,
+    an unresolvable iron-sulfur coordination would be dropped in silence, which
+    is the failure mode the audit trail exists to prevent.
+    """
+    cluster_atoms = [
+        AtomSpec("FE1", "FE", (40.0, 20.0, 20.0)),
+        AtomSpec("S1", "S", (41.35, 21.15, 20.0)),
+    ]
+
+    source_builder, histidine, _ = zinc_histidine_site()
+    cluster = source_builder.add_hetero_residue("FES", 2, cluster_atoms, chain="C")
+    source_builder.add_connection(
+        cluster.ref("FE1"), histidine.ref("NE2"), name="cluster", reported_distance=2.2
+    )
+    source = source_builder.write_cif(tmp_path / "source.cif")
+    analysis_builder, _, _ = zinc_histidine_site()
+    analysis_pdb = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
+
+    result = analyze(analysis_pdb, connection_path=source)
+
+    assert result.declared_rows == []
+    assert (
+        "declared_connection_resolution_incomplete"
+        in (result.metadata["partial_reason_codes"])
+    )
+    assert any(
+        "cluster" in message and "unresolved" in message
+        for message in result.metadata["messages"]
+    )
+
+
+def test_declaration_naming_a_metal_survives_a_failed_resolution():
+    """The metal test also runs *before* ``find_cra``, which can raise.
+
+    Nothing is resolved here, so the declaration's own identifiers are the only
+    evidence left that this failure concerns a metal -- and they are read first
+    for exactly that reason. The audit trail must survive the failure that
+    destroyed everything else.
+    """
+    connection = SimpleNamespace(
+        partner1=declared_address("ZN", "ZN"),
+        partner2=declared_address("HIS", "NE2"),
+    )
+
+    resolved = declared_connections._resolve_declared_partners(
+        None, UnresolvableModel(), connection, {}
+    )
+
+    assert resolved.failure == "RuntimeError"
+    assert resolved.atoms is None
+    assert resolved.declares_metal is True
+
+    candidate, issues, warnings = (
+        declared_connections._declared_candidate_for_connection(
+            None, connection, "c1", "struct_conn", resolved, set()
+        )
+    )
+
+    assert candidate is None
+    assert issues == ["struct_conn c1 resolution failed: RuntimeError"]
+    assert warnings == []
+
+
+def test_failed_resolution_of_a_non_metal_declaration_is_silent():
+    """The same failure between two amino acids is not Alchemy's subject.
+
+    The counterpart to the test above: reporting every unresolvable link in a
+    deposition would bury the metal sites the message exists to surface.
+    """
+    connection = SimpleNamespace(
+        partner1=declared_address("ASN", "ND2"),
+        partner2=declared_address("SER", "OG"),
+    )
+
+    resolved = declared_connections._resolve_declared_partners(
+        None, UnresolvableModel(), connection, {}
+    )
+
+    assert resolved.failure == "RuntimeError"
+    assert resolved.declares_metal is False
+    assert declared_connections._declared_candidate_for_connection(
+        None, connection, "c1", "struct_conn", resolved, set()
+    ) == (None, [], [])
+
+
 def test_unparsable_connection_file_is_reported_and_not_fatal(tmp_path):
     """A source file gemmi cannot read degrades to a partial result.
 
@@ -1049,6 +1156,11 @@ def test_declaration_inside_a_cofactor_is_not_an_external_contact(tmp_path):
 
     assert result.rows_for("S1") == []
     assert result.declared_rows == []
+    # Nor as candidate evidence: a contact inside the metal's own residue is
+    # dropped outright, not merely held back from the bond rows.
+    assert [
+        entry for entry in result.candidates if entry["neighbor_atom"] == "S1"
+    ] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -1267,7 +1379,7 @@ def test_declared_geometry_honors_each_asu_constraint(
     )
     connection = SimpleNamespace(asu=asu)
 
-    geometry = bond_analysis._declared_candidate_geometry(
+    geometry = declared_connections._declared_candidate_geometry(
         context, metal, neighbor, connection
     )
 
@@ -1452,7 +1564,7 @@ def test_declared_contact_through_an_ncs_image_is_labelled_strict_ncs(tmp_path):
     neighbor = next(atom for atom in context.contact_atoms if atom.atom_name == "O")
     connection = SimpleNamespace(asu=gemmi.Asu.Any)
 
-    geometry = bond_analysis._declared_candidate_geometry(
+    geometry = declared_connections._declared_candidate_geometry(
         context, metal, neighbor, connection
     )
 

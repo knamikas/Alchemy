@@ -509,7 +509,7 @@ class StructureBuilder:
 
         Written as ``_struct_conn`` in mmCIF and as a ``LINK`` record in PDB, so
         the same builder exercises both branches of
-        ``bond_analysis._collect_declared_candidates``. ``asu`` is one of
+        ``declared_connections._collect_declared_candidates``. ``asu`` is one of
         ``same``, ``any`` or ``different``.
         """
         if str(type).lower() not in _CONNECTION_TYPES:
@@ -771,7 +771,7 @@ def write_data_json(
 
     ``NREFCNT`` is the reflection count and ``RFFIN`` the final R-free; pass
     ``None`` for either to omit it and exercise the missing-input branches of
-    ``bond_analysis._calculate_dpi_details``.
+    ``dpi._calculate_dpi_details``.
 
     Both are typed ``object`` deliberately: callers also pass non-numeric values
     such as ``"many"`` to exercise the malformed-metadata branches, which is the

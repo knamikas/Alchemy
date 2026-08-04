@@ -26,6 +26,7 @@ import pytest
 import helpers
 import bond_analysis
 import coordinate_conversion as conversion
+import declared_connections
 import density_analysis as density
 import main
 import metal_identification
@@ -1897,7 +1898,7 @@ class TestCifToPdb:
         cra = SimpleNamespace(
             chain=source_chain, residue=source_residue, atom=source_atom
         )
-        resolved = bond_analysis._analysis_atom_for_partner(context, cra, {})
+        resolved = declared_connections._analysis_atom_for_partner(context, cra, {})
         assert resolved is not None
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"

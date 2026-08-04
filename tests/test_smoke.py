@@ -42,7 +42,9 @@ def test_src_modules_import():
     import bond_analysis
     import ccp4_setup
     import confidence_score
+    import declared_connections
     import density_analysis
+    import donor_chemistry
     import dpi
     import main
     import metal_elements
@@ -64,6 +66,8 @@ def test_src_modules_import():
     assert callable(runlog._RunLog)
     assert resources.available_cpu_count() >= 1
     assert callable(dpi._calculate_dpi_details)
+    assert callable(declared_connections._collect_declared_candidates)
+    assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
     assert callable(density_analysis.run_density_analysis)
     assert callable(confidence_score.score_site)
     # Named explicitly rather than asserted truthy: a non-empty tuple literal is

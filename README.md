@@ -287,7 +287,8 @@ matters for a consumer is that "no reference for this donor class" and "this
 metal has no coordination" are now different, visibly, in the output.
 
 Alchemy separately parses `_struct_conn` records from the authoritative source
-mmCIF and `LINK` records from a source PDB. A declared metal–donor contact is
+mmCIF and `LINK` records from a source PDB, in
+`src/declared_connections.py`. A declared metal–donor contact is
 merged with a matching proximity candidate when present and added independently
 when it lies outside 4 Å. Declared contacts remain bonds even when they fail the
 distance-based first-sphere eligibility rule; their measured distance and Zbond
