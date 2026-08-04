@@ -18,6 +18,7 @@ from bond_schema import (
 )
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
+from worker import blank_if_unmeasured
 
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every
@@ -67,25 +68,31 @@ STATS_COLUMNS = (
 )
 
 
+#: The one manifest column whose name differs from its ``EntryResult`` field.
+#: The CSV keeps the deposited spelling; the identifier does not (commit 9).
+MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {"pdbID": "pdb_id"}
+
+
 def _manifest_row(
     result, resume, bonds_enabled, prior_bond_counts, prior_candidate_counts
 ):
     """Project one worker result onto the manifest schema."""
-    row = {column: result.get(column, "") for column in MANIFEST_COLUMNS}
-    n_bonds = result["n_bonds"]
-    n_candidates = result["n_candidates"]
+    row = {
+        column: blank_if_unmeasured(getattr(result, field))
+        for column, field in MANIFEST_FIELDS.items()
+    }
+    n_bonds = blank_if_unmeasured(result.n_bonds)
+    n_candidates = blank_if_unmeasured(result.n_candidates)
     if not bonds_enabled:
-        n_bonds = prior_bond_counts.get(result["pdbID"].lower(), "") if resume else ""
+        n_bonds = prior_bond_counts.get(result.pdb_id.lower(), "") if resume else ""
         n_candidates = (
-            prior_candidate_counts.get(result["pdbID"].lower(), "") if resume else ""
+            prior_candidate_counts.get(result.pdb_id.lower(), "") if resume else ""
         )
     row.update(
-        n_metals=result["n"],
         n_bonds=n_bonds,
         n_candidates=n_candidates,
-        runtime_s=result["runtime"],
-        reason_codes="|".join(result.get("reason_codes", [])),
-        warning_codes="|".join(result.get("warning_codes", [])),
+        reason_codes="|".join(result.reason_codes),
+        warning_codes="|".join(result.warning_codes),
     )
     return row
 

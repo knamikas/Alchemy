@@ -24,7 +24,7 @@ import shutil
 import signal
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Collection, Dict, Optional
 
 from _version import __version__
@@ -201,56 +201,113 @@ def _preserve_timeout_log(timeout, pdb_id, output_dir):
         return ""
 
 
-def _initial_result(pdb_id, cfg, manual_inputs):
-    """Return the per-entry result skeleton, pre-filled with run provenance.
+def blank_if_unmeasured(value: Any) -> Any:
+    """Render a not-yet-measured field as the blank the outputs expect.
+
+    ``None`` on an ``EntryResult`` means "this stage never ran", which every
+    output has always written as an empty cell. Keep that rendering in one
+    place: a ``None`` reaching a CSV as the string ``"None"``, or a run log as
+    ``null``, would be read by the next ``--resume`` as a real value.
+    """
+    return "" if value is None else value
+
+
+@dataclass
+class EntryResult:
+    """One entry's outcome, from the skeleton a failure returns to a full run.
 
     Every manifest column is present from the outset so a failure at any stage
-    still yields a complete row.
+    still yields a complete row, and the worker fills the rest in as its stages
+    complete -- which is why this is the one mutable contract in the pipeline.
 
-    ``n_bonds`` and ``n_candidates`` start blank rather than zero. Zero is a
-    measured result meaning the bond stage ran and found nothing, so an entry
-    that fails before that stage must not claim it: a later ``--resume`` reads
-    a non-blank count as proof the stage completed and would skip the entry
-    permanently.
+    **Not-yet-measured is ``None``, and it is not zero.** ``n_bonds`` and
+    ``n_candidates`` are the pair that matters: zero is a measured result
+    meaning the bond stage ran and found nothing, so an entry that failed
+    before that stage must not claim it. A later ``--resume`` reads a non-blank
+    count as proof the stage completed and would skip the entry permanently.
+    That invariant used to live only in a docstring, with ``""`` standing for
+    "unmeasured" in a field otherwise holding integers; the three model fields
+    below carry the same distinction for the same reason.
     """
-    return {
-        "pdbID": pdb_id,
-        "status": "error",
-        "n": 0,
-        "runtime": 0.0,
-        "error": "",
-        "rows": [],
-        "bond_rows": [],
-        "candidate_rows": [],
-        "n_bonds": "",
-        "n_candidates": "",
-        "no_metals": False,
-        "timings": {},
-        "density_map_scope_used": "",
-        "density_full_map_bytes": 0,
-        "density_edstats_map_bytes": 0,
-        "retryable": True,
-        "reason_codes": [],
-        "warning_codes": [],
-        "confidence_inputs_missing_reason": "",
-        "ccp4_timeout_log_path": "",
-        "alchemy_version": __version__,
-        "alchemy_commit": cfg.alchemy_commit,
-        "gemmi_version": cfg.gemmi_version,
-        "ccp4_version": cfg.ccp4_version,
-        "refinement_state": "manual" if manual_inputs else "final",
-        "source_coordinate_format": "",
-        "analysis_coordinate_format": "pdb",
-        "coordinate_conversion_performed": False,
-        "source_coordinate_path": "",
-        "analysis_coordinate_path": "",
-        "model_policy": MODEL_POLICY,
-        "input_model_count": "",
-        "model_analyzed": "",
-        "multi_model_structure": "",
-        "altloc_policy": ALTLOC_POLICY,
-        "symmetry_contact_policy": SYMMETRY_POLICY,
-    }
+
+    #: Run provenance, known before any work starts. The CSV column keeps the
+    #: deposited spelling ``pdbID``; the identifier here is ``pdb_id``, as
+    #: everywhere else in the codebase.
+    pdb_id: str
+    alchemy_commit: str
+    gemmi_version: str
+    ccp4_version: str
+    refinement_state: str
+
+    #: ``ok``, ``partial``, ``skip`` or ``error``. Starts at ``error`` so a
+    #: worker that dies mid-entry cannot be mistaken for a success.
+    status: str = "error"
+    #: Whether this entry is worth another attempt. Starts true for the same
+    #: reason, and is cleared once a stage has produced a terminal answer.
+    retryable: bool = True
+    n_metals: int = 0
+    runtime_s: float = 0.0
+    error: str = ""
+    no_metals: bool = False
+
+    #: The rows this entry contributes to each CSV.
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    bond_rows: list[dict[str, Any]] = field(default_factory=list)
+    candidate_rows: list[dict[str, Any]] = field(default_factory=list)
+    #: ``None`` until the bond stage runs -- see the class docstring.
+    n_bonds: Optional[int] = None
+    n_candidates: Optional[int] = None
+
+    reason_codes: list[str] = field(default_factory=list)
+    warning_codes: list[str] = field(default_factory=list)
+    timings: dict[str, float] = field(default_factory=dict)
+
+    density_map_scope_used: str = ""
+    density_full_map_bytes: int = 0
+    density_edstats_map_bytes: int = 0
+    confidence_inputs_missing_reason: str = ""
+    ccp4_timeout_log_path: str = ""
+
+    alchemy_version: str = __version__
+    source_coordinate_format: str = ""
+    analysis_coordinate_format: str = "pdb"
+    coordinate_conversion_performed: bool = False
+    source_coordinate_path: str = ""
+    analysis_coordinate_path: str = ""
+
+    #: Fixed statements of what this run does, copied onto every row so a CSV
+    #: is readable without the code that produced it.
+    model_policy: str = MODEL_POLICY
+    altloc_policy: str = ALTLOC_POLICY
+    symmetry_contact_policy: str = SYMMETRY_POLICY
+    #: ``None`` until the coordinates load.
+    input_model_count: Optional[int] = None
+    model_analyzed: Optional[int] = None
+    multi_model_structure: Optional[bool] = None
+
+    def update(self, **fields: Any) -> None:
+        """Assign several fields at once, rejecting any this result lacks.
+
+        ``process`` fills the result in stage by stage, and reads better as one
+        statement per stage than one per field. The name check is what the dict
+        could not offer: a misspelled key used to add a value nobody read,
+        leaving the entry reporting whatever the field still held.
+        """
+        for name, value in fields.items():
+            if name not in self.__dataclass_fields__:
+                raise AttributeError(f"{type(self).__name__} has no field {name!r}")
+            setattr(self, name, value)
+
+
+def _initial_result(pdb_id, cfg, manual_inputs):
+    """Return the per-entry result skeleton, pre-filled with run provenance."""
+    return EntryResult(
+        pdb_id=pdb_id,
+        alchemy_commit=cfg.alchemy_commit,
+        gemmi_version=cfg.gemmi_version,
+        ccp4_version=cfg.ccp4_version,
+        refinement_state="manual" if manual_inputs else "final",
+    )
 
 
 def _worker_death_result(pdb_id, cfg, pid):
@@ -348,9 +405,9 @@ def _finalize_result(
     result, identification_codes, bond_meta, structure, rows, bond_rows, candidate_rows
 ):
     """Merge the stage outcomes into the final status, codes, and counts."""
-    result["reason_codes"] = list(
+    result.reason_codes = list(
         dict.fromkeys(
-            result["reason_codes"]
+            result.reason_codes
             + identification_codes
             + list(bond_meta["partial_reason_codes"])
         )
@@ -358,25 +415,25 @@ def _finalize_result(
     messages = [IDENTIFICATION_REASON_MESSAGES[code] for code in identification_codes]
     messages.extend(bond_meta["messages"])
     if messages:
-        existing_error = result["error"]
-        result["error"] = "; ".join(
+        existing_error = result.error
+        result.error = "; ".join(
             ([existing_error] if existing_error else []) + messages
         )
-        result["error"] = truncate(result["error"], MAX_MANIFEST_ERROR_CHARS)
+        result.error = truncate(result.error, MAX_MANIFEST_ERROR_CHARS)
     if bond_meta.get("retryable", False):
-        result["retryable"] = True
-    result["warning_codes"] = list(
-        dict.fromkeys(result["warning_codes"] + bond_meta.get("warning_codes", []))
+        result.retryable = True
+    result.warning_codes = list(
+        dict.fromkeys(result.warning_codes + bond_meta.get("warning_codes", []))
     )
-    status = "partial" if result["reason_codes"] else "ok"
+    status = "partial" if result.reason_codes else "ok"
     if status == "ok":
-        result["retryable"] = False
+        result.retryable = False
     # Count coordinate-model metal sites, not emitted statistics rows. A failed
     # EDSTATS join can leave a diagnostic row without a site even though bond
     # analysis still found and evaluated the deposited metal.
     result.update(
         status=status,
-        n=len(structure.metal_atoms(METALS_SET, canonical=True)),
+        n_metals=len(structure.metal_atoms(METALS_SET, canonical=True)),
         rows=rows,
         bond_rows=bond_rows,
         candidate_rows=candidate_rows,
@@ -447,7 +504,7 @@ def process(pdb_id):
             analysis_coordinate_path=pdb,
         )
         structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
-        result["timings"]["input_structure_s"] = round(time.monotonic() - t0, 3)
+        result.timings["input_structure_s"] = round(time.monotonic() - t0, 3)
         result.update(
             analysis_coordinate_format=structure.analysis_coordinate_format,
             input_model_count=structure.input_model_count,
@@ -462,7 +519,7 @@ def process(pdb_id):
             result.update(
                 status="ok",
                 retryable=False,
-                n=0,
+                n_metals=0,
                 rows=[],
                 bond_rows=[],
                 candidate_rows=[],
@@ -501,7 +558,7 @@ def process(pdb_id):
                 confidence_inputs_missing_reason="ccp4_tool_timeout",
                 ccp4_timeout_log_path=kept_log,
             )
-            result["timings"].update(exc.timings)
+            result.timings.update(exc.timings)
         except MtzfixValidationError as exc:
             # The input is readable, but MTZFIX could not make its Fourier
             # coefficients internally consistent. Do not use those maps or
@@ -513,19 +570,18 @@ def process(pdb_id):
                 error=truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS),
                 confidence_inputs_missing_reason=("mtzfix_validation_failure"),
             )
-            result["timings"].update(exc.timings)
+            result.timings.update(exc.timings)
         else:
-            result["timings"].update(res.timings)
+            result.timings.update(res.timings)
             result.update(
                 density_map_scope_used=res.density_map_scope_used,
                 density_full_map_bytes=res.full_map_bytes,
                 density_edstats_map_bytes=res.edstats_map_bytes,
             )
             if res.twin_coefficient_normalization_applied:
-                result["warning_codes"] = list(
+                result.warning_codes = list(
                     dict.fromkeys(
-                        result["warning_codes"]
-                        + ["twin_refmac_coefficients_normalized"]
+                        result.warning_codes + ["twin_refmac_coefficients_normalized"]
                     )
                 )
             statistics_started = time.monotonic()
@@ -536,14 +592,14 @@ def process(pdb_id):
                 cfg.cofactors,
                 structure=structure,
             )
-            result["timings"]["statistics_extraction_s"] = round(
+            result.timings["statistics_extraction_s"] = round(
                 time.monotonic() - statistics_started, 3
             )
             # Reaching this point means the entry's core inputs and density
             # stage succeeded. Later deterministic limitations remain terminal.
-            result["retryable"] = False
+            result.retryable = False
         finally:
-            result["timings"]["density_total_s"] = round(
+            result.timings["density_total_s"] = round(
                 time.monotonic() - density_started, 3
             )
 
@@ -584,15 +640,15 @@ def process(pdb_id):
                     )
                 )
             except Exception as e:  # noqa: BLE001
-                result["error"] = truncate(
+                result.error = truncate(
                     f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS
                 )
-                result["reason_codes"] = list(
-                    dict.fromkeys(result["reason_codes"] + ["bond_stage_failure"])
+                result.reason_codes = list(
+                    dict.fromkeys(result.reason_codes + ["bond_stage_failure"])
                 )
-                result["retryable"] = True
+                result.retryable = True
             finally:
-                result["timings"]["bond_analysis_s"] = round(
+                result.timings["bond_analysis_s"] = round(
                     time.monotonic() - bond_started, 3
                 )
         _append_site_fields(rows, site_summaries, structure)
@@ -623,9 +679,7 @@ def process(pdb_id):
         if not cfg.keep and work_dir is not None and os.path.isdir(work_dir):
             cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
-            result["timings"]["cleanup_s"] = round(
-                time.monotonic() - cleanup_started, 3
-            )
-        result["runtime"] = round(time.monotonic() - t0, 2)
+            result.timings["cleanup_s"] = round(time.monotonic() - cleanup_started, 3)
+        result.runtime_s = round(time.monotonic() - t0, 2)
         _announce_inflight("end", pdb_id)
     return result

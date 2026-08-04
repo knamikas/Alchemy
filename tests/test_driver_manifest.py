@@ -37,6 +37,7 @@ from driver.progress import _ProgressReporter
 from driver.runlog import _RunLog
 from driver.writers import (
     MANIFEST_COLUMNS,
+    MANIFEST_FIELDS,
     STATS_COLUMNS,
     _manifest_row,
     _OutputWriters,
@@ -99,7 +100,7 @@ DERIVED_MANIFEST_COLUMNS = frozenset(
 def _result(pdb_id="109m", **overrides):
     """A worker result skeleton plus overrides, as the driver would see it."""
     result = worker._initial_result(pdb_id, CFG, None)
-    result.update(overrides)
+    result.update(**overrides)
     return result
 
 
@@ -684,39 +685,42 @@ class TestInitialResult:
         before the bond stage look like a completed bond analysis.
         """
         result = worker._initial_result("109m", CFG, None)
-        assert result["n_bonds"] == ""
-        assert result["n_candidates"] == ""
-        assert result["n_bonds"] != 0
-        assert result["n_candidates"] != 0
+        assert result.n_bonds is None
+        assert result.n_candidates is None
+        assert result.n_bonds != 0
+        assert result.n_candidates != 0
 
     def test_every_non_derived_manifest_column_is_present_up_front(self):
         """A failure at any stage still projects onto a complete row."""
         result = worker._initial_result("109m", CFG, None)
         required = set(MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
-        assert required.issubset(result.keys())
+        supplied = {
+            column for column, name in MANIFEST_FIELDS.items() if hasattr(result, name)
+        }
+        assert required.issubset(supplied)
 
-    def test_supplies_the_keys_manifest_row_reads_directly(self):
-        """``_manifest_row`` indexes these without a default; they must exist."""
+    def test_supplies_the_fields_manifest_row_reads_directly(self):
+        """``_manifest_row`` reads these without a default; they must exist."""
         result = worker._initial_result("109m", CFG, None)
-        for key in ("n", "runtime", "n_bonds", "n_candidates", "pdbID"):
-            assert key in result
+        for name in ("n_metals", "runtime_s", "n_bonds", "n_candidates", "pdb_id"):
+            assert hasattr(result, name)
 
     def test_defaults_to_a_retryable_error(self):
         """An entry that dies before setting a status must be retried."""
         result = worker._initial_result("109m", CFG, None)
-        assert result["status"] == "error"
-        assert result["retryable"] is True
+        assert result.status == "error"
+        assert result.retryable is True
 
     def test_carries_run_provenance_from_the_config(self):
         """Version provenance is stamped once and shared by every row."""
         result = worker._initial_result("109m", CFG, None)
-        assert result["alchemy_version"] == pool.ALCHEMY_VERSION
-        assert result["alchemy_commit"] == CFG.alchemy_commit
-        assert result["gemmi_version"] == CFG.gemmi_version
-        assert result["ccp4_version"] == CFG.ccp4_version
-        assert result["model_policy"] == worker.MODEL_POLICY
-        assert result["altloc_policy"] == worker.ALTLOC_POLICY
-        assert result["symmetry_contact_policy"] == worker.SYMMETRY_POLICY
+        assert result.alchemy_version == pool.ALCHEMY_VERSION
+        assert result.alchemy_commit == CFG.alchemy_commit
+        assert result.gemmi_version == CFG.gemmi_version
+        assert result.ccp4_version == CFG.ccp4_version
+        assert result.model_policy == worker.MODEL_POLICY
+        assert result.altloc_policy == worker.ALTLOC_POLICY
+        assert result.symmetry_contact_policy == worker.SYMMETRY_POLICY
 
     @pytest.mark.parametrize(
         "manual_inputs,expected",
@@ -729,16 +733,45 @@ class TestInitialResult:
     def test_refinement_state_reflects_manual_inputs(self, manual_inputs, expected):
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
         result = worker._initial_result("109m", CFG, manual_inputs)
-        assert result["refinement_state"] == expected
+        assert result.refinement_state == expected
 
     def test_row_lists_are_independent_between_entries(self):
         """Two skeletons must not share mutable row accumulators."""
         first = worker._initial_result("109m", CFG, None)
         second = worker._initial_result("1cll", CFG, None)
-        first["rows"].append({"x": 1})
-        first["reason_codes"].append("boom")
-        assert second["rows"] == []
-        assert second["reason_codes"] == []
+        first.rows.append({"x": 1})
+        first.reason_codes.append("boom")
+        assert second.rows == []
+        assert second.reason_codes == []
+
+    def test_update_refuses_a_field_the_result_does_not_have(self):
+        """A misspelled field must fail here, not silently later.
+
+        ``process`` fills the result in stage by stage. While it was a dict,
+        ``result.update(retryble=True)`` added a key nobody read and left the
+        entry reporting whatever ``retryable`` still held -- for a real entry,
+        in a real manifest, with nothing anywhere saying so.
+        """
+        result = worker._initial_result("109m", CFG, None)
+
+        with pytest.raises(AttributeError, match="retryble"):
+            result.update(retryble=True)
+
+        assert result.retryable is True, "the real field must be untouched"
+
+    def test_unmeasured_fields_render_blank_not_none(self):
+        """``None`` means "this stage never ran", and every output says so blank.
+
+        A ``None`` reaching a CSV as ``"None"`` would be read back by the next
+        ``--resume`` as a completed stage, which is the same failure the blank
+        counts exist to prevent.
+        """
+        result = worker._initial_result("109m", CFG, None)
+        row = _manifest_row(result, False, True, {}, {})
+
+        for column in ("n_bonds", "n_candidates", "input_model_count"):
+            assert row[column] == ""
+        assert "None" not in set(map(str, row.values()))
 
 
 # --------------------------------------------------------------------------- #
@@ -758,8 +791,8 @@ class TestManifestRow:
     def test_renames_and_joins_the_derived_columns(self):
         """n/runtime become n_metals/runtime_s; code lists become pipe text."""
         result = _result(
-            n=3,
-            runtime=12.5,
+            n_metals=3,
+            runtime_s=12.5,
             n_bonds=7,
             n_candidates=11,
             reason_codes=["a", "b"],
@@ -887,7 +920,7 @@ class TestUnrunBondStageChain:
         prior_candidates = resume._manifest_values_by_id(str(manifest), "n_candidates")
 
         recovered = _manifest_row(
-            _result("109m", status="ok", retryable=False, n=2),
+            _result("109m", status="ok", retryable=False, n_metals=2),
             resume=True,
             bonds_enabled=False,
             prior_bond_counts=prior_bonds,
@@ -907,7 +940,12 @@ class TestUnrunBondStageChain:
         # now may a later bond-enabled resume skip the entry.
         completed = _manifest_row(
             _result(
-                "109m", status="ok", retryable=False, n=2, n_bonds=0, n_candidates=0
+                "109m",
+                status="ok",
+                retryable=False,
+                n_metals=2,
+                n_bonds=0,
+                n_candidates=0,
             ),
             resume=True,
             bonds_enabled=True,
@@ -941,12 +979,16 @@ class TestResumeReplacementSucceeded:
     )
     def test_terminality(self, status, retryable, expected):
         """A retryable or failed retry leaves the previous rows in place."""
-        result = {"status": status, "retryable": retryable}
+        result = _result(status=status, retryable=retryable)
         assert resume._resume_replacement_succeeded(result) is expected
 
-    def test_missing_retryable_defaults_to_retryable(self):
-        """An unspecified partial is assumed unfinished, so it cannot replace."""
-        assert resume._resume_replacement_succeeded({"status": "partial"}) is False
+    def test_an_untouched_partial_is_assumed_unfinished(self):
+        """``retryable`` starts true, so a partial nothing cleared cannot replace.
+
+        This used to depend on a ``.get`` default; it is now the field's own
+        default, which is the same rule in a place a reader can find it.
+        """
+        assert resume._resume_replacement_succeeded(_result(status="partial")) is False
 
 
 # --------------------------------------------------------------------------- #
@@ -1440,10 +1482,10 @@ class TestOutputWriters:
                     "109m",
                     status="ok",
                     retryable=False,
-                    n=1,
+                    n_metals=1,
                     n_bonds=0,
                     n_candidates=0,
-                    runtime=1.0,
+                    runtime_s=1.0,
                 ),
                 False,
                 True,
@@ -1673,14 +1715,14 @@ class TestRunLog:
         )
         for index, runtime in enumerate(runtimes):
             run_log.record_entry(
-                {
-                    "pdbID": f"e{index}",
-                    "status": "ok",
-                    "runtime": runtime,
-                    "n": 1,
-                    "n_bonds": 0,
-                    "n_candidates": 0,
-                }
+                _result(
+                    f"e{index}",
+                    status="ok",
+                    runtime_s=runtime,
+                    n_metals=1,
+                    n_bonds=0,
+                    n_candidates=0,
+                )
             )
         return run_log
 
@@ -2477,9 +2519,9 @@ class TestDensityResultReachesTheResult:
             ),
         )
 
-        assert result["density_map_scope_used"] == "full-extent-fallback"
-        assert result["density_full_map_bytes"] == 8192
-        assert result["density_edstats_map_bytes"] == 2048
+        assert result.density_map_scope_used == "full-extent-fallback"
+        assert result.density_full_map_bytes == 8192
+        assert result.density_edstats_map_bytes == 2048
 
     def test_density_timings_reach_the_entry(self, tmp_path, monkeypatch):
         """The stage's own per-program timings are merged, not discarded.
@@ -2491,9 +2533,9 @@ class TestDensityResultReachesTheResult:
             tmp_path, monkeypatch, self._density(timings={"edstats_s": 12.5})
         )
 
-        assert result["timings"]["edstats_s"] == 12.5
+        assert result.timings["edstats_s"] == 12.5
         # And the worker's own measurement of the whole stage is still there.
-        assert "density_total_s" in result["timings"]
+        assert "density_total_s" in result.timings
 
     def test_a_normalized_twin_entry_is_flagged(self, tmp_path, monkeypatch):
         """The normalization is a real modification and must stay visible."""
@@ -2506,7 +2548,7 @@ class TestDensityResultReachesTheResult:
             ),
         )
 
-        assert "twin_refmac_coefficients_normalized" in result["warning_codes"]
+        assert "twin_refmac_coefficients_normalized" in result.warning_codes
 
     @pytest.mark.parametrize("keep", [False, True])
     def test_keep_intermediates_decides_the_scratch_directory(
@@ -2525,6 +2567,31 @@ class TestDensityResultReachesTheResult:
         ]
 
         assert bool(scratch) is keep
+
+
+def test_a_loaded_structure_fills_in_the_model_provenance(tmp_path, monkeypatch):
+    """The model fields are blank only until the coordinates load.
+
+    They start unmeasured for the same reason the bond counts do -- an entry
+    that failed before ``load_structure`` must not claim a model count -- so
+    something has to prove they stop being blank once it succeeds. Nothing did:
+    the manifest would have carried three empty columns for every entry in a
+    database run and the suite would have stayed green.
+    """
+    monkeypatch.setattr(worker, "extract_metal_statistics", lambda *a, **k: ([], []))
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        lambda *a, **k: TestDensityResultReachesTheResult._density(),
+    )
+
+    assert result.input_model_count == 1
+    assert result.model_analyzed == 1
+    assert result.multi_model_structure is False
+
+    row = _manifest_row(result, False, True, {}, {})
+    assert row["input_model_count"] == 1
+    assert row["model_analyzed"] == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -2563,16 +2630,16 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        assert result["reason_codes"] == ["ccp4_tool_timeout"]
-        assert result["retryable"] is True, (
+        assert result.reason_codes == ["ccp4_tool_timeout"]
+        assert result.retryable is True, (
             "the program was killed for running too long and reported nothing "
             "about the entry, so it must stay eligible for retry"
         )
-        assert result["status"] == "partial"
-        assert "edstats" in result["error"]
-        assert result["confidence_inputs_missing_reason"] == "ccp4_tool_timeout"
+        assert result.status == "partial"
+        assert "edstats" in result.error
+        assert result.confidence_inputs_missing_reason == "ccp4_tool_timeout"
         # The cost of the abandoned attempt is preserved for the run log.
-        assert result["timings"].get("edstats_s") == 900.4
+        assert result.timings.get("edstats_s") == 900.4
 
     def test_the_partial_log_survives_scratch_cleanup(self, tmp_path, monkeypatch):
         """The log the timeout message names must still exist afterwards.
@@ -2599,7 +2666,7 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        kept = result["ccp4_timeout_log_path"]
+        kept = result.ccp4_timeout_log_path
         assert kept, "the timeout log path must be recorded on the result"
         assert os.path.isfile(kept), (
             f"the retained log is missing at {kept}; the path named in the "
@@ -2631,7 +2698,7 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        kept_dir = os.path.dirname(result["ccp4_timeout_log_path"])
+        kept_dir = os.path.dirname(result.ccp4_timeout_log_path)
         assert os.listdir(kept_dir) == ["1abc_edstats_timeout.log"], (
             "only the log belongs in the retained directory"
         )
@@ -2650,9 +2717,9 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        assert result["ccp4_timeout_log_path"] == ""
-        assert result["reason_codes"] == ["ccp4_tool_timeout"]
-        assert result["retryable"] is True
+        assert result.ccp4_timeout_log_path == ""
+        assert result.reason_codes == ["ccp4_tool_timeout"]
+        assert result.retryable is True
 
     def test_a_validation_failure_remains_terminal_and_distinct(
         self, tmp_path, monkeypatch
@@ -2664,5 +2731,5 @@ class TestCcp4TimeoutOutcome:
             density.MtzfixValidationError("bad coefficients", timings={}),
         )
 
-        assert result["reason_codes"] == ["mtzfix_validation_failure"]
-        assert result["retryable"] is False
+        assert result.reason_codes == ["mtzfix_validation_failure"]
+        assert result.retryable is False

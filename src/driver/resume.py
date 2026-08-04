@@ -82,10 +82,8 @@ def load_done(
 
 def _resume_replacement_succeeded(result):
     """Whether a retry produced a terminal result suitable for replacement."""
-    status = str(result.get("status", "")).strip().lower()
-    return status == "ok" or (
-        status == "partial" and not bool(result.get("retryable", True))
-    )
+    status = str(result.status).strip().lower()
+    return status == "ok" or (status == "partial" and not bool(result.retryable))
 
 
 def _manifest_values_by_id(path, column):

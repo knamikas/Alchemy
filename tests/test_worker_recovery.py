@@ -310,20 +310,20 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     cfg = _reference_cfg(str(tmp_path))
     result = worker._worker_death_result("1abc", cfg, 4321)
 
-    assert result["pdbID"] == "1abc"
-    assert result["status"] == "error"
-    assert result["retryable"] is True
-    assert result["reason_codes"] == ["worker_process_died"]
-    assert result["n"] == 0
-    assert result["rows"] == []
-    assert result["bond_rows"] == []
-    assert result["candidate_rows"] == []
+    assert result.pdb_id == "1abc"
+    assert result.status == "error"
+    assert result.retryable is True
+    assert result.reason_codes == ["worker_process_died"]
+    assert result.n_metals == 0
+    assert result.rows == []
+    assert result.bond_rows == []
+    assert result.candidate_rows == []
     # The message has to name both the entry and the process for triage.
-    assert "4321" in result["error"] and "1abc" in result["error"]
+    assert "4321" in result.error and "1abc" in result.error
     # Provenance is carried over from the run config, not left blank.
-    assert result["alchemy_commit"] == cfg.alchemy_commit
-    assert result["gemmi_version"] == cfg.gemmi_version
-    assert result["ccp4_version"] == cfg.ccp4_version
+    assert result.alchemy_commit == cfg.alchemy_commit
+    assert result.gemmi_version == cfg.gemmi_version
+    assert result.ccp4_version == cfg.ccp4_version
 
     row = writers._manifest_row(
         result,
@@ -348,8 +348,8 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
     """
     cfg = _reference_cfg(str(tmp_path))
     result = worker._worker_death_result("1abc", cfg, 7)
-    assert result["n_bonds"] == ""
-    assert result["n_candidates"] == ""
+    assert result.n_bonds is None
+    assert result.n_candidates is None
 
     row = writers._manifest_row(
         result,
@@ -376,7 +376,7 @@ def test_worker_death_result_reports_the_run_refinement_state(
     """
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
     result = worker._worker_death_result("1abc", cfg, 7)
-    assert result["refinement_state"] == expected_state
+    assert result.refinement_state == expected_state
 
 
 def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
@@ -391,9 +391,9 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
     synthesized = worker._worker_death_result("1abc", cfg, 7)
     genuine = worker._initial_result("1abc", cfg, None)
 
-    assert synthesized["reason_codes"] == ["worker_process_died"]
-    assert genuine["reason_codes"] == []
-    assert genuine["reason_codes"] != synthesized["reason_codes"]
+    assert synthesized.reason_codes == ["worker_process_died"]
+    assert genuine.reason_codes == []
+    assert genuine.reason_codes != synthesized.reason_codes
 
 
 # --------------------------------------------------------------------------- #
@@ -497,10 +497,10 @@ def _stub_process(pdb_id):
 
     result.update(
         status="ok",
-        n=0,
+        n_metals=0,
         no_metals=True,
         retryable=False,
-        runtime=runtime,
+        runtime_s=runtime,
         n_bonds=0,
         n_candidates=0,
     )

@@ -544,11 +544,11 @@ class _BatchTally:
         self.retryable_partials = 0
 
     def record(self, result):
-        status = result["status"]
+        status = result.status
         self.counts[status] = self.counts.get(status, 0) + 1
-        if result.get("no_metals", False):
+        if result.no_metals:
             self.no_metals += 1
-        if status == "partial" and result.get("retryable", False):
+        if status == "partial" and result.retryable:
             self.retryable_partials += 1
 
     def exit_code(self):
@@ -899,13 +899,13 @@ def _open_writers(handles, args, plan, write_paths):
 def _confidence_rows_for(result, plan):
     """The confidence rows one entry contributes, scored where a reference is."""
     rows = prepare_result_confidence_inputs(
-        result["rows"], result["bond_rows"], STATS_COLUMNS
+        result.rows, result.bond_rows, STATS_COLUMNS
     )
     rows = complete_confidence_site_count(
         rows,
-        result["pdbID"],
-        result["n"],
-        result.get("confidence_inputs_missing_reason", ""),
+        result.pdb_id,
+        result.n_metals,
+        result.confidence_inputs_missing_reason,
     )
     # Equivalent to `plan.mode == "reference"`: the mode is set only where a
     # reference has just been loaded. Testing the reference itself says what
@@ -923,9 +923,9 @@ def _write_entry(result, args, plan, writers, staging, prior_counts):
     repeated entry on the next resume, never a lost one.
     """
     prior_bond_counts, prior_candidate_counts = prior_counts
-    writers.write_stats_rows(result["rows"])
-    writers.write_bond_rows(result["bond_rows"])
-    writers.write_candidate_rows(result["candidate_rows"])
+    writers.write_stats_rows(result.rows)
+    writers.write_bond_rows(result.bond_rows)
+    writers.write_candidate_rows(result.candidate_rows)
     if plan.enabled:
         writers.write_confidence_rows(_confidence_rows_for(result, plan))
     writers.write_manifest_row(
@@ -934,7 +934,7 @@ def _write_entry(result, args, plan, writers, staging, prior_counts):
         )
     )
     if staging is not None:
-        staging.replacement_ids.add(result["pdbID"].lower())
+        staging.replacement_ids.add(result.pdb_id.lower())
 
 
 def _dispatch_entries(
@@ -1014,15 +1014,13 @@ def _dispatch_entries(
                     continue
             last_progress = time.monotonic()
             for r in batch:
-                if r["pdbID"] in lost_ids and r.get("reason_codes") != [
-                    "worker_process_died"
-                ]:
+                if r.pdb_id in lost_ids and r.reason_codes != ["worker_process_died"]:
                     # A real result arrived for an entry already declared lost.
                     # The synthesized row stands, so this one is dropped rather
                     # than written twice.
                     continue
                 completed += 1
-                completed_ids.add(r["pdbID"])
+                completed_ids.add(r.pdb_id)
                 run_log.record_entry(r)
                 if not args.resume or _resume_replacement_succeeded(r):
                     _write_entry(r, args, plan, writers, staging, prior_counts)

@@ -15,6 +15,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from driver.resources import available_cpu_count, available_memory_bytes
+from worker import blank_if_unmeasured
 
 
 class _RunLog:
@@ -36,21 +37,21 @@ class _RunLog:
         """Retain diagnostic fields without keeping large result-row payloads."""
         self.entries.append(
             {
-                "pdbID": result.get("pdbID", ""),
-                "status": result.get("status", "unknown"),
-                "retryable": bool(result.get("retryable", False)),
-                "no_metals": bool(result.get("no_metals", False)),
-                "n_metals": result.get("n", 0),
-                "n_bonds": result.get("n_bonds", 0),
-                "n_candidates": result.get("n_candidates", 0),
-                "runtime_s": float(result.get("runtime", 0.0)),
-                "timings": dict(result.get("timings", {})),
-                "reason_codes": list(result.get("reason_codes", [])),
-                "warning_codes": list(result.get("warning_codes", [])),
-                "error": str(result.get("error", "")),
-                "density_map_scope_used": result.get("density_map_scope_used", ""),
-                "density_full_map_bytes": result.get("density_full_map_bytes", 0),
-                "density_edstats_map_bytes": result.get("density_edstats_map_bytes", 0),
+                "pdbID": result.pdb_id,
+                "status": result.status,
+                "retryable": bool(result.retryable),
+                "no_metals": bool(result.no_metals),
+                "n_metals": result.n_metals,
+                "n_bonds": blank_if_unmeasured(result.n_bonds),
+                "n_candidates": blank_if_unmeasured(result.n_candidates),
+                "runtime_s": float(result.runtime_s),
+                "timings": dict(result.timings),
+                "reason_codes": list(result.reason_codes),
+                "warning_codes": list(result.warning_codes),
+                "error": str(result.error),
+                "density_map_scope_used": result.density_map_scope_used,
+                "density_full_map_bytes": result.density_full_map_bytes,
+                "density_edstats_map_bytes": result.density_edstats_map_bytes,
             }
         )
 
