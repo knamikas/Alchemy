@@ -495,7 +495,7 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     # No confidence artefacts: no frozen reference is installed for this run.
     assert "confidence_scores_all.csv" not in written
     assert "confidence_inputs_all.csv" not in written
-    assert "No frozen confidence reference found" in result.stdout
+    assert "no frozen reference is distributed with Alchemy" in result.text
 
     # Per-entry working directories are removed once their rows are extracted.
     assert [name for name in written if name.startswith(".alchemy-")] == []
@@ -902,7 +902,7 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     assert second.exit_code == 0, second.text
     assert len(log_paths(output_dir)) == 2
     assert open(original[0], encoding="utf-8").read() == original_text
-    assert "No entries to process." in second.stdout
+    assert "no entries to process" in second.text
 
 
 # --------------------------------------------------------------------------- #
@@ -937,7 +937,7 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
         output_dir, entry_cache, ccp4_env, extra=("--resume",), tmp_root=tmp_path
     )
     assert second.result.exit_code == 0, second.result.text
-    assert "No entries to process." in second.result.stdout
+    assert "no entries to process" in second.result.text
 
     after = {
         name: open(os.path.join(str(output_dir), name), "rb").read() for name in names
@@ -981,7 +981,7 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
         tmp_root=tmp_path,
     )
     assert disabled.exit_code == 0, disabled.text
-    assert "Removed stale bond-stage output" in disabled.stdout
+    assert "removed stale bond-stage output" in disabled.text
     assert not os.path.exists(os.path.join(str(output_dir), "metal_bonds_all.csv"))
     assert not os.path.exists(os.path.join(str(output_dir), "metal_candidates_all.csv"))
 
@@ -1090,7 +1090,7 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
         tmp_root=tmp_path,
     )
     assert filled.exit_code == 0, filled.text
-    assert "No entries to process." not in filled.stdout, (
+    assert "no entries to process" not in filled.text, (
         "the bond stage never ran for this entry, so resume must process it"
     )
     bonds = rows_for(read_rows(output_dir, "metal_bonds_all.csv"), "9myr")
@@ -1388,7 +1388,7 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 
     assert result.exit_code == 1
     assert "Traceback" not in result.text
-    assert "Alchemy completed with incomplete entries" in result.text
+    assert "completed with incomplete entries" in result.text
 
     row = manifest_by_id(output_dir)["9myr"]
     assert row["status"] == "error"
@@ -1799,7 +1799,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
         tmp_root=tmp_path,
     )
     assert result.exit_code == 0, result.text
-    assert f"Enumerating final PDB-REDO entries under {mirror}" in result.stdout
+    assert f"enumerating final PDB-REDO entries under {mirror}" in result.text
 
     written = set(os.listdir(str(output_dir)))
     assert {
@@ -1920,7 +1920,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp
         tmp_root=tmp_path,
     )
     assert same.exit_code == 0, same.text
-    assert "No entries to process." in same.stdout
+    assert "no entries to process" in same.text
 
     mismatched = run_alchemy(
         output_dir,
