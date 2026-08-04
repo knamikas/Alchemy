@@ -1976,12 +1976,14 @@ def test_reference_table_holds_exactly_the_expected_rows_and_keys():
     ],
 )
 def test_the_strict_parser_rejects_a_corrupted_row(tmp_path, corruption):
-    """The independence claim above is itself checked.
+    """The independence claim above is itself checked, and so is ``src``.
 
-    ``_load_literature`` accepts all three of these files -- it just drops the
-    bad line -- so if this test's parser did the same, the row-count and key
-    assertions would be vacuous. A copy of the real table with one row damaged
-    must fail to parse here while still loading cleanly in ``src``.
+    If this module's parser dropped a bad row the way the old loader did, the
+    row-count and key assertions above would be vacuous. Both parsers must
+    refuse a copy of the real table with one row damaged -- and the three forms
+    are the three ways it can be damaged: an unparseable number, a lost column,
+    and a stray extra one that used to overwrite the real CYS/S/CU numbers
+    without a word.
     """
     with open(REFERENCE_TABLE, encoding="utf-8") as handle:
         text = handle.read()
@@ -1991,11 +1993,8 @@ def test_the_strict_parser_rejects_a_corrupted_row(tmp_path, corruption):
     with pytest.raises(AssertionError):
         _parse_reference_table(str(damaged))
 
-    # src, by contrast, accepts the damaged file without a word: the bad row is
-    # either dropped or -- for the extra-column form -- silently overwrites the
-    # real CYS/S/CU numbers. That is exactly why the parser above is strict.
-    loaded = reference_data._load_literature(str(damaged))
-    assert len(loaded) == EXPECTED_REFERENCE_ROW_COUNT
+    with pytest.raises(ValueError, match="metal_distances_info.txt line"):
+        reference_data._load_literature(str(damaged))
 
 
 def test_reference_table_has_no_duplicate_keys():

@@ -499,7 +499,20 @@ list or classification rules change.
   678-682](https://doi.org/10.1107/S0907444906014594), except NI, which is from
   Zheng et al. (2008), and SER/THR/TYR, which are approximated from statements
   in Harding (2006) rather than tabulated. See "Reference coverage of the donor
-  table" for which donors this file does and does not cover.
+  table" for which donors this file does and does not cover. Note the format
+  trap: column 1 `CA` is the backbone-carbonyl pseudo residue, while column 3
+  `CA` is calcium.
+- `src/data/metal_distances_info.meta.json` — checksum, row count and citations
+  for the distance table, written by `tools/stamp_distance_table.py`.
+
+Both bundled files are verified against their sidecars when they are first
+read, and a run stops rather than analyze against data that has drifted from
+what the tools recorded. After editing the distance table by hand, re-stamp it:
+
+```console
+python tools/stamp_distance_table.py            # rewrite the sidecar
+python tools/stamp_distance_table.py --check    # verify, change nothing
+```
 
 ## Operational notes
 

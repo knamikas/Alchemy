@@ -15,6 +15,8 @@ twice by two parsers that disagreed about what a valid catalog was.
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 from types import MappingProxyType
@@ -219,3 +221,138 @@ def test_building_the_targets_leaves_nothing_in_the_module_namespace():
         if hasattr(reference_data, name) or hasattr(bond_analysis, name)
     ]
     assert not leaked, f"loop variables left in a module namespace: {leaked}"
+
+
+# --------------------------------------------------------------------------- #
+# Checksum verification
+# --------------------------------------------------------------------------- #
+def test_both_bundled_files_match_their_recorded_checksums():
+    """The shipped data is the data the tools say they wrote.
+
+    Every z-score in the database is measured against these two files, and
+    nothing else in the output records which version produced a number. A
+    checkout whose data has drifted from its sidecar is a checkout whose
+    results cannot be attributed.
+    """
+    for path, (sidecar, key) in reference_data.CHECKSUM_SIDECARS.items():
+        with open(sidecar, encoding="utf-8") as handle:
+            recorded = json.load(handle)[key]
+        assert reference_data._sha256(path) == recorded, (
+            f"{os.path.basename(path)} does not match {os.path.basename(sidecar)}; "
+            "rebuild it with its tool or re-stamp the sidecar"
+        )
+
+
+@pytest.mark.parametrize("target", ["catalog", "distances"])
+def test_an_edited_bundled_file_is_refused_at_load(tmp_path, monkeypatch, target):
+    """A hand edit to either file stops the run rather than changing results.
+
+    This is the whole point of the sidecars. Before them the pipeline ran
+    happily against an edited catalog or a nudged reference distance, and every
+    entry afterwards was scored against something no output identified.
+    """
+    if target == "catalog":
+        path = reference_data.COFACTOR_CATALOG_PATH
+        accessor = reference_data.cofactor_ids
+        cached = reference_data._catalog
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        edited = text + "ZZZ\tZn\tcluster\n"
+    else:
+        path = reference_data.DONOR_DISTANCE_PATH
+        accessor = reference_data.literature_distances
+        cached = reference_data.literature_distances
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        edited = text.replace("HOH O ZN 2.09", "HOH O ZN 2.50")
+        assert edited != text, "the edit must actually change the file"
+
+    copied = tmp_path / os.path.basename(path)
+    copied.write_text(edited, encoding="utf-8")
+    # Point the constant at the edited copy while leaving the sidecar mapping
+    # keyed on it, which is what a hand-edited checkout looks like.
+    sidecar = reference_data.CHECKSUM_SIDECARS[path]
+    monkeypatch.setitem(reference_data.CHECKSUM_SIDECARS, str(copied), sidecar)
+    cached.cache_clear()
+
+    with pytest.raises(reference_data.ReferenceDataError, match="does not match"):
+        accessor(str(copied))
+
+
+def test_a_caller_supplied_file_is_not_checksummed(tmp_path):
+    """Only the bundled paths are verified; a path you passed is yours.
+
+    The tests above write catalogs of their own, and so would anyone running
+    against a catalog they built. Refusing those would make the check a
+    nuisance rather than a guarantee about what ships.
+    """
+    catalog = tmp_path / "mine.txt"
+    catalog.write_text("ABC\tZn\tcluster\nDEF\tFe\theme\n", encoding="utf-8")
+
+    assert reference_data.cofactor_ids(str(catalog)) == frozenset({"ABC", "DEF"})
+
+
+def test_a_missing_sidecar_is_an_error_for_a_bundled_file(tmp_path, monkeypatch):
+    """Deleting the sidecar must not silently disable the check."""
+    catalog = tmp_path / "catalog.txt"
+    catalog.write_text("ABC\tZn\tcluster\nDEF\tFe\theme\n", encoding="utf-8")
+    monkeypatch.setitem(
+        reference_data.CHECKSUM_SIDECARS,
+        str(catalog),
+        (str(tmp_path / "gone.meta.json"), "catalog_sha256"),
+    )
+    reference_data._catalog.cache_clear()
+
+    with pytest.raises(reference_data.ReferenceDataError, match="no metadata sidecar"):
+        reference_data.cofactor_ids(str(catalog))
+
+
+# --------------------------------------------------------------------------- #
+# The literature table's strict parse
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "row,message",
+    [
+        ("CYS S CU 2.two 0.2", "non-numeric"),
+        ("CYS S CU 2.20", "fields, expected 5"),
+        ("CYS S CU 2.20 0.2 0.3", "fields, expected 5"),
+    ],
+)
+def test_a_damaged_distance_row_fails_the_parse(tmp_path, row, message):
+    """A typo in a reference distance is an error, not a missing z-score.
+
+    Dropping the row produced a contact "no reference covers" -- which is a
+    legitimate outcome for a metal-donor pair genuinely absent from the
+    literature, and therefore indistinguishable from this.
+    """
+    table = tmp_path / "distances.txt"
+    table.write_text(f"HOH O ZN 2.09 0.11\n{row}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        reference_data._load_literature(str(table))
+
+
+def test_the_table_header_is_skipped_by_name():
+    """It is skipped because it is the header, not because it fails to parse.
+
+    Recognizing it explicitly is what allows every other unparseable line to be
+    an error rather than a shrug.
+    """
+    assert reference_data.DISTANCE_TABLE_HEADER == (
+        "residue",
+        "atom",
+        "metal",
+        "avg_bond_dist",
+        "st_dev",
+    )
+    with open(reference_data.DONOR_DISTANCE_PATH, encoding="utf-8") as handle:
+        assert tuple(handle.readline().split()) == reference_data.DISTANCE_TABLE_HEADER
+
+
+def test_a_table_with_no_distances_is_named_as_empty(tmp_path):
+    """A file of comments and blanks parses to nothing and must say so."""
+    table = tmp_path / "distances.txt"
+    table.write_text("# only a comment\n\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no reference distances"):
+        reference_data._load_literature(str(table))

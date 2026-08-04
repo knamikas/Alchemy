@@ -1,0 +1,18 @@
+{
+  "generated": "2026-08-04T15:37:49.284274+00:00",
+  "distance_table_sha256": "7f6e3a53084505dfb95b760c77daa29561c7a6d374fc53e801dd50817ebc00b3",
+  "reference_distance_count": 79,
+  "sources": [
+    {
+      "citation": "Harding, M. M. (2006). Small revisions to predicted distances around metal sites in proteins. Acta Cryst. D62, 678-682.",
+      "doi": "10.1107/S0907444906014594",
+      "covers": "every metal except Ni"
+    },
+    {
+      "citation": "Zheng, H., Chruszcz, M., Lasota, P., Lebioda, L. & Minor, W. (2008). Data mining of metal ion environments present in protein structures. J. Inorg. Biochem. 102, 1765-1776.",
+      "doi": "10.1016/j.jinorgbio.2008.05.006",
+      "covers": "Ni"
+    }
+  ],
+  "format": "Space-delimited: residue atom metal avg_bond_dist st_dev. Blank lines separate blocks. Column 1 'CA' is the backbone-carbonyl pseudo residue, not calcium; column 3 'CA' is calcium."
+}
