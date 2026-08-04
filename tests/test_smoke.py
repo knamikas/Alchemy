@@ -39,16 +39,16 @@ def test_src_modules_import():
     first names the real cause. ``driver`` *is* a package, reached the same way,
     so it is covered here too.
     """
-    import bond_analysis
-    import bond_schema
+    from bond import bond_analysis
+    from bond import bond_schema
     import ccp4_setup
     import codes
     import confidence_score
-    import contact_record
-    import declared_connections
+    from bond import contact_record
+    from bond import declared_connections
     import density_analysis
-    import donor_chemistry
-    import dpi
+    from bond import donor_chemistry
+    from bond import dpi
     import main
     import metal_elements
     import metal_identification  # noqa: F401 - imported to prove it loads
@@ -92,7 +92,7 @@ def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
     ``data_dir`` in particular has to reach the bundled literature tables, which
     several modules read directly rather than through a fixture.
     """
-    assert os.path.isfile(os.path.join(src_dir, "bond_analysis.py"))
+    assert os.path.isfile(os.path.join(src_dir, "bond", "bond_analysis.py"))
     assert os.path.dirname(src_dir) == repo_root
     assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
 
@@ -110,7 +110,7 @@ def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_f
     code writing to a relative path -- which would land in the repository on a
     normal run.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     inputs = tmp_path_factory.mktemp("isolated_inputs")
@@ -216,7 +216,7 @@ def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix
     Distance assertions across the suite are only meaningful if that holds, and
     nothing but the requested donors may fall inside the 4 Angstrom search.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     donors = [("HIS", "NE2", 2.03), ("ASP", "OD1", 1.99), ("HOH", "O", 2.09)]
@@ -247,7 +247,7 @@ def test_declared_connection_is_reported_for_both_formats(tmp_path):
     regenerates one from the connection type, while ``_struct_conn.id``
     round-trips -- and both must reach the same bond.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     # A legacy LINK record carries no identifier, so gemmi regenerates one from
@@ -330,7 +330,7 @@ def test_connection_can_name_a_specific_conformer(tmp_path):
     ``declared_connection_conformer_substituted`` so the substitution is visible
     rather than silent.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
@@ -491,7 +491,7 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
     If that join misses, the sigma columns are silently blank rather than wrong,
     which is why they are asserted explicitly here.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
@@ -613,7 +613,7 @@ def test_symmetry_image_contacts_are_reachable(tmp_path):
     distance measured against the image, and it must be marked crystallographic
     with the operation that produced it -- not reported as a deposited contact.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     # A small P 1 cell puts the water's -a image 1.0 A from the metal.
@@ -645,7 +645,7 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     chain must produce real numbers, so a blank z-score elsewhere means missing
     metadata rather than a broken formula.
     """
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")

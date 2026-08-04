@@ -29,7 +29,7 @@ from helpers import SRC_DIR
 
 
 # The modules that used to read a file merely by being imported.
-_PREVIOUSLY_EAGER = ("bond_analysis", "metal_identification", "reference_data")
+_PREVIOUSLY_EAGER = ("bond.bond_analysis", "metal_identification", "reference_data")
 
 
 def _catalog(tmp_path, lines, name="catalog.txt"):
@@ -213,7 +213,7 @@ def test_building_the_targets_leaves_nothing_in_the_module_namespace():
     ``donor``, ``metal_element``, ``target`` and ``key`` stayed bound in
     ``bond_analysis`` afterwards, where they read as module constants.
     """
-    import bond_analysis
+    from bond import bond_analysis
 
     leaked = [
         name

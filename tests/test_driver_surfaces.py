@@ -31,7 +31,7 @@ import os
 
 import pytest
 
-import bond_schema
+from bond import bond_schema
 import ccp4_setup
 import cli
 import inputs

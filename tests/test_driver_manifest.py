@@ -25,9 +25,9 @@ import gemmi
 import pytest
 
 import helpers
-import bond_schema
+from bond import bond_schema
 import coordinate_conversion as conversion
-import declared_connections
+from bond import declared_connections
 import density_analysis as density
 import main
 import metal_identification

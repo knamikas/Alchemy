@@ -28,23 +28,23 @@ its per-entry worker and supplies edstats rows in memory for the sigma join.
 import math
 from dataclasses import replace
 
-from bond_schema import (
+from bond.bond_schema import (
     ZSCORE_OUTLIER_CUTOFF,
     _bond_row,
     _candidate_row,
     _context_warning_values,
 )
 from codes import CandidateSource, ContactScope, GeometryStatus, MultiDonorStatus
-from contact_record import Candidate
-from declared_connections import _collect_declared_candidates
-from donor_chemistry import (
+from bond.contact_record import Candidate
+from bond.declared_connections import _collect_declared_candidates
+from bond.donor_chemistry import (
     AA,
     C_TERMINAL_DONOR_ATOMS,
     DONOR_ELEMENTS,
     INFERRED_DONOR_ATOMS,
     N_TERMINAL_DONOR_ATOMS,
 )
-from dpi import _calculate_dpi_details
+from bond.dpi import _calculate_dpi_details
 from metal_elements import METAL_ELEMENTS
 from metal_identification import _sigma_for, _sigma_index, _zd_indices
 from reference_data import (

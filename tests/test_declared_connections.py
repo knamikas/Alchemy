@@ -34,9 +34,9 @@ import gemmi
 import helpers
 from helpers import AtomRef, AtomSpec, StructureBuilder
 
-import bond_analysis
+from bond import bond_analysis
 import coordinate_conversion as conversion
-import declared_connections
+from bond import declared_connections
 from structure_analysis import StructureContext, load_structure
 import reference_data
 

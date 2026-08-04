@@ -24,12 +24,12 @@ from collections import defaultdict
 import gemmi
 import pytest
 
-import bond_analysis as ba
-import bond_schema
+import bond.bond_analysis as ba
+from bond import bond_schema
 import codes
-from contact_record import Candidate
-import donor_chemistry
-import dpi as dpi_module
+from bond.contact_record import Candidate
+from bond import donor_chemistry
+import bond.dpi as dpi_module
 import helpers
 import reference_data
 from helpers import AtomSpec, EDSTATS_HEADER, StructureBuilder

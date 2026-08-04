@@ -26,7 +26,7 @@ import os
 import shutil
 import tempfile
 
-from bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
 

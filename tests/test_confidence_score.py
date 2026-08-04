@@ -25,7 +25,7 @@ import pytest
 
 import confidence_score as cs
 import helpers
-from bond_schema import STATS_EXTRA_COLUMNS
+from bond.bond_schema import STATS_EXTRA_COLUMNS
 
 
 # --------------------------------------------------------------------------- #
@@ -472,7 +472,7 @@ def test_rejected_broad_search_candidates_stay_out_of_the_qg_denominator(tmp_pat
     by the broad search and rejected as outside the first sphere.
     """
     from structure_analysis import load_structure
-    from bond_analysis import run_bond_analysis
+    from bond.bond_analysis import run_bond_analysis
 
     builder = helpers.simple_metal_site(
         "ZN", [("HIS", "NE2", 2.03), ("MET", "SD", 3.60)]

@@ -34,8 +34,8 @@ import math
 from typing import NamedTuple, Optional
 
 from codes import CandidateSource, ContactScope, WarningCode
-from contact_record import Candidate
-from donor_chemistry import AA, DONOR_ELEMENTS
+from bond.contact_record import Candidate
+from bond.donor_chemistry import AA, DONOR_ELEMENTS
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import NAN, blank_if_missing, position_distance
 

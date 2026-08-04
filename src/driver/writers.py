@@ -10,7 +10,7 @@ here, is what keeps the written header and the resume check from disagreeing.
 import csv
 from typing import Optional
 
-from bond_schema import (
+from bond.bond_schema import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
     STATS_EXTRA_COLUMNS,

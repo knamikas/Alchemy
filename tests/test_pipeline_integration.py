@@ -51,7 +51,7 @@ import inputs
 import main
 from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
-from bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 
 
 # --------------------------------------------------------------------------- #

@@ -88,7 +88,7 @@ statistics or the documented `n/a` marker and a row for every selected metal or
 cofactor residue. Empty, malformed, incomplete, or wrong-model output fails the
 entry instead of being written to the aggregate CSV.
 
-### 4. Bond-distance analysis — `src/bond_analysis.py`
+### 4. Bond-distance analysis — `src/bond/`
 
 Gemmi parses the same coordinate representation supplied to EDSTATS. For a
 multi-model structure, Alchemy analyzes the first model only for metal
@@ -168,7 +168,7 @@ metal has no coordination" are now different, visibly, in the output.
 
 Alchemy separately parses `_struct_conn` records from the authoritative source
 mmCIF and `LINK` records from a source PDB, in
-`src/declared_connections.py`. A declared metal–donor contact is
+`src/bond/declared_connections.py`. A declared metal–donor contact is
 merged with a matching proximity candidate when present and added independently
 when it lies outside 4 Å. Declared contacts remain bonds even when they fail the
 distance-based first-sphere eligibility rule; their measured distance and Zbond
