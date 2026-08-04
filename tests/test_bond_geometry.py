@@ -13,6 +13,7 @@ import pytest
 import bond.bond_analysis as ba
 from bond import bond_schema
 import codes
+import coordinate_conversion
 from bond.contact_record import Candidate
 from bond import donor_chemistry
 import bond.dpi as dpi_module
@@ -110,7 +111,16 @@ def _probe_structure(
             positions=dict(positions) if index == probe_index else None,
             origin=(20.0 + 14.0 * index, 20.0, 20.0),
         )
-    return builder.write_pdb(tmp_path / name)
+    structure = builder.to_gemmi()
+    polymer = next(
+        entity
+        for entity in structure.entities
+        if entity.entity_type == gemmi.EntityType.Polymer
+    )
+    polymer.full_sequence = [resname] * chain_length
+    path = str(tmp_path / name)
+    structure.write_pdb(path)
+    return path
 
 
 def _analyze(path, *, data_json=None, resolution=1.50):
@@ -447,6 +457,77 @@ def test_a_single_residue_chain_is_both_polymer_termini(tmp_path):
         rows, candidates, _, _ = _analyze(path)
         assert _only(candidates, atom_name)["inferred_donor_rule"] == rule
         assert len(rows) == 1
+
+
+def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(tmp_path):
+    """A visible internal residue stays internal after mmCIF -> PDB conversion."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_amino_acid(
+        "HIS",
+        10,
+        chain="A",
+        positions={"N": (2.0, 0.0, 0.0)},
+    )
+    source = builder.to_gemmi()
+    polymer = next(
+        entity
+        for entity in source.entities
+        if entity.entity_type == gemmi.EntityType.Polymer
+    )
+    polymer.full_sequence = ["HIS", "HIS", "HIS"]
+    modeled = next(
+        residue
+        for chain in source[0]
+        for residue in chain
+        if residue.entity_type == gemmi.EntityType.Polymer
+    )
+    modeled.label_seq = 2
+    cif_path = str(tmp_path / "internal_only.cif")
+    source.make_mmcif_document().write_file(cif_path)
+    pdb_path = coordinate_conversion._cif_to_pdb(
+        cif_path, str(tmp_path / "internal_only.pdb")
+    )
+
+    rows, candidates, _, _ = _analyze(pdb_path)
+    context = load_structure("test", pdb_path)
+
+    candidate = _only(candidates, "N")
+    assert candidate["inferred_donor_allowed"] is False
+    assert candidate["inferred_donor_rule"] == "outside_typical_donor_list"
+    assert rows == []
+    his = next(
+        residue for residue in context.residues if residue.residue_name == "HIS"
+    )
+    assert his.source_polymer_position == "M"
+
+
+def test_incomplete_pdb_seqres_does_not_create_a_terminal_donor(tmp_path):
+    """Direct PDB input also rejects modeled endpoints when SEQRES has gaps."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_amino_acid(
+        "HIS",
+        10,
+        chain="A",
+        positions={"N": (2.0, 0.0, 0.0)},
+    )
+    structure = builder.to_gemmi()
+    polymer = next(
+        entity
+        for entity in structure.entities
+        if entity.entity_type == gemmi.EntityType.Polymer
+    )
+    polymer.full_sequence = ["HIS", "HIS", "HIS"]
+    path = str(tmp_path / "incomplete_seqres.pdb")
+    structure.write_pdb(path)
+
+    rows, candidates, _, _ = _analyze(path)
+
+    candidate = _only(candidates, "N")
+    assert candidate["inferred_donor_allowed"] is False
+    assert candidate["inferred_donor_rule"] == "outside_typical_donor_list"
+    assert rows == []
 
 
 def test_terminal_rules_require_a_real_polymer_residue(tmp_path):

@@ -218,7 +218,7 @@ def _polymer_terminal_position(structure, atom):
     selected = structure.residue_for_atom(atom)
     if selected.source_polymer_position:
         position = selected.source_polymer_position
-        return "N" in position, "C" in position
+        return position in ("N", "NC"), position in ("C", "NC")
     try:
         chain = structure.model[atom.chain_index]
         residue = chain[atom.residue_index]
@@ -233,6 +233,18 @@ def _polymer_terminal_position(structure, atom):
             )
         ]
         if not indices:
+            return False, False
+        full_sequence = next(
+            (
+                tuple(str(name) for name in entity.full_sequence)
+                for entity in structure.structure.entities
+                if str(residue.subchain) in {str(value) for value in entity.subchains}
+                and entity.full_sequence
+            ),
+            (),
+        )
+        modeled_sequence = tuple(str(chain[index].name) for index in indices)
+        if not full_sequence or modeled_sequence != full_sequence:
             return False, False
         return atom.residue_index == indices[0], atom.residue_index == indices[-1]
     except (AttributeError, IndexError, TypeError):

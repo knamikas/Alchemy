@@ -14,6 +14,7 @@ import os
 from typing import Any, Dict, List, Tuple
 
 from structure_analysis import (
+    POLYMER_REMARK_PREFIX,
     RESIDUE_REMARK_PREFIX,
     RESNAME_REMARK_PREFIX,
     blank_if_missing,
@@ -134,34 +135,45 @@ def _source_residue_records(structure):
     """Snapshot source-mmCIF residue identities before legacy conversion."""
     import gemmi
 
+    polymer_sequence_lengths = {
+        str(entity.name): len(entity.full_sequence)
+        for entity in structure.entities
+        if entity.entity_type == gemmi.EntityType.Polymer
+        and entity.full_sequence
+    }
     records = []
     for model_index, model in enumerate(structure, start=1):
         for source_chain_index, chain in enumerate(model):
-            polymer_indices_by_subchain: dict[str, list[int]] = {}
-            for residue_index, residue in enumerate(chain):
-                if residue.entity_type == gemmi.EntityType.Polymer:
-                    polymer_indices_by_subchain.setdefault(
-                        str(residue.subchain), []
-                    ).append(residue_index)
             for residue_index, residue in enumerate(chain):
                 number = residue.seqid.num
                 if number is None:
                     raise ValueError(
                         f"mmCIF residue {residue.name!r} has no author number"
                     )
-                polymer_indices = polymer_indices_by_subchain.get(
-                    str(residue.subchain), []
-                )
-                if not polymer_indices:
+                if residue.entity_type != gemmi.EntityType.Polymer:
                     polymer_position = "-"
                 else:
-                    is_first = residue_index == polymer_indices[0]
-                    is_last = residue_index == polymer_indices[-1]
-                    polymer_position = (
-                        "NC"
-                        if is_first and is_last
-                        else ("N" if is_first else ("C" if is_last else "M"))
+                    label_seq = residue.label_seq
+                    sequence_length = polymer_sequence_lengths.get(
+                        str(residue.entity_id)
                     )
+                    if (
+                        label_seq is None
+                        or sequence_length is None
+                        or label_seq < 1
+                        or label_seq > sequence_length
+                    ):
+                        # A modeled endpoint is not evidence of a chemical
+                        # terminus when the deposited polymer extent is absent.
+                        polymer_position = "?"
+                    else:
+                        is_first = label_seq == 1
+                        is_last = label_seq == sequence_length
+                        polymer_position = (
+                            "NC"
+                            if is_first and is_last
+                            else ("N" if is_first else ("C" if is_last else "M"))
+                        )
                 records.append(
                     (
                         model_index,
@@ -297,11 +309,46 @@ def _residue_identity_records(source_records, converted_structure):
     return records
 
 
+def _polymer_position_records(source_records, converted_structure):
+    """Map every converted residue to its source polymer-boundary status."""
+    converted_records = []
+    for model_index, model in enumerate(converted_structure, start=1):
+        for chain in model:
+            for residue in chain:
+                number = residue.seqid.num
+                if number is None:
+                    raise ValueError(
+                        f"converted residue {residue.name!r} has no number"
+                    )
+                converted_records.append(
+                    (
+                        model_index,
+                        str(chain.name),
+                        f"{number}{blank_if_missing(str(residue.seqid.icode))}",
+                        str(residue.name),
+                    )
+                )
+    if len(source_records) != len(converted_records):
+        raise ValueError("PDB conversion changed residue count")
+    positions = {}
+    for source, converted in zip(source_records, converted_records):
+        position = source[-1]
+        previous = positions.get(converted)
+        if previous is not None and previous != position:
+            # The legacy coordinate key cannot distinguish these source
+            # residues, so retain uncertainty instead of assigning either
+            # boundary classification to both.
+            position = "?"
+        positions[converted] = position
+    return [(*converted, position) for converted, position in positions.items()]
+
+
 def _write_cif_conversion_provenance(
     dst: str,
     missing_occupancies: List[bool],
     residue_records: List[Tuple[int, str, str, str, str]],
     identity_records=None,
+    polymer_records=None,
 ) -> None:
     """Blank unknown occupancies and embed reversible residue mappings."""
     with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
@@ -353,6 +400,20 @@ def _write_cif_conversion_provenance(
             source_polymer_position,
         ) in (identity_records or ())
     )
+    remarks.extend(
+        (
+            f"{POLYMER_REMARK_PREFIX} {model_index} "
+            f"{converted_chain or '_'} {converted_resnum} {converted_name} "
+            f"{polymer_position}\n"
+        )
+        for (
+            model_index,
+            converted_chain,
+            converted_resnum,
+            converted_name,
+            polymer_position,
+        ) in (polymer_records or ())
+    )
     with open(dst, "w", encoding="utf-8", newline="") as handle:
         handle.writelines(remarks)
         handle.writelines(lines)
@@ -403,8 +464,17 @@ def _cif_to_pdb(cif_path, dst):
         if identifiers_packed
         else []
     )
+    # Every converted residue carries its source polymer position, even when
+    # its PDB identifiers did not need packing. This deliberately remains
+    # separate from reversible identity records: ordinary chain shortening is
+    # part of the analysis namespace and must not look like identifier packing.
+    polymer_records = _polymer_position_records(source_residues, converted_structure)
     _write_cif_conversion_provenance(
-        dst, missing_occupancies, residue_records, identity_records
+        dst,
+        missing_occupancies,
+        residue_records,
+        identity_records,
+        polymer_records,
     )
     return dst
 

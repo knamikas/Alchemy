@@ -132,8 +132,13 @@ The geometry-inference donor table covers all 20 standard amino acids. Backbone
 carbonyl `O` is allowed for every residue. Typical side-chain donors are ASN
 OD1; ASP OD1/OD2; CYS SG; GLN OE1; GLU OE1/OE2; HIS ND1/NE2; LYS NZ; MET SD;
 SER OG; THR OG1; and TYR OH. Water oxygen is allowed. Polymer N-terminal `N`
-and C-terminal `OXT`/`OT1`/`OT2` are allowed only when Gemmi identifies the
-residue at the corresponding polymer boundary. Other proximal N/O/S atoms are
+and C-terminal `OXT`/`OT1`/`OT2` are allowed only when deposited sequence
+provenance identifies the residue at the corresponding polymer boundary.
+For converted mmCIF this uses `label_seq_id` and the complete entity sequence;
+for direct PDB input it requires a complete `SEQRES` sequence matching the
+modeled polymer. A first or last modeled residue is not by itself treated as a
+terminus, so missing or disordered endpoint residues cannot create terminal
+donors. Other proximal N/O/S atoms are
 retained in `metal_candidates_all.csv`, marked
 `inferred_donor_allowed=false`, and cannot become geometry-inferred bonds.
 This includes internal peptide N, ASN/GLN amide N, TRP pyrrole N, and ARG

@@ -24,6 +24,7 @@ NAN = float("nan")
 DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
 RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
 RESIDUE_REMARK_PREFIX = "REMARK 950 ALCHEMY RESIDUE"
+POLYMER_REMARK_PREFIX = "REMARK 950 ALCHEMY POLYMER"
 
 
 # Blank PDB columns, Gemmi's NUL altloc, and the two mmCIF null tokens all mean
@@ -561,16 +562,27 @@ def _raw_pdb_residue_mapping(
 
     ``RESNAME`` records carry the source component name alone; ``RESIDUE``
     records, written when residues had to be packed into a PDB-safe namespace,
-    also carry the source chain, sequence number and insertion code.
+    also carry the source chain, sequence number and insertion code. ``POLYMER``
+    records independently preserve whether the deposited sequence identifies a
+    residue as terminal, internal, non-polymer, or indeterminate.
     """
     mapping: Dict[Tuple[int, str, str, str], SourceResidueIdentity] = {}
+    polymer_positions: Dict[Tuple[int, str, str, str], str] = {}
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             fields = line.split()
             prefix = " ".join(fields[:4])
-            if prefix not in (RESNAME_REMARK_PREFIX, RESIDUE_REMARK_PREFIX):
+            if prefix not in (
+                RESNAME_REMARK_PREFIX,
+                RESIDUE_REMARK_PREFIX,
+                POLYMER_REMARK_PREFIX,
+            ):
                 continue
-            expected_fields = 9 if prefix == RESNAME_REMARK_PREFIX else 15
+            expected_fields = {
+                RESNAME_REMARK_PREFIX: 9,
+                RESIDUE_REMARK_PREFIX: 15,
+                POLYMER_REMARK_PREFIX: 9,
+            }[prefix]
             if len(fields) != expected_fields:
                 raise ValueError(f"malformed Alchemy residue mapping: {line.rstrip()}")
             try:
@@ -589,6 +601,25 @@ def _raw_pdb_residue_mapping(
                 coordinate_chain,
                 coordinate_resnum,
             )
+            if prefix == POLYMER_REMARK_PREFIX:
+                polymer_position = fields[8]
+                if polymer_position not in ("-", "?", "M", "N", "C", "NC"):
+                    raise ValueError(
+                        "invalid source polymer position in residue mapping: "
+                        f"{polymer_position!r}"
+                    )
+                previous_position = polymer_positions.get(key)
+                if (
+                    previous_position is not None
+                    and previous_position != polymer_position
+                ):
+                    raise ValueError(
+                        "conflicting Alchemy polymer mappings for "
+                        f"{coordinate_name}/{coordinate_chain}/"
+                        f"{coordinate_resnum}"
+                    )
+                polymer_positions[key] = polymer_position
+                continue
             if prefix == RESNAME_REMARK_PREFIX:
                 source = SourceResidueIdentity(
                     residue_name=fields[8],
@@ -605,6 +636,12 @@ def _raw_pdb_residue_mapping(
                         "invalid source numeric field in residue mapping: "
                         f"{line.rstrip()}"
                     ) from exc
+                polymer_position = fields[14]
+                if polymer_position not in ("-", "?", "M", "N", "C", "NC"):
+                    raise ValueError(
+                        "invalid source polymer position in residue mapping: "
+                        f"{polymer_position!r}"
+                    )
                 source = SourceResidueIdentity(
                     residue_name=fields[11],
                     chain_id=source_chain,
@@ -612,7 +649,7 @@ def _raw_pdb_residue_mapping(
                     insertion_code=("" if fields[10] == "_" else fields[10]),
                     chain_index=source_chain_index,
                     residue_index=source_residue_index,
-                    polymer_position=fields[14],
+                    polymer_position=polymer_position,
                 )
             previous = mapping.get(key)
             if previous is not None:
@@ -628,6 +665,25 @@ def _raw_pdb_residue_mapping(
                         f"{coordinate_resnum}"
                     )
             mapping[key] = source
+    for key, polymer_position in polymer_positions.items():
+        current = mapping.get(key)
+        if current is None:
+            _model_index, coordinate_name, coordinate_chain, _coordinate_resnum = key
+            mapping[key] = SourceResidueIdentity(
+                residue_name=coordinate_name,
+                chain_id=coordinate_chain,
+                polymer_position=polymer_position,
+            )
+        else:
+            mapping[key] = SourceResidueIdentity(
+                residue_name=current.residue_name,
+                chain_id=current.chain_id,
+                residue_number=current.residue_number,
+                insertion_code=current.insertion_code,
+                polymer_position=polymer_position,
+                chain_index=current.chain_index,
+                residue_index=current.residue_index,
+            )
     return mapping
 
 
@@ -890,7 +946,17 @@ def load_structure(
         source_residue_identities = _raw_pdb_residue_mapping(path)
     legacy_identifiers_packed = any(
         identity.residue_number is not None
-        for identity in source_residue_identities.values()
+        and (
+            identity.chain_id != coordinate_chain
+            or f"{identity.residue_number}{identity.insertion_code}"
+            != coordinate_resnum
+        )
+        for (
+            _model_index,
+            _coordinate_name,
+            coordinate_chain,
+            coordinate_resnum,
+        ), identity in source_residue_identities.items()
     )
     raw_first = raw_models[0] if raw_models else []
     gemmi_atoms = [atom for chain in model for residue in chain for atom in residue]
