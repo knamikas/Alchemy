@@ -870,6 +870,23 @@ def test_an_explicit_zero_coverage_is_scored_as_no_geometry(tmp_path):
     assert float(scored["confidence_score"]) == pytest.approx(87.5, abs=1e-6)
 
 
+def test_unscorable_input_status_overrides_complete_numeric_evidence(tmp_path):
+    """An upstream failure is authoritative even when stale numbers remain."""
+    reference = _frozen_reference(tmp_path)
+    row = _input_row(
+        confidence_inputs_status="unscorable",
+        confidence_inputs_missing_reasons="bond_stage_failure",
+    )
+
+    (scored,) = cs.score_against_reference([row], reference)
+
+    assert scored["confidence_inputs_status"] == "unscorable"
+    assert scored["confidence_scoring_status"] == "unscorable"
+    assert scored["confidence_scoring_reason"] == "confidence_inputs_unscorable"
+    assert scored["confidence_score"] == ""
+    assert scored["confidence_percentile"] == ""
+
+
 def test_missing_or_corrupt_geometry_coverage_is_unscorable(tmp_path):
     """Damaged QG is invalid input, not evidence that geometry is irrelevant.
 
@@ -931,12 +948,15 @@ def test_score_file_refuses_already_scored_input_and_leaves_no_partial_output(tm
     assert not os.path.exists(output_path + ".tmp")
 
 
-def test_score_file_requires_the_evidence_columns(tmp_path):
+@pytest.mark.parametrize("required_column", ["max_abs_zbond", "confidence_inputs_status"])
+def test_score_file_requires_the_evidence_and_validity_columns(
+    tmp_path, required_column
+):
     reference = _frozen_reference(tmp_path)
-    columns = [c for c in cs.CONFIDENCE_INPUT_COLUMNS if c != "max_abs_zbond"]
+    columns = [c for c in cs.CONFIDENCE_INPUT_COLUMNS if c != required_column]
     row = {column: "" for column in columns}
     input_path = _write_input_csv(tmp_path / "in.csv", [row], columns)
-    with pytest.raises(ValueError, match="max_abs_zbond"):
+    with pytest.raises(ValueError, match=required_column):
         cs.score_file_against_reference(
             input_path, str(tmp_path / "out.csv"), reference
         )
@@ -1002,6 +1022,33 @@ def test_finalize_builds_the_cohort_from_scorable_rows_only(tmp_path):
     assert {row["confidence_reference_id"] for row in out_rows} == {
         reference.reference_id
     }
+
+
+def test_finalize_excludes_explicitly_unscorable_numeric_rows(tmp_path):
+    rows = [
+        _input_row(pdbID="1aaa", metal_atom_index="1"),
+        _input_row(
+            pdbID="2bbb",
+            metal_atom_index="2",
+            confidence_inputs_status="unscorable",
+            confidence_inputs_missing_reasons="bond_stage_failure",
+        ),
+    ]
+    input_path = _write_input_csv(tmp_path / "in.csv", rows)
+    output_path = str(tmp_path / "scores.csv")
+    reference_dir = str(tmp_path / "ref")
+
+    total, scored, cohort = cs.finalize_database_confidence(
+        input_path, output_path, reference_dir
+    )
+
+    assert (total, scored, cohort) == (2, 1, 1)
+    _, output_rows = _read_csv_rows(output_path)
+    invalid = output_rows[1]
+    assert invalid["confidence_scoring_status"] == "unscorable"
+    assert invalid["confidence_scoring_reason"] == "confidence_inputs_unscorable"
+    assert invalid["confidence_score"] == ""
+    assert invalid["confidence_percentile"] == ""
 
 
 def test_finalize_removes_a_stale_reference_when_it_cannot_publish(tmp_path):
@@ -1184,4 +1231,23 @@ def test_coverage_policy_is_part_of_the_reference_identity(tmp_path):
     metadata["coverage_policy"] = "coerce_invalid_coverage_to_zero"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="coverage_policy"):
+        cs.load_reference(str(reference_dir))
+
+
+def test_input_status_policy_is_part_of_the_reference_identity(tmp_path):
+    rows = [_input_row(metal_atom_index="1")]
+    inputs = tmp_path / "inputs.csv"
+    _write_input_csv(inputs, rows)
+    reference_dir = tmp_path / "ref"
+    cs.finalize_database_confidence(
+        str(inputs), str(tmp_path / "scores.csv"), str(reference_dir)
+    )
+
+    metadata_path = reference_dir / cs.REFERENCE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["input_status_policy"] == cs.INPUT_STATUS_POLICY
+
+    metadata["input_status_policy"] = "numeric_fields_only"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="input_status_policy"):
         cs.load_reference(str(reference_dir))

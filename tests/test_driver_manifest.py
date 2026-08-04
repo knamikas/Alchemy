@@ -158,6 +158,33 @@ def _read_csv(path):
         return list(csv.reader(handle))
 
 
+def test_bond_stage_failure_invalidates_confidence_inputs(monkeypatch):
+    """A crashed geometry stage is not legitimate density-only evidence."""
+    result = _result()
+    inputs = SimpleNamespace(
+        data_json=None,
+        pdb="/nonexistent/entry.pdb",
+        mtz="/nonexistent/entry.mtz",
+        data_reshi=2.0,
+        source_coordinate_path="/nonexistent/entry.cif",
+    )
+    structure = SimpleNamespace(warning_codes=[])
+
+    def fail_bond_analysis(*args, **kwargs):
+        raise RuntimeError("geometry unavailable")
+
+    monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
+
+    bond_rows, candidate_rows, summaries, _ = worker._run_bond_stage(
+        result, _cfg(bonds=True), inputs, structure, [], []
+    )
+
+    assert (bond_rows, candidate_rows, summaries) == ([], [], {})
+    assert result.reason_codes == ["bond_stage_failure"]
+    assert result.confidence_inputs_missing_reason == "bond_stage_failure"
+    assert result.retryable is True
+
+
 # Hand-written because the behaviours under test are raw ``.``/``?`` occupancy
 # tokens and >3-character component ids, neither of which gemmi would write.
 _CIF_HEADER = """data_TEST

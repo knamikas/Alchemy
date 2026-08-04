@@ -476,6 +476,7 @@ def _run_bond_stage(result, cfg, inputs, structure, rows, header):
         result.reason_codes = list(
             dict.fromkeys(result.reason_codes + ["bond_stage_failure"])
         )
+        result.confidence_inputs_missing_reason = "bond_stage_failure"
         result.retryable = True
     finally:
         result.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)

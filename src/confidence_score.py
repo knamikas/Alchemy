@@ -94,6 +94,11 @@ ANALYSIS_COLUMNS = (
     "confidence_context_warning_reasons",
 )
 
+SCORABLE_INPUT_STATUSES = frozenset(
+    {"complete", "partial_geometry", "density_only"}
+)
+INPUT_STATUS_POLICY = "explicit_scorable_statuses"
+
 
 def _required_columns(fieldnames, required, label):
     missing = [column for column in required if column not in (fieldnames or ())]
@@ -115,6 +120,14 @@ def _finite_float(value):
 
 def _true(value):
     return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def _confidence_inputs_are_scorable(row):
+    """Return whether upstream evidence collection authorized scoring."""
+    return (
+        str(row.get("confidence_inputs_status", "")).strip()
+        in SCORABLE_INPUT_STATUSES
+    )
 
 
 def _format_number(value, digits=6):
@@ -468,6 +481,7 @@ def _scoring_metadata():
         },
         "percentile_method": "average_rank_empirical_cdf",
         "coverage_policy": COVERAGE_POLICY,
+        "input_status_policy": INPUT_STATUS_POLICY,
         "reference_data_id": reference_data_id(),
     }
 
@@ -534,6 +548,7 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         "weights",
         "percentile_method",
         "coverage_policy",
+        "input_status_policy",
     ):
         if metadata.get(key) != expected[key]:
             raise ValueError(
@@ -583,15 +598,25 @@ def _score_prepared_row(row, reference):
     zbond = _finite_float(row.get("max_abs_zbond", ""))
     coverage = _finite_float(row.get("geometry_coverage", ""))
     coverage_valid = coverage_is_valid(coverage)
-    result = score_site(rszd, zbond, coverage) if coverage_valid else None
+    inputs_scorable = _confidence_inputs_are_scorable(row)
+    result = (
+        score_site(rszd, zbond, coverage)
+        if inputs_scorable and coverage_valid
+        else None
+    )
     output = dict(row)
     if result is None:
+        input_status = str(row.get("confidence_inputs_status", "")).strip()
         output.update({column: "" for column in ANALYSIS_COLUMNS})
         output.update(
             {
                 "confidence_scoring_status": "unscorable",
                 "confidence_scoring_reason": (
-                    "geometry_coverage_invalid"
+                    "confidence_inputs_unscorable"
+                    if input_status == "unscorable"
+                    else "confidence_inputs_status_invalid"
+                    if not inputs_scorable
+                    else "geometry_coverage_invalid"
                     if not coverage_valid
                     else "rszd_unavailable"
                     if not math.isfinite(rszd)
@@ -651,6 +676,7 @@ def _validated_input_reader(handle):
             "geometry_coverage",
             "context_warning",
             "context_warning_reasons",
+            "confidence_inputs_status",
         ),
         "confidence input CSV",
     )
@@ -674,6 +700,8 @@ def finalize_database_confidence(
         _, rows = _validated_input_reader(handle)
         for row in rows:
             input_row_count += 1
+            if not _confidence_inputs_are_scorable(row):
+                continue
             rszd = _finite_float(row.get("rszd_magnitude", ""))
             zbond = _finite_float(row.get("max_abs_zbond", ""))
             coverage = _finite_float(row.get("geometry_coverage", ""))
