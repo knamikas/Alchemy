@@ -19,6 +19,8 @@ import sys
 from collections import Counter, defaultdict
 from typing import Any, Optional, Sequence
 
+from reference_data import reference_data_id
+
 
 REFERENCE_METADATA_FILE = "metadata.json"
 REFERENCE_DISTRIBUTION_FILE = "score_distribution.csv"
@@ -460,6 +462,15 @@ def coverage_is_valid(coverage: float) -> bool:
 
 
 def _scoring_metadata():
+    """Everything a score depends on that is not the cohort itself.
+
+    ``reference_data_id`` belongs here for the same reason the anchors do: a
+    reference is a distribution of scores, and every score in it was measured
+    against one particular catalog and one particular distance table. Change
+    either and the old distribution describes a population that no longer
+    exists -- so the identity feeds the reference id, which makes a changed
+    table produce a different reference rather than a quietly wrong percentile.
+    """
     return {
         "density_anchors": [list(anchor) for anchor in DENSITY_ANCHORS],
         "geometry_anchors": [list(anchor) for anchor in GEOMETRY_ANCHORS],
@@ -470,6 +481,7 @@ def _scoring_metadata():
         },
         "percentile_method": "average_rank_empirical_cdf",
         "coverage_policy": COVERAGE_POLICY,
+        "reference_data_id": reference_data_id(),
     }
 
 
@@ -540,6 +552,16 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
             raise ValueError(
                 f"confidence reference {key} is incompatible with this code"
             )
+    if metadata.get("reference_data_id") != expected["reference_data_id"]:
+        # Its own message: this one is not a code change but a data change, and
+        # the remedy is different. Re-freezing is an uncapped database run.
+        raise ValueError(
+            "confidence reference was built against reference data "
+            f"{metadata.get('reference_data_id') or 'nothing recorded'}, but "
+            f"this run uses {expected['reference_data_id']}. Every score in it "
+            "was measured against different reference distances; rebuild the "
+            "reference with an uncapped database run."
+        )
     distribution_path = os.path.join(
         reference_dir,
         metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE),

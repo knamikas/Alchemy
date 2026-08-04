@@ -1,0 +1,96 @@
+# Operations
+
+Running batches, resuming them, and reading what a run wrote. See
+[usage.md](usage.md) for the options themselves and
+[maintenance.md](maintenance.md) for the bundled reference data.
+
+## Operational notes
+
+- Alchemy separates three kinds of output. The progress line and the final
+  result summary go to **stdout**, so a redirected stdout remains a usable
+  record of what was produced. Diagnostics go to **stderr** as log records,
+  controlled by `-v`/`--quiet`/`--log-file`. The per-run report in
+  `<log-dir>/alchemy_run_*.log` -- `<output-dir>/logs/` unless `--log-dir`
+  says otherwise -- is written separately and is unaffected by
+  verbosity: it is a structured artifact, not a transcript. Worker processes
+  emit records through a queue that the driver re-emits, so per-entry
+  diagnostics from parallel workers never interleave mid-line.
+- Interactive runs redraw a single progress line after every completed
+  structure. While waiting on a slow structure, the elapsed time refreshes
+  approximately once per second. Redirected output is limited to one progress
+  line every 30 seconds to avoid producing oversized logs.
+- Per-entry maps and logs are written to uniquely created working directories
+  and removed after their rows are extracted unless `--keep-intermediates` is
+  supplied. Cleanup never targets a pre-existing `<output-dir>/<pdb-id>`
+  directory.
+- Model-envelope mode still calculates each complete FFT map before cropping,
+  so map values come from the same Fourier calculation as legacy full-map mode.
+  Full temporary maps are deleted as soon as they are no longer needed unless
+  `--keep-intermediates` is supplied.
+- Output CSV handles are flushed after each processed entry so interrupted batch
+  runs retain completed results.
+- In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis
+  was not run; `0` means it ran successfully but found no rows of that type.
+  Resume uses this distinction to add bond-stage results after an earlier
+  `--no-bonds` run. Missing bond or candidate CSVs make bond-enabled results
+  incomplete.
+- Statistics, bond, and candidate CSV files retain their column headers when a
+  completed run finds no metals, contacts, or proximal candidates.
+- The statistics header is a fixed schema rather than a copy of whatever EDSTATS
+  emitted, because `extract_metal_statistics` already requires the EDSTATS
+  residue table to match the standard column set and order.
+- Resume retries are staged separately. Existing rows are replaced only after a
+  retry produces a terminal result and the retry batch completes; failed or
+  interrupted retries leave the previous rows intact. `--resume --no-bonds`
+  preserves existing bond and candidate rows and their manifest counts. Entries
+  originating from a bond-disabled run retain blank `n_bonds` and
+  `n_candidates`, so a later bond-enabled resume will process them.
+- `--resume --retry-partials` reprocesses non-retryable `partial` entries from
+  the manifest after a processing improvement while continuing to protect
+  `ok` entries. Optional `--id` or `--id-file` selectors restrict that set. Errors,
+  skips, and retryable partials already follow ordinary resume behavior. The
+  same staged replacement rules apply, so an interrupted or retryably failed
+  attempt does not discard the previous terminal result. When a frozen
+  reference scores a targeted resume inside an existing database output,
+  `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
+  together so their per-entry evidence cannot diverge.
+- A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
+  `metal_candidates_all.csv` files before replacing the manifest and
+  statistics, so old bond-stage rows cannot be mistaken for current output.
+- A failure in bond analysis does not discard real-space-statistics rows already
+  calculated for that entry; the manifest records the entry as `partial` with
+  the bond-stage error.
+- If `mtzfix` cannot make an MTZ's Fourier coefficients pass its consistency
+  re-test, Alchemy does not use the rejected maps or retry indefinitely. An
+  explicitly twin-refined PDB-REDO entry is eligible for the guarded Refmac
+  coefficient normalization described above. Every other entry, and any twin
+  entry that fails a provenance, schema, or coefficient-identity check, is a
+  terminal `partial` with `mtzfix_validation_failure`; coordinate-based bond
+  analysis still runs, while its metal sites remain explicitly unscorable by
+  confidence because RSZD is unavailable.
+- After canonical model and conformer selection, structures with no recognized
+  metal atoms finish with `n_metals=0` without running `mtzfix`, either FFT, or
+  `edstats`. These stages cannot produce metal-site output for such entries.
+  Progress and completion summaries report these successful negative results as
+  `no_metals`; this is an informational subset of `ok`, whereas `skip` remains
+  reserved for entries that could not be processed operationally.
+- The command exits nonzero when any entry ends as `error`, `skip`, or a
+  retryable `partial`. Completed `ok` and terminal `partial` results exit
+  successfully.
+- A CCP4 program that exceeds `--ccp4-timeout` is killed and its entry recorded
+  as a retryable `partial` with reason `ccp4_tool_timeout`, distinct from a
+  program that failed with an error. A killed program reported nothing about the
+  entry, so retrying it is meaningful. Its partial log is copied to
+  `<output-dir>/ccp4_timeout_logs/<id>_<tool>_timeout.log` before the entry's
+  scratch directory is removed; the maps beside it are not retained.
+- `partial` describes usable but incomplete scientific output; it does not by
+  itself mean that rerunning can repair the entry. Deterministic limitations,
+  such as invalid deposited occupancy or unavailable symmetry metadata, are
+  recorded as `partial` with `retryable=false`. Transient processing failures
+  are recorded with `retryable=true`. `--resume` uses that field so terminal
+  entries do not run forever.
+- The candidate-output migration expands all four CSV schemas. `--resume`
+  refuses to mix new rows with incompatible pre-migration headers; use a new `--output-dir`
+  for the first run. All four headers are compared in full,
+  including the EDSTATS block of `metal_stats_all.csv`, so appended rows cannot
+  be silently misaligned by output from a different EDSTATS build.
