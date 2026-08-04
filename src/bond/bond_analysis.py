@@ -934,7 +934,12 @@ def run_bond_analysis(
             )
 
         sigma = _sigma_for(
-            sig, metal.residue_name, metal.chain_id, metal.resnum, zd_idx
+            sig,
+            metal.residue_name,
+            metal.chain_id,
+            metal.resnum,
+            zd_idx,
+            site_key=metal.source_key,
         )
         parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
         rows.extend(

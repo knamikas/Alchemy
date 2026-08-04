@@ -83,7 +83,11 @@ EDSTATS omits its empty trailing chain field for a blank-chain residue, Alchemy
 restores that field before validating the standard 42-column schema. Other row
 width mismatches still fail. Decimal and hybrid-36 PDB residue numbers are
 decoded to the same canonical integer representation used by Gemmi before raw
-PDB atoms and EDSTATS rows are joined. The table must contain finite numeric
+PDB atoms and EDSTATS rows are joined. If coordinate residues repeat the same
+author identity, the one-based EDSTATS `NR` coordinate-residue ordinal resolves
+them one-to-one; a duplicate, out-of-range, or inconsistent `NR` fails the entry
+rather than expanding an ambiguous row across multiple sites. Completeness is
+checked with residue multiplicity intact. The table must contain finite numeric
 statistics or the documented `n/a` marker and a row for every selected metal or
 cofactor residue. Empty, malformed, incomplete, or wrong-model output fails the
 entry instead of being written to the aggregate CSV.

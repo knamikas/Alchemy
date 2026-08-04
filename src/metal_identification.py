@@ -5,6 +5,7 @@ line is the column header.
 """
 
 import math
+from collections import Counter
 from typing import Any, Iterable, Optional
 
 from structure_analysis import NAN, canonical_pdb_residue_id
@@ -179,12 +180,52 @@ def _classify_residue(residue, metals_upper, cofactor_set):
 
 
 def _expected_edstats_residues(structure, metals_upper, cofactor_set):
-    """Coordinate residue keys for sites Alchemy expects EDSTATS to report."""
-    return {
+    """Coordinate residue-key multiplicities Alchemy expects EDSTATS to report."""
+    return Counter(
         residue.coordinate_author_key
         for residue in structure.residues
         if _classify_residue(residue, metals_upper, cofactor_set)[0]
-    }
+    )
+
+
+def _validated_edstats_row_number(fields, indices, line_number):
+    """Return EDSTATS' one-based coordinate-residue ordinal."""
+    value = fields[indices["NR"]]
+    try:
+        row_number = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"invalid EDSTATS NR row value on row {line_number}: {value!r}"
+        ) from exc
+    if row_number < 1:
+        raise ValueError(
+            f"invalid EDSTATS NR row value on row {line_number}: {value!r}"
+        )
+    return row_number
+
+
+def _resolve_coordinate_residues(
+    structure, matched_residues, row_number, line_number, coordinate_key
+):
+    """Use NR to reduce a repeated author identity to one coordinate residue."""
+    matched_residues = tuple(matched_residues)
+    if len(matched_residues) <= 1:
+        return matched_residues
+
+    coordinate_residues = tuple(structure.residues)
+    index = row_number - 1
+    if index < len(coordinate_residues):
+        row_residue_key = coordinate_residues[index].key
+        for residue in matched_residues:
+            if residue.key == row_residue_key:
+                return (residue,)
+
+    resname, chain, resnum = coordinate_key
+    raise ValueError(
+        f"EDSTATS NR {row_number} on row {line_number} does not resolve "
+        f"the {len(matched_residues)} coordinate residues matching "
+        f"{resname}/{chain or '_'}/{resnum}"
+    )
 
 
 def _density_observation_id(pdb_id, fields, indices):
@@ -278,7 +319,9 @@ def extract_metal_statistics(
     rows = []
     schema: Optional[tuple[list[str], dict[str, int]]] = None
     residue_row_count = 0
-    observed_residues = set()
+    observed_residues = Counter()
+    observed_edstats_rows = set()
+    residue_observations = {}
     with open(stats_out, encoding="utf-8", errors="strict") as f:
         for line_number, line in enumerate(f, 1):
             stripped = line.strip()
@@ -296,11 +339,18 @@ def extract_metal_statistics(
 
             fields = _normalize_edstats_row(fields, header, indices)
             row_model = _validate_edstats_row(fields, header, indices, line_number)
+            row_number = _validated_edstats_row_number(fields, indices, line_number)
             if row_model != structure.model_analyzed:
                 raise ValueError(
                     f"EDSTATS returned model {row_model}, but Alchemy's "
                     f"model policy selected model {structure.model_analyzed}"
                 )
+            observation_key = (row_model, row_number)
+            if observation_key in observed_edstats_rows:
+                raise ValueError(
+                    f"duplicate EDSTATS NR {row_number} for model {row_model}"
+                )
+            observed_edstats_rows.add(observation_key)
             try:
                 fields[indices["RN"]] = canonical_pdb_residue_id(fields[indices["RN"]])
             except ValueError as exc:
@@ -313,16 +363,31 @@ def extract_metal_statistics(
             coordinate_resname = fields[indices["RT"]]
             chain = fields[indices["CI"]]
             resnum = fields[indices["RN"]]
-            observed_residues.add((coordinate_resname, chain, resnum))
+            coordinate_key = (coordinate_resname, chain, resnum)
+            observed_residues[coordinate_key] += 1
             matched_residues = structure.residues_for_coordinate_author(
                 coordinate_resname, chain, resnum
             )
+            matched_residues = _resolve_coordinate_residues(
+                structure,
+                matched_residues,
+                row_number,
+                line_number,
+                coordinate_key,
+            )
             if not matched_residues:
                 mapping_status = "coordinate_residue_not_found"
-            elif len(matched_residues) == 1:
-                mapping_status = "matched"
             else:
-                mapping_status = "multiple_coordinate_residues"
+                mapping_status = "matched"
+                residue_key = matched_residues[0].key
+                previous = residue_observations.get(residue_key)
+                if previous is not None:
+                    raise ValueError(
+                        f"EDSTATS NR {previous} and {row_number} both map to "
+                        f"coordinate residue {coordinate_resname}/"
+                        f"{chain or '_'}/{resnum}"
+                    )
+                residue_observations[residue_key] = row_number
 
             coordinate_name_is_cofactor = coordinate_resname in cofactor_set
             matched_cofactor_names = []
@@ -399,8 +464,10 @@ def extract_metal_statistics(
         raise ValueError("EDSTATS output contains no residue rows")
 
     missing_residues = sorted(
-        _expected_edstats_residues(structure, metals_upper, cofactor_set)
-        - observed_residues
+        (
+            _expected_edstats_residues(structure, metals_upper, cofactor_set)
+            - observed_residues
+        ).elements()
     )
     if missing_residues:
         preview = ", ".join(
@@ -424,11 +491,23 @@ def extract_metal_statistics(
 # EDSTATS row, so it lives beside ``EDSTATS_COLUMNS``: a column-order change
 # breaks both.
 def _sigma_index(stats_rows):
-    """Map (resname, chain, resnum) -> edstats fields, for the sigma join."""
-    return {
-        (r["resname"], str(r["chain"]), str(r["resnum"])): r["fields"]
-        for r in stats_rows
-    }
+    """Index EDSTATS fields by site, with an unambiguous author-key fallback."""
+    by_site = {}
+    by_author = {}
+    ambiguous_authors = set()
+    for row in stats_rows:
+        fields = row["fields"]
+        site_key = row.get("site_key")
+        if site_key is not None:
+            by_site[tuple(site_key)] = fields
+        author_key = (row["resname"], str(row["chain"]), str(row["resnum"]))
+        if author_key in by_author:
+            ambiguous_authors.add(author_key)
+        else:
+            by_author[author_key] = fields
+    for author_key in ambiguous_authors:
+        by_author.pop(author_key, None)
+    return {"by_site": by_site, "by_author": by_author}
 
 
 ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
@@ -444,8 +523,12 @@ def _zd_indices(header):
         return None
 
 
-def _sigma_for(sig, resname, chain, resnum, zd_idx):
-    fields = sig.get((resname, str(chain), str(resnum)))
+def _sigma_for(sig, resname, chain, resnum, zd_idx, site_key=None):
+    fields = None
+    if site_key is not None:
+        fields = sig["by_site"].get(tuple(site_key))
+    if fields is None:
+        fields = sig["by_author"].get((resname, str(chain), str(resnum)))
     if fields is None or zd_idx is None:
         return NAN, NAN, NAN
     try:

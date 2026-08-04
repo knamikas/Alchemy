@@ -10,10 +10,14 @@ row *shape*: a CI-gated guard rejects every water row and fails the entry.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
 
+import confidence_score
 import helpers
+import worker
+from driver.writers import STATS_COLUMNS
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
 from metal_elements import METAL_ELEMENTS
@@ -24,8 +28,11 @@ from metal_identification import (
     _density_observation_id,
     _is_edstats_separator,
     _normalize_edstats_row,
+    _sigma_for,
+    _sigma_index,
     _validate_edstats_row,
     _validated_edstats_header,
+    _zd_indices,
     extract_metal_statistics,
 )
 from structure_analysis import load_structure
@@ -78,12 +85,17 @@ class _RemappedStructure:
 
     @property
     def residues(self):
-        return (self._residues[0],)
+        return self._residues
 
     def residues_for_coordinate_author(self, residue_name, chain_id, resnum):
         if (residue_name, chain_id, resnum) == self._author_key:
             return self._residues
-        return self._context.residues_for_author(residue_name, chain_id, resnum)
+        return self._context.residues_for_coordinate_author(
+            residue_name, chain_id, resnum
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._context, name)
 
 
 def test_valid_header_maps_every_documented_column_to_its_position():
@@ -726,27 +738,133 @@ def test_a_cofactor_row_with_no_coordinate_residue_reports_a_join_failure(tmp_pa
     assert phantom["density_shared_site_count"] == 0
 
 
-def test_an_ambiguous_author_join_is_reported_on_every_emitted_row(tmp_path):
-    """Two coordinate residues behind one EDSTATS row is flagged, not hidden."""
+def _repeated_coordinate_identity(context):
+    first, second = context.residues
+    second = replace(
+        second,
+        coordinate_residue_name="ZN",
+        coordinate_chain_id="B",
+        coordinate_residue_number=1,
+        coordinate_resnum="1",
+    )
+    return _RemappedStructure(context, ("ZN", "B", "1"), (first, second))
+
+
+def test_nr_maps_repeated_author_rows_one_to_one(tmp_path):
+    """Two observations and two residues produce two rows, never four."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     builder.add_metal("ZN", 1, chain="C", pos=(12.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "twochain.pdb")
     context = load_structure("test", path)
-    duplicated = _RemappedStructure(context, ("ZN", "B", "1"), context.residues)
+    duplicated = _repeated_coordinate_identity(context)
 
-    stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "1", nr=1)])
-    rows, _ = _extract(stats, duplicated)
+    stats = _write_rows(
+        tmp_path,
+        [
+            helpers.edstats_row("ZN", "B", "1", nr=1, metrics={"ZDm": 2.0}),
+            helpers.edstats_row("ZN", "B", "1", nr=2, metrics={"ZDm": 8.0}),
+        ],
+    )
+    rows, header = _extract(stats, duplicated)
 
     assert len(rows) == 2
-    assert all(
-        row["coordinate_mapping_status"] == "multiple_coordinate_residues"
-        for row in rows
-    )
+    assert all(row["coordinate_mapping_status"] == "matched" for row in rows)
     assert all(row["selected_metal_site_status"] == "selected" for row in rows)
-    assert len({row["density_observation_id"] for row in rows}) == 1
-    assert all(row["density_shared_site_count"] == 2 for row in rows)
+    assert len({row["density_observation_id"] for row in rows}) == 2
+    assert all(row["density_shared_site_count"] == 1 for row in rows)
     assert len({row["residue_key"] for row in rows}) == 2
+    assert len({row["site_key"] for row in rows}) == 2
+    assert [row["fields"][header.index("ZDm")] for row in rows] == ["2.0", "8.0"]
+
+    sigma_index = _sigma_index(rows)
+    zd_indices = _zd_indices(header)
+    assert [
+        _sigma_for(
+            sigma_index,
+            row["resname"],
+            row["chain"],
+            row["resnum"],
+            zd_indices,
+            site_key=row["site_key"],
+        )[0]
+        for row in rows
+    ] == [2.0, 8.0]
+
+    worker._append_site_fields(rows, {}, duplicated)
+    confidence_inputs = confidence_score.prepare_result_confidence_inputs(
+        rows, [], STATS_COLUMNS
+    )
+    assert len(confidence_inputs) == 2
+    assert len(
+        {
+            (
+                row["metal_model_index"],
+                row["metal_chain_index"],
+                row["metal_residue_index"],
+                row["metal_atom_index"],
+            )
+            for row in confidence_inputs
+        }
+    ) == 2
+
+
+def test_repeated_author_identity_completeness_keeps_multiplicity(tmp_path):
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_metal("ZN", 1, chain="C", pos=(12.0, 0.0, 0.0))
+    path = builder.write_pdb(tmp_path / "twochain.pdb")
+    context = load_structure("test", path)
+    duplicated = _repeated_coordinate_identity(context)
+    stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "1", nr=1)])
+
+    with pytest.raises(ValueError, match="incomplete"):
+        _extract(stats, duplicated)
+
+
+def test_nr_must_resolve_an_ambiguous_author_identity(tmp_path):
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_metal("ZN", 1, chain="C", pos=(12.0, 0.0, 0.0))
+    path = builder.write_pdb(tmp_path / "twochain.pdb")
+    context = load_structure("test", path)
+    duplicated = _repeated_coordinate_identity(context)
+    stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "1", nr=3)])
+
+    with pytest.raises(ValueError, match=r"NR 3.*does not resolve"):
+        _extract(stats, duplicated)
+
+
+@pytest.mark.parametrize("nr", ["0", "-1", "not-a-number"])
+def test_nr_must_be_a_positive_integer(tmp_path, nr):
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    path = builder.write_pdb(tmp_path / "site.pdb")
+    context = load_structure("test", path)
+    row = helpers.edstats_row("ZN", "B", "1", nr=1)
+    row[INDICES["NR"]] = nr
+    stats = _write_rows(tmp_path, [row])
+
+    with pytest.raises(ValueError, match="invalid EDSTATS NR"):
+        _extract(stats, context)
+
+
+def test_duplicate_nr_fails_instead_of_reusing_a_coordinate_residue(tmp_path):
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    builder.add_metal("MG", 2, chain="B")
+    path = builder.write_pdb(tmp_path / "two.pdb")
+    context = load_structure("test", path)
+    stats = _write_rows(
+        tmp_path,
+        [
+            helpers.edstats_row("ZN", "B", "1", nr=1),
+            helpers.edstats_row("MG", "B", "2", nr=1),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="duplicate EDSTATS NR 1"):
+        _extract(stats, context)
 
 
 def test_insertion_coded_residue_ids_join_after_canonicalization(tmp_path):
