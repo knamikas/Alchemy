@@ -94,17 +94,30 @@ def _result(pdb_id="109m", **overrides):
     return result
 
 
-def _manual_entry(tmp_path, monkeypatch, density_stage, **cfg_overrides):
+def _manual_entry(
+    tmp_path,
+    monkeypatch,
+    density_stage,
+    *,
+    structure_builder=None,
+    pdb_transform=None,
+    **cfg_overrides,
+):
     """Run one manual-input entry through ``worker.process``.
 
     Only the three MTZ-dependent readers are stubbed; structure loading, result
     assembly and status computation all run for real.
     """
-    builder = helpers.StructureBuilder()
-    builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
-    builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.05, 0.0, 0.0)})
+    builder = structure_builder or helpers.StructureBuilder()
+    if structure_builder is None:
+        builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
+        builder.add_amino_acid(
+            "HIS", 2, chain="A", positions={"NE2": (2.05, 0.0, 0.0)}
+        )
     pdb_path = tmp_path / "entry.pdb"
     builder.write_pdb(str(pdb_path))
+    if pdb_transform is not None:
+        pdb_transform(pdb_path)
     mtz_path = tmp_path / "entry.mtz"
     mtz_path.write_bytes(b"unused: the readers below are stubbed")
 
@@ -183,6 +196,77 @@ def test_bond_stage_failure_invalidates_confidence_inputs(monkeypatch):
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
     assert result.retryable is True
+
+
+class TestNoRecognizedMetalOutcome:
+    @staticmethod
+    def _density_must_not_run(*args, **kwargs):
+        pytest.fail("density analysis ran without a recognized metal site")
+
+    @staticmethod
+    def _blank_metal_element(path):
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        rewritten = []
+        for line in lines:
+            if line.startswith("HETATM") and line[12:16].strip() == "ZN":
+                newline = "\n" if line.endswith("\n") else ""
+                record = line.removesuffix("\n").ljust(80)
+                line = record[:76] + "  " + record[78:] + newline
+            rewritten.append(line)
+        path.write_text("".join(rewritten), encoding="utf-8")
+
+    def test_unknown_element_makes_metal_presence_indeterminate(
+        self, tmp_path, monkeypatch
+    ):
+        builder = helpers.StructureBuilder()
+        builder.add_metal("ZN", 1, chain="A")
+
+        result = _manual_entry(
+            tmp_path,
+            monkeypatch,
+            self._density_must_not_run,
+            structure_builder=builder,
+            pdb_transform=self._blank_metal_element,
+        )
+
+        assert result.status == "partial"
+        assert result.retryable is False
+        assert result.reason_codes == ["metal_presence_indeterminate"]
+        assert "1 atom(s)" in result.error
+        assert result.n_metals == 0
+        assert result.n_bonds is None
+        assert result.n_candidates is None
+        assert result.no_metals is False
+        assert "unknown_elements" in result.warning_codes
+        assert (
+            result.confidence_inputs_missing_reason
+            == "metal_presence_indeterminate"
+        )
+        assert pool._confidence_rows_for(
+            result, SimpleNamespace(reference=None)
+        ) == []
+
+    def test_known_nonmetal_structure_remains_an_authoritative_negative(
+        self, tmp_path, monkeypatch
+    ):
+        builder = helpers.StructureBuilder()
+        builder.add_amino_acid("GLY", 1, chain="A")
+
+        result = _manual_entry(
+            tmp_path,
+            monkeypatch,
+            self._density_must_not_run,
+            structure_builder=builder,
+        )
+
+        assert result.status == "ok"
+        assert result.retryable is False
+        assert result.reason_codes == []
+        assert result.error == ""
+        assert result.n_metals == 0
+        assert result.n_bonds == 0
+        assert result.n_candidates == 0
+        assert result.no_metals is True
 
 
 # Hand-written because the behaviours under test are raw ``.``/``?`` occupancy
@@ -531,6 +615,29 @@ class TestLoadDone:
             ],
         )
         assert _manifest_ids(path, bonds_required=False) == {"109m"}
+
+    def test_indeterminate_metal_presence_needs_no_bond_stage(self, tmp_path):
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": "partial",
+                    "retryable": "False",
+                    "reason_codes": "metal_presence_indeterminate",
+                    "n_bonds": "",
+                    "n_candidates": "",
+                }
+            ],
+        )
+
+        assert _manifest_ids(path, bonds_required=True) == {"109m"}
+        assert resume.load_done(
+            path,
+            bonds_required=True,
+            bond_output_present=False,
+            candidate_output_present=True,
+        ) == set()
 
     @pytest.mark.parametrize(
         "bond_present,candidate_present,expected_done",

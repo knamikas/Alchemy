@@ -29,9 +29,11 @@ def load_done(
     """PDB IDs whose requested result is terminal in an existing manifest.
 
     Blank ``n_bonds`` or ``n_candidates`` mean the bond stage never ran, so
-    under ``bonds_required`` such a row is not done; a missing bond or
-    candidate CSV has the same effect. ``retry_partial_ids`` releases only
-    non-retryable ``partial`` rows, never ``ok`` ones.
+    under ``bonds_required`` such a row is not done unless the manifest says
+    metal presence was indeterminate and therefore supplied no analyzable site.
+    A missing bond or candidate CSV otherwise has the same effect.
+    ``retry_partial_ids`` releases only non-retryable ``partial`` rows, never
+    ``ok`` ones.
     """
     retry_partial_ids = {
         str(pdb_id).strip().lower()
@@ -52,11 +54,27 @@ def load_done(
                         "no",
                     )
                     pdb_id = row.get("pdbID", "").strip().lower()
-                    bonds_complete = not bonds_required or (
-                        bond_output_present
-                        and candidate_output_present
-                        and row.get("n_bonds", "").strip() != ""
-                        and row.get("n_candidates", "").strip() != ""
+                    reason_codes = {
+                        code
+                        for code in row.get("reason_codes", "").split("|")
+                        if code
+                    }
+                    bonds_inapplicable = (
+                        "metal_presence_indeterminate" in reason_codes
+                    )
+                    bonds_complete = (
+                        not bonds_required
+                        or (
+                            bond_output_present
+                            and candidate_output_present
+                            and (
+                                bonds_inapplicable
+                                or (
+                                    row.get("n_bonds", "").strip() != ""
+                                    and row.get("n_candidates", "").strip() != ""
+                                )
+                            )
+                        )
                     )
                     protected_terminal = status == "ok" or (
                         terminal_partial and pdb_id not in retry_partial_ids

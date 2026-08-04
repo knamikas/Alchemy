@@ -600,6 +600,24 @@ def process(pdb_id):
         result.multi_model_structure = structure.multi_model_structure
         result.warning_codes = list(structure.warning_codes)
         if not structure.metal_atoms(METALS_SET, canonical=True):
+            if structure.unknown_element_atom_count:
+                # A missing or invalid deposited element could belong to a
+                # configured metal. Under the no-inference policy, zero
+                # recognized sites is therefore not proof of metal absence.
+                unknown_count = structure.unknown_element_atom_count
+                result.status = "partial"
+                result.retryable = False
+                result.reason_codes = ["metal_presence_indeterminate"]
+                result.error = truncate(
+                    "cannot establish metal absence: "
+                    f"{unknown_count} atom(s) have missing or invalid element symbols",
+                    MAX_MANIFEST_ERROR_CHARS,
+                )
+                result.n_metals = 0
+                result.confidence_inputs_missing_reason = (
+                    "metal_presence_indeterminate"
+                )
+                return result
             # Skip two FFT maps and EDSTATS: with no canonical metal site,
             # neither density nor contact analysis can produce output.
             result.status = "ok"
