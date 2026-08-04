@@ -11,7 +11,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -58,6 +57,12 @@ from worker import (
     process,
 )
 from driver.progress import _ProgressReporter
+from driver.output_lock import (
+    OutputDirectoryBusyError,
+    OutputDirectoryLock,
+    OutputDirectoryLockError,
+    sweep_owned_scratch_directories,
+)
 from driver.resources import automatic_worker_limits
 from driver.resume import (
     _ResumeStaging,
@@ -242,26 +247,8 @@ def _dead_worker_pids(pool, known_pids):
 
 
 def _sweep_leaked_work_dirs(output_dir):
-    """Remove per-entry scratch directories an interrupted run left behind.
-
-    Safe at startup only because two Alchemy processes cannot share one
-    ``--output-dir`` anyway: they would already be overwriting each other's
-    manifest and CSVs.
-    """
-    removed = 0
-    try:
-        names = os.listdir(output_dir)
-    except OSError:
-        return 0
-    for name in names:
-        if not name.startswith((".alchemy-", ".alchemy-resume-")):
-            continue
-        path = os.path.join(output_dir, name)
-        if not os.path.isdir(path) or os.path.islink(path):
-            continue
-        shutil.rmtree(path, ignore_errors=True)
-        removed += not os.path.exists(path)
-    return removed
+    """Remove marked disposable scratch after output ownership is acquired."""
+    return sweep_owned_scratch_directories(output_dir)
 
 
 def _shutdown_pool(pool):
@@ -471,14 +458,13 @@ def _load_cofactor_catalog():
 
 
 def _prepare_output_directory(output_dir):
-    """Create ``--output-dir`` and remove scratch a previous run abandoned."""
+    """Create ``--output-dir`` before its stable lock file is opened."""
     try:
         os.makedirs(output_dir, exist_ok=True)
     except OSError as exc:
         raise DriverError(
             f"Cannot use --output-dir {output_dir}: {exc.strerror or exc}"
         ) from None
-    _sweep_leaked_work_dirs(output_dir)
 
 
 def _classify_run(args):
@@ -1112,14 +1098,9 @@ def _run(args, run_log):
         return 1
 
 
-def _execute(args, run_log):
-    """The order of a run, phase by phase."""
-    cofactors = _load_cofactor_catalog()
-    env, _ = resolve_ccp4_environment(args)
-    if env is None:
-        return 0  # --configure-ccp4 saved a setup path and ran nothing else.
-    _prepare_output_directory(args.output_dir)
-
+def _execute_with_output_lock(args, run_log, cofactors, env):
+    """Run every output-reading and output-writing phase under one lease."""
+    _sweep_leaked_work_dirs(args.output_dir)
     layout = _OutputLayout(args.output_dir)
     run_mode, database_run = _classify_run(args)
     run_log.details["run_mode"] = run_mode
@@ -1141,3 +1122,17 @@ def _execute(args, run_log):
 
     tally, writers = _process_entries(args, ids, cfg, workers, layout, plan, run_log)
     return _report_batch(args, layout, plan, tally, writers, run_log)
+
+
+def _execute(args, run_log):
+    """Resolve prerequisites, then exclusively own the output for the run."""
+    cofactors = _load_cofactor_catalog()
+    env, _ = resolve_ccp4_environment(args)
+    if env is None:
+        return 0  # --configure-ccp4 saved a setup path and ran nothing else.
+    _prepare_output_directory(args.output_dir)
+    try:
+        with OutputDirectoryLock(args.output_dir, run_log.command):
+            return _execute_with_output_lock(args, run_log, cofactors, env)
+    except (OutputDirectoryBusyError, OutputDirectoryLockError) as exc:
+        raise DriverError(str(exc)) from None

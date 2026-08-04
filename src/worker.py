@@ -12,7 +12,6 @@ import math
 import os
 import shutil
 import signal
-import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any, Collection, Dict, Optional
@@ -27,6 +26,7 @@ from density_analysis import (
     MtzfixValidationError,
     run_density_analysis,
 )
+from driver.output_lock import create_owned_scratch_directory
 from inputs import (
     _first_existing,
     ensure_entry_available,
@@ -536,8 +536,11 @@ def process(pdb_id):
     _announce_inflight("start", pdb_id)
     try:
         if manual_inputs:
-            work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdb_id}-", dir=cfg.output_dir
+            work_dir = create_owned_scratch_directory(
+                cfg.output_dir,
+                prefix=f".alchemy-{pdb_id}-",
+                kind="entry",
+                preserve=cfg.keep,
             )
             mtz, pdb = resolve_manual_inputs(
                 pdb_id,
@@ -557,8 +560,11 @@ def process(pdb_id):
                 result.status = "skip"
                 result.error = "entry dir missing"
                 return result
-            work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdb_id}-", dir=cfg.output_dir
+            work_dir = create_owned_scratch_directory(
+                cfg.output_dir,
+                prefix=f".alchemy-{pdb_id}-",
+                kind="entry",
+                preserve=cfg.keep,
             )
             mtz, pdb = prepare_inputs(pdb_id, entry, work_dir)
             data_reshi = read_resolution(entry, mtz)

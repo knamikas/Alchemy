@@ -84,6 +84,17 @@ Running batches, resuming them, and reading what a run wrote. See
 - The command exits nonzero when any entry ends as `error`, `skip`, or a
   retryable `partial`. Completed `ok` and terminal `partial` results exit
   successfully.
+- One Alchemy process owns an output directory at a time. A run takes a
+  non-blocking advisory lease on `<output-dir>/.alchemy.lock` before it reads,
+  replaces, or resumes any result file. A second run fails immediately and
+  reports the current owner's process, host, start time, and command instead of
+  touching those results. The lock file intentionally remains after exit; the
+  operating-system lease, not the file's presence, determines whether the
+  directory is busy, and the lease is released automatically if the process
+  exits or crashes.
+- Startup cleanup removes only Alchemy scratch directories carrying a valid
+  disposable ownership marker. Unmarked directories, symlinks, malformed
+  markers, and intermediates retained by `--keep-intermediates` are left alone.
 - A CCP4 program that exceeds `--ccp4-timeout` is killed and its entry recorded
   as a retryable `partial` with reason `ccp4_tool_timeout`, distinct from a
   program that failed with an error. A killed program reported nothing about the

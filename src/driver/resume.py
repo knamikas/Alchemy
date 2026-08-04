@@ -17,6 +17,7 @@ from typing import Optional, Sequence
 
 from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
+from driver.output_lock import create_owned_scratch_directory
 
 
 def load_done(
@@ -246,7 +247,11 @@ class _ResumeStaging:
 
     def __init__(self, output_dir, targets):
         self.targets = targets
-        self.dir = tempfile.mkdtemp(prefix=".alchemy-resume-", dir=output_dir)
+        self.dir = create_owned_scratch_directory(
+            output_dir,
+            prefix=".alchemy-resume-",
+            kind="resume",
+        )
         self.staged = tuple(
             os.path.join(self.dir, os.path.basename(path)) for path in targets
         )

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import json
 import logging
 import os
 from types import SimpleNamespace
@@ -43,6 +44,7 @@ from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 import cli
 from driver import resume
 from driver import pool
+from driver import output_lock
 import confidence_score
 
 
@@ -2391,8 +2393,88 @@ class TestFirstModelPdb:
         assert len(gemmi.read_structure(str(source))) == count
 
 
+@pytest.mark.skipif(os.name != "posix", reason="uses POSIX advisory locks")
+class TestOutputDirectoryLock:
+    def test_second_owner_fails_with_first_owners_details(self, tmp_path):
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with output_lock.OutputDirectoryLock(str(output_dir), "alchemy first"):
+            with pytest.raises(output_lock.OutputDirectoryBusyError) as caught:
+                with output_lock.OutputDirectoryLock(str(output_dir), "alchemy second"):
+                    pass
+
+        message = str(caught.value)
+        assert str(output_dir) in message
+        assert f"pid={os.getpid()}" in message
+        assert "command=alchemy first" in message
+        assert (output_dir / output_lock.LOCK_FILENAME).is_file()
+
+        # The stable file remains, but the kernel lease is reusable.
+        with output_lock.OutputDirectoryLock(str(output_dir), "alchemy third"):
+            pass
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+    def test_process_exit_releases_the_lock_without_deleting_its_file(self, tmp_path):
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        ready_read, ready_write = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(ready_read)
+            with output_lock.OutputDirectoryLock(str(output_dir), "crashing owner"):
+                os.write(ready_write, b"1")
+                os._exit(0)
+        os.close(ready_write)
+        try:
+            assert os.read(ready_read, 1) == b"1"
+        finally:
+            os.close(ready_read)
+            os.waitpid(pid, 0)
+
+        with output_lock.OutputDirectoryLock(str(output_dir), "recovery run"):
+            pass
+
+    def test_rejected_run_does_not_sweep_or_replace_outputs(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(
+            pool, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
+        )
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        manifest = output_dir / "manifest.csv"
+        manifest.write_bytes(b"existing manifest\n")
+        scratch = output_lock.create_owned_scratch_directory(
+            str(output_dir), prefix=".alchemy-109m-", kind="entry"
+        )
+        id_file = tmp_path / "ids.txt"
+        id_file.write_text("109m\n", encoding="utf-8")
+
+        with output_lock.OutputDirectoryLock(str(output_dir), "active batch"):
+            exit_code = main.main(
+                [
+                    "--id-file",
+                    str(id_file),
+                    "--output-dir",
+                    str(output_dir),
+                    "--pdb-redo-root",
+                    str(tmp_path / "absent-mirror"),
+                    "--pdb-redo-cache",
+                    str(tmp_path / "cache"),
+                ]
+            )
+
+        assert exit_code == 1
+        assert manifest.read_bytes() == b"existing manifest\n"
+        assert os.path.isdir(scratch)
+        error = capsys.readouterr().err
+        assert "already in use by another Alchemy run" in error
+        assert "active batch" in error
+
+
 class TestLeakedWorkDirectorySweep:
-    """``_sweep_leaked_work_dirs`` clears scratch a dead run left behind."""
+    """The startup sweep removes only disposable scratch owned by Alchemy."""
 
     def test_removes_per_entry_and_staging_directories(self, tmp_path):
         """Both scratch shapes are swept, with their contents.
@@ -2400,11 +2482,15 @@ class TestLeakedWorkDirectorySweep:
         A per-entry directory is otherwise removed only on the normal
         completion path, and holds that entry's maps.
         """
-        entry = tmp_path / ".alchemy-109m-abcd"
-        entry.mkdir()
+        entry = output_lock.create_owned_scratch_directory(
+            str(tmp_path), prefix=".alchemy-109m-", kind="entry"
+        )
+        entry = tmp_path / os.path.basename(entry)
         (entry / "2mFo-DFc.map").write_text("stale", encoding="utf-8")
-        staging = tmp_path / ".alchemy-resume-wxyz"
-        staging.mkdir()
+        staging = output_lock.create_owned_scratch_directory(
+            str(tmp_path), prefix=".alchemy-resume-", kind="resume"
+        )
+        staging = tmp_path / os.path.basename(staging)
         (staging / "manifest.csv").write_text("stale", encoding="utf-8")
 
         removed = pool._sweep_leaked_work_dirs(str(tmp_path))
@@ -2413,24 +2499,49 @@ class TestLeakedWorkDirectorySweep:
         assert sorted(os.listdir(tmp_path)) == []
 
     def test_leaves_real_output_alone(self, tmp_path):
-        """Only the dotted scratch prefixes are swept, never results.
+        """Names alone never authorize deleting output-directory contents.
 
-        The sweep runs at startup against a directory holding the result CSVs
-        and every previous run log, so a slightly too broad prefix match would
-        delete a completed run's output.
+        The unmarked directory has the exact shape of legacy entry scratch;
+        it still belongs to the user as far as the conservative sweep knows.
         """
         (tmp_path / "manifest.csv").write_text("keep", encoding="utf-8")
         (tmp_path / "alchemy_run_20260101.log").write_text("keep", encoding="utf-8")
         (tmp_path / "109m").mkdir()  # a user directory named for an id
         (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
+        (tmp_path / ".alchemy-109m-unmarked").mkdir()
 
         assert pool._sweep_leaked_work_dirs(str(tmp_path)) == 0
         assert sorted(os.listdir(tmp_path)) == [
+            ".alchemy-109m-unmarked",
             ".alchemyrc",
             "109m",
             "alchemy_run_20260101.log",
             "manifest.csv",
         ]
+
+    def test_preserved_scratch_is_not_swept(self, tmp_path):
+        kept = output_lock.create_owned_scratch_directory(
+            str(tmp_path),
+            prefix=".alchemy-109m-",
+            kind="entry",
+            preserve=True,
+        )
+
+        assert pool._sweep_leaked_work_dirs(str(tmp_path)) == 0
+        assert os.path.isdir(kept)
+
+    def test_symlink_is_not_followed_even_if_its_target_is_marked(self, tmp_path):
+        target_root = tmp_path / "elsewhere"
+        target_root.mkdir()
+        target = output_lock.create_owned_scratch_directory(
+            str(target_root), prefix=".alchemy-109m-", kind="entry"
+        )
+        link = tmp_path / ".alchemy-109m-link"
+        link.symlink_to(target, target_is_directory=True)
+
+        assert pool._sweep_leaked_work_dirs(str(tmp_path)) == 0
+        assert link.is_symlink()
+        assert os.path.isdir(target)
 
     def test_missing_directory_is_not_an_error(self, tmp_path):
         assert pool._sweep_leaked_work_dirs(str(tmp_path / "absent")) == 0
@@ -2494,8 +2605,10 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
-    leaked = output_dir / ".alchemy-109m-leaked"
-    leaked.mkdir()
+    leaked = output_lock.create_owned_scratch_directory(
+        str(output_dir), prefix=".alchemy-109m-", kind="entry"
+    )
+    leaked = output_dir / os.path.basename(leaked)
     (leaked / "2mFo-DFc.map").write_text("stale map bytes", encoding="utf-8")
     id_file = tmp_path / "ids.txt"
     id_file.write_text("109m\n", encoding="utf-8")
@@ -2605,6 +2718,10 @@ class TestDensityResultReachesTheResult:
         ]
 
         assert bool(scratch) is keep
+        if keep:
+            marker = tmp_path / scratch[0] / output_lock.SCRATCH_MARKER_FILENAME
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
+            assert metadata["preserve"] is True
 
 
 def test_a_loaded_structure_fills_in_the_model_provenance(tmp_path, monkeypatch):
