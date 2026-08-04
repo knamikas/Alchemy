@@ -8,8 +8,9 @@ two implementations of the tool-availability probe, a dead ``explicit_setup``
 parameter, and library code raising ``SystemExit``.
 
 Nothing here raises ``SystemExit``. Failures are ``Ccp4SetupError``, so CCP4
-resolution is usable outside a CLI process; ``main.resolve_ccp4_environment``
-is the single place that turns one into an exit.
+resolution is usable outside a CLI process;
+``driver.pool.resolve_ccp4_environment`` is the single place that turns one
+into an exit.
 """
 
 import json
@@ -161,7 +162,7 @@ def find_ccp4_setup(
 
     ``None`` means two different things and the caller must distinguish them:
     CCP4 is already on PATH and no script is needed, or nothing could be found
-    at all. ``main.resolve_ccp4_environment`` treats the second as fatal.
+    at all. ``driver.pool.resolve_ccp4_environment`` treats the second as fatal.
 
     An explicitly requested script is deliberately not handled here. The caller
     that has one overrides the ambient environment with it and errors on a path

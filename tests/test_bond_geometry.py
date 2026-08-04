@@ -25,6 +25,7 @@ import gemmi
 import pytest
 
 import bond_analysis as ba
+import dpi as dpi_module
 import helpers
 from helpers import AtomSpec, EDSTATS_HEADER, StructureBuilder
 from metal_elements import METAL_ELEMENTS
@@ -913,7 +914,7 @@ def _dpi_details(
         ),
         resolution=resolution,
     )
-    return _DpiRun(path, context, ba._calculate_dpi_details(context, inputs))
+    return _DpiRun(path, context, dpi_module._calculate_dpi_details(context, inputs))
 
 
 def _dpi_value(tmp_path, **kwargs):
@@ -949,7 +950,7 @@ def test_dpi_equals_the_hand_computed_blow_value(tmp_path):
 
     # The two inputs the test claims to know, confirmed against the model.
     assert count_ni(run.context) == pytest.approx(16.0)
-    assert ba._asu_volume(
+    assert dpi_module._asu_volume(
         os.path.join(str(tmp_path), "absent.mtz"), run.path
     ) == pytest.approx(100.0**3)
 
@@ -983,7 +984,7 @@ def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path):
     )
 
     assert count_ni(run.context) == pytest.approx(400.0)
-    assert ba._asu_volume(
+    assert dpi_module._asu_volume(
         os.path.join(str(tmp_path), "absent.mtz"), run.path
     ) == pytest.approx(216000.0)
     assert run.reason == ""
@@ -1168,7 +1169,7 @@ def test_asu_volume_is_the_cell_volume_over_the_operation_count(
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "cell.pdb")
 
-    volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
 
     assert volume == pytest.approx(1.0e6 / operations)
 
@@ -1189,7 +1190,7 @@ def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path):
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "placeholder-cell.pdb")
 
-    volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
     assert math.isnan(volume), (
         f"a placeholder 1 A^3 cell was accepted as ASU volume {volume!r}"
     )
@@ -1197,7 +1198,7 @@ def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path):
     # The user-visible consequence: no DPI, and a reason code saying why.
     data_json = helpers.write_data_json(tmp_path / "data.json")
     context = load_structure("test", path)
-    dpi, _, reason = ba._calculate_dpi_details(
+    dpi, _, reason = dpi_module._calculate_dpi_details(
         context, helpers.dpi_inputs(pdb_path=path, data_json=data_json)
     )
 
@@ -1219,7 +1220,7 @@ def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path):
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "small-cell.pdb")
 
-    volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
 
     assert volume == pytest.approx(1000.0)
 
@@ -1245,10 +1246,10 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(tmp_path):
     mtz_path = str(tmp_path / "data.mtz")
     mtz.write_to_file(mtz_path)
 
-    assert ba._asu_volume(mtz_path, pdb_path) == pytest.approx(40.0**3 / 4)
+    assert dpi_module._asu_volume(mtz_path, pdb_path) == pytest.approx(40.0**3 / 4)
     # Without the MTZ the same call falls back to CRYST1, which is a different
     # number -- so the assertion above really did read the MTZ.
-    assert ba._asu_volume(
+    assert dpi_module._asu_volume(
         os.path.join(str(tmp_path), "absent.mtz"), pdb_path
     ) == pytest.approx(100.0**3)
 
@@ -1268,7 +1269,7 @@ def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path):
     corrupt.write_text("this is not an MTZ file\n", encoding="utf-8")
 
     for mtz in (os.path.join(str(tmp_path), "absent.mtz"), str(corrupt)):
-        assert ba._asu_volume(mtz, pdb_path) == pytest.approx(100.0**3)
+        assert dpi_module._asu_volume(mtz, pdb_path) == pytest.approx(100.0**3)
 
 
 @pytest.mark.parametrize(
@@ -1292,7 +1293,7 @@ def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(tmp_path, c
         with open(pdb_path, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-    volume = ba._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), pdb_path)
+    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), pdb_path)
 
     assert math.isnan(volume)
 
@@ -1317,7 +1318,7 @@ def test_rfree_is_read_from_the_remark_3_header(tmp_path):
         encoding="utf-8",
     )
 
-    assert ba._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
+    assert dpi_module._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
 
 
 @pytest.mark.parametrize(
@@ -1340,11 +1341,11 @@ def test_rfree_ignores_test_set_estimate_and_per_bin_lines(tmp_path, line):
     """
     path = tmp_path / "header.pdb"
     path.write_text(_remark_3(line, "FREE R VALUE : 0.21530"), encoding="utf-8")
-    assert ba._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
+    assert dpi_module._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
 
     decoy_only = tmp_path / "decoy.pdb"
     decoy_only.write_text(_remark_3(line), encoding="utf-8")
-    assert math.isnan(ba._rfree_from_pdb(str(decoy_only)))
+    assert math.isnan(dpi_module._rfree_from_pdb(str(decoy_only)))
 
 
 def test_rfree_takes_the_first_matching_line(tmp_path):
@@ -1353,7 +1354,7 @@ def test_rfree_takes_the_first_matching_line(tmp_path):
     path.write_text(
         _remark_3("FREE R VALUE : 0.21530", "FREE R VALUE : 0.29900"), encoding="utf-8"
     )
-    assert ba._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
+    assert dpi_module._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
 
 
 @pytest.mark.parametrize(
@@ -1380,7 +1381,7 @@ def test_rfree_is_nan_when_absent_or_malformed(tmp_path, content):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-    assert math.isnan(ba._rfree_from_pdb(path))
+    assert math.isnan(dpi_module._rfree_from_pdb(path))
 
 
 def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
@@ -1403,7 +1404,7 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
         ),
     )
 
-    dpi, _resolution, reason = ba._calculate_dpi_details(context, inputs)
+    dpi, _resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
 
     assert reason == ""
     assert dpi == pytest.approx(0.125, abs=DPI_ROUNDING)
@@ -1448,7 +1449,7 @@ def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path):
             mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
             data_json=data_json,
         )
-        dpi, _resolution, reason = ba._calculate_dpi_details(context, inputs)
+        dpi, _resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
         assert math.isnan(dpi)
         assert reason == "missing_or_invalid_reflection_count"
 
@@ -1558,7 +1559,7 @@ def test_a_non_numeric_reflection_count_is_a_calculation_failure(tmp_path):
         data_json=data_json,
     )
 
-    dpi, resolution, reason = ba._calculate_dpi_details(context, inputs)
+    dpi, resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
 
     assert math.isnan(dpi)
     assert reason == "dpi_calculation_failed"
@@ -1580,7 +1581,7 @@ def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
     """
     path = _atom_count_structure(tmp_path, "site.pdb", 16, cell_edge=100.0)
     context = load_structure("test", path)
-    monkeypatch.setattr(ba, "_asu_volume", lambda mtz, pdb: "1000000")
+    monkeypatch.setattr(dpi_module, "_asu_volume", lambda mtz, pdb: "1000000")
     inputs = helpers.dpi_inputs(
         pdb_path=path,
         mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
@@ -1589,7 +1590,7 @@ def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
         ),
     )
 
-    dpi, _resolution, reason = ba._calculate_dpi_details(context, inputs)
+    dpi, _resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
 
     assert math.isnan(dpi)
     assert reason == "invalid_dpi_metadata"

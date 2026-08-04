@@ -10,7 +10,7 @@ Two things here are the driver's, not the worker's. ``_initial_result`` builds
 the manifest-complete result skeleton, which the driver also needs to
 synthesize ``_worker_death_result`` for a process that was killed before it
 could return anything. And ``_announce_inflight`` is the worker half of the
-liveness protocol whose driver half is ``main._drain_inflight``.
+liveness protocol whose driver half is ``driver.pool._drain_inflight``.
 
 Configuration reaches a worker once, through ``_init_worker``, and is held in
 this module's ``_CFG``: a pool initializer cannot return a value, and passing

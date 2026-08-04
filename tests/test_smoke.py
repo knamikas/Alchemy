@@ -43,6 +43,7 @@ def test_src_modules_import():
     import ccp4_setup
     import confidence_score
     import density_analysis
+    import dpi
     import main
     import metal_elements
     import metal_identification  # noqa: F401 - imported to prove it loads
@@ -62,6 +63,7 @@ def test_src_modules_import():
     assert callable(progress._ProgressReporter)
     assert callable(runlog._RunLog)
     assert resources.available_cpu_count() >= 1
+    assert callable(dpi._calculate_dpi_details)
     assert callable(density_analysis.run_density_analysis)
     assert callable(confidence_score.score_site)
     # Named explicitly rather than asserted truthy: a non-empty tuple literal is

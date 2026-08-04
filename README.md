@@ -127,7 +127,7 @@ calculation failure.
 
 ## Pipeline flow
 
-### 1. Input preparation — `src/main.py`
+### 1. Input preparation — `src/inputs.py` and `src/coordinate_conversion.py`
 
 The automatic PDB-REDO workflow analyzes only the final re-refined and rebuilt
 model. It prefers `{id}_final.cif` as the authoritative coordinate source and

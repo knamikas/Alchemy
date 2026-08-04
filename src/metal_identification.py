@@ -11,7 +11,7 @@ import math
 import os
 from typing import Any, Iterable, Optional
 
-from structure_analysis import canonical_pdb_residue_id
+from structure_analysis import NAN, canonical_pdb_residue_id
 
 
 # Single source for the bundled reference-data directory. Every file under it
@@ -456,3 +456,47 @@ def extract_metal_statistics(
             f"{preview}{suffix}"
         )
     return rows, header
+
+
+# --------------------------------------------------------------------------- #
+# Density-sigma join
+# --------------------------------------------------------------------------- #
+# Reading the real-space Z-difference metrics back out of an extracted EDSTATS
+# row. This is the same table ``EDSTATS_COLUMNS`` above describes, so the two
+# live together: a column-order change breaks both, and having the reader in
+# ``bond_analysis`` meant EDSTATS knowledge was split across two modules that
+# had to agree without either one saying so.
+def _sigma_index(stats_rows):
+    """Map (resname, chain, resnum) -> edstats fields, for the sigma join."""
+    return {
+        (r["resname"], str(r["chain"]), str(r["resnum"])): r["fields"]
+        for r in stats_rows
+    }
+
+
+ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
+
+
+def _zd_indices(header):
+    """Return column indices for ZDm/ZD-m/ZD+m, or None
+    if the header is missing or doesn't contain all three names."""
+    if not header:
+        return None
+    try:
+        return tuple(header.index(name) for name in ZD_COLUMNS)
+    except ValueError:
+        return None
+
+
+def _sigma_for(sig, resname, chain, resnum, zd_idx):
+    fields = sig.get((resname, str(chain), str(resnum)))
+    if fields is None or zd_idx is None:
+        return NAN, NAN, NAN
+    try:
+        return (
+            float(fields[zd_idx[0]]),
+            float(fields[zd_idx[1]]),
+            float(fields[zd_idx[2]]),
+        )
+    except (IndexError, ValueError):
+        return NAN, NAN, NAN
