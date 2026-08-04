@@ -307,6 +307,8 @@ def _declared_candidate_for_connection(
         return None, issues, warnings
 
     metal, neighbor = (first, second) if first_is_metal else (second, first)
+    if neighbor.occupancy_valid and neighbor.occupancy == 0.0:
+        warnings.append(WarningCode.DECLARED_CONNECTION_ZERO_OCCUPANCY_PARTNER)
     residue = structure.residue_for_atom(neighbor)
     if neighbor.element not in DONOR_ELEMENTS:
         warnings.append(WarningCode.DECLARED_DONOR_ELEMENT_UNSUPPORTED)

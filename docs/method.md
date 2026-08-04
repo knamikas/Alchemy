@@ -321,7 +321,9 @@ The deposited count, strict-NCS multiplier, and resulting complete count are all
 reported. A missing, non-finite, negative, or greater-than-one occupancy makes
 DPI unavailable rather than being silently repaired; contact distances that do
 not require DPI are retained. Zero occupancy is valid for `Ni` but is not
-accepted as evidence for a candidate contact.
+accepted as evidence for a metal site or assigned contact. A source-declared
+contact to a zero-occupancy donor remains in `metal_candidates_all.csv` for
+audit, with `eligibility_status=zero_occupancy`, but cannot become a bond.
 For PDB input, raw occupancy records are matched to Gemmi atoms by chain,
 residue number and insertion code, residue and atom names, alternate location,
 and atom serial rather than parser traversal order.

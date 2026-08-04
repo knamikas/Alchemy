@@ -705,6 +705,8 @@ def test_zero_occupancy_is_valid_for_ni(tmp_path):
     assert context.occupancy_validation_failed is False
     assert context.zero_occupancy_atom_count == 1
     assert "zero_occupancy_atoms" in context.warning_codes
+    assert context.metal_atoms(["ZN"]) == []
+    assert context.metal_atoms(["ZN"], include_zero_occupancy=True) == [metal]
     # Water oxygen contributes 1.0, the zero-occupancy metal contributes 0.0.
     assert sa.count_deposited_ni(context) == pytest.approx(1.0)
 

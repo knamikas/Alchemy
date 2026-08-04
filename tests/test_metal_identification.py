@@ -26,6 +26,7 @@ from metal_identification import (
     EDSTATS_METRIC_COLUMNS,
     _classify_residue,
     _density_observation_id,
+    _expected_edstats_residues,
     _is_edstats_separator,
     _normalize_edstats_row,
     _sigma_for,
@@ -611,6 +612,17 @@ def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(tmp_path):
     category, sites = _classify_residue(residue, {"ZN"}, set())
     assert category == "metal"
     assert [site.altloc for site in sites] == ["B"]
+
+
+def test_zero_occupancy_ion_is_not_a_selected_density_site(tmp_path):
+    """A deposited zero contributes no metal-site density evidence."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", occupancy=0.0)
+    context = load_structure("test", builder.write_pdb(tmp_path / "zero.pdb"))
+    residue = context.residues[0]
+
+    assert _classify_residue(residue, {"ZN"}, set()) == ("", [])
+    assert _expected_edstats_residues(context, {"ZN"}, set()) == {}
 
 
 def test_only_metal_and_cofactor_residues_produce_rows(tmp_path):

@@ -437,11 +437,30 @@ class StructureContext:
         )
 
     def metal_atoms(
-        self, elements: Iterable[str], canonical: bool = True
+        self,
+        elements: Iterable[str],
+        canonical: bool = True,
+        include_zero_occupancy: bool = False,
     ) -> List[AtomSite]:
+        """Return selected metal atoms, excluding modeled absence by default.
+
+        A valid occupancy of zero remains part of the deposited atom inventory
+        and the ``Ni`` sum, but it is not an analyzable metal site. Invalid or
+        missing occupancies are retained so coordinate-only analysis can still
+        proceed while separate occupancy-validation flags disable scoring.
+        """
         wanted = {str(element).upper() for element in elements}
         atoms = self.contact_atoms if canonical else self.source_atoms
-        return [atom for atom in atoms if atom.element_known and atom.element in wanted]
+        return [
+            atom
+            for atom in atoms
+            if atom.element_known
+            and atom.element in wanted
+            and (
+                include_zero_occupancy
+                or not (atom.occupancy_valid and atom.occupancy == 0.0)
+            )
+        ]
 
     def make_neighbor_search(
         self,

@@ -171,6 +171,7 @@ def _classify_residue(residue, metals_upper, cofactor_set):
         atom
         for atom in residue.contact_atoms
         if atom.element_known and atom.element in metals_upper
+        and not (atom.occupancy_valid and atom.occupancy == 0.0)
     ]
     if residue.residue_name in cofactor_set:
         return "cofactor", metal_sites
@@ -319,9 +320,9 @@ def extract_metal_statistics(
     rows = []
     schema: Optional[tuple[list[str], dict[str, int]]] = None
     residue_row_count = 0
-    observed_residues = Counter()
-    observed_edstats_rows = set()
-    residue_observations = {}
+    observed_residues: Counter[tuple[str, str, str]] = Counter()
+    observed_edstats_rows: set[tuple[int, int]] = set()
+    residue_observations: dict[tuple[int, int, int], int] = {}
     with open(stats_out, encoding="utf-8", errors="strict") as f:
         for line_number, line in enumerate(f, 1):
             stripped = line.strip()

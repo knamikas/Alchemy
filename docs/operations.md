@@ -69,12 +69,15 @@ Running batches, resuming them, and reading what a run wrote. See
   analysis still runs, while its metal sites remain explicitly unscorable by
   confidence because RSZD is unavailable.
 - After canonical model and conformer selection, structures with no recognized
-  metal atoms and no unknown-element atoms finish with `n_metals=0` without
+  positive-occupancy metal sites and no unknown-element atoms finish with
+  `n_metals=0` without
   running `mtzfix`, either FFT, or `edstats`. These stages cannot produce
   metal-site output for such entries. Progress and completion summaries report
-  these successful negative results as `no_metals`; this is an informational
-  subset of `ok`, whereas `skip` remains reserved for entries that could not be
-  processed operationally. If any atom has a missing or invalid deposited
+  these successful negative results as `no_metals`; valid zero-occupancy metal
+  records remain visible through the `zero_occupancy_atoms` warning but are not
+  counted as sites. `no_metals` is an informational subset of `ok`, whereas
+  `skip` remains reserved for entries that could not be processed
+  operationally. If any atom has a missing or invalid deposited
   element, metal absence cannot be established under the no-inference policy;
   the entry instead finishes as terminal `partial` with
   `metal_presence_indeterminate` and is not counted as `no_metals`.

@@ -268,6 +268,28 @@ class TestNoRecognizedMetalOutcome:
         assert result.n_candidates == 0
         assert result.no_metals is True
 
+    def test_zero_occupancy_metal_is_not_an_analyzable_site(
+        self, tmp_path, monkeypatch
+    ):
+        builder = helpers.StructureBuilder()
+        builder.add_metal("ZN", 1, chain="A", occupancy=0.0)
+
+        result = _manual_entry(
+            tmp_path,
+            monkeypatch,
+            self._density_must_not_run,
+            structure_builder=builder,
+        )
+
+        assert result.status == "ok"
+        assert result.retryable is False
+        assert result.reason_codes == []
+        assert result.n_metals == 0
+        assert result.n_bonds == 0
+        assert result.n_candidates == 0
+        assert result.no_metals is True
+        assert "zero_occupancy_atoms" in result.warning_codes
+
 
 # Hand-written because the behaviours under test are raw ``.``/``?`` occupancy
 # tokens and >3-character component ids, neither of which gemmi would write.

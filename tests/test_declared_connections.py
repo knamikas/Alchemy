@@ -1106,6 +1106,47 @@ def test_declared_contact_is_retained_beyond_the_search_radius(tmp_path):
     assert candidate["eligibility_status"] == "outside_first_sphere"
 
 
+def test_declared_zero_occupancy_donor_is_candidate_evidence_not_a_bond(tmp_path):
+    """A declaration cannot promote an atom explicitly modeled as absent."""
+    builder = StructureBuilder()
+    histidine = builder.add_amino_acid(
+        "HIS",
+        10,
+        chain="A",
+        positions={"NE2": (5.0, 0.0, 0.0)},
+        occupancy=0.0,
+    )
+    zinc = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_connection(
+        zinc.ref("ZN"), histidine.ref("NE2"), name="zero", reported_distance=5.0
+    )
+    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+
+    result = analyze(analysis_pdb, connection_path=source)
+
+    assert result.rows_for("NE2") == []
+    (candidate,) = [
+        row for row in result.candidates if row["neighbor_atom"] == "NE2"
+    ]
+    assert candidate["candidate_source"] == "LINK"
+    assert candidate["declared_connection"] is True
+    assert candidate["neighbor_occupancy"] == pytest.approx(0.0)
+    assert candidate["first_sphere_eligible"] is False
+    assert candidate["inferred_contact_eligible"] is False
+    assert candidate["eligibility_status"] == "zero_occupancy"
+    assert (
+        candidate["eligibility_reason"]
+        == "zero_occupancy_atom_is_not_contact_evidence"
+    )
+    assert candidate["context_warning"] is True
+    assert "zero_occupancy_neighbor" in candidate[
+        "context_warning_reasons"
+    ].split("|")
+    assert "declared_connection_zero_occupancy_partner" in result.metadata[
+        "warning_codes"
+    ]
+
+
 def test_declared_contact_outside_first_sphere_keeps_measured_geometry(tmp_path):
     """A declared bond too long for the distance rule still gets Zbond and a flag.
 

@@ -340,6 +340,8 @@ def _donor_output_values(candidate):
 def _context_warning_values(candidate, include_proximal=False):
     """Return the context flag and the reason codes behind it."""
     reasons = []
+    if candidate.neighbor.occupancy_valid and candidate.neighbor.occupancy == 0.0:
+        reasons.append("zero_occupancy_neighbor")
     if not candidate.inferred_donor_allowed:
         if candidate.declared_connections:
             reasons.append("declared_non_typical_donor")

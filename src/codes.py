@@ -105,6 +105,11 @@ class WarningCode(StrEnum):
     DECLARED_CONNECTION_CONFORMER_SUBSTITUTED = (
         "declared_connection_conformer_substituted"
     )
+    #: A source declaration resolves to an atom whose valid occupancy is zero.
+    #: The declaration remains candidate evidence but cannot become a bond.
+    DECLARED_CONNECTION_ZERO_OCCUPANCY_PARTNER = (
+        "declared_connection_zero_occupancy_partner"
+    )
     DECLARED_DONOR_ELEMENT_UNSUPPORTED = "declared_donor_element_unsupported"
     #: No bundled reference covers the donor's residue class, so its geometry
     #: can never be z-scored.

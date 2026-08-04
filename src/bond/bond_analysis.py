@@ -294,6 +294,14 @@ def _annotate_donor_policy(structure, candidates):
         )
 
 
+def _candidate_has_zero_occupancy(candidate, metal):
+    """Whether either endpoint is explicitly modeled with zero occupancy."""
+    return any(
+        atom.occupancy_valid and atom.occupancy == 0.0
+        for atom in (metal, candidate.neighbor)
+    )
+
+
 def _identify_first_sphere_candidates(candidates, metal):
     """Annotate every candidate with eligibility, and return those eligible.
 
@@ -309,6 +317,17 @@ def _identify_first_sphere_candidates(candidates, metal):
         target, cutoff, reference_kind, reference_key = _first_sphere_rule(
             metal, neighbor
         )
+        if _candidate_has_zero_occupancy(candidate, metal):
+            candidate.eligibility_status = "zero_occupancy"
+            candidate.eligibility_reason = "zero_occupancy_atom_is_not_contact_evidence"
+            candidate.first_sphere_eligible = False
+            candidate.inferred_contact_eligible = False
+            candidate.assignment_target = target
+            candidate.assignment_tolerance = FIRST_SPHERE_TOLERANCE
+            candidate.first_sphere_cutoff = cutoff
+            candidate.assignment_reference_kind = reference_kind
+            candidate.assignment_reference = reference_key
+            continue
         if not math.isfinite(cutoff):
             declared = bool(candidate.declared_connections)
             if donor_allowed or declared:
@@ -484,6 +503,7 @@ def _current_contacts_from_candidates(candidates, metal):
         if candidate.declared_connections
         and not candidate.inferred_contact_eligible
         and candidate.donor_class_supported
+        and not _candidate_has_zero_occupancy(candidate, metal)
     ]
     return (
         _deduplicate_special_position_contacts(eligible + declared_not_inferred),
