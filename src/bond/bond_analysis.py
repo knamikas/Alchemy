@@ -663,6 +663,17 @@ def _site_context_values(contacts, candidates):
     }
 
 
+# Generated-contact scope and its two dependency flags, keyed by whether the
+# site has any crystallographic and any strict-NCS contact. Read only once a
+# site has generated contacts, so a contact that is neither counts as NCS.
+_GENERATED_SCOPES = {
+    (True, True): ("strict_ncs_and_crystallographic", True, True),
+    (True, False): ("crystallographic", True, False),
+    (False, True): ("strict_ncs", False, True),
+    (False, False): ("strict_ncs", False, True),
+}
+
+
 def _site_summary(
     metal,
     explicit_contacts,
@@ -717,26 +728,16 @@ def _site_summary(
         changed = ""
         depends_crystallographic = ""
         depends_strict_ncs = ""
-    elif not symmetry_count:
-        generated_scope = "none"
-        changed = explicit["status"] != image_inclusive["status"]
-        depends_crystallographic = False
-        depends_strict_ncs = False
-    elif crystallographic_count and strict_ncs_count:
-        generated_scope = "strict_ncs_and_crystallographic"
-        changed = explicit["status"] != image_inclusive["status"]
-        depends_crystallographic = True
-        depends_strict_ncs = True
-    elif crystallographic_count:
-        generated_scope = "crystallographic"
-        changed = explicit["status"] != image_inclusive["status"]
-        depends_crystallographic = True
-        depends_strict_ncs = False
     else:
-        generated_scope = "strict_ncs"
         changed = explicit["status"] != image_inclusive["status"]
-        depends_crystallographic = False
-        depends_strict_ncs = True
+        generated_scope, depends_crystallographic, depends_strict_ncs = (
+            _GENERATED_SCOPES[
+                bool(crystallographic_count),
+                bool(strict_ncs_count),
+            ]
+            if symmetry_count
+            else ("none", False, False)
+        )
 
     reasons = []
     if metal_zero:

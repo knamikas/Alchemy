@@ -297,7 +297,7 @@ def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(tmp_path, monkeypatc
             raise PermissionError("locked down")
         return real_listdir(path)
 
-    monkeypatch.setattr(pool.os, "listdir", failing_listdir)
+    monkeypatch.setattr(inputs.os, "listdir", failing_listdir)
     assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
 
 

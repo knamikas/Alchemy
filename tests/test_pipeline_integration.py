@@ -29,6 +29,7 @@ import shutil
 import socket
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import pytest
@@ -310,6 +311,10 @@ def read_rows(output_dir, name: str) -> List[Dict[str, str]]:
 def read_header(output_dir, name: str) -> List[str]:
     with open(os.path.join(str(output_dir), name), newline="") as handle:
         return next(csv.reader(handle))
+
+
+def read_text(path) -> str:
+    return Path(path).read_text(encoding="utf-8")
 
 
 def manifest_by_id(output_dir) -> Dict[str, Dict[str, str]]:
@@ -712,7 +717,7 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
     # Headers survive even when an entry contributes no rows.
     assert read_header(batch.output_dir, "metal_stats_all.csv") == STATS_COLUMNS
 
-    log_text = open(log_paths(batch.output_dir)[0], encoding="utf-8").read()
+    log_text = read_text(log_paths(batch.output_dir)[0])
     entry_line = next(
         line for line in log_text.splitlines() if line.startswith("9nxl | status=")
     )
@@ -804,7 +809,7 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     assert first.exit_code == 0, first.text
     original = log_paths(output_dir)
     assert len(original) == 1
-    original_text = open(original[0], encoding="utf-8").read()
+    original_text = read_text(original[0])
 
     second = run_alchemy(
         output_dir,
@@ -819,7 +824,7 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     )
     assert second.exit_code == 0, second.text
     assert len(log_paths(output_dir)) == 2
-    assert open(original[0], encoding="utf-8").read() == original_text
+    assert read_text(original[0]) == original_text
     assert "no entries to process" in second.text
 
 
@@ -844,9 +849,7 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
         "metal_bonds_all.csv",
         "metal_candidates_all.csv",
     )
-    before = {
-        name: open(os.path.join(str(output_dir), name), "rb").read() for name in names
-    }
+    before = {name: Path(str(output_dir), name).read_bytes() for name in names}
 
     second = run_batch(
         output_dir, entry_cache, ccp4_env, extra=("--resume",), tmp_root=tmp_path
@@ -854,9 +857,7 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
     assert second.result.exit_code == 0, second.result.text
     assert "no entries to process" in second.result.text
 
-    after = {
-        name: open(os.path.join(str(output_dir), name), "rb").read() for name in names
-    }
+    after = {name: Path(str(output_dir), name).read_bytes() for name in names}
     assert after == before
 
     assert len(second.manifest) == len(ENTRY_IDS)
@@ -1142,8 +1143,8 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
 
     # Without cropping on at least one entry both runs took the same path and
     # the comparison proves nothing.
-    cropped_log = open(log_paths(cropped.output_dir)[0], encoding="utf-8").read()
-    full_log = open(log_paths(full.output_dir)[0], encoding="utf-8").read()
+    cropped_log = read_text(log_paths(cropped.output_dir)[0])
+    full_log = read_text(log_paths(full.output_dir)[0])
     assert re.search(r"density_map_scope=model-envelope\b", cropped_log), (
         "no entry exercised model-envelope cropping"
     )
@@ -1237,7 +1238,7 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
     # Abandoned before any output table exists, but the log records the attempt.
     assert not os.path.exists(os.path.join(str(output_dir), "manifest.csv"))
     assert len(log_paths(output_dir)) == 1
-    assert "Driver error:" in open(log_paths(output_dir)[0], encoding="utf-8").read()
+    assert "Driver error:" in read_text(log_paths(output_dir)[0])
 
 
 @_requires_entry_data
@@ -1605,7 +1606,7 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
         f"13 confidence rows compared with database cohort {cohort_size}"
         in scored_run.result.stdout
     )
-    log_text = open(log_paths(output_dir)[0], encoding="utf-8").read()
+    log_text = read_text(log_paths(output_dir)[0])
     assert "confidence_mode: reference" in log_text
     assert "confidence_status: scored_against_reference" in log_text
 
@@ -1691,7 +1692,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
         f"13 confidence rows (13 scored; reference cohort 13) -> "
         f"{os.path.join(str(output_dir), 'confidence_scores_all.csv')}" in result.stdout
     )
-    log_text = open(log_paths(output_dir)[0], encoding="utf-8").read()
+    log_text = read_text(log_paths(output_dir)[0])
     assert "confidence_mode: database" in log_text
     assert "confidence_status: finalized" in log_text
 
@@ -1749,7 +1750,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp
     )
     assert first.exit_code == 0, first.text
     scores_path = os.path.join(str(output_dir), "confidence_scores_all.csv")
-    original = open(scores_path, "rb").read()
+    original = Path(scores_path).read_bytes()
 
     same = run_alchemy(
         output_dir,
@@ -1783,7 +1784,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp
     assert "Cannot resume confidence output" in mismatched.text
     assert "different database reference" in mismatched.text
     # Refused before anything was rewritten.
-    assert open(scores_path, "rb").read() == original
+    assert Path(scores_path).read_bytes() == original
 
     # The converse gap: resuming a run with no confidence output at all would
     # silently score only the entries the resume happens to touch.

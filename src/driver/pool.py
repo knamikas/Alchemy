@@ -830,6 +830,73 @@ def _write_entry(result, args, plan, writers, staging, prior_counts):
         staging.replacement_ids.add(result.pdb_id.lower())
 
 
+class _WorkerDeathWatch:
+    """Stands in for the pool on the results a dead worker will never deliver.
+
+    Workers announce the entry they are holding, so a pid that leaves the pool
+    roster is usually attributable and its entry can be failed retryably at
+    once. A worker killed before it announced anything leaves no such trace:
+    that death is only counted, and is settled by ``stalled_losses`` once the
+    run has gone quiet for long enough to rule out a live worker.
+    """
+
+    def __init__(self, pool, inflight, ids, cfg):
+        self._pool = pool
+        self._inflight = inflight
+        self._ids = ids
+        self._cfg = cfg
+        self._assignments: Dict[int, str] = {}
+        self._worker_pids: set = set()
+        self._lost_ids: set = set()
+        self._unattributed_deaths = 0
+
+    def poll(self):
+        """Results for the entries whose worker has died since the last call."""
+        _drain_inflight(self._inflight, self._assignments)
+        losses = []
+        for dead_pid in _dead_worker_pids(self._pool, self._worker_pids):
+            dead_id = self._assignments.pop(dead_pid, None)
+            if dead_id is None:
+                self._unattributed_deaths += 1
+            elif dead_id not in self._lost_ids:
+                losses.append(self._lose(dead_id, dead_pid))
+        return losses
+
+    def stalled_losses(self, completed_ids, stalled_for, remaining):
+        """Results for the outstanding entries an unattributed death held.
+
+        ``None`` until every outstanding entry can be accounted for by a death
+        that named no entry and the run has been quiet for the grace period,
+        which leaves the caller waiting rather than failing live work.
+        """
+        if not (
+            self._unattributed_deaths
+            and stalled_for > WORKER_STALL_GRACE_S
+            and remaining <= self._unattributed_deaths
+        ):
+            return None
+        # Only entries that never returned a result can still be held by a
+        # process that died before naming its entry; blaming a completed one
+        # would write a second, failed row for an entry that succeeded.
+        losses = []
+        for stuck_id in self._ids:
+            if stuck_id in self._lost_ids or stuck_id in completed_ids:
+                continue
+            losses.append(self._lose(stuck_id, 0))
+            if len(losses) >= remaining:
+                break
+        return losses
+
+    def superseded(self, result):
+        """True when a synthesized loss row already stands for this entry."""
+        died = result.reason_codes == ["worker_process_died"]
+        return result.pdb_id in self._lost_ids and not died
+
+    def _lose(self, pdb_id, pid):
+        self._lost_ids.add(pdb_id)
+        return _worker_death_result(pdb_id, self._cfg, pid)
+
+
 def _dispatch_entries(
     args, ids, cfg, workers, writers, plan, staging, prior_counts, run_log
 ):
@@ -841,11 +908,7 @@ def _dispatch_entries(
     tally = _BatchTally()
     progress = _ProgressReporter(len(ids))
     inflight: SimpleQueue[Any] = SimpleQueue()
-    assignments: Dict[int, str] = {}
-    worker_pids: set = set()
-    lost_ids: set = set()
     completed_ids: set = set()
-    unattributed_deaths = 0
     last_progress = time.monotonic()
     # Not a ``with`` block: ``Pool.__exit__`` calls the same ``terminate`` a
     # killed idle worker can wedge, so the ``finally`` below bounds shutdown.
@@ -855,6 +918,7 @@ def _dispatch_entries(
     log_queue = create_worker_log_queue()
     pool = Pool(workers, initializer=_init_worker, initargs=(cfg, inflight, log_queue))
     log_listener = start_worker_log_listener(log_queue)
+    deaths = _WorkerDeathWatch(pool, inflight, ids, cfg)
     try:
         results = pool.imap_unordered(process, ids, chunksize=1)
         completed = 0
@@ -865,40 +929,20 @@ def _dispatch_entries(
                 batch.append(results.next(timeout=1.0))
             except MultiprocessingTimeoutError:
                 pass
-            _drain_inflight(inflight, assignments)
-            for dead_pid in _dead_worker_pids(pool, worker_pids):
-                dead_id = assignments.pop(dead_pid, None)
-                if dead_id is None:
-                    unattributed_deaths += 1
-                elif dead_id not in lost_ids:
-                    lost_ids.add(dead_id)
-                    batch.append(_worker_death_result(dead_id, cfg, dead_pid))
+            batch.extend(deaths.poll())
             if not batch:
-                stalled = time.monotonic() - last_progress
-                remaining = len(ids) - completed
-                if (
-                    unattributed_deaths
-                    and stalled > WORKER_STALL_GRACE_S
-                    and remaining <= unattributed_deaths
-                ):
-                    # Only entries that never returned a result can still be
-                    # held by a process that died before naming its entry;
-                    # blaming a completed one would write a second, failed row
-                    # for an entry that succeeded.
-                    for stuck_id in ids:
-                        if stuck_id in lost_ids or stuck_id in completed_ids:
-                            continue
-                        lost_ids.add(stuck_id)
-                        batch.append(_worker_death_result(stuck_id, cfg, 0))
-                        if len(batch) >= remaining:
-                            break
-                else:
+                losses = deaths.stalled_losses(
+                    completed_ids,
+                    time.monotonic() - last_progress,
+                    len(ids) - completed,
+                )
+                if losses is None:
                     progress.render(completed, tally.counts, tally.no_metals)
                     continue
+                batch = losses
             last_progress = time.monotonic()
             for r in batch:
-                if r.pdb_id in lost_ids and r.reason_codes != ["worker_process_died"]:
-                    # The synthesized loss row already stands for this entry.
+                if deaths.superseded(r):
                     continue
                 completed += 1
                 completed_ids.add(r.pdb_id)

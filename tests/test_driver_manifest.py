@@ -15,6 +15,7 @@ import os
 from types import SimpleNamespace
 from typing import Any
 from typing import List
+from typing import NamedTuple
 
 import gemmi
 import pytest
@@ -1159,23 +1160,36 @@ class TestResumeStaging:
         assert leftovers == []
 
 
+class _Handles(NamedTuple):
+    """The open output files, in ``_OutputWriters`` argument order."""
+
+    manifest: Any
+    stats: Any
+    bonds: Any
+    candidates: Any
+    confidence: Any
+
+
 class TestOutputWriters:
     """The streamed CSVs: headers on creation, running counts, schema guards."""
 
     @staticmethod
-    def _handles(
-        tmp_path, bonds=True, candidates=True, confidence=None
-    ) -> tuple[Any, Any, Any, Any, Any]:
-        manifest = open(tmp_path / "manifest.csv", "w", newline="")
-        stats = open(tmp_path / "stats.csv", "w", newline="")
-        bonds_fh = open(tmp_path / "bonds.csv", "w", newline="") if bonds else None
-        candidates_fh = (
-            open(tmp_path / "candidates.csv", "w", newline="") if candidates else None
+    def _handles(tmp_path, bonds=True, candidates=True, confidence=None) -> _Handles:
+        return _Handles(
+            manifest=open(tmp_path / "manifest.csv", "w", newline=""),
+            stats=open(tmp_path / "stats.csv", "w", newline=""),
+            bonds=open(tmp_path / "bonds.csv", "w", newline="") if bonds else None,
+            candidates=(
+                open(tmp_path / "candidates.csv", "w", newline="")
+                if candidates
+                else None
+            ),
+            confidence=(
+                open(tmp_path / "confidence.csv", "w", newline="")
+                if confidence
+                else None
+            ),
         )
-        confidence_fh = (
-            open(tmp_path / "confidence.csv", "w", newline="") if confidence else None
-        )
-        return manifest, stats, bonds_fh, candidates_fh, confidence_fh
 
     @staticmethod
     def _close(handles):
@@ -1316,7 +1330,12 @@ class TestOutputWriters:
         try:
             with pytest.raises(ValueError):
                 _OutputWriters(
-                    *handles[:4], confidence_fh=handles[4], confidence_columns=None
+                    handles.manifest,
+                    handles.stats,
+                    handles.bonds,
+                    handles.candidates,
+                    confidence_fh=handles.confidence,
+                    confidence_columns=None,
                 )
         finally:
             self._close(handles)
@@ -1325,7 +1344,12 @@ class TestOutputWriters:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
         writers = _OutputWriters(
-            *handles[:4], confidence_fh=handles[4], confidence_columns=columns
+            handles.manifest,
+            handles.stats,
+            handles.bonds,
+            handles.candidates,
+            confidence_fh=handles.confidence,
+            confidence_columns=columns,
         )
         writers.write_confidence_rows([])
         assert writers.n_confidence == 0
@@ -1348,8 +1372,11 @@ class TestOutputWriters:
         inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
         try:
             writers = _OutputWriters(
-                *handles[:4],
-                confidence_fh=handles[4],
+                handles.manifest,
+                handles.stats,
+                handles.bonds,
+                handles.candidates,
+                confidence_fh=handles.confidence,
                 confidence_columns=scored_columns,
                 confidence_inputs_fh=inputs_handle,
             )
@@ -1371,7 +1398,12 @@ class TestOutputWriters:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
         writers = _OutputWriters(
-            *handles[:4], confidence_fh=handles[4], confidence_columns=columns
+            handles.manifest,
+            handles.stats,
+            handles.bonds,
+            handles.candidates,
+            confidence_fh=handles.confidence,
+            confidence_columns=columns,
         )
         row = dict.fromkeys(columns, "")
         row.pop(columns[0])

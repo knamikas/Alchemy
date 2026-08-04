@@ -208,6 +208,46 @@ def _density_observation_id(pdb_id, fields, indices):
     )
 
 
+def _density_row(
+    pdb_id,
+    fields,
+    indices,
+    mapping_status,
+    *,
+    category,
+    resname,
+    site,
+    residue_key,
+    shared_site_count,
+):
+    """Build one site-level row from an extracted EDSTATS residue row.
+
+    ``site`` is ``None`` for a cofactor residue with no selected metal site,
+    which is also what makes the row's status ``no_selected_metal``.
+    """
+    return {
+        "pdbID": pdb_id,
+        "category": category,
+        "resname": resname,
+        "chain": fields[indices["CI"]],
+        "resnum": fields[indices["RN"]],
+        "fields": fields,
+        "density_observation_id": _density_observation_id(pdb_id, fields, indices),
+        "density_scope": (
+            "cofactor_residue" if category == "cofactor" else "metal_residue"
+        ),
+        "density_shared_site_count": shared_site_count,
+        "density_is_shared": shared_site_count > 1,
+        "coordinate_mapping_status": mapping_status,
+        "selected_metal_site_status": (
+            "selected" if site is not None else "no_selected_metal"
+        ),
+        "site": site,
+        "site_key": None if site is None else site.source_key,
+        "residue_key": residue_key,
+    }
+
+
 def extract_metal_statistics(
     pdb_id: str,
     stats_out: str,
@@ -300,40 +340,24 @@ def extract_metal_statistics(
                     selected_sites.append((residue, resname, category, site))
 
             density_shared_site_count = len(selected_sites)
-            density_is_shared = density_shared_site_count > 1
             for residue, resname, category, site in selected_sites:
                 output_fields = list(fields)
                 output_fields[indices["RT"]] = resname
                 if mapping_status == "matched":
                     output_fields[indices["CI"]] = residue.chain_id
                     output_fields[indices["RN"]] = residue.resnum
-                density_observation_id = _density_observation_id(
-                    pdb_id, output_fields, indices
-                )
-                output_chain = output_fields[indices["CI"]]
-                output_resnum = output_fields[indices["RN"]]
                 rows.append(
-                    {
-                        "pdbID": pdb_id,
-                        "category": category,
-                        "resname": resname,
-                        "chain": output_chain,
-                        "resnum": output_resnum,
-                        "fields": output_fields,
-                        "density_observation_id": density_observation_id,
-                        "density_scope": (
-                            "cofactor_residue"
-                            if category == "cofactor"
-                            else "metal_residue"
-                        ),
-                        "density_shared_site_count": density_shared_site_count,
-                        "density_is_shared": density_is_shared,
-                        "coordinate_mapping_status": mapping_status,
-                        "selected_metal_site_status": "selected",
-                        "site": site,
-                        "site_key": site.source_key,
-                        "residue_key": residue.key,
-                    }
+                    _density_row(
+                        pdb_id,
+                        output_fields,
+                        indices,
+                        mapping_status,
+                        category=category,
+                        resname=resname,
+                        site=site,
+                        residue_key=residue.key,
+                        shared_site_count=density_shared_site_count,
+                    )
                 )
 
             if (
@@ -352,33 +376,20 @@ def extract_metal_statistics(
                 if matched_residue is not None:
                     output_fields[indices["CI"]] = matched_residue.chain_id
                     output_fields[indices["RN"]] = matched_residue.resnum
-                output_chain = output_fields[indices["CI"]]
-                output_resnum = output_fields[indices["RN"]]
-                density_observation_id = _density_observation_id(
-                    pdb_id, output_fields, indices
-                )
                 rows.append(
-                    {
-                        "pdbID": pdb_id,
-                        "category": "cofactor",
-                        "resname": resname,
-                        "chain": output_chain,
-                        "resnum": output_resnum,
-                        "fields": output_fields,
-                        "density_observation_id": density_observation_id,
-                        "density_scope": "cofactor_residue",
-                        "density_shared_site_count": 0,
-                        "density_is_shared": False,
-                        "coordinate_mapping_status": mapping_status,
-                        "selected_metal_site_status": "no_selected_metal",
-                        "site": None,
-                        "site_key": None,
-                        "residue_key": (
-                            matched_residues[0].key
-                            if len(matched_residues) == 1
-                            else None
+                    _density_row(
+                        pdb_id,
+                        output_fields,
+                        indices,
+                        mapping_status,
+                        category="cofactor",
+                        resname=resname,
+                        site=None,
+                        residue_key=(
+                            None if matched_residue is None else matched_residue.key
                         ),
-                    }
+                        shared_site_count=0,
+                    )
                 )
 
     if schema is None:

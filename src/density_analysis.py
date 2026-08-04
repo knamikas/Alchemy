@@ -588,7 +588,7 @@ if __name__ == "__main__":
             "+ edstats on a single structure."
         )
     )
-    p.add_argument("pdbID")
+    p.add_argument("pdb_id", metavar="pdbID")
     p.add_argument("mtz", help="MTZ with FWT/PHWT/DELFWT/PHDELWT columns")
     p.add_argument("pdb", help="coordinate file (edstats XYZIN)")
     p.add_argument("--out-dir", default=BASE_DIR)

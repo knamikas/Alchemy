@@ -289,6 +289,108 @@ def _resolve_entry_dir(pdb_id, cfg):
     return entry_dir_for(cfg.root, pdb_id)
 
 
+@dataclass(frozen=True)
+class _EntryInputs:
+    """What the input stage resolved, and the later stages then read.
+
+    Held together rather than threaded through each stage separately, so that
+    the density and bond stages take one entry-shaped argument instead of a
+    handful of loose paths and resolution limits.
+    """
+
+    work_dir: str
+    mtz: str
+    # First-model-only coordinates: what the analysis reads, which is not
+    # necessarily what was deposited (see ``source_coordinate_path``).
+    pdb: str
+    # PDB-REDO's per-entry metadata, or a manual run's ``--data-json``, and
+    # ``None`` when a manual run supplied none.
+    data_json: Optional[str]
+    # The diffraction data's own high-resolution limit, as distinct from the
+    # map columns' range below.
+    data_reshi: Any
+    map_reslo: Any
+    map_reshi: Any
+    pdb_redo_is_twin: bool
+    source_coordinate_path: str
+
+
+def _run_density_stage(result, cfg, inputs, structure):
+    """Calculate the maps, run EDSTATS, and extract this entry's statistics.
+
+    Returns ``(rows, header)``, both empty when density could not be produced;
+    the reason is recorded on ``result`` in that case, along with whether it is
+    worth retrying.
+    """
+    rows: list[dict[str, Any]] = []
+    header: list[str] = []
+    density_started = time.monotonic()
+    try:
+        res = run_density_analysis(
+            result.pdb_id,
+            inputs.mtz,
+            inputs.pdb,
+            inputs.work_dir,
+            inputs.map_reslo,
+            inputs.map_reshi,
+            env=cfg.env,
+            map_scope=cfg.density_map_scope,
+            keep_full_maps=cfg.keep,
+            pdb_redo_is_twin=inputs.pdb_redo_is_twin,
+            tool_timeout_s=cfg.ccp4_timeout_s,
+        )
+    except Ccp4ToolTimeoutError as exc:
+        # A killed program says nothing about the entry, so unlike a
+        # failure exit this is retryable, under its own reason code so a
+        # stalled CCP4 install is visible in the manifest.
+        rows, header = [], []
+        kept_log = _preserve_timeout_log(exc, result.pdb_id, cfg.output_dir)
+        result.retryable = True
+        result.reason_codes = ["ccp4_tool_timeout"]
+        result.error = truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS)
+        result.confidence_inputs_missing_reason = "ccp4_tool_timeout"
+        result.ccp4_timeout_log_path = kept_log
+        result.timings.update(exc.timings)
+    except MtzfixValidationError as exc:
+        # MTZFIX could not make the Fourier coefficients internally
+        # consistent, which retrying will not change; geometry stays
+        # independently assessable.
+        rows, header = [], []
+        result.retryable = False
+        result.reason_codes = ["mtzfix_validation_failure"]
+        result.error = truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS)
+        result.confidence_inputs_missing_reason = "mtzfix_validation_failure"
+        result.timings.update(exc.timings)
+    else:
+        result.timings.update(res.timings)
+        result.density_map_scope_used = res.density_map_scope_used
+        result.density_full_map_bytes = res.full_map_bytes
+        result.density_edstats_map_bytes = res.edstats_map_bytes
+        if res.twin_coefficient_normalization_applied:
+            result.warning_codes = list(
+                dict.fromkeys(
+                    result.warning_codes
+                    + [WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED]
+                )
+            )
+        statistics_started = time.monotonic()
+        rows, header = extract_metal_statistics(
+            result.pdb_id,
+            res.stats_out,
+            METALS_SET,
+            cfg.cofactors,
+            structure=structure,
+        )
+        result.timings["statistics_extraction_s"] = round(
+            time.monotonic() - statistics_started, 3
+        )
+        # Inputs and density succeeded; later limitations are terminal.
+        result.retryable = False
+    finally:
+        result.timings["density_total_s"] = round(time.monotonic() - density_started, 3)
+    return rows, header
+
+
 def _identification_reason_codes(rows):
     """Deduplicated reason codes for EDSTATS rows that could not be joined."""
     codes = []
@@ -332,10 +434,60 @@ def _append_site_fields(rows, site_summaries, structure):
         )
 
 
-def _finalize_result(
-    result, identification_codes, bond_meta, structure, rows, bond_rows, candidate_rows
-):
-    """Merge the stage outcomes into the final status, codes, and counts."""
+def _run_bond_stage(result, cfg, inputs, structure, rows, header):
+    """Evaluate the contacts around each site, unless ``--no-bonds`` cleared it.
+
+    Returns ``(bond_rows, candidate_rows, site_summaries, bond_meta)``. A
+    bond-stage failure must not lose the EDSTATS rows already computed, so it
+    is recorded on ``result`` and the empty defaults are returned instead.
+    """
+    bond_rows = []
+    candidate_rows = []
+    site_summaries = {}
+    bond_meta = {
+        "partial_reason_codes": [],
+        "warning_codes": list(structure.warning_codes),
+        "messages": [],
+        "retryable": False,
+    }
+    if not cfg.bonds:
+        return bond_rows, candidate_rows, site_summaries, bond_meta
+
+    bond_started = time.monotonic()
+    try:
+        (bond_rows, candidate_rows, site_summaries, bond_meta) = run_bond_analysis(
+            result.pdb_id,
+            inputs.pdb,
+            rows,
+            header,
+            {
+                "data_json": inputs.data_json,
+                "pdb_path": inputs.pdb,
+                "mtz_path": inputs.mtz,
+                "resolution": inputs.data_reshi,
+            },
+            structure=structure,
+            connection_path=inputs.source_coordinate_path,
+        )
+    except Exception as e:  # noqa: BLE001
+        result.error = truncate(
+            f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS
+        )
+        result.reason_codes = list(
+            dict.fromkeys(result.reason_codes + ["bond_stage_failure"])
+        )
+        result.retryable = True
+    finally:
+        result.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)
+    return bond_rows, candidate_rows, site_summaries, bond_meta
+
+
+def _finalize_result(result, identification_codes, bond_meta, structure):
+    """Merge the stage outcomes into the final status, codes, and counts.
+
+    The rows each stage produced are already on ``result``; only what no stage
+    could record there is passed in.
+    """
     result.reason_codes = list(
         dict.fromkeys(
             result.reason_codes
@@ -364,11 +516,8 @@ def _finalize_result(
     # EDSTATS join leaves a diagnostic row without a site even where bond
     # analysis found and evaluated the deposited metal.
     result.n_metals = len(structure.metal_atoms(METALS_SET, canonical=True))
-    result.rows = rows
-    result.bond_rows = bond_rows
-    result.candidate_rows = candidate_rows
-    result.n_bonds = len(bond_rows)
-    result.n_candidates = len(candidate_rows)
+    result.n_bonds = len(result.bond_rows)
+    result.n_candidates = len(result.candidate_rows)
 
 
 def process(pdb_id):
@@ -431,6 +580,17 @@ def process(pdb_id):
         result.coordinate_conversion_performed = converted
         result.source_coordinate_path = source_coordinate_path
         result.analysis_coordinate_path = pdb
+        inputs = _EntryInputs(
+            work_dir=work_dir,
+            mtz=mtz,
+            pdb=pdb,
+            data_json=density_data_json,
+            data_reshi=data_reshi,
+            map_reslo=map_reslo,
+            map_reshi=map_reshi,
+            pdb_redo_is_twin=pdb_redo_is_twin,
+            source_coordinate_path=source_coordinate_path,
+        )
         structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
         result.timings["input_structure_s"] = round(time.monotonic() - t0, 3)
         result.analysis_coordinate_format = structure.analysis_coordinate_format
@@ -451,138 +611,16 @@ def process(pdb_id):
             result.n_candidates = 0
             result.no_metals = True
             return result
-        rows: list[dict[str, Any]] = []
-        header: list[str] = []
-        density_started = time.monotonic()
-        try:
-            res = run_density_analysis(
-                pdb_id,
-                mtz,
-                pdb,
-                work_dir,
-                map_reslo,
-                map_reshi,
-                env=cfg.env,
-                map_scope=cfg.density_map_scope,
-                keep_full_maps=cfg.keep,
-                pdb_redo_is_twin=pdb_redo_is_twin,
-                tool_timeout_s=cfg.ccp4_timeout_s,
-            )
-        except Ccp4ToolTimeoutError as exc:
-            # A killed program says nothing about the entry, so unlike a
-            # failure exit this is retryable, under its own reason code so a
-            # stalled CCP4 install is visible in the manifest.
-            rows, header = [], []
-            kept_log = _preserve_timeout_log(exc, pdb_id, cfg.output_dir)
-            result.retryable = True
-            result.reason_codes = ["ccp4_tool_timeout"]
-            result.error = truncate(
-                f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS
-            )
-            result.confidence_inputs_missing_reason = "ccp4_tool_timeout"
-            result.ccp4_timeout_log_path = kept_log
-            result.timings.update(exc.timings)
-        except MtzfixValidationError as exc:
-            # MTZFIX could not make the Fourier coefficients internally
-            # consistent, which retrying will not change; geometry stays
-            # independently assessable.
-            rows, header = [], []
-            result.retryable = False
-            result.reason_codes = ["mtzfix_validation_failure"]
-            result.error = truncate(
-                f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS
-            )
-            result.confidence_inputs_missing_reason = "mtzfix_validation_failure"
-            result.timings.update(exc.timings)
-        else:
-            result.timings.update(res.timings)
-            result.density_map_scope_used = res.density_map_scope_used
-            result.density_full_map_bytes = res.full_map_bytes
-            result.density_edstats_map_bytes = res.edstats_map_bytes
-            if res.twin_coefficient_normalization_applied:
-                result.warning_codes = list(
-                    dict.fromkeys(
-                        result.warning_codes
-                        + [WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED]
-                    )
-                )
-            statistics_started = time.monotonic()
-            rows, header = extract_metal_statistics(
-                pdb_id,
-                res.stats_out,
-                METALS_SET,
-                cfg.cofactors,
-                structure=structure,
-            )
-            result.timings["statistics_extraction_s"] = round(
-                time.monotonic() - statistics_started, 3
-            )
-            # Inputs and density succeeded; later limitations are terminal.
-            result.retryable = False
-        finally:
-            result.timings["density_total_s"] = round(
-                time.monotonic() - density_started, 3
-            )
-
+        rows, header = _run_density_stage(result, cfg, inputs, structure)
         identification_reason_codes = _identification_reason_codes(rows)
-
-        bond_rows = []
-        candidate_rows = []
-        site_summaries = {}
-        bond_meta = {
-            "partial_reason_codes": [],
-            "warning_codes": list(structure.warning_codes),
-            "messages": [],
-            "retryable": False,
-        }
-
-        if cfg.bonds:
-            # A bond-stage failure must not lose the EDSTATS rows already
-            # computed.
-            bond_started = time.monotonic()
-            try:
-                (bond_rows, candidate_rows, site_summaries, bond_meta) = (
-                    run_bond_analysis(
-                        pdb_id,
-                        pdb,
-                        rows,
-                        header,
-                        {
-                            "data_json": (
-                                data_json
-                                if manual_inputs
-                                else os.path.join(entry, "data.json")
-                            ),
-                            "pdb_path": pdb,
-                            "mtz_path": mtz,
-                            "resolution": data_reshi,
-                        },
-                        structure=structure,
-                        connection_path=source_coordinate_path,
-                    )
-                )
-            except Exception as e:  # noqa: BLE001
-                result.error = truncate(
-                    f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS
-                )
-                result.reason_codes = list(
-                    dict.fromkeys(result.reason_codes + ["bond_stage_failure"])
-                )
-                result.retryable = True
-            finally:
-                result.timings["bond_analysis_s"] = round(
-                    time.monotonic() - bond_started, 3
-                )
-        _append_site_fields(rows, site_summaries, structure)
-        _finalize_result(
-            result,
-            identification_reason_codes,
-            bond_meta,
-            structure,
-            rows,
-            bond_rows,
-            candidate_rows,
+        bond_rows, candidate_rows, site_summaries, bond_meta = _run_bond_stage(
+            result, cfg, inputs, structure, rows, header
         )
+        _append_site_fields(rows, site_summaries, structure)
+        result.rows = rows
+        result.bond_rows = bond_rows
+        result.candidate_rows = candidate_rows
+        _finalize_result(result, identification_reason_codes, bond_meta, structure)
     except FileNotFoundError as e:
         result.status = "skip"
         result.retryable = True

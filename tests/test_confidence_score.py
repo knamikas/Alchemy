@@ -25,12 +25,11 @@ from bond.bond_schema import STATS_EXTRA_COLUMNS
 
 # Compact rows are built directly; the pipeline is run only by the one
 # candidate-exclusion test, which needs real candidate rows.
-STATS_COLUMNS = (
-    ["pdbID", "category"]
-    + list(helpers.EDSTATS_HEADER)
-    + ["aa_geometry_coverage"]
-    + list(STATS_EXTRA_COLUMNS)
+STATS_ID_COLUMNS = ["pdbID", "category"]
+STATS_FIELD_COLUMNS = (
+    list(helpers.EDSTATS_HEADER) + ["aa_geometry_coverage"] + list(STATS_EXTRA_COLUMNS)
 )
+STATS_COLUMNS = STATS_ID_COLUMNS + STATS_FIELD_COLUMNS
 
 SITE = {
     "metal_model_index": "0",
@@ -585,7 +584,7 @@ def _result_stats_row(flat):
     return {
         "pdbID": flat["pdbID"],
         "category": flat["category"],
-        "fields": [flat.get(column, "") for column in STATS_COLUMNS[2:]],
+        "fields": [flat.get(column, "") for column in STATS_FIELD_COLUMNS],
     }
 
 

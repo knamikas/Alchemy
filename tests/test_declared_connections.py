@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import NamedTuple, Optional, Sequence
 
@@ -475,7 +476,7 @@ def test_regression_declared_partner_survives_the_ter_serial_shift(tmp_path):
 
     # The premise: the conversion inserted a TER ahead of the metal, so the
     # metal's analysis serial differs from its source _atom_site.id.
-    lines = [line for line in open(analysis_pdb, encoding="utf-8")]
+    lines = Path(analysis_pdb).read_text(encoding="utf-8").splitlines()
     ter_index = next(
         index for index, line in enumerate(lines) if line.startswith("TER")
     )
@@ -615,7 +616,7 @@ def test_declared_partner_resolves_through_shortened_and_renamed_components(tmp_
 
     remarks = [
         line
-        for line in open(analysis_pdb, encoding="utf-8")
+        for line in Path(analysis_pdb).read_text(encoding="utf-8").splitlines()
         if line.startswith("REMARK 950 ALCHEMY RESNAME")
     ]
     assert any("A1L A1LU6" in line for line in remarks)

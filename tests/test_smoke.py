@@ -207,7 +207,15 @@ def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix
     assert metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
 
 
-def test_declared_connection_is_reported_for_both_formats(tmp_path):
+# A legacy LINK record carries no identifier, so gemmi regenerates one from the
+# connection type; mmCIF _struct_conn.id round-trips the given name.
+@pytest.mark.parametrize(
+    "suffix,expected_source,expected_id",
+    [(".pdb", "LINK", "metalc1"), (".cif", "struct_conn", "metal1")],
+)
+def test_declared_connection_is_reported_for_both_formats(
+    tmp_path, suffix, expected_source, expected_id
+):
     """A declared connection is honoured from a PDB LINK and from mmCIF alike.
 
     LYS NZ at this distance is not a proximity-inferable Zn donor, so the row
@@ -216,37 +224,33 @@ def test_declared_connection_is_reported_for_both_formats(tmp_path):
     from bond.bond_analysis import run_bond_analysis
     from structure_analysis import load_structure
 
-    # A legacy LINK record carries no identifier, so gemmi regenerates one from
-    # the connection type; mmCIF _struct_conn.id round-trips the given name.
-    cases = ((".pdb", "LINK", "metalc1"), (".cif", "struct_conn", "metal1"))
-    for suffix, expected_source, expected_id in cases:
-        builder = StructureBuilder()
-        metal = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
-        lys = builder.add_amino_acid(
-            "LYS", 10, chain="A", positions={"NZ": (2.10, 0.0, 0.0)}
-        )
-        builder.add_connection(
-            metal.ref("ZN"), lys.ref("NZ"), name="metal1", reported_distance=2.10
-        )
-        path = builder.write(tmp_path / f"declared{suffix}")
+    builder = StructureBuilder()
+    metal = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    lys = builder.add_amino_acid(
+        "LYS", 10, chain="A", positions={"NZ": (2.10, 0.0, 0.0)}
+    )
+    builder.add_connection(
+        metal.ref("ZN"), lys.ref("NZ"), name="metal1", reported_distance=2.10
+    )
+    path = builder.write(tmp_path / f"declared{suffix}")
 
-        context = load_structure("test", path)
-        rows, _, _, metadata = run_bond_analysis(
-            "test",
-            path,
-            [],
-            list(EDSTATS_HEADER),
-            helpers.dpi_inputs(),
-            structure=context,
-            connection_path=path,
-        )
+    context = load_structure("test", path)
+    rows, _, _, metadata = run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+        connection_path=path,
+    )
 
-        assert metadata["messages"] == ["DPI unavailable: missing_dpi_metadata_source"]
-        declared = [row for row in rows if row["declared_connection"]]
-        assert [row["neighbor_atom"] for row in declared] == ["NZ"]
-        assert declared[0]["coordination_source"] == expected_source
-        assert declared[0]["connection_id"] == expected_id
-        assert float(declared[0]["connection_reported_distance"]) == pytest.approx(2.10)
+    assert metadata["messages"] == ["DPI unavailable: missing_dpi_metadata_source"]
+    declared = [row for row in rows if row["declared_connection"]]
+    assert [row["neighbor_atom"] for row in declared] == ["NZ"]
+    assert declared[0]["coordination_source"] == expected_source
+    assert declared[0]["connection_id"] == expected_id
+    assert float(declared[0]["connection_reported_distance"]) == pytest.approx(2.10)
 
 
 def test_conformers_drive_the_altloc_selection_policy(tmp_path):
