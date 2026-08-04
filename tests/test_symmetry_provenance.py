@@ -621,7 +621,11 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse():
             symmetry_image_index=int(symmetry),
             symmetry_operation="2_555" if symmetry else "1_555",
             translation=(0, 0, 0),
-            candidate_sources={"symmetry" if symmetry else "explicit"},
+            candidate_sources={
+                codes.CandidateSource.STRUCT_CONN
+                if symmetry
+                else codes.CandidateSource.PROXIMITY_4A
+            },
         )
 
     origin = candidate(0.0, symmetry=False)
@@ -633,7 +637,10 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse():
 
     collapsed = ba._deduplicate_special_position_contacts([origin, boundary])
     assert len(collapsed) == 1
-    assert collapsed[0].candidate_sources == {"explicit", "symmetry"}
+    assert collapsed[0].candidate_sources == {
+        codes.CandidateSource.PROXIMITY_4A,
+        codes.CandidateSource.STRUCT_CONN,
+    }
 
     outside = ba._deduplicate_special_position_contacts(
         [candidate(0.0, symmetry=False), candidate(0.800001, symmetry=True)]

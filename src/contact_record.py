@@ -31,6 +31,8 @@ reads.
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from codes import CandidateSource, ContactScope, MultiDonorStatus
+
 
 @dataclass(slots=True)
 class Candidate:
@@ -44,22 +46,22 @@ class Candidate:
     #: Measured metal-donor distance, before any rounding for output.
     distance_raw: float
     #: Where the donor image sits, after any symmetry transform.
-    transformed_position: tuple
+    transformed_position: tuple[float, float, float]
     symmetry_contact: bool
     crystallographic_contact: bool
     strict_ncs_contact: bool
     strict_ncs_operation_id: str
-    contact_scope: str
+    contact_scope: ContactScope
     symmetry_image_index: int
     symmetry_operation: str
-    translation: tuple
-    #: How this candidate was found: ``proximity_4A``, ``struct_conn``, or
-    #: ``LINK`` -- and more than one once ``_merge_candidates`` has run. No
-    #: default: both discovery paths know how they found the atom, and a
-    #: candidate that cannot say where it came from is not one.
-    candidate_sources: set
+    translation: tuple[int, int, int]
+    #: How this candidate was found, and more than one once
+    #: ``_merge_candidates`` has run. No default: both discovery paths know how
+    #: they found the atom, and a candidate that cannot say where it came from
+    #: is not one.
+    candidate_sources: set[CandidateSource]
     #: The declarations naming this contact, empty for a proximity-only find.
-    declared_connections: list = field(default_factory=list)
+    declared_connections: list[dict[str, Any]] = field(default_factory=list)
     metal: Optional[Any] = None
     #: Whether a literature reference could cover this donor's residue class at
     #: all. Declared connections to nucleic acids, modified residues and
@@ -113,10 +115,9 @@ class Candidate:
     # -- Donor-group context: _annotate_multi_donor_groups ------------------ #
     multi_donor_detected: Optional[bool] = None
     multi_donor_contact_count: Optional[int] = None
-    #: ``single_donor``, ``consistent``, ``suspect`` or ``indeterminate`` --
-    #: see ``codes.MultiDonorStatus``, whose ``suspect`` is *not* the site-level
-    #: ``suspect`` of ``codes.GeometryStatus``.
-    multi_donor_geometry_status: Optional[str] = None
+    #: This group's verdict. ``MultiDonorStatus.SUSPECT`` is *not* the
+    #: site-level ``GeometryStatus.SUSPECT``: same string, different question.
+    multi_donor_geometry_status: Optional[MultiDonorStatus] = None
     multi_donor_contains_suspect_bond: bool = False
     score_eligible: Optional[bool] = None
     score_exclusion_reason: Optional[str] = None

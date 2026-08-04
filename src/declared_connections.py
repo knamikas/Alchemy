@@ -202,7 +202,8 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
     nearest = cell.find_nearest_image(metal.pos, neighbor.pos, asu)
     transformed_fractional = cell.fract_image(nearest, cell.fractionalize(neighbor.pos))
     transformed = cell.orthogonalize(transformed_fractional)
-    translation = tuple(int(value) for value in nearest.pbc_shift)
+    shift_a, shift_b, shift_c = nearest.pbc_shift
+    translation = (int(shift_a), int(shift_b), int(shift_c))
     image_index = int(nearest.sym_idx)
     # Classified exactly as the proximity path does. ``same_asu()`` alone
     # cannot tell the two apart: after ``setup_cell_images`` the image list

@@ -403,7 +403,11 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
             transformed = structure.structure.cell.find_nearest_pbc_position(
                 metal.pos, neighbor.pos, mark.image_idx
             )
-            translation = tuple(int(value) for value in nearest.pbc_shift)
+            # Unpacked rather than comprehended: ``pbc_shift`` is a lattice
+            # triple, and spelling that out gives the field the exact
+            # ``tuple[int, int, int]`` it declares.
+            shift_a, shift_b, shift_c = nearest.pbc_shift
+            translation = (int(shift_a), int(shift_b), int(shift_c))
             image_index = int(nearest.sym_idx)
             (
                 crystallographic_contact,

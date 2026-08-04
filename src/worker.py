@@ -91,8 +91,17 @@ class WorkerConfig:
 
     Frozen because it is shared state in the strongest sense: assembled by the
     driver, pickled into each worker's ``_init_worker``, and read from there by
-    every stage of ``process``. Nothing in a worker may edit it, and a frozen
-    dataclass says so where a dict could not.
+    every stage of ``process``. Nothing in a worker may rebind a field, and a
+    frozen dataclass says so where a dict could not.
+
+    **The freeze is shallow, and ``env`` and ``manual_inputs`` are still
+    mutable dicts.** ``cfg.env.clear()`` in a worker would succeed. Closing
+    that needs an immutable mapping that also survives ``pickle``, which
+    ``MappingProxyType`` does not -- spawn workers receive this config by
+    pickling it -- so it wants a ``ManualInputs`` dataclass and a picklable
+    frozen mapping for ``env``, not a one-line change. The hole is real but
+    bounded: each worker unpickles its own copy, so such an edit diverges that
+    one worker rather than the run.
 
     Declaring the fields also puts the shape in one place. Two test modules
     used to hand-build the same dict, and both had already drifted -- neither
@@ -213,13 +222,19 @@ def blank_if_unmeasured(value: Any) -> Any:
     return "" if value is None else value
 
 
-@dataclass
+@dataclass(slots=True)
 class EntryResult:
     """One entry's outcome, from the skeleton a failure returns to a full run.
 
     Every manifest column is present from the outset so a failure at any stage
     still yields a complete row, and the worker fills the rest in as its stages
     complete -- which is why this is the one mutable contract in the pipeline.
+    Fields are assigned directly rather than through a ``**fields`` helper: a
+    helper takes every value as ``Any``, so ``n_bonds="0"`` would pass it and
+    then break the blank-versus-measured rule below in a manifest column that
+    ``--resume`` reads back. ``slots=True`` closes the other half -- a
+    misspelled attribute is an error at the assignment, not a new attribute
+    nobody reads.
 
     **Not-yet-measured is ``None``, and it is not zero.** ``n_bonds`` and
     ``n_candidates`` are the pair that matters: zero is a measured result
@@ -286,19 +301,6 @@ class EntryResult:
     model_analyzed: Optional[int] = None
     multi_model_structure: Optional[bool] = None
 
-    def update(self, **fields: Any) -> None:
-        """Assign several fields at once, rejecting any this result lacks.
-
-        ``process`` fills the result in stage by stage, and reads better as one
-        statement per stage than one per field. The name check is what the dict
-        could not offer: a misspelled key used to add a value nobody read,
-        leaving the entry reporting whatever the field still held.
-        """
-        for name, value in fields.items():
-            if name not in self.__dataclass_fields__:
-                raise AttributeError(f"{type(self).__name__} has no field {name!r}")
-            setattr(self, name, value)
-
 
 def _initial_result(pdb_id, cfg, manual_inputs):
     """Return the per-entry result skeleton, pre-filled with run provenance."""
@@ -314,14 +316,12 @@ def _initial_result(pdb_id, cfg, manual_inputs):
 def _worker_death_result(pdb_id, cfg, pid):
     """Synthesize the retryable result a killed worker could not return."""
     result = _initial_result(pdb_id, cfg, cfg.manual_inputs)
-    result.update(
-        status="error",
-        retryable=True,
-        reason_codes=["worker_process_died"],
-        error=(
-            f"worker process {pid} terminated without returning a result "
-            f"(out-of-memory kill or crash); {pdb_id} was not analyzed"
-        ),
+    result.status = "error"
+    result.retryable = True
+    result.reason_codes = ["worker_process_died"]
+    result.error = (
+        f"worker process {pid} terminated without returning a result "
+        f"(out-of-memory kill or crash); {pdb_id} was not analyzed"
     )
     return result
 
@@ -432,15 +432,13 @@ def _finalize_result(
     # Count coordinate-model metal sites, not emitted statistics rows. A failed
     # EDSTATS join can leave a diagnostic row without a site even though bond
     # analysis still found and evaluated the deposited metal.
-    result.update(
-        status=status,
-        n_metals=len(structure.metal_atoms(METALS_SET, canonical=True)),
-        rows=rows,
-        bond_rows=bond_rows,
-        candidate_rows=candidate_rows,
-        n_bonds=len(bond_rows),
-        n_candidates=len(candidate_rows),
-    )
+    result.status = status
+    result.n_metals = len(structure.metal_atoms(METALS_SET, canonical=True))
+    result.rows = rows
+    result.bond_rows = bond_rows
+    result.candidate_rows = candidate_rows
+    result.n_bonds = len(bond_rows)
+    result.n_candidates = len(candidate_rows)
 
 
 def process(pdb_id):
@@ -476,7 +474,8 @@ def process(pdb_id):
             # never leaves a temporary directory behind.
             entry = _resolve_entry_dir(pdb_id, cfg)
             if not os.path.isdir(entry):
-                result.update(status="skip", error="entry dir missing")
+                result.status = "skip"
+                result.error = "entry dir missing"
                 return result
             work_dir = tempfile.mkdtemp(
                 prefix=f".alchemy-{pdb_id}-", dir=cfg.output_dir
@@ -497,37 +496,31 @@ def process(pdb_id):
         if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
             model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
         pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
-        result.update(
-            source_coordinate_format=source_format,
-            analysis_coordinate_format=analysis_format,
-            coordinate_conversion_performed=converted,
-            source_coordinate_path=source_coordinate_path,
-            analysis_coordinate_path=pdb,
-        )
+        result.source_coordinate_format = source_format
+        result.analysis_coordinate_format = analysis_format
+        result.coordinate_conversion_performed = converted
+        result.source_coordinate_path = source_coordinate_path
+        result.analysis_coordinate_path = pdb
         structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
         result.timings["input_structure_s"] = round(time.monotonic() - t0, 3)
-        result.update(
-            analysis_coordinate_format=structure.analysis_coordinate_format,
-            input_model_count=structure.input_model_count,
-            model_analyzed=structure.model_analyzed,
-            multi_model_structure=structure.multi_model_structure,
-            warning_codes=list(structure.warning_codes),
-        )
+        result.analysis_coordinate_format = structure.analysis_coordinate_format
+        result.input_model_count = structure.input_model_count
+        result.model_analyzed = structure.model_analyzed
+        result.multi_model_structure = structure.multi_model_structure
+        result.warning_codes = list(structure.warning_codes)
         if not structure.metal_atoms(METALS_SET, canonical=True):
             # Density and contact analysis cannot produce metal-site output for
             # this structure. Avoid two FFT maps and EDSTATS when there is no
             # canonical metal site to assess.
-            result.update(
-                status="ok",
-                retryable=False,
-                n_metals=0,
-                rows=[],
-                bond_rows=[],
-                candidate_rows=[],
-                n_bonds=0,
-                n_candidates=0,
-                no_metals=True,
-            )
+            result.status = "ok"
+            result.retryable = False
+            result.n_metals = 0
+            result.rows = []
+            result.bond_rows = []
+            result.candidate_rows = []
+            result.n_bonds = 0
+            result.n_candidates = 0
+            result.no_metals = True
             return result
         density_started = time.monotonic()
         try:
@@ -552,33 +545,31 @@ def process(pdb_id):
             # manifest instead of looking like an unexplained crash.
             rows, header = [], []
             kept_log = _preserve_timeout_log(exc, pdb_id, cfg.output_dir)
-            result.update(
-                retryable=True,
-                reason_codes=["ccp4_tool_timeout"],
-                error=truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS),
-                confidence_inputs_missing_reason="ccp4_tool_timeout",
-                ccp4_timeout_log_path=kept_log,
+            result.retryable = True
+            result.reason_codes = ["ccp4_tool_timeout"]
+            result.error = truncate(
+                f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS
             )
+            result.confidence_inputs_missing_reason = "ccp4_tool_timeout"
+            result.ccp4_timeout_log_path = kept_log
             result.timings.update(exc.timings)
         except MtzfixValidationError as exc:
             # The input is readable, but MTZFIX could not make its Fourier
             # coefficients internally consistent. Do not use those maps or
             # retry forever. Geometry remains independently assessable.
             rows, header = [], []
-            result.update(
-                retryable=False,
-                reason_codes=["mtzfix_validation_failure"],
-                error=truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS),
-                confidence_inputs_missing_reason=("mtzfix_validation_failure"),
+            result.retryable = False
+            result.reason_codes = ["mtzfix_validation_failure"]
+            result.error = truncate(
+                f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS
             )
+            result.confidence_inputs_missing_reason = "mtzfix_validation_failure"
             result.timings.update(exc.timings)
         else:
             result.timings.update(res.timings)
-            result.update(
-                density_map_scope_used=res.density_map_scope_used,
-                density_full_map_bytes=res.full_map_bytes,
-                density_edstats_map_bytes=res.edstats_map_bytes,
-            )
+            result.density_map_scope_used = res.density_map_scope_used
+            result.density_full_map_bytes = res.full_map_bytes
+            result.density_edstats_map_bytes = res.edstats_map_bytes
             if res.twin_coefficient_normalization_applied:
                 result.warning_codes = list(
                     dict.fromkeys(
@@ -664,19 +655,15 @@ def process(pdb_id):
             candidate_rows,
         )
     except FileNotFoundError as e:
-        result.update(
-            status="skip",
-            retryable=True,
-            reason_codes=["missing_input"],
-            error=truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS),
-        )
+        result.status = "skip"
+        result.retryable = True
+        result.reason_codes = ["missing_input"]
+        result.error = truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS)
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
-        result.update(
-            status="error",
-            retryable=True,
-            reason_codes=["unexpected_processing_error"],
-            error=truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS),
-        )
+        result.status = "error"
+        result.retryable = True
+        result.reason_codes = ["unexpected_processing_error"]
+        result.error = truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS)
     finally:
         if not cfg.keep and work_dir is not None and os.path.isdir(work_dir):
             cleanup_started = time.monotonic()

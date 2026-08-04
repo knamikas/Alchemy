@@ -495,15 +495,13 @@ def _stub_process(pdb_id):
     if step.get("die_after") is not None:
         _kill_self_after(float(step["die_after"]))
 
-    result.update(
-        status="ok",
-        n_metals=0,
-        no_metals=True,
-        retryable=False,
-        runtime_s=runtime,
-        n_bonds=0,
-        n_candidates=0,
-    )
+    result.status = "ok"
+    result.n_metals = 0
+    result.no_metals = True
+    result.retryable = False
+    result.runtime_s = runtime
+    result.n_bonds = 0
+    result.n_candidates = 0
     return result
 
 

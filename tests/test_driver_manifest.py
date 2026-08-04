@@ -100,7 +100,8 @@ DERIVED_MANIFEST_COLUMNS = frozenset(
 def _result(pdb_id="109m", **overrides):
     """A worker result skeleton plus overrides, as the driver would see it."""
     result = worker._initial_result(pdb_id, CFG, None)
-    result.update(**overrides)
+    for name, value in overrides.items():
+        setattr(result, name, value)
     return result
 
 
@@ -744,18 +745,19 @@ class TestInitialResult:
         assert second.rows == []
         assert second.reason_codes == []
 
-    def test_update_refuses_a_field_the_result_does_not_have(self):
+    def test_a_misspelled_field_cannot_be_assigned(self):
         """A misspelled field must fail here, not silently later.
 
         ``process`` fills the result in stage by stage. While it was a dict,
-        ``result.update(retryble=True)`` added a key nobody read and left the
+        ``result["retryble"] = True`` added a key nobody read and left the
         entry reporting whatever ``retryable`` still held -- for a real entry,
-        in a real manifest, with nothing anywhere saying so.
+        in a real manifest, with nothing anywhere saying so. ``slots=True`` is
+        what makes the assignment itself the error.
         """
         result = worker._initial_result("109m", CFG, None)
 
         with pytest.raises(AttributeError, match="retryble"):
-            result.update(retryble=True)
+            result.retryble = True  # type: ignore[attr-defined]
 
         assert result.retryable is True, "the real field must be untouched"
 
