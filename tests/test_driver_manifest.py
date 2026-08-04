@@ -2671,7 +2671,7 @@ class TestCcp4TimeoutOutcome:
         result = self._entry(
             tmp_path,
             monkeypatch,
-            density.Ccp4ToolTimeout(
+            density.Ccp4ToolTimeoutError(
                 tool="edstats",
                 timeout_s=900,
                 elapsed_s=900.4,
@@ -2694,7 +2694,7 @@ class TestCcp4TimeoutOutcome:
     def test_the_partial_log_survives_scratch_cleanup(self, tmp_path, monkeypatch):
         """The log the timeout message names must still exist afterwards.
 
-        Regression: ``Ccp4ToolTimeout`` reports "partial log kept at <path>",
+        Regression: ``Ccp4ToolTimeoutError`` reports "partial log kept at <path>",
         but ``process`` deletes the whole scratch directory unless
         --keep-intermediates is given, so under the default configuration that
         path was gone by the time anyone read the manifest. Only the log is
@@ -2707,7 +2707,7 @@ class TestCcp4TimeoutOutcome:
         result = self._entry(
             tmp_path,
             monkeypatch,
-            density.Ccp4ToolTimeout(
+            density.Ccp4ToolTimeoutError(
                 tool="edstats",
                 timeout_s=900,
                 elapsed_s=900.4,
@@ -2739,7 +2739,7 @@ class TestCcp4TimeoutOutcome:
         result = self._entry(
             tmp_path,
             monkeypatch,
-            density.Ccp4ToolTimeout(
+            density.Ccp4ToolTimeoutError(
                 tool="edstats",
                 timeout_s=900,
                 elapsed_s=900.4,
@@ -2758,7 +2758,7 @@ class TestCcp4TimeoutOutcome:
         result = self._entry(
             tmp_path,
             monkeypatch,
-            density.Ccp4ToolTimeout(
+            density.Ccp4ToolTimeoutError(
                 tool="fft",
                 timeout_s=900,
                 elapsed_s=900.1,

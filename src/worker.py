@@ -33,7 +33,7 @@ from codes import WarningCode
 from bond.bond_schema import STATS_EXTRA_COLUMNS, _check_row_schema, stats_extra_values
 from coordinate_conversion import _first_model_pdb
 from density_analysis import (
-    Ccp4ToolTimeout,
+    Ccp4ToolTimeoutError,
     MtzfixValidationError,
     run_density_analysis,
 )
@@ -545,7 +545,7 @@ def process(pdb_id):
                 pdb_redo_is_twin=pdb_redo_is_twin,
                 tool_timeout_s=cfg.ccp4_timeout_s,
             )
-        except Ccp4ToolTimeout as exc:
+        except Ccp4ToolTimeoutError as exc:
             # The program told us nothing about the entry -- it was killed for
             # running too long -- so this is retryable, unlike a failure exit.
             # It gets its own reason code rather than falling through to the

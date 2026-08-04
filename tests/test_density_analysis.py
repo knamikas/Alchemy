@@ -209,7 +209,7 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
 def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     tmp_path, monkeypatch
 ):
-    """A hung CCP4 step raises ``Ccp4ToolTimeout`` and keeps what it wrote.
+    """A hung CCP4 step raises ``Ccp4ToolTimeoutError`` and keeps what it wrote.
 
     Without a budget a stalled ``edstats`` holds its worker slot for the rest of
     the run: the driver detects workers that have *died*, but nothing detects
@@ -235,7 +235,7 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
 
     monkeypatch.setattr(density.subprocess, "run", fake_run)
 
-    with pytest.raises(density.Ccp4ToolTimeout) as excinfo:
+    with pytest.raises(density.Ccp4ToolTimeoutError) as excinfo:
         density.run_density_analysis(
             "1abc",
             str(source),

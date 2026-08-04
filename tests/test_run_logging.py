@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import io
 import logging
-import logging.handlers  # noqa: F401 - `logging.handlers` needs its own import
+import logging.handlers  # `logging.handlers` needs its own import
 import multiprocessing
 import re
 

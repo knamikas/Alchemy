@@ -106,7 +106,7 @@ class MtzfixValidationError(RuntimeError):
         self.timings = dict(timings or {})
 
 
-class Ccp4ToolTimeout(RuntimeError):
+class Ccp4ToolTimeoutError(RuntimeError):
     """A CCP4 program ran past its time budget and was killed.
 
     Distinguished from a non-zero exit so the driver can report it as its own
@@ -345,7 +345,7 @@ def run_density_analysis(
     Returns a ``DensityResult`` of output paths and MTZFIX provenance. Raises
     RuntimeError if
     any CCP4 step exits non-zero or edstats produces no stats file, and
-    ``Ccp4ToolTimeout`` if one of them runs past ``tool_timeout_s``. The budget
+    ``Ccp4ToolTimeoutError`` if one of them runs past ``tool_timeout_s``. The budget
     applies to each program separately, not to the entry as a whole.
     """
     if map_scope not in DENSITY_MAP_SCOPES:
@@ -403,7 +403,7 @@ def run_density_analysis(
             # before it stalled is the only evidence of where it stalled.
             elapsed = time.monotonic() - started
             timings[timing_name] = round(elapsed, 3)
-            raise Ccp4ToolTimeout(
+            raise Ccp4ToolTimeoutError(
                 tool=os.path.basename(cmd[0]),
                 timeout_s=timeout_s,
                 elapsed_s=elapsed,
