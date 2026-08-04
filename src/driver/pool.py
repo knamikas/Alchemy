@@ -3,7 +3,7 @@
 One entrypoint, ``_run``, which is a handler around ``_execute`` -- an
 orchestrator that names the phases of a run in order and does nothing else.
 Each phase below either produces the value the next one needs or raises
-``_DriverError`` carrying the message the user should see. That is what makes
+``DriverError`` carrying the message the user should see. That is what makes
 the shape of a batch readable: it is the sequence of calls in ``_execute``, not
 a 600-line function whose phases were visible only as blank lines.
 
@@ -203,16 +203,16 @@ def _resolve_ccp4_environment(args):
 
 
 def resolve_ccp4_environment(args):
-    """Return ``(env, setup_path)`` for this run, or exit with a diagnostic.
+    """Return ``(env, setup_path)`` for this run, or fail with a diagnostic.
 
-    The CLI boundary. ``ccp4_setup`` raises ``Ccp4SetupError`` so that CCP4
-    resolution stays usable outside a command-line process; this is the single
-    place that turns one into the ``SystemExit`` a run expects.
+    ``ccp4_setup`` raises ``Ccp4SetupError`` so that CCP4 resolution stays
+    usable outside a command-line process; this is the single place that turns
+    one into the driver's own failure.
     """
     try:
         return _resolve_ccp4_environment(args)
     except Ccp4SetupError as exc:
-        raise SystemExit(str(exc)) from None
+        raise DriverError(str(exc)) from None
 
 
 # --------------------------------------------------------------------------- #
@@ -420,14 +420,22 @@ def load_ids_from_file(path):
     return list(dict.fromkeys(ids))
 
 
-class _DriverError(Exception):
-    """A user-facing driver failure: the message is printed and the run exits 1."""
+class DriverError(Exception):
+    """A user-facing driver failure: the message is reported and the run exits 1.
+
+    The driver's only failure mechanism. Everything a user can fix -- an
+    unreadable id file, an unusable output directory, a CCP4 installation that
+    cannot be resolved -- raises this and is handled in one place, so the exit
+    code and the way the message reaches the operator do not depend on which
+    phase noticed. Argument validation is the deliberate exception: argparse
+    owns that, reports it its own way, and exits 2.
+    """
 
 
 def _select_entry_ids(args, cache_root):
     """Resolve the run's work list, returning ``(ids, root, manual_inputs)``.
 
-    Raises ``_DriverError`` when the request cannot be satisfied at all.
+    Raises ``DriverError`` when the request cannot be satisfied at all.
     """
     root = args.pdb_redo_root
     if args.pdb_file or args.mtz_file or args.cif_file:
@@ -438,7 +446,7 @@ def _select_entry_ids(args, cache_root):
             or infer_pdb_id_from_path(args.mtz_file)
         )
         if not pdb_id:
-            raise _DriverError(
+            raise DriverError(
                 "Manual input mode requires --id or a file name that contains "
                 "a 4-character PDB id."
             )
@@ -458,7 +466,7 @@ def _select_entry_ids(args, cache_root):
         try:
             used_root = ensure_entry_available(args.id, args.pdb_redo_root, cache_root)
         except FileNotFoundError:
-            raise _DriverError(
+            raise DriverError(
                 f"Entry {args.id} not found locally and download failed."
             ) from None
         if used_root != args.pdb_redo_root:
@@ -469,7 +477,7 @@ def _select_entry_ids(args, cache_root):
         try:
             ids = load_ids_from_file(args.id_file)
         except (FileNotFoundError, ValueError) as exc:
-            raise _DriverError(str(exc)) from None
+            raise DriverError(str(exc)) from None
         logger.info("loaded %d IDs from %s", len(ids), args.id_file)
         return ids, root, None
 
@@ -484,7 +492,7 @@ def _select_entry_ids(args, cache_root):
 # --------------------------------------------------------------------------- #
 # ``_run`` below is an orchestrator: it names the phases in order and does
 # nothing else. Each phase is a function here, and each one either produces the
-# value the next phase needs or raises ``_DriverError`` with the message the
+# value the next phase needs or raises ``DriverError`` with the message the
 # user should see. That is what makes the order of a run readable -- the shape
 # of a batch is the sequence of calls in ``_run``, not a 600-line function whose
 # phases are only visible as blank lines.
@@ -564,7 +572,7 @@ def _load_cofactor_catalog():
     try:
         return cofactor_ids()
     except (OSError, UnicodeError, ValueError) as exc:
-        raise _DriverError(f"Invalid bundled metallocofactor catalog: {exc}") from None
+        raise DriverError(f"Invalid bundled metallocofactor catalog: {exc}") from None
 
 
 def _prepare_output_directory(output_dir):
@@ -575,7 +583,7 @@ def _prepare_output_directory(output_dir):
         # A read-only mount or someone else's directory is a fixable user
         # mistake, so it exits the way every other unusable input does rather
         # than as a traceback that reads like an Alchemy bug.
-        raise SystemExit(
+        raise DriverError(
             f"Cannot use --output-dir {output_dir}: {exc.strerror or exc}"
         ) from None
     _sweep_leaked_work_dirs(output_dir)
@@ -641,7 +649,7 @@ def _plan_confidence(args, layout, database_run, run_log):
     try:
         plan.reference = load_confidence_reference(reference_dir)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise _DriverError(f"Invalid confidence reference: {exc}") from None
+        raise DriverError(f"Invalid confidence reference: {exc}") from None
     run_log.details["confidence_reference_dir"] = reference_dir
     plan.mode = "reference"
     plan.stream_path = layout.confidence_scores
@@ -661,7 +669,7 @@ def _check_resume_is_compatible(args, layout, plan):
     if plan.enabled and (
         plan.stream_path is None or not os.path.isfile(plan.stream_path)
     ):
-        raise _DriverError(
+        raise DriverError(
             "Cannot resume confidence-aware output because "
             f"{plan.stream_path} is missing; use a fresh output directory."
         )
@@ -683,12 +691,12 @@ def _check_resume_is_compatible(args, layout, plan):
                 confidence_columns=CONFIDENCE_INPUT_COLUMNS,
             )
     except ValueError as exc:
-        raise _DriverError(str(exc)) from None
+        raise DriverError(str(exc)) from None
     if plan.mode == "reference":
         try:
             validate_scored_reference(plan.stream_path, plan.reference)
         except (OSError, ValueError) as exc:
-            raise _DriverError(f"Cannot resume confidence output: {exc}") from None
+            raise DriverError(f"Cannot resume confidence output: {exc}") from None
 
 
 def _schedule_entries(args, layout, cache_root, run_log):
@@ -735,7 +743,7 @@ def _finalize_confidence_reference(layout):
             layout.confidence_inputs, layout.confidence_scores, layout.reference_dir
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise _DriverError(f"Confidence finalization failed: {exc}") from None
+        raise DriverError(f"Confidence finalization failed: {exc}") from None
 
 
 def _finish_without_entries(args, layout, plan):
@@ -774,7 +782,7 @@ def _clear_stale_outputs(args, layout, plan):
             bonds_enabled=args.bonds,
         )
     except OSError as exc:
-        raise _DriverError(f"Could not remove stale bond-stage output: {exc}") from None
+        raise DriverError(f"Could not remove stale bond-stage output: {exc}") from None
     for removed_path in removed:
         logger.info("removed stale bond-stage output: %s", removed_path)
     if args.resume:
@@ -793,7 +801,7 @@ def _clear_stale_outputs(args, layout, plan):
             if os.path.isfile(path):
                 os.unlink(path)
     except OSError as exc:
-        raise _DriverError(f"Could not clear stale confidence output: {exc}") from None
+        raise DriverError(f"Could not clear stale confidence output: {exc}") from None
 
 
 def _choose_worker_count(args, entry_count, run_log):
@@ -1195,7 +1203,7 @@ def _run(args, run_log):
     """Execute one batch, returning its exit code."""
     try:
         return _execute(args, run_log)
-    except _DriverError as exc:
+    except DriverError as exc:
         run_log.driver_error = str(exc)
         logger.error("%s", exc)
         return 1

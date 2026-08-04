@@ -34,6 +34,7 @@ import metal_identification
 import structure_analysis
 import worker
 from driver.progress import _ProgressReporter
+from driver import runlog
 from driver.runlog import _RunLog
 from driver.writers import (
     MANIFEST_COLUMNS,
@@ -1724,10 +1725,41 @@ class TestProgressReporter:
 class TestRunLog:
     """The written log is the only record of how a finished run behaved."""
 
+    def test_the_log_goes_to_a_subdirectory_of_the_output_by_default(self, tmp_path):
+        """Logs accumulate; results do not. They should not share a directory.
+
+        One log per invocation, kept forever, beside the four CSVs a user
+        actually opens. The default is a subdirectory so listing the output
+        directory stays readable after the hundredth run.
+        """
+        args = SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1)
+
+        path = _RunLog(args, "pytest").write(0)
+
+        assert os.path.dirname(path) == str(tmp_path / runlog.DEFAULT_LOG_DIRNAME)
+        assert sorted(os.listdir(tmp_path)) == [runlog.DEFAULT_LOG_DIRNAME]
+
+    def test_an_explicit_log_dir_is_used_as_given(self, tmp_path):
+        """``--log-dir`` sends logs somewhere else entirely, not under output.
+
+        A shared log area on another filesystem is the point: the output
+        directory may be scratch, or per-run, while the logs are the record.
+        """
+        elsewhere = tmp_path / "shared-logs"
+        args = SimpleNamespace(
+            output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
+        )
+
+        path = _RunLog(args, "pytest").write(0)
+
+        assert os.path.dirname(path) == str(elsewhere)
+        assert not (tmp_path / "out").exists(), "the output dir is not created here"
+
     @staticmethod
     def _log(tmp_path, runtimes):
         run_log = _RunLog(
-            SimpleNamespace(output_dir=str(tmp_path), workers=1), "pytest"
+            SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1),
+            "pytest",
         )
         for index, runtime in enumerate(runtimes):
             run_log.record_entry(
@@ -2411,24 +2443,26 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     id_file.write_text("109m\n", encoding="utf-8")
 
     try:
-        with pytest.raises(SystemExit) as excinfo:
-            main.main(
-                [
-                    "--id-file",
-                    str(id_file),
-                    "--output-dir",
-                    str(output_dir),
-                    "--pdb-redo-root",
-                    str(tmp_path / "absent-mirror"),
-                    "--pdb-redo-cache",
-                    str(tmp_path / "cache"),
-                ]
-            )
+        exit_code = main.main(
+            [
+                "--id-file",
+                str(id_file),
+                "--output-dir",
+                str(output_dir),
+                "--pdb-redo-root",
+                str(tmp_path / "absent-mirror"),
+                "--pdb-redo-cache",
+                str(tmp_path / "cache"),
+            ]
+        )
     finally:
         parent.chmod(0o700)
 
-    assert excinfo.value.code not in (0, None)
-    message = f"{excinfo.value}\n{capsys.readouterr().err}"
+    # One failure mechanism: the driver reports it and returns 1, the same as
+    # every other fixable failure. Argument validation is argparse's, and exits
+    # 2; nothing in between raises ``SystemExit`` of its own.
+    assert exit_code == 1
+    message = capsys.readouterr().err
     assert str(output_dir) in message, message
     assert "Traceback" not in message
 

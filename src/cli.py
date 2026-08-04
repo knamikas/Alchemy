@@ -127,6 +127,14 @@ def parse_args(argv=None):
         help="report warnings and errors only, suppressing the run narrative",
     )
     ap.add_argument(
+        "--log-dir",
+        default=None,
+        help=(
+            "directory for run logs (default: <output-dir>/logs/). Each "
+            "invocation writes one immutable, timestamped log there"
+        ),
+    )
+    ap.add_argument(
         "--log-file",
         default=None,
         help=(
@@ -198,7 +206,7 @@ def parse_args(argv=None):
 
     args = ap.parse_args(argv)
     if args.id and args.id_file:
-        raise SystemExit("use either --id or --id-file, not both")
+        ap.error("use either --id or --id-file, not both")
     if args.retry_partials and not args.resume:
         ap.error("--retry-partials requires --resume")
     if args.retry_partials and (args.pdb_file or args.mtz_file or args.cif_file):
@@ -236,10 +244,21 @@ def main(argv=None):
     args = parse_args(raw_args)
     # Handlers are attached once, here, and nowhere else: the driver is the
     # only process that writes them, and workers reach them over a queue.
-    configure_driver_logging(
-        level=level_for_verbosity(args.verbose, args.quiet),
-        log_file=args.log_file,
-    )
+    try:
+        configure_driver_logging(
+            level=level_for_verbosity(args.verbose, args.quiet),
+            log_file=args.log_file,
+        )
+    except OSError as exc:
+        # The one failure that cannot be logged, because it *is* the logging.
+        # Reported the way the shell will see it, with the same exit code every
+        # other fixable failure uses.
+        print(
+            f"Cannot write --log-file {args.log_file}: {exc.strerror or exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
     command_parts = list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args]
     run_log = _RunLog(args, shlex.join(command_parts))
     exit_code = 1

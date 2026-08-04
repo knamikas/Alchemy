@@ -171,19 +171,11 @@ def configure_driver_logging(
     root.addHandler(console)
 
     if log_file:
-        # Opened here, before the driver's protected block, so a bad path would
-        # otherwise surface as a bare traceback with no run report. Raising
-        # SystemExit routes it through the same channel as every other unusable
-        # argument.
-        try:
-            os.makedirs(
-                os.path.dirname(os.path.abspath(log_file)) or ".", exist_ok=True
-            )
-            file_handler = logging.FileHandler(log_file, encoding="utf-8")
-        except OSError as exc:
-            raise SystemExit(
-                f"Cannot write --log-file {log_file}: {exc.strerror or exc}"
-            ) from None
+        # ``OSError`` rather than a message and an exit: this runs before any
+        # handler exists, and the caller is the only code that knows how a
+        # failure can still be reported. ``cli.main`` does that in one place.
+        os.makedirs(os.path.dirname(os.path.abspath(log_file)) or ".", exist_ok=True)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
         # A file is read after the fact, when the cheap console level may have
         # discarded the detail that explains what happened.
         file_handler.setLevel(logging.DEBUG)

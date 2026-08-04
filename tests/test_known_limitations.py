@@ -24,10 +24,11 @@ Three properties keep this module honest:
   exhausting memory are recorded as ``skip`` with the manual reproduction in the
   docstring, rather than as a fragile automated approximation.
 
-One open finding remains, and it is pinned elsewhere: corrupt confidence
-coverage, in ``test_confidence_score.py``.  This module currently owns no
-pins -- every finding it held has been fixed and its test moved to the
-module that owns the behaviour.  The protocol above is kept for the next
+This module currently owns no pins.  Every finding it held has been fixed and
+its test moved to the module that owns the behaviour, including the last one --
+corrupt confidence coverage scoring as higher confidence, fixed in ``36e5dbf``
+and now covered by parametrised regression tests in
+``test_confidence_score.py``.  The protocol above is kept for the next
 validated-but-unfixed defect.
 """
 
@@ -43,9 +44,9 @@ validated-but-unfixed defect.
 #   declared donor/NCS handling     -> test_declared_connections.py
 #   placeholder unit cell           -> test_bond_geometry.py
 #
-# The one finding still open -- a corrupt geometry_coverage cell scoring as
-# higher confidence -- is pinned in test_confidence_score.py, next to the
-# scoring code it concerns.
+# The last finding this module tracked -- a corrupt geometry_coverage cell
+# scoring as higher confidence -- was fixed in 36e5dbf; its regression tests
+# live in test_confidence_score.py, next to the scoring code they concern.
 #
 # The protocol above stands for the next validated-but-unfixed defect: assert
 # the desired behaviour, mark it xfail(strict=True) with a source anchor in the

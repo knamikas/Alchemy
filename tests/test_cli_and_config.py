@@ -118,6 +118,7 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
 @pytest.mark.parametrize(
     "arguments,fragment",
     [
+        (["--id", "109m", "--id-file", "ids.txt"], "either --id or --id-file"),
         (["--id", "109m", "--retry-partials"], "requires --resume"),
         (
             [
@@ -134,7 +135,16 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
         ),
     ],
 )
-def test_retry_partials_rejects_unsafe_invocations(arguments, fragment):
+def test_an_unusable_combination_of_arguments_exits_two(arguments, fragment):
+    """Every argument mistake exits the same way, and it is argparse's way.
+
+    ``--id`` with ``--id-file`` used to raise ``SystemExit`` directly and exit
+    1, while ``--retry-partials`` without ``--resume`` went through
+    ``ap.error`` and exited 2 -- the same class of mistake, made in the same
+    function, reported with two different statuses. Exit 2 is what argparse
+    means by "you called this wrong", and a script branching on the status
+    should not have to know which check caught it.
+    """
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
         with pytest.raises(SystemExit) as excinfo:
@@ -323,7 +333,7 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
     args = argparse.Namespace(
         configure_ccp4=None, ccp4_setup="/nonexistent/ccp4.setup-sh"
     )
-    with pytest.raises(SystemExit, match="not found"):
+    with pytest.raises(pool.DriverError, match="not found"):
         pool.resolve_ccp4_environment(args)
 
 

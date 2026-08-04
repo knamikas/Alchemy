@@ -283,16 +283,35 @@ def test_worker_debug_records_reach_a_log_file_under_a_quiet_console(tmp_path):
     )
 
 
-def test_an_unusable_log_file_is_a_clear_startup_error(tmp_path):
+def test_an_unusable_log_file_is_raised_for_the_caller_to_report(tmp_path):
     """A bad path must not bypass the driver's error handling.
 
     The file is opened before ``main`` enters its protected block, so without
-    this it surfaced as a bare traceback with no structured run report.
+    this it surfaced as a bare traceback with no structured run report. It is
+    an ``OSError`` rather than an exit: this runs before any handler exists,
+    and only the caller knows how a failure can still be reported.
     """
-    with pytest.raises(SystemExit, match="Cannot write --log-file"):
+    with pytest.raises(OSError):
         run_logging.configure_driver_logging(
             level=logging.INFO, stream=io.StringIO(), log_file=str(tmp_path)
         )
+
+
+def test_main_reports_an_unusable_log_file_and_exits_one(tmp_path, capsys):
+    """The other half: the caller turns that error into the run's one policy.
+
+    ``--log-file`` pointing at a directory is a fixable mistake, so it reports
+    the path and exits 1 like every other fixable failure -- not a traceback,
+    and not a status that says "you called this wrong", which argparse owns.
+    """
+    import cli
+
+    exit_code = cli.main(["--id", "109m", "--log-file", str(tmp_path)])
+
+    message = capsys.readouterr().err
+    assert exit_code == 1
+    assert str(tmp_path) in message, message
+    assert "Traceback" not in message
 
 
 def test_repeated_verbose_flags_are_accepted_without_a_further_tier():

@@ -36,6 +36,13 @@ from driver import pool
 
 
 README_PATH = os.path.join(REPO_ROOT, "README.md")
+DOCS_DIR = os.path.join(REPO_ROOT, "docs")
+#: Every prose file a reader is sent to. The README is an overview and a quick
+#: start; the four below carry what used to be its other 500 lines.
+DOC_PATHS = [README_PATH, os.path.join(REPO_ROOT, "tests", "README.md")] + [
+    os.path.join(DOCS_DIR, name)
+    for name in ("usage.md", "method.md", "operations.md", "maintenance.md")
+]
 PYPROJECT_PATH = os.path.join(REPO_ROOT, "pyproject.toml")
 
 #: Distributions that ship with CPython and so are never declared.
@@ -198,8 +205,12 @@ def test_default_paths_land_in_the_checkout_not_inside_src():
 
 @pytest.mark.parametrize(
     "path",
-    [README_PATH, os.path.join(SRC_DIR, "main.py")],
-    ids=["readme", "main-docstring"],
+    DOC_PATHS + [os.path.join(SRC_DIR, "main.py")],
+    ids=[
+        os.path.basename(os.path.dirname(path)) + "/" + os.path.basename(path)
+        for path in DOC_PATHS
+    ]
+    + ["main-docstring"],
 )
 def test_examples_do_not_assume_a_private_environment(path):
     """Documented commands run anywhere, not only on the author's machine.
@@ -341,3 +352,37 @@ def test_version_has_a_single_definition():
     assert pool.ALCHEMY_VERSION == _version.__version__, (
         "driver.pool.ALCHEMY_VERSION must come from _version.py, not a second literal"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The documentation split
+# --------------------------------------------------------------------------- #
+def test_every_documentation_link_resolves():
+    """A split is only useful if the links between the pieces work.
+
+    The README stopped being the whole manual and became a table of contents,
+    which is a new way for documentation to rot: a moved or renamed page now
+    breaks a link instead of merely being hard to find.
+    """
+    broken = []
+    for path in DOC_PATHS:
+        directory = os.path.dirname(path)
+        for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", _read(path)):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            if not os.path.exists(os.path.join(directory, target)):
+                broken.append(f"{os.path.relpath(path, REPO_ROOT)} -> {target}")
+
+    assert not broken, f"documentation links point at missing files: {broken}"
+
+
+def test_the_readme_points_at_every_documentation_page():
+    """No page is orphaned: each one is reachable from the front door."""
+    readme = _read(README_PATH)
+    unlinked = [
+        name
+        for name in sorted(os.listdir(DOCS_DIR))
+        if name.endswith(".md") and f"docs/{name}" not in readme
+    ]
+
+    assert not unlinked, f"docs/ pages nothing links to: {unlinked}"

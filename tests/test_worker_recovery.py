@@ -1167,7 +1167,8 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
         time.sleep(1.0)
         alive = [pid for pid in workers if _process_exists(pid)]
         assert alive == [], f"workers outlived the driver: {alive}"
-        logs = [name for name in os.listdir(output_dir) if name.endswith(".log")]
+        log_dir = os.path.join(output_dir, runlog.DEFAULT_LOG_DIRNAME)
+        logs = [name for name in os.listdir(log_dir) if name.endswith(".log")]
         assert logs, "no run log was written for the interrupted run"
     finally:
         _terminate_driver_tree(child, ready)

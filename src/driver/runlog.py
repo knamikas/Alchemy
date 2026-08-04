@@ -15,7 +15,21 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from driver.resources import available_cpu_count, available_memory_bytes
+
+
 from worker import blank_if_unmeasured
+
+#: Where run logs go when ``--log-dir`` is not given. A subdirectory rather
+#: than the output directory itself: one log per invocation accumulates, and a
+#: directory holding four result CSVs plus a year of logs is one a user has to
+#: filter by hand every time they look at it. Also the reason the startup
+#: sweep can be narrow -- nothing it might delete lives beside the results.
+DEFAULT_LOG_DIRNAME = "logs"
+
+
+def log_dir_for(args):
+    """Return the directory this run writes its log to."""
+    return args.log_dir or os.path.join(args.output_dir, DEFAULT_LOG_DIRNAME)
 
 
 class _RunLog:
@@ -246,18 +260,19 @@ class _RunLog:
 
     def write(self, exit_code):
         """Atomically write the final timestamped log and return its path."""
-        os.makedirs(self.args.output_dir, exist_ok=True)
+        directory = log_dir_for(self.args)
+        os.makedirs(directory, exist_ok=True)
         finished_at = datetime.now(timezone.utc)
         elapsed_s = time.monotonic() - self.started_monotonic
         run_date = self.started_at.strftime("%Y%m%d")
         log_stem = f"alchemy_run_{run_date}"
-        path = os.path.join(self.args.output_dir, f"{log_stem}.log")
+        path = os.path.join(directory, f"{log_stem}.log")
         suffix = 2
         while os.path.lexists(path):
-            path = os.path.join(self.args.output_dir, f"{log_stem}_{suffix}.log")
+            path = os.path.join(directory, f"{log_stem}_{suffix}.log")
             suffix += 1
         handle, temporary_path = tempfile.mkstemp(
-            prefix=".alchemy-run-log-", dir=self.args.output_dir, text=True
+            prefix=".alchemy-run-log-", dir=directory, text=True
         )
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:

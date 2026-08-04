@@ -6,7 +6,7 @@ tests run the full pipeline with CCP4 and three PDB-REDO entries.
 Install the test dependency and run the suite with:
 
 ```bash
-python3 -m pip install -e '.[test]'
+python3 -m pip install '.[test]'
 python3 -m pytest
 ```
 
@@ -22,8 +22,9 @@ python3 -m pytest --no-ccp4 --no-network --skip-slow
 python3 -m pytest tests/test_pipeline_integration.py \
     --require-ccp4 --require-entry-data -v
 
-# Known Alchemy defects
-python3 -m pytest tests/test_known_limitations.py -rxs
+# Coverage, as CI measures it
+python3 -m pytest --no-ccp4 --no-network --skip-slow \
+    --cov=src --cov-report=term-missing
 ```
 
 CCP4 must provide `mtzfix`, `fft`, `mapmask`, and `edstats`. If they are not
@@ -65,13 +66,17 @@ the run. `--require-entry-data` ensures the integration tests did not all skip.
 
 ## Known defects
 
-Open defects are recorded in `test_known_limitations.py` with strict `xfail`
-markers. An expected failure means the defect is still present. An unexpected
-pass fails the suite so the test can be moved to the appropriate module when
-the underlying code is fixed.
+`test_known_limitations.py` is the ledger for validated-but-unfixed defects. It
+currently holds none: every finding it once pinned has been fixed and its test
+moved to the module that owns the behaviour, so the file collects no tests and
+documents the protocol for the next one.
 
-Tests that need destructive process-level reproduction remain skipped and keep
-the manual procedure in their docstrings.
+That protocol is: assert the behaviour Alchemy *should* have, mark it
+`xfail(strict=True)` with a source anchor in the reason, and move it out when it
+turns green. Strictness is the point -- an unexpected pass fails the suite, so a
+fix cannot land unnoticed. Defects that can only be reproduced by killing a
+process or exhausting memory are recorded as explicit skips with the manual
+procedure in their docstrings.
 
 ## Adding tests
 

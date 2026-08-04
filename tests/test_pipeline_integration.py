@@ -49,6 +49,7 @@ import confidence_score
 import helpers
 import inputs
 import main
+from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 
@@ -367,9 +368,13 @@ def rows_for(rows: Sequence[Dict[str, str]], pdb_id: str) -> List[Dict[str, str]
 
 
 def log_paths(output_dir) -> List[str]:
+    """Every run log this output directory has, wherever the default puts them."""
+    directory = os.path.join(str(output_dir), runlog.DEFAULT_LOG_DIRNAME)
+    if not os.path.isdir(directory):
+        return []
     return sorted(
-        os.path.join(str(output_dir), name)
-        for name in os.listdir(str(output_dir))
+        os.path.join(directory, name)
+        for name in os.listdir(directory)
         if re.fullmatch(r"alchemy_run_\d{8}(_\d+)?\.log", name)
     )
 
