@@ -316,8 +316,8 @@ def _bonded_to(is_water=False):
 
 
 def _connection_output_values(candidate):
-    records = candidate.get("declared_connections", ())
-    inferred = bool(candidate.get("inferred_contact_eligible", False))
+    records = candidate.declared_connections
+    inferred = bool(candidate.inferred_contact_eligible)
 
     def joined(name):
         return "|".join(
@@ -346,23 +346,23 @@ def _connection_output_values(candidate):
 
 def _donor_output_values(candidate):
     return {
-        "inferred_donor_allowed": candidate["inferred_donor_allowed"],
-        "inferred_donor_rule": candidate["inferred_donor_rule"],
-        "donor_rule_override": candidate["donor_rule_override"],
+        "inferred_donor_allowed": candidate.inferred_donor_allowed,
+        "inferred_donor_rule": candidate.inferred_donor_rule,
+        "donor_rule_override": candidate.donor_rule_override,
     }
 
 
 def _context_warning_values(candidate, include_proximal=False):
     """Return the extensible binary context flag and auditable reason codes."""
     reasons = []
-    if not candidate["inferred_donor_allowed"]:
-        if candidate.get("declared_connections"):
+    if not candidate.inferred_donor_allowed:
+        if candidate.declared_connections:
             reasons.append("declared_non_typical_donor")
-        elif candidate.get("first_sphere_eligible", False):
+        elif candidate.first_sphere_eligible:
             reasons.append("non_typical_first_sphere_candidate")
         elif include_proximal:
             reasons.append("non_typical_proximal_candidate")
-    if candidate.get("multi_donor_contains_suspect_bond", False):
+    if candidate.multi_donor_contains_suspect_bond:
         reasons.append("suspect_multi_donor_group")
     reasons = list(dict.fromkeys(reasons))
     return {
@@ -445,11 +445,11 @@ def stats_extra_values(
 
 
 def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_type):
-    neighbor = contact["neighbor"]
+    neighbor = contact.neighbor
     metal_residue = structure.residue_for_atom(metal)
     neighbor_residue = structure.residue_for_atom(neighbor)
-    x, y, z = contact["transformed_position"]
-    tx, ty, tz = contact["translation"]
+    x, y, z = contact.transformed_position
+    tx, ty, tz = contact.translation
     mag, neg, pos = sigma
     connection_values = _connection_output_values(contact)
     donor_values = _donor_output_values(contact)
@@ -463,13 +463,13 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_
         "neighbor_resname": neighbor.residue_name,
         "neighbor_atom": neighbor.atom_name,
         "neighbor_element": neighbor.element,
-        "distance": contact["distance"],
+        "distance": contact.distance,
         **connection_values,
         **donor_values,
         **context_values,
-        "literature_distance": contact["literature_distance"],
-        "literature_stdev": contact["literature_stdev"],
-        "zscore": contact["zscore"],
+        "literature_distance": contact.literature_distance,
+        "literature_stdev": contact.literature_stdev,
+        "zscore": contact.zscore,
         "dpi": dpi,
         "resolution": resolution,
         "sigma_mag": mag,
@@ -521,25 +521,25 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_
         ),
         "neighbor_class": "water" if neighbor.is_water else "amino_acid",
         "candidate_contact": True,
-        "reference_covered": contact["reference_covered"],
-        "geometry_outlier": contact["geometry_outlier"],
-        "geometry_consistent": contact["geometry_consistent"],
-        "multi_donor_detected": contact["multi_donor_detected"],
-        "multi_donor_contact_count": contact["multi_donor_contact_count"],
-        "multi_donor_geometry_status": (contact["multi_donor_geometry_status"]),
+        "reference_covered": contact.reference_covered,
+        "geometry_outlier": contact.geometry_outlier,
+        "geometry_consistent": contact.geometry_consistent,
+        "multi_donor_detected": contact.multi_donor_detected,
+        "multi_donor_contact_count": contact.multi_donor_contact_count,
+        "multi_donor_geometry_status": (contact.multi_donor_geometry_status),
         "multi_donor_contains_suspect_bond": (
-            contact["multi_donor_contains_suspect_bond"]
+            contact.multi_donor_contains_suspect_bond
         ),
-        "score_eligible": contact["score_eligible"],
-        "score_exclusion_reason": contact["score_exclusion_reason"],
+        "score_eligible": contact.score_eligible,
+        "score_exclusion_reason": contact.score_exclusion_reason,
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
-        "contact_scope": contact["contact_scope"],
-        "symmetry_contact": contact["symmetry_contact"],
-        "crystallographic_contact": contact["crystallographic_contact"],
-        "strict_ncs_contact": contact["strict_ncs_contact"],
-        "strict_ncs_operation_id": contact["strict_ncs_operation_id"],
-        "symmetry_image_index": contact["symmetry_image_index"],
-        "symmetry_operation": contact["symmetry_operation"],
+        "contact_scope": contact.contact_scope,
+        "symmetry_contact": contact.symmetry_contact,
+        "crystallographic_contact": contact.crystallographic_contact,
+        "strict_ncs_contact": contact.strict_ncs_contact,
+        "strict_ncs_operation_id": contact.strict_ncs_operation_id,
+        "symmetry_image_index": contact.symmetry_image_index,
+        "symmetry_operation": contact.symmetry_operation,
         "cell_translation_x": tx,
         "cell_translation_y": ty,
         "cell_translation_z": tz,
@@ -551,25 +551,25 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_
 
 def _candidate_row(pdb_id, structure, metal, candidate):
     """Return one discovered or declared candidate with full provenance."""
-    neighbor = candidate["neighbor"]
-    x, y, z = candidate["transformed_position"]
-    tx, ty, tz = candidate["translation"]
+    neighbor = candidate.neighbor
+    x, y, z = candidate.transformed_position
+    tx, ty, tz = candidate.translation
     connection_values = _connection_output_values(candidate)
     donor_values = _donor_output_values(candidate)
     context_values = _context_warning_values(candidate, include_proximal=True)
     return {
         "pdbID": pdb_id,
-        "candidate_source": "|".join(sorted(candidate["candidate_sources"])),
-        "eligibility_status": candidate["eligibility_status"],
-        "eligibility_reason": candidate["eligibility_reason"],
-        "first_sphere_eligible": candidate["first_sphere_eligible"],
-        "candidate_distance": round(candidate["distance_raw"], 3),
-        "assignment_target": candidate["assignment_target"],
-        "assignment_tolerance": candidate["assignment_tolerance"],
-        "first_sphere_cutoff": candidate["first_sphere_cutoff"],
-        "assignment_reference_kind": candidate["assignment_reference_kind"],
-        "assignment_reference": candidate["assignment_reference"],
-        "inferred_contact_eligible": candidate["inferred_contact_eligible"],
+        "candidate_source": "|".join(sorted(candidate.candidate_sources)),
+        "eligibility_status": candidate.eligibility_status,
+        "eligibility_reason": candidate.eligibility_reason,
+        "first_sphere_eligible": candidate.first_sphere_eligible,
+        "candidate_distance": round(candidate.distance_raw, 3),
+        "assignment_target": candidate.assignment_target,
+        "assignment_tolerance": candidate.assignment_tolerance,
+        "first_sphere_cutoff": candidate.first_sphere_cutoff,
+        "assignment_reference_kind": candidate.assignment_reference_kind,
+        "assignment_reference": candidate.assignment_reference,
+        "inferred_contact_eligible": candidate.inferred_contact_eligible,
         **donor_values,
         **context_values,
         **connection_values,
@@ -599,13 +599,13 @@ def _candidate_row(pdb_id, structure, metal, candidate):
         "neighbor_chain_index": neighbor.output_chain_index,
         "neighbor_residue_index": neighbor.output_residue_index,
         "neighbor_atom_index": neighbor.atom_index,
-        "contact_scope": candidate["contact_scope"],
-        "symmetry_contact": candidate["symmetry_contact"],
-        "crystallographic_contact": candidate["crystallographic_contact"],
-        "strict_ncs_contact": candidate["strict_ncs_contact"],
-        "strict_ncs_operation_id": candidate["strict_ncs_operation_id"],
-        "symmetry_image_index": candidate["symmetry_image_index"],
-        "symmetry_operation": candidate["symmetry_operation"],
+        "contact_scope": candidate.contact_scope,
+        "symmetry_contact": candidate.symmetry_contact,
+        "crystallographic_contact": candidate.crystallographic_contact,
+        "strict_ncs_contact": candidate.strict_ncs_contact,
+        "strict_ncs_operation_id": candidate.strict_ncs_operation_id,
+        "symmetry_image_index": candidate.symmetry_image_index,
+        "symmetry_operation": candidate.symmetry_operation,
         "cell_translation_x": tx,
         "cell_translation_y": ty,
         "cell_translation_z": tz,

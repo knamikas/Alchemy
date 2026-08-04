@@ -22,6 +22,8 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import gemmi
 
+from codes import ContactScope, ElementStatus, OccupancyStatus, WarningCode
+
 
 NAN = float("nan")
 DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
@@ -121,15 +123,15 @@ def _parse_pdb_element(value: str) -> Tuple[str, str]:
     """Return the canonical deposited PDB element and its validation status."""
     deposited = value.strip()
     if not deposited:
-        return "", "missing"
+        return "", ElementStatus.MISSING
     try:
         element = gemmi.Element(deposited)
     except (RuntimeError, ValueError):
-        return "", "invalid"
+        return "", ElementStatus.INVALID
     canonical = str(element.name).upper()
     if int(element.atomic_number) <= 0 or canonical in ("", "X"):
-        return "", "invalid"
-    return canonical, "valid"
+        return "", ElementStatus.INVALID
+    return canonical, ElementStatus.VALID
 
 
 def _format_number(value: Optional[float]) -> str:
@@ -143,7 +145,7 @@ class RawOccupancy:
     value: Optional[float]
     status: str
     element: str = ""
-    element_status: str = "missing"
+    element_status: str = ElementStatus.MISSING
     atom_name: str = ""
     altloc: str = ""
     chain_id: str = ""
@@ -155,7 +157,7 @@ class RawOccupancy:
 
     @property
     def valid(self) -> bool:
-        return self.status == "valid"
+        return self.status == OccupancyStatus.VALID
 
     @property
     def stable_identity(self) -> Tuple[str, str, str, str, str, str]:
@@ -406,13 +408,13 @@ class StructureContext:
                 )
 
         if strict_ncs and crystallographic:
-            scope = "strict_ncs_and_crystallographic"
+            scope = ContactScope.STRICT_NCS_AND_CRYSTALLOGRAPHIC
         elif strict_ncs:
-            scope = "strict_ncs"
+            scope = ContactScope.STRICT_NCS
         elif crystallographic:
-            scope = "crystallographic"
+            scope = ContactScope.CRYSTALLOGRAPHIC
         else:
-            scope = "explicit"
+            scope = ContactScope.EXPLICIT
         return crystallographic, strict_ncs, ncs_operation_id, scope
 
     def atom_for_indices(
@@ -518,20 +520,20 @@ def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
                 stripped = text.strip()
                 if not stripped:
                     value = None
-                    status = "missing"
+                    status = OccupancyStatus.MISSING
                 else:
                     try:
                         value = float(stripped)
                     except (TypeError, ValueError, OverflowError):
                         value = None
-                        status = "invalid_non_numeric"
+                        status = OccupancyStatus.INVALID_NON_NUMERIC
                     else:
                         if not math.isfinite(value):
-                            status = "invalid_non_finite"
+                            status = OccupancyStatus.INVALID_NON_FINITE
                         elif value < 0.0 or value > 1.0:
-                            status = "invalid_range"
+                            status = OccupancyStatus.INVALID_RANGE
                         else:
-                            status = "valid"
+                            status = OccupancyStatus.VALID
                 records[model_index].append(
                     RawOccupancy(
                         value=value,
@@ -706,10 +708,14 @@ def _occupancy_for_atom(
     value = float(atom.occ)
     if raw is not None:
         if raw.valid and raw.value is not None:
-            return raw.value, True, "valid"
+            return raw.value, True, OccupancyStatus.VALID
         return value, False, raw.status
     valid = _valid_occupancy(value)
-    return value, valid, "valid" if valid else "invalid_value"
+    return (
+        value,
+        valid,
+        OccupancyStatus.VALID if valid else OccupancyStatus.INVALID_VALUE,
+    )
 
 
 def _element_for_atom(
@@ -717,7 +723,7 @@ def _element_for_atom(
 ) -> Tuple[str, bool]:
     """Use deposited element provenance rather than a PDB atom-name guess."""
     if analysis_format == "pdb":
-        if raw is not None and raw.element_status == "valid":
+        if raw is not None and raw.element_status == ElementStatus.VALID:
             return raw.element, True
         return "", False
     element = str(atom.element.name).upper()
@@ -970,7 +976,7 @@ def load_structure(
                 )
                 if analysis_format == "pdb" and raw is None:
                     occupancy_valid = False
-                    occupancy_status = "raw_mapping_failed"
+                    occupancy_status = OccupancyStatus.RAW_MAPPING_FAILED
                 source_order = (
                     raw.source_order
                     if raw is not None
@@ -1019,9 +1025,11 @@ def load_structure(
 
     # Occupancy provenance is counted before malformed exact duplicates are
     # collapsed, so an invalid deposited record is never silently hidden.
-    missing_count = sum(atom.occupancy_status == "missing" for atom in all_sites)
+    missing_count = sum(
+        atom.occupancy_status == OccupancyStatus.MISSING for atom in all_sites
+    )
     invalid_count = sum(
-        not atom.occupancy_valid and atom.occupancy_status != "missing"
+        not atom.occupancy_valid and atom.occupancy_status != OccupancyStatus.MISSING
         for atom in all_sites
     )
     zero_count = sum(
@@ -1067,23 +1075,23 @@ def load_structure(
 
     warnings: List[str] = []
     if input_model_count > 1:
-        warnings.append("multi_model_structure")
+        warnings.append(WarningCode.MULTI_MODEL_STRUCTURE)
     if duplicate_count:
-        warnings.append("duplicate_atom_records")
+        warnings.append(WarningCode.DUPLICATE_ATOM_RECORDS)
     if coordinate_conflicts:
-        warnings.append("duplicate_atom_coordinate_conflict")
+        warnings.append(WarningCode.DUPLICATE_ATOM_COORDINATE_CONFLICT)
     if malformed_names:
-        warnings.append("malformed_duplicate_atom_names")
+        warnings.append(WarningCode.MALFORMED_DUPLICATE_ATOM_NAMES)
     if any(residue.altloc_selection_fallback for residue in residues):
-        warnings.append("altloc_selection_fallback")
+        warnings.append(WarningCode.ALTLOC_SELECTION_FALLBACK)
     if unknown_count:
-        warnings.append("unknown_elements")
+        warnings.append(WarningCode.UNKNOWN_ELEMENTS)
     if zero_count:
-        warnings.append("zero_occupancy_atoms")
+        warnings.append(WarningCode.ZERO_OCCUPANCY_ATOMS)
     if mapping_failed:
-        warnings.append("raw_occupancy_mapping_failed")
+        warnings.append(WarningCode.RAW_OCCUPANCY_MAPPING_FAILED)
     if legacy_identifiers_packed:
-        warnings.append("legacy_pdb_identifiers_packed")
+        warnings.append(WarningCode.LEGACY_PDB_IDENTIFIERS_PACKED)
 
     atom_by_indices = {
         (atom.chain_index, atom.residue_index, atom.atom_index): atom

@@ -29,6 +29,7 @@ from typing import Any, Collection, Dict, Optional
 
 from _version import __version__
 from bond_analysis import NAN, load_structure, run_bond_analysis
+from codes import WarningCode
 from bond_schema import STATS_EXTRA_COLUMNS, _check_row_schema, stats_extra_values
 from coordinate_conversion import _first_model_pdb
 from density_analysis import (
@@ -581,7 +582,8 @@ def process(pdb_id):
             if res.twin_coefficient_normalization_applied:
                 result.warning_codes = list(
                     dict.fromkeys(
-                        result.warning_codes + ["twin_refmac_coefficients_normalized"]
+                        result.warning_codes
+                        + [WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED]
                     )
                 )
             statistics_started = time.monotonic()

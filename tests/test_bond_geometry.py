@@ -26,6 +26,8 @@ import pytest
 
 import bond_analysis as ba
 import bond_schema
+import codes
+from contact_record import Candidate
 import donor_chemistry
 import dpi as dpi_module
 import helpers
@@ -158,6 +160,30 @@ def _analyze(path, *, data_json=None, resolution=1.50):
 def _dpi_metadata(tmp_path, *, nrefcnt=50000, rffin=0.20, name="data.json"):
     """A PDB-REDO-style ``data.json`` giving a finite DPI."""
     return helpers.write_data_json(tmp_path / name, nrefcnt=nrefcnt, rffin=rffin)
+
+
+def _contact(neighbor, **fields):
+    """A bare ``Candidate`` for a stage that only reads a couple of fields.
+
+    The discovery fields the stage under test never touches are given inert
+    values rather than omitted: the record declares them, so a test that wants
+    one field still has to say what the others are.
+    """
+    defaults = {
+        "candidate_sources": {codes.CandidateSource.PROXIMITY_4A},
+        "distance_raw": 0.0,
+        "transformed_position": (0.0, 0.0, 0.0),
+        "symmetry_contact": False,
+        "crystallographic_contact": False,
+        "strict_ncs_contact": False,
+        "strict_ncs_operation_id": "",
+        "contact_scope": codes.ContactScope.EXPLICIT,
+        "symmetry_image_index": 0,
+        "symmetry_operation": "1_555",
+        "translation": (0, 0, 0),
+    }
+    defaults.update(fields)
+    return Candidate(neighbor=neighbor, **defaults)
 
 
 def _only(rows, atom_name):
@@ -772,17 +798,17 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     builder.add_water(101, (2.09, 0.0, 0.0), chain="B")
     context = load_structure("test", builder.write_pdb(tmp_path / "w.pdb"))
     water = next(residue for residue in context.residues if residue.is_water)
-    contact = {"neighbor": water.contact_atoms[0], "distance_raw": distance}
+    contact = _contact(water.contact_atoms[0], distance_raw=distance)
 
     ba._annotate_contacts([contact], "ZN", 0.12)
 
     assert bond_schema.ZSCORE_OUTLIER_CUTOFF == 6.0
-    assert contact["literature_distance"] == pytest.approx(2.09)
-    assert contact["literature_stdev"] == pytest.approx(0.05)
-    assert contact["zscore"] == pytest.approx(expected_z)
-    assert contact["reference_covered"] is True
-    assert contact["geometry_outlier"] is outlier
-    assert contact["geometry_consistent"] is (not outlier)
+    assert contact.literature_distance == pytest.approx(2.09)
+    assert contact.literature_stdev == pytest.approx(0.05)
+    assert contact.zscore == pytest.approx(expected_z)
+    assert contact.reference_covered is True
+    assert contact.geometry_outlier is outlier
+    assert contact.geometry_consistent is (not outlier)
 
 
 def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):

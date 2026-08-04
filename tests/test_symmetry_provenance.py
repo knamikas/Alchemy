@@ -44,6 +44,8 @@ import pytest
 import gemmi
 
 import bond_analysis as ba
+import codes
+from contact_record import Candidate
 import structure_analysis as sa
 from metal_elements import METAL_ELEMENTS
 
@@ -525,8 +527,8 @@ def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(tmp_path)
     raw, collapsed = _raw_and_deduplicated(context)
 
     assert len(raw) == 2
-    assert {candidate["symmetry_operation"] for candidate in raw} == {"1_555", "2_555"}
-    source_keys = {candidate["neighbor"].source_key for candidate in raw}
+    assert {candidate.symmetry_operation for candidate in raw} == {"1_555", "2_555"}
+    source_keys = {candidate.neighbor.source_key for candidate in raw}
     assert len(source_keys) == 1, "both images are of one deposited atom"
     assert len(collapsed) == 1
 
@@ -586,7 +588,7 @@ def test_images_collapse_only_within_the_special_position_cutoff(
     raw, collapsed = _raw_and_deduplicated(context)
     assert len(raw) == 2
     measured = sa.position_distance(
-        raw[0]["transformed_position"], raw[1]["transformed_position"]
+        raw[0].transformed_position, raw[1].transformed_position
     )
     assert measured == pytest.approx(separation, abs=1e-6)
     assert (measured <= ba.SPECIAL_POSITION_DEDUP_CUTOFF) is (expected_contacts == 1)
@@ -603,30 +605,35 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse():
     )
 
     def candidate(x, *, symmetry):
-        return {
-            "neighbor": neighbor,
-            "distance_raw": 2.0,
-            "transformed_position": (x, 0.0, 0.0),
-            "symmetry_contact": symmetry,
-            "symmetry_image_index": int(symmetry),
-            "symmetry_operation": "2_555" if symmetry else "1_555",
-            "translation": (0, 0, 0),
-            "candidate_sources": {"symmetry" if symmetry else "explicit"},
-            "declared_connections": [],
-        }
+        return Candidate(
+            neighbor=neighbor,
+            distance_raw=2.0,
+            transformed_position=(x, 0.0, 0.0),
+            symmetry_contact=symmetry,
+            crystallographic_contact=symmetry,
+            strict_ncs_contact=False,
+            strict_ncs_operation_id="",
+            contact_scope=(
+                codes.ContactScope.CRYSTALLOGRAPHIC
+                if symmetry
+                else codes.ContactScope.EXPLICIT
+            ),
+            symmetry_image_index=int(symmetry),
+            symmetry_operation="2_555" if symmetry else "1_555",
+            translation=(0, 0, 0),
+            candidate_sources={"symmetry" if symmetry else "explicit"},
+        )
 
     origin = candidate(0.0, symmetry=False)
     boundary = candidate(0.8, symmetry=True)
     assert (
-        sa.position_distance(
-            origin["transformed_position"], boundary["transformed_position"]
-        )
+        sa.position_distance(origin.transformed_position, boundary.transformed_position)
         == 0.8
     )
 
     collapsed = ba._deduplicate_special_position_contacts([origin, boundary])
     assert len(collapsed) == 1
-    assert collapsed[0]["candidate_sources"] == {"explicit", "symmetry"}
+    assert collapsed[0].candidate_sources == {"explicit", "symmetry"}
 
     outside = ba._deduplicate_special_position_contacts(
         [candidate(0.0, symmetry=False), candidate(0.800001, symmetry=True)]
@@ -739,11 +746,9 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path):
     reversed_result = ba._deduplicate_special_position_contacts(list(reversed(raw)))
 
     assert len(collapsed) == len(reversed_result) == 1
-    assert (
-        reversed_result[0]["symmetry_operation"] == collapsed[0]["symmetry_operation"]
-    )
-    assert reversed_result[0]["transformed_position"] == pytest.approx(
-        collapsed[0]["transformed_position"], abs=1e-9
+    assert reversed_result[0].symmetry_operation == collapsed[0].symmetry_operation
+    assert reversed_result[0].transformed_position == pytest.approx(
+        collapsed[0].transformed_position, abs=1e-9
     )
 
 

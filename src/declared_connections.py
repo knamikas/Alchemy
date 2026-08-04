@@ -33,6 +33,8 @@ coordination at all.
 import math
 from typing import NamedTuple, Optional
 
+from codes import CandidateSource, ContactScope, WarningCode
+from contact_record import Candidate
 from donor_chemistry import AA, DONOR_ELEMENTS
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import NAN, blank_if_missing, position_distance
@@ -42,7 +44,11 @@ def _connection_source(path):
     lower = str(path or "").lower()
     if lower.endswith(".gz"):
         lower = lower[:-3]
-    return "struct_conn" if lower.endswith((".cif", ".mmcif")) else "LINK"
+    return (
+        CandidateSource.STRUCT_CONN
+        if lower.endswith((".cif", ".mmcif"))
+        else CandidateSource.LINK
+    )
 
 
 def _enum_name(value):
@@ -61,7 +67,7 @@ def _analysis_chain_names(connection_path):
     """
     import gemmi
 
-    if _connection_source(connection_path) != "struct_conn":
+    if _connection_source(connection_path) != CandidateSource.STRUCT_CONN:
         return {}
     copy = gemmi.read_structure(connection_path)
     if len(copy) == 0:
@@ -182,7 +188,7 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
             "crystallographic_contact": False,
             "strict_ncs_contact": False,
             "strict_ncs_operation_id": "",
-            "contact_scope": "explicit",
+            "contact_scope": ContactScope.EXPLICIT,
             "symmetry_image_index": 0,
             "symmetry_operation": "1_555",
             "translation": (0, 0, 0),
@@ -325,7 +331,7 @@ def _declared_candidate_for_connection(
         resolved.declares_metal or first_is_metal or second_is_metal
     )
     if resolved.substituted and connection_involves_metal:
-        warnings.append("declared_connection_conformer_substituted")
+        warnings.append(WarningCode.DECLARED_CONNECTION_CONFORMER_SUBSTITUTED)
     if first is None and second is None:
         if connection_involves_metal:
             issues.append(f"{source} {connection_id} neither partner resolved")
@@ -345,7 +351,7 @@ def _declared_candidate_for_connection(
     if neighbor.element not in DONOR_ELEMENTS:
         # Not a donor-like atom at all, so there is no coordination
         # evidence to retain. Recorded rather than dropped in silence.
-        warnings.append("declared_donor_element_unsupported")
+        warnings.append(WarningCode.DECLARED_DONOR_ELEMENT_UNSUPPORTED)
         return None, issues, warnings
     # Nucleic acids, modified residues and organic ligands are genuine
     # metal donors, but no bundled literature reference covers them, so
@@ -359,7 +365,7 @@ def _declared_candidate_for_connection(
     # nothing can assess.
     donor_class_supported = bool(residue.is_water or residue.residue_name in AA)
     if not donor_class_supported:
-        warnings.append("declared_donor_outside_supported_classes")
+        warnings.append(WarningCode.DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES)
     try:
         geometry = _declared_candidate_geometry(structure, metal, neighbor, connection)
     except Exception as exc:
@@ -382,14 +388,14 @@ def _declared_candidate_for_connection(
         "connection_asu": _enum_name(connection.asu),
         "connection_reported_distance": reported_distance,
     }
-    candidate = {
-        "metal": metal,
-        "neighbor": neighbor,
+    candidate = Candidate(
+        metal=metal,
+        neighbor=neighbor,
         **geometry,
-        "candidate_sources": {source},
-        "declared_connections": [record],
-        "donor_class_supported": donor_class_supported,
-    }
+        candidate_sources={source},
+        declared_connections=[record],
+        donor_class_supported=donor_class_supported,
+    )
     return candidate, issues, warnings
 
 

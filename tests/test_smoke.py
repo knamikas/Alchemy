@@ -42,7 +42,9 @@ def test_src_modules_import():
     import bond_analysis
     import bond_schema
     import ccp4_setup
+    import codes
     import confidence_score
+    import contact_record
     import declared_connections
     import density_analysis
     import donor_chemistry
@@ -69,6 +71,8 @@ def test_src_modules_import():
     assert callable(dpi._calculate_dpi_details)
     assert callable(declared_connections._collect_declared_candidates)
     assert bond_schema.BOND_COLUMNS[0] == "pdbID"
+    assert codes.GeometryStatus.SUSPECT == "suspect"
+    assert callable(contact_record.Candidate)
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
     assert callable(density_analysis.run_density_analysis)
     assert callable(confidence_score.score_site)
