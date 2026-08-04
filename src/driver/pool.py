@@ -56,6 +56,7 @@ from inputs import (
     infer_pdb_id_from_path,
 )
 from worker import (
+    WorkerConfig,
     _init_worker,
     _worker_death_result,
     process,
@@ -834,30 +835,30 @@ def _worker_config(
     args, env, root, cache_root, cofactors, manual_inputs, plan, run_log
 ):
     """Build the config every worker is initialized with, once per run."""
-    cfg = {
-        "root": root,
-        "mirror_root": args.pdb_redo_root,
-        "cache_root": cache_root,
-        "env": env,
-        "output_dir": args.output_dir,
-        "cofactors": cofactors,
-        "keep": args.keep_intermediates,
-        "bonds": args.bonds,
-        "density_map_scope": args.density_map_scope,
-        "ccp4_timeout_s": args.ccp4_timeout,
-        "log_level": worker_level(
+    cfg = WorkerConfig(
+        root=root,
+        mirror_root=args.pdb_redo_root,
+        cache_root=cache_root,
+        env=env,
+        output_dir=args.output_dir,
+        cofactors=cofactors,
+        keep=args.keep_intermediates,
+        bonds=args.bonds,
+        density_map_scope=args.density_map_scope,
+        ccp4_timeout_s=args.ccp4_timeout,
+        log_level=worker_level(
             level_for_verbosity(args.verbose, args.quiet), args.log_file
         ),
-        "allow_download": bool(args.id or args.id_file),
-        "manual_inputs": manual_inputs,
-        "alchemy_commit": _alchemy_commit(),
-        "gemmi_version": _gemmi_version(),
-        "ccp4_version": _ccp4_version(env),
-    }
+        allow_download=bool(args.id or args.id_file),
+        manual_inputs=manual_inputs,
+        alchemy_commit=_alchemy_commit(),
+        gemmi_version=_gemmi_version(),
+        ccp4_version=_ccp4_version(env),
+    )
     run_log.details.update(
         alchemy_version=ALCHEMY_VERSION,
-        gemmi_version=cfg["gemmi_version"],
-        ccp4_version=cfg["ccp4_version"],
+        gemmi_version=cfg.gemmi_version,
+        ccp4_version=cfg.ccp4_version,
         confidence_mode=plan.mode or "disabled",
     )
     return cfg

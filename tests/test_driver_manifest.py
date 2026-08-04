@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import logging
 import os
 from types import SimpleNamespace
 from typing import List
@@ -50,11 +51,36 @@ import confidence_score
 # --------------------------------------------------------------------------- #
 # Local fixtures / builders
 # --------------------------------------------------------------------------- #
-CFG = {
-    "alchemy_commit": "abc123def456",
-    "gemmi_version": "0.7.5",
-    "ccp4_version": "9.0",
-}
+def _cfg(**overrides):
+    """A complete ``WorkerConfig`` with test placeholders.
+
+    Every field is required now that the config is a frozen dataclass, and
+    naming them here rather than in each test keeps the three provenance values
+    the manifest actually asserts on visible.
+    """
+    fields = {
+        "root": "/nonexistent/root",
+        "mirror_root": "/nonexistent/mirror",
+        "cache_root": None,
+        "env": {},
+        "output_dir": "/nonexistent/output",
+        "cofactors": frozenset(),
+        "keep": False,
+        "bonds": True,
+        "density_map_scope": "model-envelope",
+        "ccp4_timeout_s": density.CCP4_TOOL_TIMEOUT_S,
+        "log_level": logging.INFO,
+        "allow_download": False,
+        "manual_inputs": None,
+        "alchemy_commit": "abc123def456",
+        "gemmi_version": "0.7.5",
+        "ccp4_version": "9.0",
+    }
+    fields.update(overrides)
+    return worker.WorkerConfig(**fields)
+
+
+CFG = _cfg()
 
 # Columns that ``_manifest_row`` recomputes from the worker result rather than
 # copying straight out of it.
@@ -75,6 +101,53 @@ def _result(pdb_id="109m", **overrides):
     result = worker._initial_result(pdb_id, CFG, None)
     result.update(overrides)
     return result
+
+
+def _manual_entry(tmp_path, monkeypatch, density_stage, **cfg_overrides):
+    """Run one manual-input entry through ``worker.process``.
+
+    Only the three MTZ-dependent readers are stubbed -- ``density_stage``
+    stands in for the CCP4 work, and may raise or return a ``DensityResult``.
+    Structure loading, result assembly and status computation all run for
+    real, which is the part under test.
+    """
+    builder = helpers.StructureBuilder()
+    builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
+    builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.05, 0.0, 0.0)})
+    pdb_path = tmp_path / "entry.pdb"
+    builder.write_pdb(str(pdb_path))
+    mtz_path = tmp_path / "entry.mtz"
+    mtz_path.write_bytes(b"unused: the readers below are stubbed")
+
+    monkeypatch.setattr(worker, "read_resolution", lambda *a, **k: 2.0)
+    monkeypatch.setattr(
+        worker, "read_map_column_resolution", lambda *a, **k: (20.0, 2.0)
+    )
+    monkeypatch.setattr(worker, "run_density_analysis", density_stage)
+
+    cfg = _cfg(
+        root=str(tmp_path),
+        mirror_root=str(tmp_path),
+        cache_root=str(tmp_path),
+        output_dir=str(tmp_path),
+        bonds=False,
+        density_map_scope="full",
+        ccp4_timeout_s=900,
+        manual_inputs={
+            "pdb_file": str(pdb_path),
+            "mtz_file": str(mtz_path),
+            "cif_file": None,
+            "data_json": None,
+        },
+        alchemy_commit="test",
+        gemmi_version="test",
+        ccp4_version="test",
+        **cfg_overrides,
+    )
+    # Set the worker global directly: monkeypatch restores it after the
+    # test, whereas _init_worker has no teardown counterpart.
+    monkeypatch.setattr(worker, "_CFG", cfg)
+    return worker.process("1abc")
 
 
 def _write_manifest(path, rows, columns=None):
@@ -638,9 +711,9 @@ class TestInitialResult:
         """Version provenance is stamped once and shared by every row."""
         result = worker._initial_result("109m", CFG, None)
         assert result["alchemy_version"] == pool.ALCHEMY_VERSION
-        assert result["alchemy_commit"] == CFG["alchemy_commit"]
-        assert result["gemmi_version"] == CFG["gemmi_version"]
-        assert result["ccp4_version"] == CFG["ccp4_version"]
+        assert result["alchemy_commit"] == CFG.alchemy_commit
+        assert result["gemmi_version"] == CFG.gemmi_version
+        assert result["ccp4_version"] == CFG.ccp4_version
         assert result["model_policy"] == worker.MODEL_POLICY
         assert result["altloc_policy"] == worker.ALTLOC_POLICY
         assert result["symmetry_contact_policy"] == worker.SYMMETRY_POLICY
@@ -2345,6 +2418,116 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# What the density stage returns is what the entry reports
+# --------------------------------------------------------------------------- #
+class TestDensityResultReachesTheResult:
+    """The worker must report the density stage's own answers, not its request.
+
+    ``DensityResult`` is the contract between the two, and every field below
+    used to be a string key the worker read with a mixture of ``[...]`` and
+    ``.get()``. These are the three the manifest and the run log depend on;
+    only the entry-data lane exercised the successful path before, and that
+    lane does not run in CI.
+    """
+
+    @staticmethod
+    def _density(**overrides):
+        fields = {
+            "stats_out": "/nonexistent/stats.out",
+            "rszd": "/nonexistent/rszd.pdb",
+            "fo_map": "/nonexistent/fo.map",
+            "df_map": "/nonexistent/df.map",
+            "mtz_for_maps": "/nonexistent/entry.mtz",
+            "mtzfix_log": "/nonexistent/mtzfix.log",
+            "mtzfix_applied": False,
+            "timings": {"edstats_s": 12.5},
+            "twin_coefficient_normalization_applied": False,
+            "twin_coefficient_normalization": None,
+            "density_map_scope_requested": "model-envelope",
+            "density_map_scope_used": "model-envelope",
+            "full_map_bytes": 8192,
+            "edstats_map_bytes": 2048,
+        }
+        fields.update(overrides)
+        return density.DensityResult(**fields)
+
+    def _entry(self, tmp_path, monkeypatch, result, **cfg_overrides):
+        monkeypatch.setattr(
+            worker, "extract_metal_statistics", lambda *a, **k: ([], [])
+        )
+        return _manual_entry(
+            tmp_path, monkeypatch, lambda *a, **k: result, **cfg_overrides
+        )
+
+    def test_the_scope_reported_is_the_one_achieved(self, tmp_path, monkeypatch):
+        """A crop that could not be applied must not be reported as applied.
+
+        The requested and achieved scopes are separate fields precisely because
+        they disagree: an envelope larger than the map, or one past the cell
+        edge, falls back to the full map. Reporting the request would make
+        every entry look cropped and quietly invalidate any later analysis that
+        grouped entries by map scope.
+        """
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            self._density(
+                density_map_scope_requested="model-envelope",
+                density_map_scope_used="full-extent-fallback",
+            ),
+        )
+
+        assert result["density_map_scope_used"] == "full-extent-fallback"
+        assert result["density_full_map_bytes"] == 8192
+        assert result["density_edstats_map_bytes"] == 2048
+
+    def test_density_timings_reach_the_entry(self, tmp_path, monkeypatch):
+        """The stage's own per-program timings are merged, not discarded.
+
+        They are how a run log attributes an entry's cost to a CCP4 program,
+        which is what the timeout budgets in commit 5 were derived from.
+        """
+        result = self._entry(
+            tmp_path, monkeypatch, self._density(timings={"edstats_s": 12.5})
+        )
+
+        assert result["timings"]["edstats_s"] == 12.5
+        # And the worker's own measurement of the whole stage is still there.
+        assert "density_total_s" in result["timings"]
+
+    def test_a_normalized_twin_entry_is_flagged(self, tmp_path, monkeypatch):
+        """The normalization is a real modification and must stay visible."""
+        result = self._entry(
+            tmp_path,
+            monkeypatch,
+            self._density(
+                twin_coefficient_normalization_applied=True,
+                twin_coefficient_normalization={"usable_reflections": 10},
+            ),
+        )
+
+        assert "twin_refmac_coefficients_normalized" in result["warning_codes"]
+
+    @pytest.mark.parametrize("keep", [False, True])
+    def test_keep_intermediates_decides_the_scratch_directory(
+        self, tmp_path, monkeypatch, keep
+    ):
+        """``--keep-intermediates`` reaches the worker's cleanup, or nothing does.
+
+        The scratch directory holds the maps, so the default must remove it;
+        the flag exists to inspect them. The worker reads one config field to
+        decide, and until now only an end-to-end run exercised it.
+        """
+        self._entry(tmp_path, monkeypatch, self._density(), keep=keep)
+
+        scratch = [
+            name for name in os.listdir(tmp_path) if name.startswith(".alchemy-")
+        ]
+
+        assert bool(scratch) is keep
+
+
+# --------------------------------------------------------------------------- #
 # CCP4 timeout as an entry outcome
 # --------------------------------------------------------------------------- #
 class TestCcp4TimeoutOutcome:
@@ -2358,56 +2541,12 @@ class TestCcp4TimeoutOutcome:
 
     @staticmethod
     def _entry(tmp_path, monkeypatch, failure):
-        """Run one manual-input entry whose density stage raises ``failure``.
-
-        Only the three MTZ-dependent readers are stubbed. Structure loading,
-        result assembly and status computation all run for real, which is the
-        part under test.
-        """
-        builder = helpers.StructureBuilder()
-        builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
-        builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.05, 0.0, 0.0)})
-        pdb_path = tmp_path / "entry.pdb"
-        builder.write_pdb(str(pdb_path))
-        mtz_path = tmp_path / "entry.mtz"
-        mtz_path.write_bytes(b"unused: the readers below are stubbed")
-
-        monkeypatch.setattr(worker, "read_resolution", lambda *a, **k: 2.0)
-        monkeypatch.setattr(
-            worker, "read_map_column_resolution", lambda *a, **k: (20.0, 2.0)
-        )
+        """Run one manual-input entry whose density stage raises ``failure``."""
 
         def fake_density(*args, **kwargs):
             raise failure
 
-        monkeypatch.setattr(worker, "run_density_analysis", fake_density)
-
-        cfg = {
-            "root": str(tmp_path),
-            "mirror_root": str(tmp_path),
-            "cache_root": str(tmp_path),
-            "env": {},
-            "output_dir": str(tmp_path),
-            "cofactors": set(),
-            "keep": False,
-            "bonds": False,
-            "density_map_scope": "full",
-            "ccp4_timeout_s": 900,
-            "allow_download": False,
-            "manual_inputs": {
-                "pdb_file": str(pdb_path),
-                "mtz_file": str(mtz_path),
-                "cif_file": None,
-                "data_json": None,
-            },
-            "alchemy_commit": "test",
-            "gemmi_version": "test",
-            "ccp4_version": "test",
-        }
-        # Set the worker global directly: monkeypatch restores it after the
-        # test, whereas _init_worker has no teardown counterpart.
-        monkeypatch.setattr(worker, "_CFG", cfg)
-        return worker.process("1abc")
+        return _manual_entry(tmp_path, monkeypatch, fake_density)
 
     def test_timeout_is_reported_as_a_named_retryable_outcome(
         self, tmp_path, monkeypatch

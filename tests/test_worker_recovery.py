@@ -27,6 +27,8 @@ the whole module costs about ten seconds. The end-to-end tests need POSIX
 from __future__ import annotations
 
 import csv
+import dataclasses
+import logging
 import multiprocessing
 import os
 import pickle
@@ -40,6 +42,7 @@ import traceback
 
 import pytest
 
+import density_analysis as density
 import main
 import worker
 from driver import runlog, writers
@@ -97,24 +100,32 @@ class _BrokenQueue:
 
 
 def _reference_cfg(output_dir, manual_inputs=None):
-    """Build the worker config dict exactly as ``driver_pool._run`` assembles it."""
+    """Build the worker config exactly as ``driver_pool._run`` assembles it.
+
+    Every field is named because ``WorkerConfig`` is frozen and requires them:
+    while this was a dict, it had silently drifted from the real one -- no
+    ``log_level``, no ``ccp4_timeout_s`` -- and a worker reading either here
+    would have raised ``KeyError`` where production works fine.
+    """
     env = dict(os.environ)
-    return {
-        "root": os.path.join(output_dir, "root"),
-        "mirror_root": os.path.join(output_dir, "mirror"),
-        "cache_root": os.path.join(output_dir, "cache"),
-        "env": env,
-        "output_dir": output_dir,
-        "cofactors": reference_data.cofactor_ids(),
-        "keep": False,
-        "bonds": True,
-        "density_map_scope": "model-envelope",
-        "allow_download": False,
-        "manual_inputs": manual_inputs,
-        "alchemy_commit": driver_pool._alchemy_commit(),
-        "gemmi_version": driver_pool._gemmi_version(),
-        "ccp4_version": driver_pool._ccp4_version(env),
-    }
+    return worker.WorkerConfig(
+        root=os.path.join(output_dir, "root"),
+        mirror_root=os.path.join(output_dir, "mirror"),
+        cache_root=os.path.join(output_dir, "cache"),
+        env=env,
+        output_dir=output_dir,
+        cofactors=reference_data.cofactor_ids(),
+        keep=False,
+        bonds=True,
+        density_map_scope="model-envelope",
+        ccp4_timeout_s=density.CCP4_TOOL_TIMEOUT_S,
+        log_level=logging.INFO,
+        allow_download=False,
+        manual_inputs=manual_inputs,
+        alchemy_commit=driver_pool._alchemy_commit(),
+        gemmi_version=driver_pool._gemmi_version(),
+        ccp4_version=driver_pool._ccp4_version(env),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -310,9 +321,9 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     # The message has to name both the entry and the process for triage.
     assert "4321" in result["error"] and "1abc" in result["error"]
     # Provenance is carried over from the run config, not left blank.
-    assert result["alchemy_commit"] == cfg["alchemy_commit"]
-    assert result["gemmi_version"] == cfg["gemmi_version"]
-    assert result["ccp4_version"] == cfg["ccp4_version"]
+    assert result["alchemy_commit"] == cfg.alchemy_commit
+    assert result["gemmi_version"] == cfg.gemmi_version
+    assert result["ccp4_version"] == cfg.ccp4_version
 
     row = writers._manifest_row(
         result,
@@ -458,7 +469,7 @@ def _stub_process(pdb_id):
         raise RuntimeError("worker configuration has not been initialized")
     step = _STUB_SCRIPT.get(pdb_id, {})
     runtime = float(step.get("runtime", 0.02))
-    result = worker._initial_result(pdb_id, cfg, cfg.get("manual_inputs"))
+    result = worker._initial_result(pdb_id, cfg, cfg.manual_inputs)
 
     die = step.get("die")
     if die and _first_visit(pdb_id):
@@ -886,7 +897,7 @@ def _spawn_task(payload):
     worker._announce_inflight("end", pdb_id)
     cfg = worker._CFG
     assert cfg is not None
-    return (pdb_id, cfg["output_dir"], sorted(cfg["cofactors"])[:1])
+    return (pdb_id, cfg.output_dir, sorted(cfg.cofactors)[:1])
 
 
 def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
@@ -926,7 +937,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     assert pdb_id == "1abc"
     # The config really crossed the interpreter boundary intact.
     assert output_dir == str(tmp_path)
-    assert cofactor_sample == sorted(cfg["cofactors"])[:1]
+    assert cofactor_sample == sorted(cfg.cofactors)[:1]
 
     # The healthy entry was released; the dead one is still attributed.
     assert "1abc" not in assignments.values()
@@ -956,12 +967,109 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
     restored = pickle.loads(pickle.dumps(cfg))
 
     assert restored == cfg
-    assert restored["cofactors"] == cfg["cofactors"]
-    assert restored["cofactors"], "the bundled cofactor catalog must be loaded"
+    assert restored.cofactors == cfg.cofactors
+    assert restored.cofactors, "the bundled cofactor catalog must be loaded"
     # And it still drives the code that consumes it in the worker.
     assert worker._initial_result(
-        "1abc", restored, restored["manual_inputs"]
-    ) == worker._initial_result("1abc", cfg, cfg["manual_inputs"])
+        "1abc", restored, restored.manual_inputs
+    ) == worker._initial_result("1abc", cfg, cfg.manual_inputs)
+
+
+def test_worker_config_cannot_be_edited_by_a_worker(tmp_path):
+    """One run decides the config; no worker may change it for itself.
+
+    Each worker holds its own unpickled copy, so an edit here would not even
+    be visible to the driver or to the other workers -- it would just make one
+    process behave differently from the rest, for one entry, with nothing in
+    the manifest to say so. Frozen turns that into an immediate error.
+    """
+    cfg = _reference_cfg(str(tmp_path))
+
+    # The type checker rejects both assignments statically, which is half the
+    # value; these assert the other half, that they also fail at runtime.
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        cfg.keep = True  # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        cfg.cofactors = frozenset()  # type: ignore[misc]
+
+    assert cfg.keep is False
+
+
+def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
+    """The one hand-written mapping from CLI options to config fields.
+
+    ``WorkerConfig`` makes a missing or misspelled *field* impossible, but not
+    a field wired to the wrong option -- ``keep=args.bonds`` would type-check
+    perfectly. Only the entry-data lane exercised this function before, and
+    that lane does not run in CI.
+    """
+    args = cli.parse_args(
+        [
+            "--id",
+            "109m",
+            "--output-dir",
+            str(tmp_path),
+            "--keep-intermediates",
+            "--no-bonds",
+            "--density-map-scope",
+            "full",
+            "--ccp4-timeout",
+            "42",
+        ]
+    )
+    env = {"PATH": "/nonexistent"}
+    run_log = runlog._RunLog(args, "pytest")
+
+    cfg = driver_pool._worker_config(
+        args,
+        env,
+        str(tmp_path / "root"),
+        str(tmp_path / "cache"),
+        frozenset({"HEM"}),
+        None,
+        driver_pool._ConfidencePlan(),
+        run_log,
+    )
+
+    assert isinstance(cfg, worker.WorkerConfig)
+    assert cfg.root == str(tmp_path / "root")
+    assert cfg.cache_root == str(tmp_path / "cache")
+    assert cfg.output_dir == str(tmp_path)
+    assert cfg.env == env
+    assert cfg.cofactors == frozenset({"HEM"})
+    assert cfg.keep is True
+    assert cfg.bonds is False
+    assert cfg.density_map_scope == "full"
+    assert cfg.ccp4_timeout_s == 42
+    assert cfg.manual_inputs is None
+    # ``--id`` means an entry may be fetched; a manual run may not, and that
+    # asymmetry is the field's whole purpose.
+    assert cfg.allow_download is True
+    manual = cli.parse_args(
+        [
+            "--pdb-file",
+            str(tmp_path / "a.pdb"),
+            "--mtz-file",
+            str(tmp_path / "a.mtz"),
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+    manual_cfg = driver_pool._worker_config(
+        manual,
+        env,
+        str(tmp_path / "root"),
+        None,
+        frozenset(),
+        {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
+        driver_pool._ConfidencePlan(),
+        runlog._RunLog(manual, "pytest"),
+    )
+    assert manual_cfg.allow_download is False
+    assert manual_cfg.manual_inputs is not None
+    # Provenance is stamped into the run log as well as into every row.
+    assert run_log.details["gemmi_version"] == cfg.gemmi_version
+    assert run_log.details["ccp4_version"] == cfg.ccp4_version
 
 
 # --------------------------------------------------------------------------- #

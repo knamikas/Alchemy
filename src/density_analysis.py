@@ -19,7 +19,8 @@ import shutil
 import struct
 import time
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import gemmi
 import numpy as np
@@ -54,6 +55,47 @@ REFMAC_TWIN_COLUMNS = {
     "FOM": "W",
 }
 REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
+
+
+@dataclass(frozen=True)
+class DensityResult:
+    """What one entry's density stage produced, and how it produced it.
+
+    Declared rather than assembled key by key because the worker used to read
+    it both ways in the same block -- ``res["density_map_scope_used"]`` beside
+    ``res.get("timings", {})`` -- which left a reader unable to tell which
+    fields are guaranteed. Every field below is always present: the function
+    either returns all of them or raises.
+
+    ``rszd`` and ``qq_out``-adjacent paths are here because the debug CLI and
+    ``--keep-intermediates`` both want to name the files the stage wrote, not
+    because the pipeline reads them back.
+    """
+
+    #: EDSTATS statistics table; the only output the pipeline parses.
+    stats_out: str
+    #: Per-atom RSZD coordinates EDSTATS writes alongside its table.
+    rszd: str
+    #: The 2mFo-DFc and mFo-DFc maps EDSTATS was run against.
+    fo_map: str
+    df_map: str
+    #: The MTZ the maps were computed from: the original, MTZFIX's correction,
+    #: or the twin-normalized rewrite, which ``mtzfix_applied`` and
+    #: ``twin_coefficient_normalization_applied`` distinguish.
+    mtz_for_maps: str
+    mtzfix_log: str
+    mtzfix_applied: bool
+    #: Per-step wall-clock seconds, merged into the entry's timings.
+    timings: dict[str, Any]
+    twin_coefficient_normalization_applied: bool
+    #: The normalization's own reflection counts and residuals, or ``None``.
+    twin_coefficient_normalization: Optional[dict[str, Any]]
+    #: What was asked for, and what was achieved -- they differ when a model
+    #: envelope could not be cropped and the full map was used instead.
+    density_map_scope_requested: str
+    density_map_scope_used: str
+    full_map_bytes: int
+    edstats_map_bytes: int
 
 
 class MtzfixValidationError(RuntimeError):
@@ -300,7 +342,8 @@ def run_density_analysis(
     already passes its checks, no corrected file is produced and the original
     MTZ is used for both FFT calculations.
 
-    Returns a dict of output paths and MTZFIX provenance. Raises RuntimeError if
+    Returns a ``DensityResult`` of output paths and MTZFIX provenance. Raises
+    RuntimeError if
     any CCP4 step exits non-zero or edstats produces no stats file, and
     ``Ccp4ToolTimeout`` if one of them runs past ``tool_timeout_s``. The budget
     applies to each program separately, not to the entry as a whole.
@@ -597,22 +640,22 @@ def run_density_analysis(
 
     if not os.path.exists(stats_out):
         raise RuntimeError(f"edstats produced no stats file for {pdb_id}")
-    return {
-        "stats_out": stats_out,
-        "rszd": rszd,
-        "fo_map": fo_map,
-        "df_map": df_map,
-        "mtz_for_maps": map_mtz,
-        "mtzfix_log": mtzfix_log,
-        "mtzfix_applied": mtzfix_applied,
-        "timings": timings,
-        "twin_coefficient_normalization_applied": (twin_normalization is not None),
-        "twin_coefficient_normalization": twin_normalization,
-        "density_map_scope_requested": map_scope,
-        "density_map_scope_used": map_scope_used,
-        "full_map_bytes": full_map_bytes,
-        "edstats_map_bytes": edstats_map_bytes,
-    }
+    return DensityResult(
+        stats_out=stats_out,
+        rszd=rszd,
+        fo_map=fo_map,
+        df_map=df_map,
+        mtz_for_maps=map_mtz,
+        mtzfix_log=mtzfix_log,
+        mtzfix_applied=mtzfix_applied,
+        timings=timings,
+        twin_coefficient_normalization_applied=(twin_normalization is not None),
+        twin_coefficient_normalization=twin_normalization,
+        density_map_scope_requested=map_scope,
+        density_map_scope_used=map_scope_used,
+        full_map_bytes=full_map_bytes,
+        edstats_map_bytes=edstats_map_bytes,
+    )
 
 
 if __name__ == "__main__":

@@ -24,7 +24,8 @@ import shutil
 import signal
 import tempfile
 import time
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Collection, Dict, Optional
 
 from _version import __version__
 from bond_analysis import NAN, load_structure, run_bond_analysis
@@ -82,14 +83,58 @@ MAX_MANIFEST_ERROR_CHARS = 300
 #: entry's scratch directory.
 TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
 
+
+@dataclass(frozen=True)
+class WorkerConfig:
+    """Everything one run decides once and every worker then reads.
+
+    Frozen because it is shared state in the strongest sense: assembled by the
+    driver, pickled into each worker's ``_init_worker``, and read from there by
+    every stage of ``process``. Nothing in a worker may edit it, and a frozen
+    dataclass says so where a dict could not.
+
+    Declaring the fields also puts the shape in one place. Two test modules
+    used to hand-build the same dict, and both had already drifted -- neither
+    carried ``log_level``, and one was missing ``ccp4_timeout_s`` -- silently,
+    because a missing key only fails at the moment some worker reads it.
+    """
+
+    #: Where entry directories are read from, and the mirror and cache the
+    #: downloader falls back to when ``allow_download`` is set.
+    root: str
+    mirror_root: str
+    cache_root: Optional[str]
+    #: Process environment carrying CCP4 on PATH, passed to every subprocess.
+    env: Dict[str, str]
+    output_dir: str
+    #: Component ids treated as metal cofactors, loaded once by the driver.
+    cofactors: Collection[str]
+    #: ``--keep-intermediates``: retain each entry's scratch directory.
+    keep: bool
+    #: ``--bonds``: run the contact stage at all.
+    bonds: bool
+    density_map_scope: str
+    ccp4_timeout_s: int
+    #: Level for this worker's logging handler; the driver owns the sink.
+    log_level: int
+    #: Whether a missing entry may be fetched, which is false for a manual run.
+    allow_download: bool
+    #: The four explicit input paths of a manual run, or ``None`` for a batch.
+    manual_inputs: Optional[Dict[str, Optional[str]]]
+    #: Run provenance stamped into every manifest row.
+    alchemy_commit: str
+    gemmi_version: str
+    ccp4_version: str
+
+
 #: The configuration a pool worker was initialized with, and the queue it
 #: reports its in-flight entry on. Both are set once per worker process by
 #: ``_init_worker`` and are read-only thereafter.
-_CFG: Optional[Dict[str, Any]] = None
+_CFG: Optional[WorkerConfig] = None
 _INFLIGHT: Optional[Any] = None
 
 
-def _init_worker(cfg: Dict[str, Any], inflight=None, log_queue=None) -> None:
+def _init_worker(cfg: WorkerConfig, inflight=None, log_queue=None) -> None:
     global _CFG, _INFLIGHT
     _CFG = cfg
     _INFLIGHT = inflight
@@ -104,7 +149,7 @@ def _init_worker(cfg: Dict[str, Any], inflight=None, log_queue=None) -> None:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
     # Handlers inherited through fork would have several processes writing to
     # one stream; the queue makes the driver the only writer.
-    configure_worker_logging(log_queue, level=(cfg or {}).get("log_level", 20))
+    configure_worker_logging(log_queue, level=cfg.log_level if cfg else 20)
 
 
 def _announce_inflight(state: str, pdb_id: str) -> None:
@@ -190,9 +235,9 @@ def _initial_result(pdb_id, cfg, manual_inputs):
         "confidence_inputs_missing_reason": "",
         "ccp4_timeout_log_path": "",
         "alchemy_version": __version__,
-        "alchemy_commit": cfg["alchemy_commit"],
-        "gemmi_version": cfg["gemmi_version"],
-        "ccp4_version": cfg["ccp4_version"],
+        "alchemy_commit": cfg.alchemy_commit,
+        "gemmi_version": cfg.gemmi_version,
+        "ccp4_version": cfg.ccp4_version,
         "refinement_state": "manual" if manual_inputs else "final",
         "source_coordinate_format": "",
         "analysis_coordinate_format": "pdb",
@@ -210,7 +255,7 @@ def _initial_result(pdb_id, cfg, manual_inputs):
 
 def _worker_death_result(pdb_id, cfg, pid):
     """Synthesize the retryable result a killed worker could not return."""
-    result = _initial_result(pdb_id, cfg, cfg.get("manual_inputs"))
+    result = _initial_result(pdb_id, cfg, cfg.manual_inputs)
     result.update(
         status="error",
         retryable=True,
@@ -224,7 +269,7 @@ def _worker_death_result(pdb_id, cfg, pid):
 
 
 def _coordinate_provenance(cfg, source_path):
-    manual = cfg.get("manual_inputs")
+    manual = cfg.manual_inputs
     if manual:
         converted = bool(manual.get("cif_file"))
         return ("mmcif" if converted else "pdb", "pdb", converted)
@@ -234,7 +279,7 @@ def _coordinate_provenance(cfg, source_path):
 
 
 def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
-    manual = cfg.get("manual_inputs")
+    manual = cfg.manual_inputs
     if manual:
         return manual.get("cif_file") or manual.get("pdb_file") or ""
     return (
@@ -250,12 +295,10 @@ def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
 
 def _resolve_entry_dir(pdb_id, cfg):
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
-    if cfg["allow_download"]:
-        used_root = ensure_entry_available(
-            pdb_id, cfg["mirror_root"], cfg["cache_root"]
-        )
+    if cfg.allow_download:
+        used_root = ensure_entry_available(pdb_id, cfg.mirror_root, cfg.cache_root)
         return entry_dir_for(used_root, pdb_id)
-    return entry_dir_for(cfg["root"], pdb_id)
+    return entry_dir_for(cfg.root, pdb_id)
 
 
 def _identification_reason_codes(rows):
@@ -351,14 +394,14 @@ def process(pdb_id):
     # Only a directory created by this invocation may be removed in ``finally``.
     # A predictable <output-dir>/<pdbID> path could already contain user data.
     work_dir: Optional[str] = None
-    manual_inputs = cfg.get("manual_inputs")
+    manual_inputs = cfg.manual_inputs
     data_json = None
     result = _initial_result(pdb_id, cfg, manual_inputs)
     _announce_inflight("start", pdb_id)
     try:
         if manual_inputs:
             work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdb_id}-", dir=cfg["output_dir"]
+                prefix=f".alchemy-{pdb_id}-", dir=cfg.output_dir
             )
             mtz, pdb = resolve_manual_inputs(
                 pdb_id,
@@ -378,7 +421,7 @@ def process(pdb_id):
                 result.update(status="skip", error="entry dir missing")
                 return result
             work_dir = tempfile.mkdtemp(
-                prefix=f".alchemy-{pdb_id}-", dir=cfg["output_dir"]
+                prefix=f".alchemy-{pdb_id}-", dir=cfg.output_dir
             )
             mtz, pdb = prepare_inputs(pdb_id, entry, work_dir)
             data_reshi = read_resolution(entry, mtz)
@@ -437,11 +480,11 @@ def process(pdb_id):
                 work_dir,
                 map_reslo,
                 map_reshi,
-                env=cfg["env"],
-                map_scope=cfg["density_map_scope"],
-                keep_full_maps=cfg["keep"],
+                env=cfg.env,
+                map_scope=cfg.density_map_scope,
+                keep_full_maps=cfg.keep,
                 pdb_redo_is_twin=pdb_redo_is_twin,
-                tool_timeout_s=cfg["ccp4_timeout_s"],
+                tool_timeout_s=cfg.ccp4_timeout_s,
             )
         except Ccp4ToolTimeout as exc:
             # The program told us nothing about the entry -- it was killed for
@@ -450,7 +493,7 @@ def process(pdb_id):
             # generic handler, so a stalled CCP4 install is visible in the
             # manifest instead of looking like an unexplained crash.
             rows, header = [], []
-            kept_log = _preserve_timeout_log(exc, pdb_id, cfg["output_dir"])
+            kept_log = _preserve_timeout_log(exc, pdb_id, cfg.output_dir)
             result.update(
                 retryable=True,
                 reason_codes=["ccp4_tool_timeout"],
@@ -472,13 +515,13 @@ def process(pdb_id):
             )
             result["timings"].update(exc.timings)
         else:
-            result["timings"].update(res.get("timings", {}))
+            result["timings"].update(res.timings)
             result.update(
-                density_map_scope_used=res["density_map_scope_used"],
-                density_full_map_bytes=res["full_map_bytes"],
-                density_edstats_map_bytes=res["edstats_map_bytes"],
+                density_map_scope_used=res.density_map_scope_used,
+                density_full_map_bytes=res.full_map_bytes,
+                density_edstats_map_bytes=res.edstats_map_bytes,
             )
-            if res.get("twin_coefficient_normalization_applied"):
+            if res.twin_coefficient_normalization_applied:
                 result["warning_codes"] = list(
                     dict.fromkeys(
                         result["warning_codes"]
@@ -488,9 +531,9 @@ def process(pdb_id):
             statistics_started = time.monotonic()
             rows, header = extract_metal_statistics(
                 pdb_id,
-                res["stats_out"],
+                res.stats_out,
                 METALS_SET,
-                cfg["cofactors"],
+                cfg.cofactors,
                 structure=structure,
             )
             result["timings"]["statistics_extraction_s"] = round(
@@ -516,7 +559,7 @@ def process(pdb_id):
             "retryable": False,
         }
 
-        if cfg["bonds"]:
+        if cfg.bonds:
             # A bond-stage failure must not lose the edstats rows already computed.
             bond_started = time.monotonic()
             try:
@@ -577,7 +620,7 @@ def process(pdb_id):
             error=truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS),
         )
     finally:
-        if not cfg["keep"] and work_dir is not None and os.path.isdir(work_dir):
+        if not cfg.keep and work_dir is not None and os.path.isdir(work_dir):
             cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
             result["timings"]["cleanup_s"] = round(

@@ -167,12 +167,12 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypa
         pdb_redo_is_twin=True,
     )
     assert len(normalized_calls) == 1
-    assert result["twin_coefficient_normalization_applied"] is True
-    assert result["twin_coefficient_normalization"] == {
+    assert result.twin_coefficient_normalization_applied is True
+    assert result.twin_coefficient_normalization == {
         "usable_reflections": 2,
         "centric_reflections": 1,
     }
-    assert result["mtz_for_maps"].endswith("test_twin_edstats.mtz")
+    assert result.mtz_for_maps.endswith("test_twin_edstats.mtz")
 
 
 def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
@@ -390,9 +390,9 @@ def test_a_usable_envelope_is_cropped_and_the_full_maps_discarded(
         _envelope_run_factory(full_size=8192, envelope_size=2048),
     )
 
-    assert result["density_map_scope_used"] == "model-envelope"
-    assert result["full_map_bytes"] == 8192 * 2
-    assert result["edstats_map_bytes"] == 2048 * 2
+    assert result.density_map_scope_used == "model-envelope"
+    assert result.full_map_bytes == 8192 * 2
+    assert result.edstats_map_bytes == 2048 * 2
     assert not os.path.exists(tmp_path / "out" / "1abc_fo_full.map"), (
         "the pre-crop map is redundant once cropping succeeded"
     )
@@ -426,8 +426,8 @@ def test_an_envelope_larger_than_the_original_falls_back_to_the_full_map(
         _envelope_run_factory(full_size=2048, envelope_size=4096),
     )
 
-    assert result["density_map_scope_used"] == "full-size-fallback"
-    assert result["edstats_map_bytes"] == result["full_map_bytes"]
+    assert result.density_map_scope_used == "full-size-fallback"
+    assert result.edstats_map_bytes == result.full_map_bytes
     assert os.path.getsize(tmp_path / "out" / "1abc_fo.map") == 2048, (
         "the retained map must be the original, not the larger crop"
     )
@@ -453,8 +453,8 @@ def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
         ),
     )
 
-    assert result["density_map_scope_used"] == "full-extent-fallback"
-    assert result["edstats_map_bytes"] == result["full_map_bytes"]
+    assert result.density_map_scope_used == "full-extent-fallback"
+    assert result.edstats_map_bytes == result.full_map_bytes
     assert os.path.getsize(tmp_path / "out" / "1abc_fo.map") == 8192
 
 
@@ -473,7 +473,7 @@ def test_a_crop_starting_inside_the_cell_is_accepted(tmp_path, monkeypatch):
         ),
     )
 
-    assert result["density_map_scope_used"] == "model-envelope"
+    assert result.density_map_scope_used == "model-envelope"
 
 
 def test_an_unreadable_map_header_is_reported_rather_than_guessed(
