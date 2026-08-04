@@ -10,10 +10,14 @@ here, is what keeps the written header and the resume check from disagreeing.
 import csv
 from typing import Optional
 
-from bond_analysis import BOND_COLUMNS, CANDIDATE_COLUMNS, STATS_EXTRA_COLUMNS
+from bond_schema import (
+    BOND_COLUMNS,
+    CANDIDATE_COLUMNS,
+    STATS_EXTRA_COLUMNS,
+    _check_row_schema,
+)
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
-from worker import _check_row_schema
 
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every

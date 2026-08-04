@@ -24,7 +24,7 @@ import gemmi
 import pytest
 
 import helpers
-import bond_analysis
+import bond_schema
 import coordinate_conversion as conversion
 import declared_connections
 import density_analysis as density
@@ -1165,9 +1165,9 @@ class TestOutputWriters:
 
         assert _read_csv(tmp_path / "manifest.csv") == [MANIFEST_COLUMNS]
         assert _read_csv(tmp_path / "stats.csv") == [list(STATS_COLUMNS)]
-        assert _read_csv(tmp_path / "bonds.csv") == [list(bond_analysis.BOND_COLUMNS)]
+        assert _read_csv(tmp_path / "bonds.csv") == [list(bond_schema.BOND_COLUMNS)]
         assert _read_csv(tmp_path / "candidates.csv") == [
-            list(bond_analysis.CANDIDATE_COLUMNS)
+            list(bond_schema.CANDIDATE_COLUMNS)
         ]
         assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
 
@@ -1183,9 +1183,9 @@ class TestOutputWriters:
             }
             for _ in range(3)
         ]
-        bond_rows = [dict.fromkeys(bond_analysis.BOND_COLUMNS, "") for _ in range(4)]
+        bond_rows = [dict.fromkeys(bond_schema.BOND_COLUMNS, "") for _ in range(4)]
         candidate_rows = [
-            dict.fromkeys(bond_analysis.CANDIDATE_COLUMNS, "") for _ in range(2)
+            dict.fromkeys(bond_schema.CANDIDATE_COLUMNS, "") for _ in range(2)
         ]
         writers.write_stats_rows(stats_rows)
         writers.write_bond_rows(bond_rows)
@@ -1217,22 +1217,20 @@ class TestOutputWriters:
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = {column: f"v-{column}" for column in bond_analysis.BOND_COLUMNS}
+        row = {column: f"v-{column}" for column in bond_schema.BOND_COLUMNS}
         # Feed it in a deliberately different key order.
         shuffled = {key: row[key] for key in reversed(list(row))}
         writers.write_bond_rows([shuffled])
         self._close(handles)
         written = _read_csv(tmp_path / "bonds.csv")[1]
-        assert written == [f"v-{column}" for column in bond_analysis.BOND_COLUMNS]
+        assert written == [f"v-{column}" for column in bond_schema.BOND_COLUMNS]
 
     def test_disabled_bond_outputs_are_a_no_op_not_a_crash(self, tmp_path):
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
         writers = _OutputWriters(*handles)
-        writers.write_bond_rows([dict.fromkeys(bond_analysis.BOND_COLUMNS, "")])
-        writers.write_candidate_rows(
-            [dict.fromkeys(bond_analysis.CANDIDATE_COLUMNS, "")]
-        )
+        writers.write_bond_rows([dict.fromkeys(bond_schema.BOND_COLUMNS, "")])
+        writers.write_candidate_rows([dict.fromkeys(bond_schema.CANDIDATE_COLUMNS, "")])
         self._close(handles)
         assert writers.n_bonds == 0
         assert writers.n_candidates == 0
@@ -1250,24 +1248,32 @@ class TestOutputWriters:
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = dict.fromkeys(getattr(bond_analysis, columns_name), "")
+        row = dict.fromkeys(getattr(bond_schema, columns_name), "")
         if mutate == "drop":
-            row.pop(next(iter(row)))
+            drifted = next(iter(row))
+            row.pop(drifted)
+            expected_clause = f"missing {drifted}"
         else:
-            row["unexpected_column"] = ""
+            drifted = "unexpected_column"
+            row[drifted] = ""
+            expected_clause = f"unexpected {drifted}"
         try:
             with pytest.raises(RuntimeError) as excinfo:
                 writers.write_bond_rows([row])
         finally:
             self._close(handles)
-        assert "metal_bonds_all.csv" in str(excinfo.value)
+        message = str(excinfo.value)
+        assert "metal_bonds_all.csv" in message
+        # Naming the column is the whole value of the guard: "the schema drifted"
+        # sends a maintainer through 90 columns by hand.
+        assert expected_clause in message
         assert writers.n_bonds == 0
 
     def test_candidate_row_schema_drift_fails_loudly(self, tmp_path):
         """Same guard on the candidate stream, named for its own file."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = dict.fromkeys(bond_analysis.CANDIDATE_COLUMNS, "")
+        row = dict.fromkeys(bond_schema.CANDIDATE_COLUMNS, "")
         row["bogus"] = ""
         try:
             with pytest.raises(RuntimeError) as excinfo:
@@ -1275,6 +1281,7 @@ class TestOutputWriters:
         finally:
             self._close(handles)
         assert "metal_candidates_all.csv" in str(excinfo.value)
+        assert "unexpected bogus" in str(excinfo.value)
 
     def test_confidence_output_requires_its_columns(self, tmp_path):
         """A confidence stream without a schema cannot be written safely."""
@@ -1397,7 +1404,7 @@ class TestOutputWriters:
                 }
             ]
         )
-        writers.write_bond_rows([dict.fromkeys(bond_analysis.BOND_COLUMNS, "")])
+        writers.write_bond_rows([dict.fromkeys(bond_schema.BOND_COLUMNS, "")])
         writers.write_manifest_row(
             _manifest_row(_result(status="ok"), False, True, {}, {})
         )

@@ -29,7 +29,8 @@ python src/main.py \
     --id-file path/to/pdb_ids.txt --ccp4-setup <…>
 ```
 
-Results are written to:
+Results are written to (the column lists and row builders live in
+`src/bond_schema.py`):
 
 - `output/metal_stats_all.csv` — one row per selected metal site, with
   real-space statistics, DPI and validation provenance, and explicit-only

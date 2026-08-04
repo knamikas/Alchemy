@@ -25,6 +25,7 @@ import gemmi
 import pytest
 
 import bond_analysis as ba
+import bond_schema
 import donor_chemistry
 import dpi as dpi_module
 import helpers
@@ -725,7 +726,7 @@ def test_zscore_denominator_carries_exactly_one_dpi():
 
     assert ba._zscore(dist, mu, sigma, dpi) == pytest.approx(round(single, 4))
     assert single == pytest.approx(6.0)
-    assert two_atom < ba.ZSCORE_OUTLIER_CUTOFF < single
+    assert two_atom < bond_schema.ZSCORE_OUTLIER_CUTOFF < single
     assert ba._zscore(dist, mu, sigma, dpi) != pytest.approx(round(two_atom, 4))
 
 
@@ -775,7 +776,7 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
 
     ba._annotate_contacts([contact], "ZN", 0.12)
 
-    assert ba.ZSCORE_OUTLIER_CUTOFF == 6.0
+    assert bond_schema.ZSCORE_OUTLIER_CUTOFF == 6.0
     assert contact["literature_distance"] == pytest.approx(2.09)
     assert contact["literature_stdev"] == pytest.approx(0.05)
     assert contact["zscore"] == pytest.approx(expected_z)
@@ -805,7 +806,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):
 
     expected = round((row["distance"] - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2), 4)
     assert row["zscore"] == pytest.approx(expected)
-    assert expected > ba.ZSCORE_OUTLIER_CUTOFF
+    assert expected > bond_schema.ZSCORE_OUTLIER_CUTOFF
     assert row["geometry_outlier"] is True
     assert row["geometry_consistent"] is False
     assert row["zscore_outlier_cutoff"] == pytest.approx(6.0)

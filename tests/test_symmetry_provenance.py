@@ -321,6 +321,25 @@ def test_transformed_neighbor_position_reproduces_the_reported_distance(symmetry
     assert recomputed == pytest.approx(row["distance"], abs=1e-3)
 
 
+def test_published_image_positions_are_rounded_in_both_streams(symmetry_case):
+    """Both CSVs publish 6-decimal coordinates, and the test above assumes it.
+
+    The rounding is what makes the tolerance in
+    ``test_transformed_neighbor_position_reproduces_the_reported_distance``
+    correct, and it is what keeps a 17-digit float repr out of a column users
+    read. Asserted on the candidate stream as well as the bond stream: they are
+    built by two different functions that round separately.
+    """
+    analysis, _, _, _, _ = symmetry_case
+
+    published = [_transformed_position(row) for row in analysis.rows]
+    published += [_transformed_position(row) for row in analysis.candidates]
+
+    assert published, "the fixture must have produced rows for this to mean anything"
+    for position in published:
+        assert position == tuple(round(value, 6) for value in position)
+
+
 def test_cell_translation_agrees_with_the_symmetry_code(symmetry_case):
     """The ``klm`` digits of the code and ``cell_translation_*`` say one thing.
 

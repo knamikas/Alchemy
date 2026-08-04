@@ -27,13 +27,8 @@ import time
 from typing import Any, Dict, Optional
 
 from _version import __version__
-from bond_analysis import (
-    NAN,
-    STATS_EXTRA_COLUMNS,
-    load_structure,
-    run_bond_analysis,
-    stats_extra_values,
-)
+from bond_analysis import NAN, load_structure, run_bond_analysis
+from bond_schema import STATS_EXTRA_COLUMNS, _check_row_schema, stats_extra_values
 from coordinate_conversion import _first_model_pdb
 from density_analysis import (
     Ccp4ToolTimeout,
@@ -276,28 +271,6 @@ def _identification_reason_codes(rows):
         elif site_status == "no_selected_metal":
             codes.append("cofactor_without_selected_metal")
     return list(dict.fromkeys(codes))
-
-
-def _check_row_schema(row, columns, name):
-    """Fail loudly when a row builder and its CSV schema have drifted apart.
-
-    Rows are written by projecting them onto a fixed column list, so a key the
-    builder gained without a matching column would be dropped silently and a
-    column it lost would surface only as a bare KeyError.
-    """
-    expected = set(columns)
-    if row.keys() == expected:
-        return
-    details = []
-    missing = sorted(expected - row.keys())
-    unexpected = sorted(row.keys() - expected)
-    if missing:
-        details.append("missing " + ", ".join(missing))
-    if unexpected:
-        details.append("unexpected " + ", ".join(unexpected))
-    raise RuntimeError(
-        f"{name} row does not match its column schema: " + "; ".join(details)
-    )
 
 
 def _append_site_fields(rows, site_summaries, structure):

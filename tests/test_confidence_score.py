@@ -25,7 +25,7 @@ import pytest
 
 import confidence_score as cs
 import helpers
-from bond_analysis import STATS_EXTRA_COLUMNS
+from bond_schema import STATS_EXTRA_COLUMNS
 
 
 # --------------------------------------------------------------------------- #
