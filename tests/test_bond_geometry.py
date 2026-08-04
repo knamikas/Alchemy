@@ -38,10 +38,8 @@ from metal_elements import METAL_ELEMENTS
 from structure_analysis import count_ni, load_structure
 
 
-# --------------------------------------------------------------------------- #
 # Expected donor table, transcribed from README.md ("The geometry-inference
 # donor table covers all 20 standard amino acids...").
-# --------------------------------------------------------------------------- #
 README_SIDE_CHAIN_DONORS = {
     "ASN": {"OD1"},
     "ASP": {"OD1", "OD2"},
@@ -106,9 +104,7 @@ REQUIRED_REFERENCE_KEYS = frozenset(
 )
 
 
-# --------------------------------------------------------------------------- #
 # Private builders (kept local so tests/helpers.py stays untouched)
-# --------------------------------------------------------------------------- #
 def _probe_structure(
     tmp_path,
     name,
@@ -249,9 +245,7 @@ def _parse_reference_table(path):
     return records
 
 
-# --------------------------------------------------------------------------- #
 # 1. The inferred-donor table
-# --------------------------------------------------------------------------- #
 def test_inferred_donor_table_matches_the_documented_atom_list():
     """The donor table is exactly README's list: backbone O plus named side chains.
 
@@ -439,9 +433,7 @@ def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path):
     )
 
 
-# --------------------------------------------------------------------------- #
 # 2. Polymer-terminal donor exceptions
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("probe_index,allowed", [(0, True), (1, False), (2, False)])
 def test_n_terminal_nitrogen_is_a_donor_only_at_the_chain_start(
     tmp_path, probe_index, allowed
@@ -548,9 +540,7 @@ def test_terminal_rules_require_a_real_polymer_residue(tmp_path):
     assert rows == []
 
 
-# --------------------------------------------------------------------------- #
 # 3. _first_sphere_rule: Harding target + 0.75 A
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "metal,residue,atom,element,is_water,expected_key",
     [
@@ -725,9 +715,7 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
     assert summary["candidate_contact_count"] == 1
 
 
-# --------------------------------------------------------------------------- #
 # 4. The z-score
-# --------------------------------------------------------------------------- #
 def test_zscore_matches_the_documented_formula():
     """z = (d - mu) / sqrt(DPI^2 + sigma^2), rounded to four decimals."""
     assert ba._zscore(2.30, 2.09, 0.05, 0.12) == pytest.approx(
@@ -839,20 +827,19 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):
     assert row["zscore_outlier_cutoff"] == pytest.approx(6.0)
 
 
-# --------------------------------------------------------------------------- #
-# 5. The DPI (Blow 2002 eq. 7)
+# 5. The DPI (Blow 2002 eq. 7) is
 #
-# DPI = 1.28 * ni**(1/2) * va**(1/3) * nobs**(-5/6) * rfree
+#     DPI = 1.28 * ni**(1/2) * va**(1/3) * nobs**(-5/6) * rfree
 #
-# It is the denominator of every Zbond, so a transposed exponent moves every
+# and it is the denominator of every Zbond, so a transposed exponent moves every
 # bond in the database across the |Z| >= 6 boundary while leaving every
 # "isfinite(dpi) and dpi > 0" assertion happy. The tests below therefore pin the
 # value against inputs chosen so the arithmetic is exact by hand, then pin each
 # exponent separately by measuring how DPI responds to one input at a time.
-# --------------------------------------------------------------------------- #
-#: Base inputs for the scaling tests. Every term is exact: ni = 16 (sqrt 4),
-#: va = 200**3 A^3 (cube root 200), nobs = 2**12 (so nobs**(-5/6) = 2**-10),
-#: rfree = 0.25. DPI = 1.28 * 4 * 200 * 2**-10 * 0.25 = 0.25 A exactly.
+#
+# Every term of the base inputs is exact: ni = 16 (sqrt 4), va = 200**3 A^3
+# (cube root 200), nobs = 2**12 (so nobs**(-5/6) = 2**-10), rfree = 0.25.
+# DPI = 1.28 * 4 * 200 * 2**-10 * 0.25 = 0.25 A exactly.
 DPI_BASE = {"atom_count": 16, "cell_edge": 200.0, "nrefcnt": 4096, "rffin": 0.25}
 DPI_BASE_VALUE = 0.25
 
@@ -1180,9 +1167,7 @@ def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path):
     assert quarter == pytest.approx(0.0625, abs=DPI_ROUNDING)
 
 
-# --------------------------------------------------------------------------- #
 # 5b. The asymmetric-unit volume
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "spacegroup,operations",
     [
@@ -1337,9 +1322,7 @@ def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(tmp_path, c
     assert math.isnan(volume)
 
 
-# --------------------------------------------------------------------------- #
 # 5c. The R-free header fallback
-# --------------------------------------------------------------------------- #
 def _remark_3(*lines):
     """Render REMARK 3 refinement-statistics lines as a PDB header fragment."""
     return "".join(f"REMARK   3   {line}\n" for line in lines)
@@ -1449,9 +1432,7 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
     assert dpi == pytest.approx(0.125, abs=DPI_ROUNDING)
 
 
-# --------------------------------------------------------------------------- #
 # 5d. Why a site has no DPI
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "nrefcnt",
     [
@@ -1668,9 +1649,7 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path):
     assert math.isnan(row["zscore"])
 
 
-# --------------------------------------------------------------------------- #
 # 6. Nullable geometry columns
-# --------------------------------------------------------------------------- #
 def test_unassessable_geometry_renders_blank_and_never_false(tmp_path):
     """Blank means "not assessed"; ``False`` would mean "assessed and passed".
 
@@ -1733,9 +1712,7 @@ def test_assessed_geometry_columns_are_complementary_booleans(tmp_path):
     assert summary["image_inclusive_geometry_status"] == "plausible"
 
 
-# --------------------------------------------------------------------------- #
 # 7. Multi-donor groups
-# --------------------------------------------------------------------------- #
 def _bidentate(tmp_path, name, d1, d2, *, data_json=None):
     """Asp chelating a Zn through both carboxylate oxygens."""
     path = _probe_structure(
@@ -1926,9 +1903,7 @@ def test_group_size_has_no_upper_limit(tmp_path):
     assert next(iter(summaries.values()))["multi_donor_contact_count"] == 4
 
 
-# --------------------------------------------------------------------------- #
 # 8. The bundled reference table
-# --------------------------------------------------------------------------- #
 def test_reference_table_holds_exactly_the_expected_rows_and_keys():
     """Every bundled row is present, parsed strictly and reachable through ``LIT``.
 

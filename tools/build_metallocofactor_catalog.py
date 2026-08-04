@@ -34,14 +34,11 @@ METADATA_FILENAME = "metallocofactors_id.meta.json"
 COMPONENT_ID_PATTERN = re.compile(r"[A-Z0-9]+")
 ELEMENT_PATTERN = re.compile(r"([A-Z][a-z]?)(\d*)")
 
-# --------------------------------------------------------------------------- #
-# Structural classes
-# --------------------------------------------------------------------------- #
-# Alchemy tags each metal's environment in the parent_type column. Two
-# architectures are singled out because their coordination geometry is
-# chemically constrained, which is what makes them usable as reference
-# populations. Deriving them here keeps them tracking the CCD instead of
-# drifting behind a hand-maintained list in the analysis code.
+# Alchemy tags each metal's environment with a structural class in the
+# parent_type column. Two architectures are singled out because their
+# coordination geometry is chemically constrained, which is what makes them
+# usable as reference populations. Deriving them here keeps them tracking the
+# CCD instead of drifting behind a hand-maintained list in the analysis code.
 CLASS_CLUSTER = "cluster"
 CLASS_HEME = "heme"
 

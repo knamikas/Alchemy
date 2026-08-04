@@ -91,9 +91,7 @@ def pytest_configure(config):
     }
 
 
-# --------------------------------------------------------------------------- #
 # Options
-# --------------------------------------------------------------------------- #
 def pytest_addoption(parser):
     group = parser.getgroup("alchemy")
     group.addoption(
@@ -223,9 +221,7 @@ def pytest_sessionfinish(session, exitstatus):
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
-# --------------------------------------------------------------------------- #
 # Paths
-# --------------------------------------------------------------------------- #
 @pytest.fixture(scope="session")
 def repo_root() -> str:
     """Absolute path of the repository checkout under test."""
@@ -257,9 +253,7 @@ def work_dir(tmp_path, monkeypatch) -> str:
     return str(tmp_path)
 
 
-# --------------------------------------------------------------------------- #
 # External capabilities
-# --------------------------------------------------------------------------- #
 @pytest.fixture(scope="session")
 def ccp4_env():
     """Environment mapping with the CCP4 binaries on ``PATH``.

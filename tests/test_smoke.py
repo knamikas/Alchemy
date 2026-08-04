@@ -27,9 +27,7 @@ from helpers import (
 )
 
 
-# --------------------------------------------------------------------------- #
 # sys.path wiring
-# --------------------------------------------------------------------------- #
 def test_src_modules_import():
     """Every src module imports from a test process and exposes its entry points.
 
@@ -97,9 +95,7 @@ def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
     assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
 
 
-# --------------------------------------------------------------------------- #
 # The isolation fixtures
-# --------------------------------------------------------------------------- #
 def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_factory):
     """A full in-memory analysis leaves the process working directory empty.
 
@@ -172,9 +168,7 @@ def test_pdb_redo_cache_fixture_is_a_writable_directory(pdb_redo_cache):
         assert os.path.realpath(pdb_redo_cache) == os.path.realpath(configured)
 
 
-# --------------------------------------------------------------------------- #
 # Structure helpers -> load_structure
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("suffix", [".pdb", ".cif"])
 def test_builder_output_loads_cleanly(tmp_path, suffix):
     """A default synthetic structure loads with no complaints in either format.
@@ -429,9 +423,7 @@ def test_builder_can_omit_symmetry_metadata(tmp_path):
     assert context.symmetry_search_failure_reason == "missing_or_invalid_unit_cell"
 
 
-# --------------------------------------------------------------------------- #
 # EDSTATS helpers -> extract_metal_statistics
-# --------------------------------------------------------------------------- #
 def test_edstats_row_matches_the_documented_schema():
     """Synthetic EDSTATS rows match the parser's own column list exactly.
 
@@ -673,9 +665,7 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     assert math.isfinite(rows[0]["zscore"])
 
 
-# --------------------------------------------------------------------------- #
 # Capability probes and markers
-# --------------------------------------------------------------------------- #
 def test_ccp4_capability_probe_is_boolean_and_does_not_raise():
     """The local CCP4 probe answers with a bool instead of raising.
 

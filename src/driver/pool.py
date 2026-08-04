@@ -119,9 +119,7 @@ PROVENANCE_COMMAND_TIMEOUT_S = 1
 logger = logger_for(__name__)
 
 
-# --------------------------------------------------------------------------- #
 # CCP4 environment -- the CLI boundary over ccp4_setup
-# --------------------------------------------------------------------------- #
 def _verify_resolved_ccp4(env, setup_path):
     """Verify ``env``, naming the script that was run when it comes up short.
 
@@ -215,9 +213,7 @@ def resolve_ccp4_environment(args):
         raise DriverError(str(exc)) from None
 
 
-# --------------------------------------------------------------------------- #
 # Run provenance -- stamped once by the driver and copied into every result
-# --------------------------------------------------------------------------- #
 def _alchemy_commit():
     try:
         completed = subprocess.run(
@@ -259,9 +255,7 @@ def _ccp4_version(env):
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-# --------------------------------------------------------------------------- #
 # Worker-pool supervision -- the driver's half of the protocol in ``worker``
-# --------------------------------------------------------------------------- #
 def _drain_inflight(inflight, assignments):
     """Apply pending worker notifications to the pid -> entry assignment map."""
     while True:
@@ -373,9 +367,7 @@ def _shutdown_pool(pool):
     return True
 
 
-# --------------------------------------------------------------------------- #
 # Driver
-# --------------------------------------------------------------------------- #
 def resolve_confidence_reference_dir(output_dir, configured_dir=None):
     """Find a frozen confidence reference, honoring an explicit override."""
     candidates: Tuple[str, ...]
@@ -488,12 +480,9 @@ def _select_entry_ids(args, cache_root):
     return enumerate_entries(root, limit=limit), root, None
 
 
-# --------------------------------------------------------------------------- #
-# Run phases
-# --------------------------------------------------------------------------- #
-# ``_run`` below is an orchestrator: it names the phases in order and does
-# nothing else. Each phase is a function here, and each one either produces the
-# value the next phase needs or raises ``DriverError`` with the message the
+# The run phases. ``_run`` below is an orchestrator: it names them in order and
+# does nothing else. Each phase is a function here, and each one either produces
+# the value the next phase needs or raises ``DriverError`` with the message the
 # user should see. That is what makes the order of a run readable -- the shape
 # of a batch is the sequence of calls in ``_run``, not a 600-line function whose
 # phases are only visible as blank lines.

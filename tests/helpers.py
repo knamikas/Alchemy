@@ -166,9 +166,7 @@ def _translate(offset: Vec3, origin: Sequence[float]) -> Vec3:
     )
 
 
-# --------------------------------------------------------------------------- #
 # Specs
-# --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class AtomSpec:
     """One deposited atom record."""
@@ -268,9 +266,7 @@ _ASU_VALUES = {
 }
 
 
-# --------------------------------------------------------------------------- #
 # Builder
-# --------------------------------------------------------------------------- #
 class StructureBuilder:
     """Compose a gemmi structure and write it as PDB and/or mmCIF.
 
@@ -693,9 +689,7 @@ def _gemmi_address(ref: AtomRef) -> gemmi.AtomAddress:
     )
 
 
-# --------------------------------------------------------------------------- #
 # High-level structure recipes
-# --------------------------------------------------------------------------- #
 def simple_metal_site(
     metal: str = "ZN",
     donors: Sequence[Tuple[str, str, float]] = (
@@ -808,13 +802,10 @@ def dpi_inputs(
     }
 
 
-# --------------------------------------------------------------------------- #
-# EDSTATS stats.out
-# --------------------------------------------------------------------------- #
-#: Literal EDSTATS 1.0.9 residue-table header, intentionally independent of
-#: ``metal_identification``. Keeping the fixture oracle separate from the
-#: production constant means an accidental reorder in production cannot update
-#: both the generated test input and its expected schema at once.
+#: Literal EDSTATS 1.0.9 ``stats.out`` residue-table header, intentionally
+#: independent of ``metal_identification``. Keeping the fixture oracle separate
+#: from the production constant means an accidental reorder in production cannot
+#: update both the generated test input and its expected schema at once.
 EDSTATS_HEADER: Tuple[str, ...] = (
     "RT",
     "CI",
@@ -1022,9 +1013,7 @@ def stats_rows_for_structure(
     return rows, header, stats_path
 
 
-# --------------------------------------------------------------------------- #
 # Capability probes
-# --------------------------------------------------------------------------- #
 CCP4_TOOLS = ("mtzfix", "fft", "mapmask", "edstats")
 _NETWORK_CACHE: Dict[Tuple[str, int], bool] = {}
 

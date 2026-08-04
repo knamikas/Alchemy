@@ -43,9 +43,7 @@ from driver import pool
 import confidence_score
 
 
-# --------------------------------------------------------------------------- #
 # Resume schema validation -- refusing to corrupt existing output
-# --------------------------------------------------------------------------- #
 def _write_header(path, columns):
     with open(path, "w", newline="", encoding="utf-8") as handle:
         csv.writer(handle).writerow(columns)
@@ -171,9 +169,7 @@ def test_an_incompatible_confidence_header_is_refused(resume_outputs, tmp_path):
         )
 
 
-# --------------------------------------------------------------------------- #
 # Exit-code contract
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     ("counts", "retryable_partials", "expected"),
     [
@@ -206,9 +202,7 @@ def test_a_missing_status_key_is_treated_as_zero():
     assert pool._batch_exit_code({"error": 2}, 0) == 1
 
 
-# --------------------------------------------------------------------------- #
 # Entry selection
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
 def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value):
     """IDs are lowercased so cache paths and manifest keys cannot diverge."""
@@ -348,9 +342,7 @@ def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(tmp_path, monkeypatc
     assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
 
 
-# --------------------------------------------------------------------------- #
 # Input preparation
-# --------------------------------------------------------------------------- #
 def test_missing_map_coefficients_are_reported_by_path(tmp_path):
     """The error must name the file that was looked for, not just fail."""
     entry_dir = _make_entry(tmp_path, "9myr", mtz=False)
@@ -440,9 +432,7 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
     assert converted, "the authoritative mmCIF should have been converted"
 
 
-# --------------------------------------------------------------------------- #
 # Housekeeping and autoscaling
-# --------------------------------------------------------------------------- #
 def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(tmp_path):
     """Old bond rows must not be mistaken for this run's output.
 
@@ -512,9 +502,7 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
     assert memory_limit is None
 
 
-# --------------------------------------------------------------------------- #
 # CCP4 tool verification
-# --------------------------------------------------------------------------- #
 def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
     """The message must say which tools are absent and how to fix it."""
     monkeypatch.setattr(
@@ -572,9 +560,7 @@ def test_a_library_caller_never_has_to_catch_systemexit(monkeypatch):
     assert not isinstance(excinfo.value, SystemExit)
 
 
-# --------------------------------------------------------------------------- #
 # Resolution metadata
-# --------------------------------------------------------------------------- #
 def _minimal_mtz(path, high=1.5):
     """An MTZ whose only purpose is to carry a known resolution limit."""
     import gemmi
@@ -660,9 +646,7 @@ def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
     ) == pytest.approx(1.72)
 
 
-# --------------------------------------------------------------------------- #
 # Intermediate retention
-# --------------------------------------------------------------------------- #
 def test_intermediates_are_discarded_unless_asked_for():
     """Per-entry maps are large, so retention is opt-in.
 

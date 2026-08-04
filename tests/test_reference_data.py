@@ -38,9 +38,7 @@ def _catalog(tmp_path, lines, name="catalog.txt"):
     return str(path)
 
 
-# --------------------------------------------------------------------------- #
 # No import-time I/O
-# --------------------------------------------------------------------------- #
 def test_importing_the_analysis_modules_reads_no_files():
     """Importing must not touch the disk, in a fresh interpreter.
 
@@ -85,9 +83,7 @@ def test_a_malformed_catalog_raises_from_the_call_not_the_import(tmp_path):
         reference_data.cofactor_ids(path)
 
 
-# --------------------------------------------------------------------------- #
 # One parser
-# --------------------------------------------------------------------------- #
 def test_ids_and_classes_come_from_one_pass_over_one_file(tmp_path):
     """Every classified component is also a known component.
 
@@ -141,9 +137,7 @@ def test_an_empty_catalog_is_named_as_empty(tmp_path):
         reference_data.cofactor_ids(_catalog(tmp_path, ["", "   "]))
 
 
-# --------------------------------------------------------------------------- #
 # Frozen, and read once
-# --------------------------------------------------------------------------- #
 def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path):
     """These objects are process-wide and shared by every worker.
 
@@ -192,9 +186,7 @@ def test_a_file_is_read_once_however_many_callers_ask(tmp_path, monkeypatch):
     assert reads.count(path) == 1
 
 
-# --------------------------------------------------------------------------- #
 # first_sphere_targets
-# --------------------------------------------------------------------------- #
 def test_first_sphere_targets_is_the_longest_distance_per_metal_and_donor():
     """It is exactly ``max`` over the literature table, keyed the other way."""
     expected: dict[tuple[str, str], float] = {}
@@ -223,9 +215,7 @@ def test_building_the_targets_leaves_nothing_in_the_module_namespace():
     assert not leaked, f"loop variables left in a module namespace: {leaked}"
 
 
-# --------------------------------------------------------------------------- #
 # Checksum verification
-# --------------------------------------------------------------------------- #
 def test_both_bundled_files_match_their_recorded_checksums():
     """The shipped data is the data the tools say they wrote.
 
@@ -307,9 +297,7 @@ def test_a_missing_sidecar_is_an_error_for_a_bundled_file(tmp_path, monkeypatch)
         reference_data.cofactor_ids(str(catalog))
 
 
-# --------------------------------------------------------------------------- #
 # The literature table's strict parse
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "row,message",
     [
@@ -358,9 +346,7 @@ def test_a_table_with_no_distances_is_named_as_empty(tmp_path):
         reference_data._load_literature(str(table))
 
 
-# --------------------------------------------------------------------------- #
 # Reference-data identity
-# --------------------------------------------------------------------------- #
 def _stub_reference_data(tmp_path, monkeypatch, catalog_text, distance_text):
     """Point the checksum map at a writable pair of files and their sidecars."""
     paths = {}

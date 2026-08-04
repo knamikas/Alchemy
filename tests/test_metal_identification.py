@@ -42,9 +42,7 @@ HEADER = list(helpers.EDSTATS_HEADER)
 INDICES = _validated_edstats_header(HEADER)
 
 
-# --------------------------------------------------------------------------- #
 # Local helpers (private to this module by the suite's ownership rules)
-# --------------------------------------------------------------------------- #
 def _normalize(fields):
     """``_normalize_edstats_row`` against the standard schema."""
     return _normalize_edstats_row(list(fields), HEADER, INDICES)
@@ -102,9 +100,7 @@ class _RemappedStructure:
         return self._context.residues_for_author(residue_name, chain_id, resnum)
 
 
-# --------------------------------------------------------------------------- #
 # Header schema
-# --------------------------------------------------------------------------- #
 def test_valid_header_maps_every_documented_column_to_its_position():
     """The standard header validates and yields the schema's column indices."""
     indices = _validated_edstats_header(list(helpers.EDSTATS_HEADER))
@@ -180,9 +176,7 @@ def test_extract_rejects_a_reordered_header_file(tmp_path):
         _extract(stats, context)
 
 
-# --------------------------------------------------------------------------- #
 # Row validation
-# --------------------------------------------------------------------------- #
 def test_a_wellformed_row_validates_and_returns_its_model_number():
     """Validation reports the row's MN so the caller can enforce model policy."""
     row = helpers.edstats_row("ZN", "B", "1", mn=3, metrics={"ZDm": -2.5})
@@ -274,9 +268,7 @@ def test_rows_from_another_model_fail_the_entry(tmp_path):
     assert "selected model 1" in message
 
 
-# --------------------------------------------------------------------------- #
 # Model separator rows
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "fields",
     [
@@ -347,9 +339,7 @@ def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path):
         _extract(stats, context)
 
 
-# --------------------------------------------------------------------------- #
 # Blank-chain normalization  (REGRESSION: 7e03abd)
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "ci, kind",
     [
@@ -455,9 +445,7 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path):
     assert rows[0]["density_observation_id"].count("chain=_") == 1
 
 
-# --------------------------------------------------------------------------- #
 # Density observation identifier
-# --------------------------------------------------------------------------- #
 def test_density_observation_id_names_the_edstats_row_not_an_atom():
     """The identifier is residue-level and case-normalized on the entry id."""
     fields = _normalize(helpers.edstats_row("FES", "B", "5", mn=1, nr=12))
@@ -540,9 +528,7 @@ def test_shared_cofactor_repeats_one_observation_once_per_metal_site(tmp_path):
     assert len({row["residue_key"] for row in rows}) == 1
 
 
-# --------------------------------------------------------------------------- #
 # Residue classification
-# --------------------------------------------------------------------------- #
 @pytest.fixture(scope="module")
 def classification_context(tmp_path_factory):
     """One structure holding every classification case, loaded once."""
@@ -647,9 +633,7 @@ def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(tmp_path):
     assert [site.altloc for site in sites] == ["B"]
 
 
-# --------------------------------------------------------------------------- #
 # extract_metal_statistics, end to end
-# --------------------------------------------------------------------------- #
 def test_only_metal_and_cofactor_residues_produce_rows(tmp_path):
     """Donor residues and waters are density-scored but never emitted."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")

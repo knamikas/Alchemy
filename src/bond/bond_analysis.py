@@ -78,9 +78,7 @@ FIRST_SPHERE_TOLERANCE = 0.75
 SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 
 
-# --------------------------------------------------------------------------- #
 # Bond rows
-# --------------------------------------------------------------------------- #
 def _bonding_key(neighbor, nb_res, metal_el):
     """Exact (residue, atom, metal) key matching metal_distances_info.txt columns."""
     name = neighbor.atom_name.strip()

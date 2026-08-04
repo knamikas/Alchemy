@@ -41,9 +41,7 @@ from structure_analysis import StructureContext, load_structure
 import reference_data
 
 
-# --------------------------------------------------------------------------- #
 # Local scaffolding (private to this module by the suite's ownership rules)
-# --------------------------------------------------------------------------- #
 class Analysis(NamedTuple):
     """Everything one ``run_bond_analysis`` call produced, plus its context."""
 
@@ -195,9 +193,7 @@ class AmbiguousStructure:
 SOURCE_FORMATS = ("pdb", "cif")
 
 
-# --------------------------------------------------------------------------- #
 # _connection_source: which parser the coordinate file selects
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "path, expected",
     [
@@ -241,9 +237,7 @@ def test_connection_source_labels_reach_the_bond_row(tmp_path):
     assert labels == {"pdb": "LINK", "cif": "struct_conn"}
 
 
-# --------------------------------------------------------------------------- #
 # _analysis_chain_names: reversing the conversion's chain shortening
-# --------------------------------------------------------------------------- #
 def test_analysis_chain_names_reverses_conversion_shortening(tmp_path):
     """Long mmCIF chain names map onto the single-character analysis names.
 
@@ -294,9 +288,7 @@ def test_analysis_chain_names_tolerates_a_model_free_file(tmp_path):
     assert declared_connections._analysis_chain_names(str(empty)) == {}
 
 
-# --------------------------------------------------------------------------- #
 # _analysis_atom_for_partner: author-identity resolution and its None results
-# --------------------------------------------------------------------------- #
 def test_analysis_atom_for_partner_resolves_author_identity(tmp_path):
     """Chain, sequence id, insertion code, component and atom name select one atom."""
     builder = StructureBuilder()
@@ -425,9 +417,7 @@ def test_analysis_atom_for_partner_tolerates_an_unresolvable_address(tmp_path, c
     assert declared_connections._analysis_atom_for_partner(context, cra, {}) is None
 
 
-# --------------------------------------------------------------------------- #
 # _selected_conformer_atom: re-pointing onto the analyzed conformer
-# --------------------------------------------------------------------------- #
 def conformer_context(
     tmp_path,
     *,
@@ -495,9 +485,7 @@ def test_selected_conformer_atom_is_none_when_the_conformer_lacks_the_atom(tmp_p
     assert declared_connections._selected_conformer_atom(context, None) is None
 
 
-# --------------------------------------------------------------------------- #
 # REGRESSION (bug 1, 733d8ec): resolution must not ride on atom serials
-# --------------------------------------------------------------------------- #
 def test_regression_declared_partner_survives_the_ter_serial_shift(tmp_path):
     """A declaration in an mmCIF still binds the right atoms after PDB conversion.
 
@@ -744,9 +732,7 @@ def test_declared_partner_is_distinguished_by_insertion_code(tmp_path, fmt):
     assert decoy["distance"] == pytest.approx(2.60, abs=1e-6)
 
 
-# --------------------------------------------------------------------------- #
 # REGRESSION (bug 3, dd63940): declarations obey alternate-conformer selection
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("fmt", SOURCE_FORMATS)
 def test_regression_declaration_on_a_deselected_conformer_yields_one_row(tmp_path, fmt):
     """A LINK naming conformer A produces exactly one bond, on selected conformer B.
@@ -868,9 +854,7 @@ def test_declaration_is_dropped_when_the_selected_conformer_lacks_the_atom(tmp_p
     assert row["coordination_status"] == "inferred"
 
 
-# --------------------------------------------------------------------------- #
 # Resolution failures that must be reported rather than swallowed
-# --------------------------------------------------------------------------- #
 def test_broken_amino_acid_connection_is_outside_metal_analysis(tmp_path):
     """An unresolved amino-acid link is neither a partial nor a warning."""
     builder = StructureBuilder()
@@ -1074,9 +1058,7 @@ def test_unparsable_connection_file_is_reported_and_not_fatal(tmp_path):
     assert row["coordination_status"] == "inferred"
 
 
-# --------------------------------------------------------------------------- #
 # Declarations that must be ignored without complaint
-# --------------------------------------------------------------------------- #
 def test_declaration_between_two_metals_is_not_a_coordination_row(tmp_path):
     """A metal-metal LINK describes a cluster, not a metal-donor contact."""
     builder, his, zinc = zinc_histidine_site()
@@ -1163,9 +1145,7 @@ def test_declaration_inside_a_cofactor_is_not_an_external_contact(tmp_path):
     ] == []
 
 
-# --------------------------------------------------------------------------- #
 # How a declared contact reaches the bond rows
-# --------------------------------------------------------------------------- #
 def test_declaration_merges_with_a_coincident_proximity_candidate(tmp_path):
     """One atom image yields one row that carries both provenances.
 
@@ -1390,9 +1370,7 @@ def test_declared_geometry_honors_each_asu_constraint(
     assert geometry["symmetry_operation"] == expected_operation
 
 
-# --------------------------------------------------------------------------- #
 # Declaration metadata carried onto the row
-# --------------------------------------------------------------------------- #
 def test_mmcif_declaration_carries_its_identity_type_and_link_id(tmp_path):
     """mmCIF preserves the declaration's own id, type and link id."""
     builder, his, zinc = zinc_histidine_site()
@@ -1517,9 +1495,7 @@ def test_a_file_without_declarations_produces_no_declared_rows(tmp_path):
     assert result.metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
 
 
-# --------------------------------------------------------------------------- #
 # Regressions: provenance and audit trail of resolved/unresolved declarations
-# --------------------------------------------------------------------------- #
 def _structure_with_one_ncs_operation(tmp_path):
     """A Zn and a water whose +10 Angstrom NCS image sits 2.09 A from the Zn.
 

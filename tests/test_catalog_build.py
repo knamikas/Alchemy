@@ -50,9 +50,7 @@ def _load_tool():
 catalog = _load_tool()
 
 
-# --------------------------------------------------------------------------- #
 # Local scaffolding
-# --------------------------------------------------------------------------- #
 def component_block(component_id: str, atoms, bonds) -> gemmi.cif.Block:
     """Return a CCD block for one component from atoms and bonds.
 
@@ -119,9 +117,7 @@ def porphyrin(
     return atoms, bonds
 
 
-# --------------------------------------------------------------------------- #
 # element_counts
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "formula,expected",
     [
@@ -160,9 +156,7 @@ def test_the_parser_reads_element_case_the_way_the_ccd_writes_it():
     assert "FE" not in catalog.element_counts("FE4 S4")
 
 
-# --------------------------------------------------------------------------- #
 # _biconnected_components
-# --------------------------------------------------------------------------- #
 def test_a_simple_cycle_is_one_biconnected_component():
     """The porphyrinoid core is found as a cycle, so this is the base case."""
     adjacency = {
@@ -223,9 +217,7 @@ def test_an_isolated_atom_contributes_no_component():
     assert catalog._biconnected_components({"A": set()}, {"A"}) == []
 
 
-# --------------------------------------------------------------------------- #
 # classify_component: clusters
-# --------------------------------------------------------------------------- #
 def test_a_cubane_is_a_cluster():
     """The 4Fe-4S case, which is what the class exists for."""
     atoms, bonds = iron_sulfur_cube()
@@ -274,9 +266,7 @@ def test_a_bridged_pair_of_non_cluster_metals_is_not_a_cluster():
     assert catalog.classify_component(component_block("ZNS", atoms, bonds)) == ""
 
 
-# --------------------------------------------------------------------------- #
 # classify_component: hemes
-# --------------------------------------------------------------------------- #
 def test_an_iron_porphyrin_is_a_heme():
     """The canonical case: one Fe in a 24-atom conjugated macrocycle."""
     atoms, bonds = porphyrin()

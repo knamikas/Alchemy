@@ -54,10 +54,8 @@ from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 
 
-# --------------------------------------------------------------------------- #
-# Entry set and cache discovery
-# --------------------------------------------------------------------------- #
-#: The three entries every test in this module draws on.
+#: The three entries every test in this module draws on, and the set the cache
+#: discovery below is keyed by.
 ENTRY_IDS = ("9myr", "6nlr", "9nxl")
 
 #: Byte-level identity of the compact PDB-REDO snapshot used by the numerical
@@ -259,9 +257,7 @@ def entry_cache(tmp_path_factory) -> str:
     return target
 
 
-# --------------------------------------------------------------------------- #
 # Running the driver
-# --------------------------------------------------------------------------- #
 @dataclass
 class RunResult:
     """One completed ``main.main`` invocation."""
@@ -346,9 +342,7 @@ def id_file(directory, pdb_ids: Sequence[str]) -> str:
     return path
 
 
-# --------------------------------------------------------------------------- #
 # Output readers
-# --------------------------------------------------------------------------- #
 def read_rows(output_dir, name: str) -> List[Dict[str, str]]:
     with open(os.path.join(str(output_dir), name), newline="") as handle:
         return list(csv.DictReader(handle))
@@ -457,9 +451,7 @@ def batch(tmp_path_factory, entry_cache, ccp4_env) -> Batch:
     return result
 
 
-# --------------------------------------------------------------------------- #
 # 1. A single-entry run produces the documented files and columns
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -554,9 +546,7 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
     } <= set(MANIFEST_COLUMNS)
 
 
-# --------------------------------------------------------------------------- #
 # 2. 9myr and 6nlr: the chemistry and density have to come out right
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -673,9 +663,7 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch
     assert max(sites, key=lambda key: float(sites[key]["ZDm"])) == ("C", "304")
 
 
-# --------------------------------------------------------------------------- #
 # 3. Regression: declared connections must bind to the atoms they name
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -756,9 +744,7 @@ def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(batch):
         assert all(row["declared_connection"] == "True" for row in rows)
 
 
-# --------------------------------------------------------------------------- #
 # 4. The no-metal control
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -799,9 +785,7 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
     assert "Metal-free entries: 1" in log_text
 
 
-# --------------------------------------------------------------------------- #
 # 5. Manifest bookkeeping
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -905,9 +889,7 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
     assert "no entries to process" in second.text
 
 
-# --------------------------------------------------------------------------- #
 # 6. Resume semantics
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1009,9 +991,7 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
     assert len(restored.manifest) == len(ENTRY_IDS)
 
 
-# --------------------------------------------------------------------------- #
 # 7. Regression: an unrun bond stage is blank, not a measured zero
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1100,9 +1080,7 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
     assert float(bonds[0]["distance"]) == pytest.approx(2.311, abs=0.02)
 
 
-# --------------------------------------------------------------------------- #
 # 8. Manual-file mode
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1216,9 +1194,7 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     assert bond["geometry_outlier"] in ("", "False")
 
 
-# --------------------------------------------------------------------------- #
 # 9. The map-scope equivalence claim
-# --------------------------------------------------------------------------- #
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
@@ -1288,9 +1264,7 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
             assert row[column] == full_bonds[bond_id][column], (bond_id, column)
 
 
-# --------------------------------------------------------------------------- #
 # 10. Clean failure, not a traceback or a hang
-# --------------------------------------------------------------------------- #
 def _mtz_without_map_coefficients(source_mtz: str, destination) -> str:
     """Write an MTZ with real indices but none of FWT/PHWT/DELFWT/PHDELWT."""
     import gemmi
@@ -1430,14 +1404,12 @@ def test_workers_below_one_is_rejected_before_any_work(tmp_path, value):
     assert not os.path.exists(output_dir)
 
 
-# --------------------------------------------------------------------------- #
-# 11. Database-referenced confidence scoring
-# --------------------------------------------------------------------------- #
-#: The published severity anchors, restated here rather than imported, so this
-#: module scores sites independently of the code it is checking.
-#: ``test_the_scoring_policy_under_test_is_the_shipped_one`` keeps the two
-#: copies honest; the anchors are part of the frozen policy that
-#: ``confidence_reference_id`` is derived from, so they cannot drift quietly.
+# 11. Database-referenced confidence scoring. The published severity anchors
+# below are restated here rather than imported, so this module scores sites
+# independently of the code it is checking.
+# ``test_the_scoring_policy_under_test_is_the_shipped_one`` keeps the two
+# copies honest; the anchors are part of the frozen policy that
+# ``confidence_reference_id`` is derived from, so they cannot drift quietly.
 _DENSITY_ANCHORS = ((2.0, 0.0), (3.0, 0.25), (6.0, 0.65), (12.0, 1.0))
 _GEOMETRY_ANCHORS = ((2.0, 0.0), (3.0, 0.35), (6.0, 0.70), (12.0, 1.0))
 _WEIGHTS = {"density": 0.50, "geometry": 0.35, "interaction": 0.15}

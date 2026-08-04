@@ -68,9 +68,7 @@ ROOMY_CELL: Tuple[float, ...] = helpers.DEFAULT_CELL
 NCS_SHIFT: Tuple[float, float, float] = (-6.0, 0.0, 0.0)
 
 
-# --------------------------------------------------------------------------- #
 # Private helpers
-# --------------------------------------------------------------------------- #
 def _write_structure(
     builder: StructureBuilder,
     path,
@@ -203,12 +201,10 @@ def _apply_spacegroup_operation(
     return (position.x, position.y, position.z)
 
 
-# --------------------------------------------------------------------------- #
-# The symmetry cases shared by the coordinate tests
-# --------------------------------------------------------------------------- #
-#: ``(builder factory, ncs ops, deposited donor xyz, expected code, scope)``.
-#: Every case has exactly one Zn and one water; the water's *deposited* copy is
-#: always out of range, so any reported contact is the image.
+#: The symmetry cases shared by the coordinate tests, each ``(builder factory,
+#: ncs ops, deposited donor xyz, expected code, scope)``. Every case has exactly
+#: one Zn and one water; the water's *deposited* copy is always out of range, so
+#: any reported contact is the image.
 def _case_explicit():
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(10.0, 10.0, 10.0))
@@ -286,9 +282,7 @@ def symmetry_case(request, tmp_path):
     return analysis, deposited, code, scope, crystallographic
 
 
-# --------------------------------------------------------------------------- #
 # G3 -- the published image coordinates
-# --------------------------------------------------------------------------- #
 def test_symmetry_case_reports_the_expected_operation_and_scope(symmetry_case):
     """Each case really exercises the branch it claims to.
 
@@ -468,9 +462,7 @@ def test_every_bond_row_position_matches_its_distance_in_a_mixed_site(tmp_path):
         assert _cell_translation(row) == code_translation
 
 
-# --------------------------------------------------------------------------- #
 # G4 -- special-position deduplication
-# --------------------------------------------------------------------------- #
 def _axis_site(offset: float, *, donor: str = "water") -> StructureBuilder:
     """A Zn on the ``P 1 2 1`` two-fold, with a donor ``offset`` A off the axis.
 
@@ -759,9 +751,7 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path):
     )
 
 
-# --------------------------------------------------------------------------- #
 # G8 -- explicit-only versus image-inclusive
-# --------------------------------------------------------------------------- #
 def test_purely_explicit_site_declares_no_generated_dependence(tmp_path):
     """All donors in the asymmetric unit: the two scopes must agree exactly.
 

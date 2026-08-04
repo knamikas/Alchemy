@@ -354,9 +354,7 @@ def test_version_has_a_single_definition():
     )
 
 
-# --------------------------------------------------------------------------- #
 # The documentation split
-# --------------------------------------------------------------------------- #
 def test_every_documentation_link_resolves():
     """A split is only useful if the links between the pieces work.
 

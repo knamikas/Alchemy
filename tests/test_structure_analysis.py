@@ -24,9 +24,7 @@ import structure_analysis as sa
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
 
-# --------------------------------------------------------------------------- #
 # Local utilities (deliberately private to this module)
-# --------------------------------------------------------------------------- #
 _OCC_COLUMN = 54  # PDB occupancy occupies columns 55-60 (0-based 54:60)
 _ELEMENT_COLUMN = 76  # PDB element occupies columns 77-78
 
@@ -152,9 +150,7 @@ def _write_pdb_with_ncs(
     return path
 
 
-# --------------------------------------------------------------------------- #
 # Residue-number decoding
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "field, expected",
     [
@@ -267,9 +263,7 @@ def test_canonical_pdb_residue_id_equals_loaded_residue_resnum(tmp_path):
     assert sa.canonical_pdb_residue_id("10A") == his.resnum
 
 
-# --------------------------------------------------------------------------- #
 # blank_if_missing
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("token", list(sa.MISSING_VALUE_TOKENS))
 def test_blank_if_missing_blanks_every_missing_token(token):
     """Blank PDB columns, Gemmi's NUL altloc and mmCIF ``.``/``?`` all mean none."""
@@ -291,9 +285,7 @@ def test_blank_if_missing_preserves_real_values(value):
     assert sa.blank_if_missing(value) == value
 
 
-# --------------------------------------------------------------------------- #
 # Occupancy and element validation primitives
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "value, expected",
     [
@@ -342,9 +334,7 @@ def test_parse_pdb_element_reports_deposited_provenance(field, element, status):
     assert sa._parse_pdb_element(field) == (element, status)
 
 
-# --------------------------------------------------------------------------- #
 # _site_is_better
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "candidate, current, expected, why",
     [
@@ -399,9 +389,7 @@ def test_site_is_better_ranks_validity_then_occupancy_then_order(
     assert sa._site_is_better(candidate, current) is expected, why
 
 
-# --------------------------------------------------------------------------- #
 # _select_residue
-# --------------------------------------------------------------------------- #
 def test_select_residue_without_alternates_shares_every_blank_atom():
     """A residue with no altlocs keeps all its atoms and reports no options."""
     atoms = [
@@ -591,9 +579,7 @@ def test_select_residue_orders_contact_atoms_by_source_order():
     assert [atom.source_order for atom in selection.source_atoms] == [2, 5, 7]
 
 
-# --------------------------------------------------------------------------- #
 # Conformer selection through a real coordinate file
-# --------------------------------------------------------------------------- #
 def test_load_structure_selects_conformer_and_keeps_both_for_counting(tmp_path):
     """File round trip: B is selected for contacts, both alternates feed Ni.
 
@@ -642,9 +628,7 @@ def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path):
     assert math.isnan(sa.count_deposited_ni(context))
 
 
-# --------------------------------------------------------------------------- #
 # Model policy
-# --------------------------------------------------------------------------- #
 def _two_model_pdb(path) -> str:
     """Write a two-model PDB whose second model holds an atom the first lacks."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
@@ -729,9 +713,7 @@ def test_load_structure_single_model_reports_no_multi_model_warning(tmp_path):
     assert "multi_model_structure" not in context.warning_codes
 
 
-# --------------------------------------------------------------------------- #
 # Occupancy validation policy
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "label, field, status, missing, invalid",
     [
@@ -840,9 +822,7 @@ def test_unknown_element_makes_the_atom_count_indeterminate(tmp_path):
     assert math.isnan(sa.count_ni(context))
 
 
-# --------------------------------------------------------------------------- #
 # Ni counting
-# --------------------------------------------------------------------------- #
 def test_count_deposited_ni_is_the_occupancy_weighted_heavy_atom_sum(tmp_path):
     """Ni sums occupancies of non-hydrogen atoms of the first model."""
     builder = StructureBuilder()
@@ -942,9 +922,7 @@ def test_count_ni_stays_unavailable_when_the_deposited_count_is(tmp_path):
     assert math.isnan(sa.count_ni(context))
 
 
-# --------------------------------------------------------------------------- #
 # Duplicate deposited records
-# --------------------------------------------------------------------------- #
 def test_duplicate_atom_records_collapse_to_the_higher_occupancy(tmp_path):
     """Repeated identical atom records are deduplicated, keeping the best one."""
     builder = StructureBuilder()
@@ -990,9 +968,7 @@ def test_duplicate_atom_records_at_different_positions_are_flagged(tmp_path):
     assert "duplicate_atom_coordinate_conflict" in context.warning_codes
 
 
-# --------------------------------------------------------------------------- #
 # position_distance
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "a, b, expected",
     [
@@ -1018,9 +994,7 @@ def test_position_distance_matches_gemmi_position_distance():
     assert sa.position_distance(first, second) == pytest.approx(expected, abs=1e-12)
 
 
-# --------------------------------------------------------------------------- #
 # image_provenance
-# --------------------------------------------------------------------------- #
 @pytest.fixture
 def ncs_context(tmp_path) -> sa.StructureContext:
     """A loaded context with four symmetry operations and two strict-NCS ops."""
@@ -1125,9 +1099,7 @@ def test_image_provenance_ncs_id_tracks_the_operation_block(tmp_path):
     assert context.image_provenance(2 * operations, (0, 0, 0))[2] == "9"
 
 
-# --------------------------------------------------------------------------- #
 # mmCIF analysis format
-# --------------------------------------------------------------------------- #
 def test_load_structure_reads_mmcif_without_raw_pdb_matching(tmp_path):
     """For mmCIF input the parser is authoritative; no raw-record join runs."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03), ("HOH", "O", 2.09)])
@@ -1157,9 +1129,7 @@ def test_mmcif_occupancy_out_of_range_still_disables_dpi(tmp_path):
     assert math.isnan(sa.count_deposited_ni(context))
 
 
-# --------------------------------------------------------------------------- #
 # StructureContext lookup surfaces
-# --------------------------------------------------------------------------- #
 def test_context_indexes_only_contact_atoms_for_neighbor_marks(tmp_path):
     """Neighbour-search marks resolve to selected conformers, never alternates."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])

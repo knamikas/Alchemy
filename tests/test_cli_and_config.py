@@ -39,9 +39,7 @@ def _option_help(option: str) -> str:
     return text[start : end if end != -1 else len(text)]
 
 
-# --------------------------------------------------------------------------- #
 # --help must describe the flag, not the dest it clears
-# --------------------------------------------------------------------------- #
 def test_help_does_not_claim_that_no_bonds_defaults_to_true():
     """``--help`` must not tell the user that ``--no-bonds`` defaults to True.
 
@@ -59,9 +57,7 @@ def test_help_does_not_claim_that_no_bonds_defaults_to_true():
     assert "bonds=True" in paragraph, paragraph
 
 
-# --------------------------------------------------------------------------- #
 # --max-pdbs is a count, so it must be positive
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("value", ["0", "-5"])
 def test_max_pdbs_rejects_non_positive_caps(value):
     """``--max-pdbs`` is documented as "process only the first N entries".
@@ -112,9 +108,7 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
     assert "No entries to process" not in message
 
 
-# --------------------------------------------------------------------------- #
 # Terminal-partial retries must be resume-safe
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "arguments,fragment",
     [
@@ -167,9 +161,7 @@ def test_retry_partials_accepts_optional_resume_selectors(selector):
     assert args.retry_partials is True
 
 
-# --------------------------------------------------------------------------- #
 # Confidence references are discovered beside the current output
-# --------------------------------------------------------------------------- #
 def test_confidence_reference_is_discovered_in_output_before_repo_default(
     tmp_path, monkeypatch
 ):
@@ -205,9 +197,7 @@ def test_explicit_confidence_reference_is_authoritative(tmp_path):
     assert searched == (str(explicit_reference),)
 
 
-# --------------------------------------------------------------------------- #
 # Saving and loading the CCP4 setup path must agree on precedence
-# --------------------------------------------------------------------------- #
 def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
     """``--configure-ccp4`` must actually take effect on the next run.
 
@@ -295,9 +285,7 @@ def test_the_driver_reads_the_setup_path_configuration_writes(monkeypatch, tmp_p
     assert used == str(setup)
 
 
-# --------------------------------------------------------------------------- #
 # An explicit --ccp4-setup must beat whatever the shell already has
-# --------------------------------------------------------------------------- #
 def _stub_ccp4_dir(root, marker):
     """A directory holding the four CCP4 tool names, each echoing ``marker``."""
     bindir = root / f"ccp4-{marker}"
@@ -374,9 +362,7 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     )
 
 
-# --------------------------------------------------------------------------- #
 # Timeout budgets
-# --------------------------------------------------------------------------- #
 def test_the_three_timeout_budgets_are_distinct_and_ordered():
     """Each class of subprocess gets a budget matched to its own work.
 

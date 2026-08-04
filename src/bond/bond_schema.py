@@ -308,9 +308,7 @@ def _check_row_schema(row, columns, name):
     )
 
 
-# ---------------------------------------------------------------------------#
 # Row values
-# ---------------------------------------------------------------------------#
 def _bonded_to(is_water=False):
     return "HOH" if is_water else "P"
 

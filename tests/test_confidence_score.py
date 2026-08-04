@@ -28,10 +28,8 @@ import helpers
 from bond.bond_schema import STATS_EXTRA_COLUMNS
 
 
-# --------------------------------------------------------------------------- #
 # Local row factories (compact rows are built directly; the pipeline is not run
 # except in the one candidate-exclusion test, which needs real candidate rows).
-# --------------------------------------------------------------------------- #
 STATS_COLUMNS = (
     ["pdbID", "category"]
     + list(helpers.EDSTATS_HEADER)
@@ -213,9 +211,7 @@ def _expected_confidence(sr, sg, qg):
     return 100.0 * (1.0 - 0.50 * sr - 0.35 * qg * sg - 0.15 * qg * math.sqrt(sr * sg))
 
 
-# --------------------------------------------------------------------------- #
 # severity()
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "anchors,expected",
     [
@@ -273,9 +269,7 @@ def test_severity_rejects_negative_and_nonfinite_magnitudes(value):
     assert math.isnan(cs.severity(value, cs.DENSITY_ANCHORS))
 
 
-# --------------------------------------------------------------------------- #
 # score_site()
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "rszd,zbond,coverage,sr,sg",
     [
@@ -423,9 +417,7 @@ def test_score_site_never_passes_a_negative_argument_to_sqrt():
     assert checked == 4 * 4 * 5
 
 
-# --------------------------------------------------------------------------- #
 # geometry coverage (QG) in prepare_confidence_inputs
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "covered_flags,expected_covered,expected_coverage",
     [
@@ -551,9 +543,7 @@ def test_max_abs_zbond_takes_the_largest_magnitude_and_names_its_contact():
     assert int(prepared["zbond_available_contact_count"]) == 2
 
 
-# --------------------------------------------------------------------------- #
 # prepare_confidence_inputs structure / status
-# --------------------------------------------------------------------------- #
 def test_prepare_emits_one_row_per_selected_site_and_skips_unselected():
     """Only sites the run actually selected enter the confidence cohort."""
     selected = _stats_row(pdb_id="1abc")
@@ -641,9 +631,7 @@ def test_bond_rows_without_a_density_row_survive_as_unscorable_orphans():
     assert set(orphan) == set(cs.CONFIDENCE_INPUT_COLUMNS)
 
 
-# --------------------------------------------------------------------------- #
 # prepare_result_confidence_inputs agreement
-# --------------------------------------------------------------------------- #
 def _result_stats_row(flat):
     return {
         "pdbID": flat["pdbID"],
@@ -676,9 +664,7 @@ def test_result_preparation_rejects_a_row_of_the_wrong_width():
         cs.prepare_result_confidence_inputs([row], [], STATS_COLUMNS)
 
 
-# --------------------------------------------------------------------------- #
 # complete_confidence_site_count
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("prepared_count,selected", [(0, 3), (1, 2), (2, 2), (0, 0)])
 def test_every_manifest_counted_site_keeps_exactly_one_row(prepared_count, selected):
     """The streamed cohort holds exactly one row per manifest-counted metal."""
@@ -738,9 +724,7 @@ def test_completion_does_not_mutate_the_rows_it_was_given():
     assert completed[0]["confidence_inputs_status"] == "unscorable"
 
 
-# --------------------------------------------------------------------------- #
 # Reference persistence, identity, percentiles
-# --------------------------------------------------------------------------- #
 def test_reference_round_trips_through_disk_unchanged(tmp_path):
     """write_reference / load_reference preserve the cohort exactly."""
     counts = Counter({12.5: 2, 56.72505: 1, 100.0: 5})
@@ -893,9 +877,7 @@ def test_load_reference_rejects_a_non_integer_count(tmp_path):
         cs.load_reference(str(reference_dir))
 
 
-# --------------------------------------------------------------------------- #
 # Scoring against a frozen reference
-# --------------------------------------------------------------------------- #
 def _frozen_reference(tmp_path, name="ref"):
     """A 100-site cohort whose distribution differs from any test batch."""
     counts = Counter({float(value): 1 for value in range(1, 101)})
@@ -1049,9 +1031,7 @@ def test_score_file_requires_the_evidence_columns(tmp_path):
         )
 
 
-# --------------------------------------------------------------------------- #
 # finalize_database_confidence
-# --------------------------------------------------------------------------- #
 def test_finalize_builds_the_cohort_from_scorable_rows_only(tmp_path):
     """The frozen cohort counts scored sites; unscorable rows are kept but not
     counted."""
@@ -1160,9 +1140,7 @@ def test_finalize_is_reproducible_for_the_same_inputs(tmp_path):
     ).read_text(encoding="utf-8")
 
 
-# --------------------------------------------------------------------------- #
 # validate_scored_reference
-# --------------------------------------------------------------------------- #
 def test_validate_scored_reference_accepts_output_from_the_same_reference(tmp_path):
     """Resuming onto output produced by the same frozen reference is allowed.
 
@@ -1244,9 +1222,7 @@ def test_validate_scored_reference_tolerates_an_empty_scored_file(tmp_path):
         cs.validate_scored_reference(populated, reference)
 
 
-# --------------------------------------------------------------------------- #
 # Reference building must apply the same coverage policy as scoring
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "coverage, label",
     [

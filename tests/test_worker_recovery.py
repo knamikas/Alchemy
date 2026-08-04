@@ -62,9 +62,7 @@ _POSIX_KILL = pytest.mark.skipif(
 )
 
 
-# --------------------------------------------------------------------------- #
 # Fakes for the pool roster
-# --------------------------------------------------------------------------- #
 class _FakeWorker:
     """Stand-in for a ``multiprocessing.Process`` in ``pool._pool``."""
 
@@ -129,9 +127,7 @@ def _reference_cfg(output_dir, manual_inputs=None):
     )
 
 
-# --------------------------------------------------------------------------- #
 # _drain_inflight
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
     "notifications, expected, label",
     [
@@ -238,9 +234,7 @@ def test_drain_inflight_survives_a_torn_down_queue(error):
     assert assignments == {11: "1abc"}
 
 
-# --------------------------------------------------------------------------- #
 # _dead_worker_pids
-# --------------------------------------------------------------------------- #
 def test_dead_worker_pids_reports_only_newly_missing_workers():
     """A pid leaving the roster is reported exactly once, then forgotten.
 
@@ -297,9 +291,7 @@ def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(pool, label):
     assert known == {101, 102}, "the known set must be left alone"
 
 
-# --------------------------------------------------------------------------- #
 # _worker_death_result
-# --------------------------------------------------------------------------- #
 def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     """The synthesized result is a full, retryable, error-status entry row.
 
@@ -397,12 +389,10 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
     assert genuine.reason_codes != synthesized.reason_codes
 
 
-# --------------------------------------------------------------------------- #
-# Driving the real dispatch loop  (regression, 3141593)
-# --------------------------------------------------------------------------- #
-# The tests below run ``driver_pool._run`` itself in a child process with only the
-# name it dispatches on -- ``driver.pool.process``, the driver's own reference
-# to ``worker.process`` -- rebound to a stub, so the bookkeeping under test --
+# Driving the real dispatch loop (regression, 3141593). The tests below run
+# ``driver_pool._run`` itself in a child process with only the name it
+# dispatches on -- ``driver.pool.process``, the driver's own reference to
+# ``worker.process`` -- rebound to a stub, so the bookkeeping under test --
 # drain the notifications, diff the roster, synthesize the lost row, drop a
 # late real result for an already-lost entry, count completions, pick the exit
 # code -- is the shipped code and not a re-implementation of it.
@@ -621,9 +611,7 @@ def _read_manifest(output_dir):
         return list(reader)
 
 
-# --------------------------------------------------------------------------- #
 # End-to-end: a SIGKILLed worker must not hang the driver
-# --------------------------------------------------------------------------- #
 @_POSIX_KILL
 @pytest.mark.parametrize(
     "script, stall_grace",
@@ -681,9 +669,7 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
     assert exit_code == 1
 
 
-# --------------------------------------------------------------------------- #
 # An idle worker's death must not wedge pool shutdown
-# --------------------------------------------------------------------------- #
 @_POSIX_KILL
 def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
     """The driver still exits when a worker is killed while awaiting a task.
@@ -715,9 +701,7 @@ def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
     assert exit_code == 0
 
 
-# --------------------------------------------------------------------------- #
 # The silent-death fallback must select an outstanding id
-# --------------------------------------------------------------------------- #
 @_POSIX_KILL
 def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     """A silent fourth-task death must not be blamed on a completed first task.
@@ -752,10 +736,8 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     assert exit_code == 1
 
 
-# --------------------------------------------------------------------------- #
-# End-to-end: one row per entry when a death is attributed to the wrong one
-# --------------------------------------------------------------------------- #
-# One driver run staging every composition rule the dispatch loop has to obey.
+# End-to-end: one row per entry when a death is attributed to the wrong one.
+# One driver run stages every composition rule the dispatch loop has to obey.
 # Two workers finish their own entry and then, while idle, leave the driver
 # holding a start notification for "aaaa" before being killed a second apart; a
 # third dies idle holding nothing. Meanwhile "aaaa" is really being processed
@@ -879,9 +861,7 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
         assert row["reason_codes"] == ""
 
 
-# --------------------------------------------------------------------------- #
 # Portability: the spawn start method (Windows)
-# --------------------------------------------------------------------------- #
 def _spawn_task(payload):
     """Announce, then either finish or die abnormally, inside a spawn worker."""
     action, pdb_id = payload
@@ -1083,9 +1063,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     assert run_log.details["ccp4_version"] == cfg.ccp4_version
 
 
-# --------------------------------------------------------------------------- #
 # SIGTERM to the driver must stop its workers, not orphan them
-# --------------------------------------------------------------------------- #
 def _never_finishing_process(pdb_id):
     """A per-entry stub that outlives the signal, so workers are busy.
 

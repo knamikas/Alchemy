@@ -203,9 +203,7 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
         )
 
 
-# --------------------------------------------------------------------------- #
 # Timeouts
-# --------------------------------------------------------------------------- #
 def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     tmp_path, monkeypatch
 ):
@@ -310,15 +308,12 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     )
 
 
-# --------------------------------------------------------------------------- #
-# Model-envelope cropping
-# --------------------------------------------------------------------------- #
-#
-# ``model-envelope`` is the *default* map scope, but every other offline test
-# here drives ``full``: the only model-envelope coverage lived in the ccp4+slow
-# integration lane, which does not run in CI. These tests reach all three of its
-# outcomes -- crop accepted, crop larger than the original, crop positioned
-# where EDSTATS cannot read it -- with a stub standing in for MAPMASK.
+# ``model-envelope`` cropping is the *default* map scope, but every other
+# offline test here drives ``full``: the only model-envelope coverage lived in
+# the ccp4+slow integration lane, which does not run in CI. These tests reach
+# all three of its outcomes -- crop accepted, crop larger than the original,
+# crop positioned where EDSTATS cannot read it -- with a stub standing in for
+# MAPMASK.
 
 
 def _ccp4_map(size, *, starts=(0, 0, 0), sampling=(64, 64, 64), mode=2):

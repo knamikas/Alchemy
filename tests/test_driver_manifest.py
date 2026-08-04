@@ -51,9 +51,7 @@ from driver import pool
 import confidence_score
 
 
-# --------------------------------------------------------------------------- #
 # Local fixtures / builders
-# --------------------------------------------------------------------------- #
 def _cfg(**overrides):
     """A complete ``WorkerConfig`` with test placeholders.
 
@@ -308,9 +306,7 @@ _BASE_RESIDUES = [
 ]
 
 
-# --------------------------------------------------------------------------- #
 # positive_int
-# --------------------------------------------------------------------------- #
 class TestPositiveInt:
     """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
 
@@ -367,9 +363,7 @@ class TestPositiveInt:
             cli.positive_int("0")
 
 
-# --------------------------------------------------------------------------- #
 # load_done
-# --------------------------------------------------------------------------- #
 class TestLoadDone:
     """Which manifest rows count as finished work that --resume may skip."""
 
@@ -613,9 +607,7 @@ class TestLoadDone:
         assert _manifest_ids(path, bonds_required=False) == {"109m", "1cll", "100d"}
 
 
-# --------------------------------------------------------------------------- #
 # _manifest_values_by_id
-# --------------------------------------------------------------------------- #
 class TestManifestValuesById:
     """Reading one prior manifest column for the resume carry-forward."""
 
@@ -676,9 +668,7 @@ class TestManifestValuesById:
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "5"}
 
 
-# --------------------------------------------------------------------------- #
 # _initial_result
-# --------------------------------------------------------------------------- #
 class TestInitialResult:
     """The per-entry skeleton that guarantees a complete manifest row."""
 
@@ -792,9 +782,7 @@ class TestInitialResult:
         assert "None" not in set(map(str, row.values()))
 
 
-# --------------------------------------------------------------------------- #
 # _manifest_row
-# --------------------------------------------------------------------------- #
 class TestManifestRow:
     """Projection of a worker result onto the manifest schema."""
 
@@ -873,9 +861,7 @@ class TestManifestRow:
         assert row["n_candidates"] == ""
 
 
-# --------------------------------------------------------------------------- #
 # REGRESSION (bug 4): the unrun-bond-stage chain
-# --------------------------------------------------------------------------- #
 class TestUnrunBondStageChain:
     """REGRESSION (cf55dd5): an unrun bond stage must never look complete.
 
@@ -974,9 +960,7 @@ class TestUnrunBondStageChain:
         assert resume.load_done(str(manifest), bonds_required=True) == {"109m"}
 
 
-# --------------------------------------------------------------------------- #
 # _resume_replacement_succeeded
-# --------------------------------------------------------------------------- #
 class TestResumeReplacementSucceeded:
     """Only a terminal retry may replace the rows it is retrying."""
 
@@ -1009,9 +993,7 @@ class TestResumeReplacementSucceeded:
         assert resume._resume_replacement_succeeded(_result(status="partial")) is False
 
 
-# --------------------------------------------------------------------------- #
 # _ResumeStaging
-# --------------------------------------------------------------------------- #
 class TestResumeStaging:
     """Staged retries replace rows only on a completed, terminal batch."""
 
@@ -1262,9 +1244,7 @@ class TestResumeStaging:
         assert leftovers == []
 
 
-# --------------------------------------------------------------------------- #
 # _OutputWriters
-# --------------------------------------------------------------------------- #
 class TestOutputWriters:
     """The streamed CSVs: headers on creation, running counts, schema guards."""
 
@@ -1550,9 +1530,7 @@ class TestOutputWriters:
         self._close(handles)
 
 
-# --------------------------------------------------------------------------- #
 # Run phases
-# --------------------------------------------------------------------------- #
 class TestScheduleEntries:
     """The work list is reduced by resume first and capped by --max-pdbs after.
 
@@ -1672,9 +1650,7 @@ class TestWriteEntry:
         assert staging.replacement_ids == {"109m"}
 
 
-# --------------------------------------------------------------------------- #
 # _ProgressReporter
-# --------------------------------------------------------------------------- #
 class TestProgressReporter:
     """The heartbeat is throttled differently for a terminal and a log file."""
 
@@ -1722,9 +1698,7 @@ class TestProgressReporter:
         assert "[10/10 100.0%]" in stream.getvalue()
 
 
-# --------------------------------------------------------------------------- #
 # _RunLog
-# --------------------------------------------------------------------------- #
 class TestRunLog:
     """The written log is the only record of how a finished run behaved."""
 
@@ -1802,9 +1776,7 @@ class TestRunLog:
         assert "Exit code: 1" in open(second).read()
 
 
-# --------------------------------------------------------------------------- #
 # _cif_to_pdb
-# --------------------------------------------------------------------------- #
 class TestCifToPdb:
     """mmCIF -> analysis PDB conversion must not lose provenance."""
 
@@ -2250,9 +2222,7 @@ class TestResidueConversionRecords:
         assert [name for name, _ in index[(0, "A", "1")]] == ["GLY", "ALA"]
 
 
-# --------------------------------------------------------------------------- #
 # _first_model_pdb
-# --------------------------------------------------------------------------- #
 _MULTI_MODEL_PDB = """\
 HEADER    TEST
 NUMMDL    2
@@ -2363,9 +2333,7 @@ class TestFirstModelPdb:
         assert len(gemmi.read_structure(str(source))) == count
 
 
-# --------------------------------------------------------------------------- #
 # Cleaning up after a run that did not finish
-# --------------------------------------------------------------------------- #
 class TestLeakedWorkDirectorySweep:
     """``_sweep_leaked_work_dirs`` clears scratch a dead run left behind."""
 
@@ -2414,9 +2382,7 @@ class TestLeakedWorkDirectorySweep:
         assert pool._sweep_leaked_work_dirs(str(tmp_path / "absent")) == 0
 
 
-# --------------------------------------------------------------------------- #
 # An unusable --output-dir is a user error, not a crash
-# --------------------------------------------------------------------------- #
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
 def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     tmp_path, monkeypatch, capsys
@@ -2512,9 +2478,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     assert leftovers == [], f"the run left scratch behind: {leftovers}"
 
 
-# --------------------------------------------------------------------------- #
 # What the density stage returns is what the entry reports
-# --------------------------------------------------------------------------- #
 class TestDensityResultReachesTheResult:
     """The worker must report the density stage's own answers, not its request.
 
@@ -2647,9 +2611,7 @@ def test_a_loaded_structure_fills_in_the_model_provenance(tmp_path, monkeypatch)
     assert row["model_analyzed"] == 1
 
 
-# --------------------------------------------------------------------------- #
 # CCP4 timeout as an entry outcome
-# --------------------------------------------------------------------------- #
 class TestCcp4TimeoutOutcome:
     """A stalled CCP4 program must be a named, retryable entry outcome.
 

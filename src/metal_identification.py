@@ -438,14 +438,11 @@ def extract_metal_statistics(
     return rows, header
 
 
-# --------------------------------------------------------------------------- #
-# Density-sigma join
-# --------------------------------------------------------------------------- #
-# Reading the real-space Z-difference metrics back out of an extracted EDSTATS
-# row. This is the same table ``EDSTATS_COLUMNS`` above describes, so the two
-# live together: a column-order change breaks both, and having the reader in
-# ``bond_analysis`` meant EDSTATS knowledge was split across two modules that
-# had to agree without either one saying so.
+# The density-sigma join reads the real-space Z-difference metrics back out of
+# an extracted EDSTATS row. This is the same table ``EDSTATS_COLUMNS`` above
+# describes, so the two live together: a column-order change breaks both, and
+# having the reader in ``bond_analysis`` meant EDSTATS knowledge was split
+# across two modules that had to agree without either one saying so.
 def _sigma_index(stats_rows):
     """Map (resname, chain, resnum) -> edstats fields, for the sigma join."""
     return {
