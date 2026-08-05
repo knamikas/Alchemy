@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import http.client
 import gzip
 import json
 import os
@@ -455,6 +456,95 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
     cpu_limit, memory_limit = resources.automatic_worker_limits()
     assert cpu_limit == 6
     assert memory_limit is None
+
+
+class _FailingResponse:
+    """A response that opens successfully and then fails partway through."""
+
+    def __init__(self, error):
+        self._error = error
+        self._served = False
+
+    def getcode(self):
+        return 200
+
+    def read(self, _size):
+        if self._served:
+            raise self._error
+        self._served = True
+        return b"partial body"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionResetError("connection reset by peer"),
+        TimeoutError("read timed out"),
+        http.client.IncompleteRead(b"partial body", 4096),
+    ],
+    ids=["reset", "timeout", "incomplete-read"],
+)
+def test_a_transfer_that_fails_midway_reports_no_usable_file(
+    tmp_path, monkeypatch, error
+):
+    """Only the opening request was guarded, so a mid-stream failure escaped.
+
+    ``IncompleteRead`` is not even an ``OSError``, so a handler written for one
+    would still have missed it. The caller's position is the same as a 404 --
+    no file -- and the partial download must not be left behind.
+    """
+    monkeypatch.setattr(
+        inputs, "urlopen", lambda url, timeout=None: _FailingResponse(error)
+    )
+    destination = tmp_path / "9myr_final.mtz"
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        inputs._download_stream(
+            "https://example.invalid/9myr_final.mtz", str(destination)
+        )
+
+    assert type(error).__name__ in str(excinfo.value)
+    assert not destination.exists()
+    assert list(tmp_path.glob("*.part")) == [], "a partial download was left behind"
+
+
+def test_an_unwritable_cache_is_reported_as_a_driver_error(tmp_path, monkeypatch):
+    """A local failure is not a missing entry, and is not a traceback either.
+
+    ``ensure_entry_available`` creates directories and writes files, so an
+    unwritable ``--pdb-redo-cache`` raised ``PermissionError`` straight out of
+    the driver's pre-flight, past a handler that caught only
+    ``FileNotFoundError``.
+    """
+
+    def unwritable(pdb_id, mirror_root, cache_root):
+        raise PermissionError(13, "Permission denied", str(cache_root))
+
+    monkeypatch.setattr(pool, "ensure_entry_available", unwritable)
+    args = argparse.Namespace(
+        id="9myr",
+        id_file=None,
+        pdb_file=None,
+        mtz_file=None,
+        cif_file=None,
+        data_json=None,
+        pdb_redo_root=str(tmp_path / "mirror"),
+    )
+
+    with pytest.raises(pool.DriverError) as excinfo:
+        pool._select_entry_ids(args, str(tmp_path / "cache"))
+
+    message = str(excinfo.value)
+    assert "PermissionError" in message
+    assert "not found" not in message, (
+        "a local failure must not read as a missing entry"
+    )
 
 
 def _host_meminfo(tmp_path, monkeypatch, host_bytes):

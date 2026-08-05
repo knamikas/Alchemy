@@ -436,6 +436,15 @@ def _select_entry_ids(args, cache_root):
             raise DriverError(
                 f"Entry {args.id} not found locally and download failed."
             ) from None
+        except OSError as exc:
+            # Preparing an entry also creates directories and writes files, so
+            # a local problem -- an unwritable cache, a full disk -- surfaces
+            # here too. It is not a missing entry and must not be reported as
+            # one, but it is still a user-facing failure rather than a bug, so
+            # it exits with a message instead of a traceback.
+            raise DriverError(
+                f"Entry {args.id} could not be prepared: {type(exc).__name__}: {exc}"
+            ) from None
         if used_root != args.pdb_redo_root:
             logger.info("auto-downloaded %s into cache at %s", args.id, cache_root)
         return [args.id], used_root, None

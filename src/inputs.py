@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+from http.client import HTTPException
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -210,8 +211,24 @@ def has_final_files(entry_dir, pdb_id):
     return mtz is not None and coordinates is not None
 
 
+def _remove_partial_download(tmp):
+    """Drop a ``.part`` file so no caller can mistake it for a complete one."""
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
+
 def _download_stream(url, dst, timeout=30):
-    """Download URL to dst. Raise FileNotFoundError on non-200."""
+    """Download URL to dst. Raise FileNotFoundError if no usable file results.
+
+    A transfer that begins and then fails -- a reset connection, a read
+    timeout, a body shorter than its Content-Length -- leaves the caller in the
+    same position as a 404: no file. Only the opening request was guarded, so
+    those raised out of the driver's pre-flight as a bare traceback, while
+    ``http.client.IncompleteRead`` is not even an ``OSError`` and so escaped
+    handlers written for one.
+    """
     try:
         response = urlopen(url, timeout=timeout)
     except HTTPError as e:
@@ -229,9 +246,14 @@ def _download_stream(url, dst, timeout=30):
                 while chunk := response.read(8192):
                     fh.write(chunk)
         os.replace(tmp, dst)
+    except FileNotFoundError:
+        _remove_partial_download(tmp)
+        raise
+    except (OSError, HTTPException) as e:
+        _remove_partial_download(tmp)
+        raise FileNotFoundError(f"{url}: {type(e).__name__}: {e}") from e
     except Exception:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        _remove_partial_download(tmp)
         raise
     return dst
 
