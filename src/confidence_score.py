@@ -127,7 +127,13 @@ def _confidence_inputs_are_scorable(row):
     )
 
 
-def _format_number(value, digits=6):
+def _format_significant(value, digits=6):
+    """Render a confidence number without trailing zeros, blanking non-finite.
+
+    Distinct from ``structure_analysis._format_number``, which renders a fixed
+    number of decimals and blanks ``None`` rather than non-finite values: the
+    two obey different contracts and shared a name only by coincidence.
+    """
     if not math.isfinite(value):
         return ""
     return f"{value:.{digits}f}".rstrip("0").rstrip(".")
@@ -164,8 +170,8 @@ def _bond_summary(rows):
         "assigned_contact_count": assigned,
         "reference_covered_contact_count": reference_covered,
         "zbond_available_contact_count": len(finite_bonds),
-        "geometry_coverage": _format_number(coverage),
-        "max_abs_zbond": _format_number(largest[0]) if largest else "",
+        "geometry_coverage": _format_significant(coverage),
+        "max_abs_zbond": _format_significant(largest[0]) if largest else "",
         "max_abs_zbond_neighbor_resname": largest_row.get("neighbor_resname", ""),
         "max_abs_zbond_neighbor_chain": largest_row.get("neighbor_chain", ""),
         "max_abs_zbond_neighbor_resnum": largest_row.get("neighbor_resnum", ""),
@@ -285,9 +291,9 @@ def prepare_confidence_inputs(
         output = {column: stats.get(column, "") for column in IDENTITY_COLUMNS}
         output.update(
             {
-                "rszd_magnitude": _format_number(rszd),
-                "rszd_negative": _format_number(negative),
-                "rszd_positive": _format_number(positive),
+                "rszd_magnitude": _format_significant(rszd),
+                "rszd_negative": _format_significant(negative),
+                "rszd_positive": _format_significant(positive),
                 **summary,
                 "suspect_multi_donor_residue_group_count": stats.get(
                     "suspect_multi_donor_residue_group_count", ""
@@ -629,11 +635,11 @@ def _score_prepared_row(row, reference):
         )
         return output, None
 
-    output.update({key: _format_number(value) for key, value in result.items()})
+    output.update({key: _format_significant(value) for key, value in result.items()})
     score = result["confidence_score"]
     output.update(
         {
-            "confidence_percentile": _format_number(reference.percentile(score)),
+            "confidence_percentile": _format_significant(reference.percentile(score)),
             "confidence_scoring_status": (
                 "density_only"
                 if coverage == 0.0

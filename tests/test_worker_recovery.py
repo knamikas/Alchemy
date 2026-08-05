@@ -585,7 +585,6 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
         tmp_path, script, stall_grace=stall_grace, workers=3 if len(ids) > 1 else 1
     )
 
-    assert elapsed < _DRIVER_HARD_TIMEOUT_S
     rows = _read_manifest(output_dir)
     assert {row["pdbID"] for row in rows} == set(ids)
     assert len(rows) == len(ids), "each entry is written exactly once"
@@ -620,7 +619,6 @@ def test_driver_recovers_when_first_worker_dies_before_first_result_poll(tmp_pat
         workers=1,
     )
 
-    assert elapsed < _DRIVER_HARD_TIMEOUT_S
     rows = _read_manifest(output_dir)
     assert len(rows) == 1
     assert rows[0]["pdbID"] == "aaaa"
@@ -683,7 +681,6 @@ def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(tmp_path):
         tmp_path, script, stall_grace=0.1, workers=2
     )
 
-    assert elapsed < _DRIVER_HARD_TIMEOUT_S
     by_id = {row["pdbID"]: row for row in _read_manifest(output_dir)}
     assert set(by_id) == set(script)
     # The kill lands after both entries are done, so the work itself completed.

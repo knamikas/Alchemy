@@ -203,6 +203,16 @@ def parse_args(argv=None):
         ap.error("--retry-partials requires --resume")
     if args.retry_partials and (args.pdb_file or args.mtz_file or args.cif_file):
         ap.error("--retry-partials cannot be used with manual structure inputs")
+    # Manual mode needs reflections and coordinates. Without this the run
+    # reached a worker before failing, and reported the omission as an
+    # unexpected processing error rather than a usage mistake.
+    if (args.pdb_file or args.cif_file) and not args.mtz_file:
+        ap.error("manual structure input requires --mtz-file")
+    if args.mtz_file and not (args.pdb_file or args.cif_file):
+        ap.error("--mtz-file requires --pdb-file or --cif-file")
+    # Both name the coordinates, and the cif silently won.
+    if args.pdb_file and args.cif_file:
+        ap.error("use either --pdb-file or --cif-file, not both")
     return args
 
 

@@ -26,6 +26,35 @@ def log_dir_for(args):
     return args.log_dir or os.path.join(args.output_dir, DEFAULT_LOG_DIRNAME)
 
 
+def _claim_log_path(directory, stem, source_path):
+    """Move a finished log onto the first free numbered name, atomically.
+
+    ``os.link`` fails rather than overwrites when the name is taken, so two
+    runs cannot select the same suffix and have one silently replace the
+    other's record. Choosing the name with ``lexists`` and renaming onto it
+    left exactly that window open, and a run log is written outside the
+    output-directory lease -- a run that failed to acquire the lease still
+    writes one -- so concurrent writers sharing a ``--log-dir`` are expected
+    rather than prevented.
+    """
+    suffix = 1
+    while True:
+        name = f"{stem}.log" if suffix == 1 else f"{stem}_{suffix}.log"
+        path = os.path.join(directory, name)
+        try:
+            os.link(source_path, path)
+        except FileExistsError:
+            suffix += 1
+            continue
+        except OSError:
+            # A filesystem without hard links keeps the previous behaviour: a
+            # log file is not worth failing an otherwise complete run over.
+            os.replace(source_path, path)
+            return path
+        os.unlink(source_path)
+        return path
+
+
 class _RunLog:
     """Collect compact run diagnostics and write one human-readable log."""
 
@@ -260,18 +289,13 @@ class _RunLog:
         elapsed_s = time.monotonic() - self.started_monotonic
         run_date = self.started_at.strftime("%Y%m%d")
         log_stem = f"alchemy_run_{run_date}"
-        path = os.path.join(directory, f"{log_stem}.log")
-        suffix = 2
-        while os.path.lexists(path):
-            path = os.path.join(directory, f"{log_stem}_{suffix}.log")
-            suffix += 1
         handle, temporary_path = tempfile.mkstemp(
             prefix=".alchemy-run-log-", dir=directory, text=True
         )
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:
                 log.write(self._render(exit_code, finished_at, elapsed_s))
-            os.replace(temporary_path, path)
+            path = _claim_log_path(directory, log_stem, temporary_path)
         except BaseException:
             try:
                 os.unlink(temporary_path)

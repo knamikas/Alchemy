@@ -1396,7 +1396,9 @@ class TestResumeStaging:
         with open(layout.manifest, "a", newline="") as handle:
             csv.writer(handle).writerow([prior[name] for name in MANIFEST_COLUMNS])
 
-        def _dispatch(args, ids, cfg, workers, writers, plan, staging, counts, run_log):
+        def _dispatch(
+            args, ids, cfg, workers, writers, plan, staging, counts, prior, run_log
+        ):
             for pdb_id in ids:
                 row = {name: "" for name in MANIFEST_COLUMNS}
                 row.update(pdbID=pdb_id, status="ok", retryable="False")

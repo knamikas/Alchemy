@@ -375,11 +375,17 @@ def _batch_exit_code(counts, retryable_partial_count):
 
 
 def load_ids_from_file(path):
-    """Return a list of PDB ids from a comma/newline-separated text file."""
+    """Return a list of PDB ids from a comma/newline-separated text file.
+
+    Read as ``utf-8-sig`` so a byte-order mark is consumed rather than glued to
+    the first id. Editors on Windows and spreadsheet exports add one routinely,
+    and under plain ``utf-8`` it made the first entry fail validation with a
+    message that blamed the id instead of the encoding.
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(f"id file not found: {path}")
     ids = []
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         for lineno, raw_line in enumerate(fh, 1):
             line = raw_line.split("#", 1)[0].strip()
             if not line:
@@ -574,6 +580,20 @@ def _plan_confidence(args, layout, database_run, run_log):
     if not args.bonds:
         return plan
     if database_run:
+        # An uncapped full-database run builds the reference every later run is
+        # scored against, so it cannot also be scored against an existing one.
+        # Said rather than raised: passing the flag uniformly across a mix of
+        # capped and uncapped runs is reasonable, and failing the multi-day run
+        # over an argument that changes nothing would be the worse outcome. The
+        # defect was that it was ignored in silence.
+        if args.confidence_reference_dir:
+            logger.warning(
+                "--confidence-reference-dir is ignored on an uncapped "
+                "full-database run: that run builds the reference later runs "
+                "are scored against, so it cannot be scored against an "
+                "existing one. Cap the run with --max-pdbs to use %s.",
+                args.confidence_reference_dir,
+            )
         plan.mode = "database"
         plan.stream_path = layout.confidence_inputs
         plan.columns = CONFIDENCE_INPUT_COLUMNS
@@ -672,7 +692,12 @@ def _schedule_entries(args, layout, cache_root, run_log):
             )
         else:
             done = normally_done
-        ids = [i for i in ids if i not in done]
+        # ``done`` holds lowercased manifest ids, while a mirror enumeration
+        # returns directory names as they are spelled on disk. Comparing them
+        # unnormalized meant a non-lowercase directory never matched its own
+        # completed row and was reprocessed on every resume. The id itself is
+        # kept as found, because it is also the path the entry is read from.
+        ids = [i for i in ids if i.lower() not in done]
     if args.max_pdbs is not None:
         ids = ids[: args.max_pdbs]
     run_log.details["entries_scheduled"] = len(ids)
@@ -869,6 +894,23 @@ def _confidence_rows_for(result, plan):
     return rows
 
 
+def _should_write_entry(resuming, result, prior_ids):
+    """Whether this result's rows belong in the output.
+
+    A resumed run suppresses a retry that did not improve on the row it would
+    replace, so a failed attempt cannot overwrite a good previous result. An
+    entry the manifest has never described has nothing to protect, and
+    suppressing it left it absent from the manifest altogether -- the artifact
+    ``--resume`` and downstream analysis read then under-reported the set the
+    run actually scheduled.
+    """
+    if not resuming:
+        return True
+    if str(result.pdb_id).strip().lower() not in prior_ids:
+        return True
+    return _resume_replacement_succeeded(result)
+
+
 def _write_entry(result, args, plan, writers, staging, prior_counts):
     """Write one entry's rows, manifest row last.
 
@@ -976,7 +1018,7 @@ class _WorkerDeathWatch:
 
 
 def _dispatch_entries(
-    args, ids, cfg, workers, writers, plan, staging, prior_counts, run_log
+    args, ids, cfg, workers, writers, plan, staging, prior_counts, prior_ids, run_log
 ):
     """Run every entry across a worker pool and write the results as they land.
 
@@ -1025,7 +1067,7 @@ def _dispatch_entries(
                 completed += 1
                 completed_ids.add(r.pdb_id)
                 run_log.record_entry(r)
-                if not args.resume or _resume_replacement_succeeded(r):
+                if _should_write_entry(args.resume, r, prior_ids):
                     _write_entry(r, args, plan, writers, staging, prior_counts)
                 tally.record(r)
                 finished = completed == len(ids)
@@ -1109,6 +1151,14 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
         if args.resume and not args.bonds
         else {},
     )
+    # Which ids the manifest already describes. A resumed run suppresses the
+    # write for a retry that did not improve on its previous row, but an entry
+    # with no previous row has nothing to protect: suppressing it left the
+    # entry absent from the manifest entirely, so the artifact --resume and
+    # downstream analysis read under-reported the scheduled set.
+    prior_ids = (
+        set(_manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
+    )
     output_paths = _output_targets(args, layout, plan)
     staging = _ResumeStaging(args.output_dir, output_paths) if args.resume else None
     write_paths = staging.staged if staging is not None else output_paths
@@ -1127,6 +1177,7 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
                 plan,
                 staging,
                 prior_counts,
+                prior_ids,
                 run_log,
             )
             processing_completed = True

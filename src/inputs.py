@@ -72,6 +72,41 @@ def _first_existing(*paths):
     return next((path for path in paths if os.path.exists(path)), None)
 
 
+# A proxy notice or captive-portal login page is served with status 200, so the
+# transfer succeeds and the bytes land under the entry's own file name. Only
+# the opening bytes are inspected: enough to tell a document from a structure
+# file without reading a 100 MB MTZ to decide whether to keep it.
+_HTML_PREFIXES = (b"<!doctype", b"<html", b"<?xml")
+
+
+def _looks_like_a_web_page(path):
+    """Whether a cached file holds a served document rather than entry data."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(64).lstrip().lower()
+    except OSError:
+        return False
+    return head.startswith(_HTML_PREFIXES)
+
+
+def _is_usable_entry_file(path):
+    """Whether a cached path is worth reading rather than re-fetching.
+
+    Existence alone was the test, so a truncated or wrong-status body written
+    under the right name was cached permanently: every later run read the same
+    unusable file, failed identically, and no ``--resume`` could recover it
+    without deleting the cache by hand.
+    """
+    if path is None:
+        return False
+    try:
+        if os.path.getsize(path) == 0:
+            return False
+    except OSError:
+        return False
+    return not _looks_like_a_web_page(path)
+
+
 def prepare_inputs(pdb_id, entry_dir, work_dir):
     """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
 
@@ -208,7 +243,7 @@ def has_final_files(entry_dir, pdb_id):
         os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
         os.path.join(entry_dir, f"{pdb_id}_final.pdb.gz"),
     )
-    return mtz is not None and coordinates is not None
+    return _is_usable_entry_file(mtz) and _is_usable_entry_file(coordinates)
 
 
 def _remove_partial_download(tmp):
@@ -274,12 +309,12 @@ def download_entry_to_cache(pdb_id, cache_root):
             return False
 
     def fetch_variant(name):
-        if (
-            _first_existing(
-                os.path.join(entry, name), os.path.join(entry, name + ".gz")
-            )
-            is not None
-        ):
+        # A cached file is reused only if it is worth reading. Short-circuiting
+        # on existence alone made an empty or served-document body permanent.
+        cached = _first_existing(
+            os.path.join(entry, name), os.path.join(entry, name + ".gz")
+        )
+        if _is_usable_entry_file(cached):
             return True
         return try_fetch(name) or try_fetch(name + ".gz")
 

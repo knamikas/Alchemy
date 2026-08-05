@@ -1625,3 +1625,28 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(tmp_pa
     # No donor rule can be overridden for a class that has no reference at all.
     assert row["donor_rule_override"] == ""
     assert "declared_donor_outside_supported_classes" in metadata["warning_codes"]
+
+
+@pytest.mark.parametrize(
+    "resname,expected,why",
+    [
+        ("ZN", True, "an unambiguous metal id is sufficient evidence"),
+        ("FE", True, "as is iron"),
+        ("U", False, "U is uranium and uridine; RNA is the realistic reading"),
+        ("NO", False, "NO is nobelium and nitric oxide"),
+        ("ALA", False, "an ordinary residue is not a metal"),
+    ],
+)
+def test_the_name_fallback_refuses_ambiguous_component_ids(resname, expected, why):
+    """With no atom to read an element from, only unambiguous names count.
+
+    ``metal_identification`` already avoids this collision by matching on the
+    element; the declaration path matched the bare CCD id and so reported an
+    unresolvable RNA ``U`` or nitric oxide ``NO`` as having named a metal.
+    """
+    address = declared_address(resname, resname)
+    cra = SimpleNamespace(atom=None)
+
+    assert declared_connections._declared_partner_is_metal(address, cra) is expected, (
+        why
+    )

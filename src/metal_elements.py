@@ -88,3 +88,25 @@ METAL_ELEMENTS = frozenset(
         "SG",
     )
 )
+
+# Element symbols that the Chemical Component Dictionary also uses for a
+# component that is not that element:
+#
+#   U   uranium (238 Da)   but the CCD's ``U`` is uridine 5'-monophosphate (324)
+#   NO  nobelium (259 Da)  but the CCD's ``NO`` is nitric oxide (30)
+#   CM  curium (247 Da)    but the CCD's ``CM`` is a ~60 Da buffer component
+#
+# Matching a residue name against METAL_ELEMENTS is only safe with these
+# excluded. None of the three elements appears in a deposited macromolecular
+# structure, so nothing real is lost by refusing to infer them from a name
+# alone; an atom's own element symbol is unaffected and stays authoritative
+# wherever it can be read.
+#
+# Derived rather than guessed: ``test_reference_data`` compares every symbol
+# against Gemmi's component table and fails if this set is not exactly the
+# symbols whose tabulated weight is not the element's own. Keeping the literal
+# here keeps this module dependency-free, which ``tools/`` relies on.
+AMBIGUOUS_METAL_COMPONENT_IDS = frozenset(("U", "NO", "CM"))
+
+#: Metal symbols safe to match against a residue name with no element evidence.
+UNAMBIGUOUS_METAL_COMPONENT_IDS = METAL_ELEMENTS - AMBIGUOUS_METAL_COMPONENT_IDS

@@ -329,3 +329,65 @@ def test_a_bond_naming_an_absent_atom_is_ignored_rather_than_fatal():
     bonds = [("FE1", "S1"), ("FE2", "S1"), ("S1", "GHOST")]
 
     assert catalog.classify_component(component_block("FES", atoms, bonds)) == "cluster"
+
+
+def _load_stamp_tool():
+    """Import the distance-table stamper by path, like the catalog builder."""
+    path = os.path.join(REPO_ROOT, "tools", "stamp_distance_table.py")
+    spec = importlib.util.spec_from_file_location("_distance_stamper", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+stamper = _load_stamp_tool()
+
+
+def test_the_committed_sidecar_matches_the_committed_table(capsys):
+    """``--check`` is what tells a maintainer the sidecar is still current."""
+    assert stamper.main(["--check"]) == 0
+    assert "sidecar matches" in capsys.readouterr().out
+
+
+def test_a_corrupt_sidecar_is_reported_rather_than_raised(
+    tmp_path, monkeypatch, capsys
+):
+    """A truncated sidecar is exactly what --check exists to catch.
+
+    Only ``OSError`` was handled, so a half-written file raised
+    ``JSONDecodeError`` -- a traceback, from the command whose job is to report
+    that the sidecar cannot be trusted.
+    """
+    sidecar = tmp_path / "metal_distances_info.meta.json"
+    sidecar.write_text('{"distance_table_sha256": "abc', encoding="utf-8")
+    monkeypatch.setattr(stamper, "SIDECAR_PATH", str(sidecar))
+
+    assert stamper.main(["--check"]) == 1
+    assert "unreadable sidecar" in capsys.readouterr().out
+
+
+def test_a_missing_sidecar_is_reported(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(stamper, "SIDECAR_PATH", str(tmp_path / "absent.json"))
+
+    assert stamper.main(["--check"]) == 1
+    assert "no sidecar" in capsys.readouterr().out
+
+
+def test_the_recorded_row_count_comes_from_the_loader(tmp_path):
+    """The count must describe what ``reference_data`` accepts, not raw lines.
+
+    Counting lines would drift from the loader the moment a comment or blank
+    line was added, and the sidecar is what the loader verifies itself against.
+    """
+    table = tmp_path / "distances.txt"
+    table.write_text(
+        "# a comment\n\nHOH O ZN 2.09 0.11\nCYS S ZN 2.31 0.10\n", encoding="utf-8"
+    )
+
+    metadata = stamper.build_metadata(str(table), "2026-08-05T00:00:00+00:00")
+
+    assert metadata["reference_distance_count"] == 2
+    assert metadata["distance_table_sha256"] == stamper.sha256(str(table))
+    assert metadata["sources"], "citations are the point of the sidecar"

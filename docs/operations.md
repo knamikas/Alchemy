@@ -85,7 +85,13 @@ Running batches, resuming them, and reading what a run wrote. See
 - The command exits nonzero when any entry ends as `error`, `skip`, or a
   retryable `partial`. Completed `ok` and terminal `partial` results exit
   successfully.
-- One Alchemy process owns an output directory at a time. A run takes a
+- One Alchemy process on one machine owns an output directory at a time. The
+  lease is an advisory `flock`, which the kernel enforces between processes on
+  the same host. Across a network filesystem it is only as reliable as that
+  filesystem's lock support, so two cluster nodes pointed at one `--output-dir`
+  may both believe they own it and both truncate the result CSVs. Give
+  concurrent runs separate output directories rather than relying on the lease
+  to arbitrate between hosts. A run takes a
   non-blocking advisory lease on `<output-dir>/.alchemy.lock` before it reads,
   replaces, or resumes any result file. A second run fails immediately and
   reports the current owner's process, host, start time, and command instead of

@@ -26,7 +26,7 @@ from typing import NamedTuple, Optional
 from codes import CandidateSource, ContactScope, WarningCode
 from coordination.contact_record import Candidate
 from coordination.donor_chemistry import AA, DONOR_ELEMENTS
-from metal_elements import METAL_ELEMENTS
+from metal_elements import METAL_ELEMENTS, UNAMBIGUOUS_METAL_COMPONENT_IDS
 from structure_analysis import NAN, blank_if_missing, position_distance
 
 
@@ -132,6 +132,10 @@ def _declared_partner_is_metal(address, cra):
     A resolved atom's element is authoritative. If resolution failed, only a
     metal residue name is sufficient evidence: atom names such as ``CA``, ``CD``,
     ``CE`` and ``SG`` are also ordinary macromolecular atom names.
+
+    The name fallback excludes the symbols that are also non-metal component
+    ids, so an unresolvable declaration naming RNA ``U`` or nitric oxide ``NO``
+    is not reported as having named a metal.
     """
     source_atom = getattr(cra, "atom", None)
     if source_atom is not None:
@@ -140,7 +144,7 @@ def _declared_partner_is_metal(address, cra):
 
     residue_id = getattr(address, "res_id", None)
     residue_name = str(getattr(residue_id, "name", "")).strip().upper()
-    return residue_name in METAL_ELEMENTS
+    return residue_name in UNAMBIGUOUS_METAL_COMPONENT_IDS
 
 
 def _declared_candidate_geometry(structure, metal, neighbor, connection):

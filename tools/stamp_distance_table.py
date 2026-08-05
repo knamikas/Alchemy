@@ -96,6 +96,12 @@ def main(argv=None):
         except OSError:
             print(f"no sidecar at {SIDECAR_PATH}")
             return 1
+        except ValueError as exc:
+            # ``json.JSONDecodeError`` is a ValueError. A sidecar truncated by
+            # an interrupted write is exactly what --check exists to report,
+            # and it reported it as a traceback.
+            print(f"unreadable sidecar at {SIDECAR_PATH}: {exc}")
+            return 1
         if recorded != actual:
             print(f"stale sidecar: recorded {recorded}, table is {actual}")
             return 1

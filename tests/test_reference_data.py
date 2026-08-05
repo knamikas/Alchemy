@@ -399,3 +399,42 @@ def test_the_bundled_identity_is_short_and_hexadecimal():
         "metallocofactors_id.txt",
         "metal_distances_info.txt",
     }
+
+
+def test_the_ambiguous_component_ids_are_exactly_the_impostors():
+    """Derive the denylist from Gemmi rather than trusting a hand-written one.
+
+    An element symbol is safe to match against a residue name only if the CCD
+    does not also use it for something else. Three do: ``U`` is uridine
+    5'-monophosphate, ``NO`` is nitric oxide, ``CM`` is a small buffer
+    component -- and the last was missed when this set was first written from
+    the two that were already known. Comparing each tabulated component's
+    weight against its element's own finds them without anyone having to
+    remember, and fails if the CCD ever adds a fourth.
+    """
+    import gemmi
+
+    from metal_elements import AMBIGUOUS_METAL_COMPONENT_IDS, METAL_ELEMENTS
+
+    impostors = set()
+    for symbol in METAL_ELEMENTS:
+        info = gemmi.find_tabulated_residue(symbol)
+        if info is None or str(info.kind) == "ResidueKind.UNKNOWN":
+            continue
+        # A tabulated component whose weight is not its element's is a
+        # different molecule wearing the same two letters.
+        if abs(info.weight - gemmi.Element(symbol).weight) > 0.5:
+            impostors.add(symbol)
+
+    assert impostors == set(AMBIGUOUS_METAL_COMPONENT_IDS), (
+        "AMBIGUOUS_METAL_COMPONENT_IDS no longer matches the component table: "
+        f"table says {sorted(impostors)}"
+    )
+
+
+def test_the_unambiguous_ids_still_cover_the_metals_that_matter():
+    """Excluding the impostors must not remove a metal Alchemy analyses."""
+    from metal_elements import UNAMBIGUOUS_METAL_COMPONENT_IDS
+
+    for symbol in ("ZN", "FE", "MG", "CA", "MN", "CU", "NI", "CO", "K", "NA"):
+        assert symbol in UNAMBIGUOUS_METAL_COMPONENT_IDS, symbol

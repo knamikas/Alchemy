@@ -19,9 +19,12 @@ import csv
 import http.client
 import gzip
 import json
+import logging
 import os
 
 import pytest
+
+from types import SimpleNamespace
 
 from coordination import schema as coordination_schema
 import ccp4_setup
@@ -32,6 +35,7 @@ from driver import writers
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver import resume
 from driver import pool
+from driver import runlog
 import confidence_score
 
 
@@ -872,3 +876,168 @@ def test_intermediates_are_discarded_unless_asked_for():
     scratch cleanup off this flag."""
     assert cli.parse_args([]).keep_intermediates is False
     assert cli.parse_args(["--keep-intermediates"]).keep_intermediates is True
+
+
+def test_an_id_file_with_a_byte_order_mark_is_read(tmp_path):
+    """A BOM belongs to the encoding, not to the first id.
+
+    Windows editors and spreadsheet exports add one routinely, and under plain
+    utf-8 it was glued to the first token, failing validation with a message
+    that blamed the id.
+    """
+    path = tmp_path / "ids.txt"
+    path.write_text("9myr, 6nlr\n", encoding="utf-8-sig")
+
+    assert pool.load_ids_from_file(str(path)) == ["9myr", "6nlr"]
+
+
+@pytest.mark.parametrize(
+    "argv, fragment",
+    [
+        (["--pdb-file", "/tmp/1abc.pdb"], "requires --mtz-file"),
+        (["--cif-file", "/tmp/1abc.cif"], "requires --mtz-file"),
+        (["--mtz-file", "/tmp/1abc.mtz"], "requires --pdb-file or --cif-file"),
+        (
+            [
+                "--pdb-file",
+                "/tmp/1abc.pdb",
+                "--cif-file",
+                "/tmp/1abc.cif",
+                "--mtz-file",
+                "/tmp/1abc.mtz",
+            ],
+            "not both",
+        ),
+    ],
+    ids=["pdb-alone", "cif-alone", "mtz-alone", "pdb-and-cif"],
+)
+def test_incomplete_manual_input_is_a_usage_error(argv, fragment, capsys):
+    """Manual mode needs coordinates and reflections, and only one of each.
+
+    These reached a worker before failing, and were reported as an unexpected
+    processing error rather than as the usage mistake they are. Supplying both
+    coordinate forms silently used the cif and ignored the pdb.
+    """
+    with pytest.raises(SystemExit):
+        cli.parse_args(argv)
+
+    assert fragment in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"<!DOCTYPE html>\n<html><body>login</body></html>\n", b"  <html>\n"],
+    ids=["empty", "captive-portal", "leading-space"],
+)
+def test_a_cached_body_that_is_not_entry_data_is_not_treated_as_cached(
+    tmp_path, content
+):
+    """A 200 response can still carry a login page under the entry's own name.
+
+    Existence alone was the cache test, so such a body was reused forever: the
+    entry failed identically on every resume with no way to recover short of
+    deleting the cache by hand.
+    """
+    entry = tmp_path / "my" / "9myr"
+    entry.mkdir(parents=True)
+    (entry / "9myr_final.mtz").write_bytes(content)
+    (entry / "9myr_final.cif").write_bytes(content)
+
+    assert inputs.has_final_files(str(entry), "9myr") is False
+
+
+def test_real_entry_bytes_are_accepted_as_cached(tmp_path):
+    """The validity check must not reject an ordinary entry."""
+    entry = tmp_path / "my" / "9myr"
+    entry.mkdir(parents=True)
+    (entry / "9myr_final.mtz").write_bytes(b"MTZ \x00\x01binary payload")
+    (entry / "9myr_final.cif").write_text(
+        "data_9MYR\n_entry.id 9MYR\n", encoding="ascii"
+    )
+
+    assert inputs.has_final_files(str(entry), "9myr") is True
+
+
+@pytest.mark.parametrize(
+    "resuming, pdb_id, status, retryable, prior, expected, why",
+    [
+        (False, "1abc", "error", True, set(), True, "a fresh run writes everything"),
+        (True, "1abc", "ok", False, {"1abc"}, True, "an improved retry replaces"),
+        (True, "1abc", "error", True, {"1abc"}, False, "a failed retry must not"),
+        (True, "1ABC", "error", True, {"1abc"}, False, "ids compare case-folded"),
+        (True, "2xyz", "error", True, {"1abc"}, True, "a new entry has none to keep"),
+        (True, "2xyz", "skip", True, {"1abc"}, True, "including when it skipped"),
+    ],
+)
+def test_a_resumed_run_writes_new_entries_even_when_they_fail(
+    resuming, pdb_id, status, retryable, prior, expected, why
+):
+    """Suppression protects a previous row; a new entry has no previous row.
+
+    Without the distinction a newly scheduled entry that failed left no
+    manifest row at all, so the artifact --resume reads under-reported the set
+    the run had actually scheduled.
+    """
+    result = SimpleNamespace(pdb_id=pdb_id, status=status, retryable=retryable)
+
+    assert pool._should_write_entry(resuming, result, prior) is expected, why
+
+
+def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference():
+    """That run builds the reference, so it cannot be scored against one.
+
+    The flag was accepted in silence, leaving an operator believing their
+    reference had been used on the one run where it never could be. It is
+    reported rather than refused: passing the flag uniformly across capped and
+    uncapped runs is reasonable, and failing a multi-day run over an argument
+    that changes nothing would be worse than saying so.
+    """
+    args = argparse.Namespace(bonds=True, confidence_reference_dir="/tmp/reference")
+    # Captured with a handler on the logger itself rather than through caplog:
+    # the run configures ``alchemy`` not to propagate, so whether caplog sees
+    # anything depends on which tests ran first.
+    messages: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            messages.append(record.getMessage())
+
+    alchemy_logger = logging.getLogger("alchemy.pool")
+    handler = _Capture()
+    previous_level = alchemy_logger.level
+    alchemy_logger.addHandler(handler)
+    alchemy_logger.setLevel(logging.WARNING)
+    try:
+        plan = pool._plan_confidence(args, pool._OutputLayout("/tmp/out"), True, None)
+    finally:
+        alchemy_logger.removeHandler(handler)
+        alchemy_logger.setLevel(previous_level)
+
+    assert plan.mode == "database"
+    assert plan.reference is None
+    assert any("is ignored on an uncapped" in message for message in messages)
+    assert any("/tmp/reference" in message for message in messages)
+
+
+def test_concurrent_run_logs_claim_distinct_names(tmp_path):
+    """Two runs sharing a --log-dir must not overwrite each other's record.
+
+    The name was chosen with ``lexists`` and then renamed onto, and a run log
+    is written outside the output-directory lease, so nothing prevented two
+    runs from selecting the same suffix.
+    """
+    claimed = []
+    for index in range(3):
+        source = tmp_path / f"source-{index}"
+        source.write_text(f"run {index}\n", encoding="utf-8")
+        claimed.append(
+            runlog._claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
+        )
+
+    assert len({os.path.basename(path) for path in claimed}) == 3
+    assert sorted(os.path.basename(p) for p in claimed) == [
+        "alchemy_run_20260805.log",
+        "alchemy_run_20260805_2.log",
+        "alchemy_run_20260805_3.log",
+    ]
+    assert [open(p).read() for p in claimed] == ["run 0\n", "run 1\n", "run 2\n"]
