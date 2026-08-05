@@ -808,17 +808,20 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path):
         rows, [], STATS_COLUMNS
     )
     assert len(confidence_inputs) == 2
-    assert len(
-        {
-            (
-                row["metal_model_index"],
-                row["metal_chain_index"],
-                row["metal_residue_index"],
-                row["metal_atom_index"],
-            )
-            for row in confidence_inputs
-        }
-    ) == 2
+    assert (
+        len(
+            {
+                (
+                    row["metal_model_index"],
+                    row["metal_chain_index"],
+                    row["metal_residue_index"],
+                    row["metal_atom_index"],
+                )
+                for row in confidence_inputs
+            }
+        )
+        == 2
+    )
 
 
 def test_repeated_author_identity_completeness_keeps_multiplicity(tmp_path):

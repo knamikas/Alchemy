@@ -170,7 +170,8 @@ def _classify_residue(residue, metals_upper, cofactor_set):
     metal_sites = [
         atom
         for atom in residue.contact_atoms
-        if atom.element_known and atom.element in metals_upper
+        if atom.element_known
+        and atom.element in metals_upper
         and not (atom.occupancy_valid and atom.occupancy == 0.0)
     ]
     if residue.residue_name in cofactor_set:

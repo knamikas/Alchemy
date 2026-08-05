@@ -626,9 +626,7 @@ def process(pdb_id):
                     MAX_MANIFEST_ERROR_CHARS,
                 )
                 result.n_metals = 0
-                result.confidence_inputs_missing_reason = (
-                    "metal_presence_indeterminate"
-                )
+                result.confidence_inputs_missing_reason = "metal_presence_indeterminate"
                 return result
             # Skip two FFT maps and EDSTATS: with no canonical metal site,
             # neither density nor contact analysis can produce output.

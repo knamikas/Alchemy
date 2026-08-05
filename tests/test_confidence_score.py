@@ -948,7 +948,9 @@ def test_score_file_refuses_already_scored_input_and_leaves_no_partial_output(tm
     assert not os.path.exists(output_path + ".tmp")
 
 
-@pytest.mark.parametrize("required_column", ["max_abs_zbond", "confidence_inputs_status"])
+@pytest.mark.parametrize(
+    "required_column", ["max_abs_zbond", "confidence_inputs_status"]
+)
 def test_score_file_requires_the_evidence_and_validity_columns(
     tmp_path, required_column
 ):

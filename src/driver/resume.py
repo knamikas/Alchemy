@@ -56,24 +56,17 @@ def load_done(
                     )
                     pdb_id = row.get("pdbID", "").strip().lower()
                     reason_codes = {
-                        code
-                        for code in row.get("reason_codes", "").split("|")
-                        if code
+                        code for code in row.get("reason_codes", "").split("|") if code
                     }
-                    bonds_inapplicable = (
-                        "metal_presence_indeterminate" in reason_codes
-                    )
-                    bonds_complete = (
-                        not bonds_required
-                        or (
-                            bond_output_present
-                            and candidate_output_present
-                            and (
-                                bonds_inapplicable
-                                or (
-                                    row.get("n_bonds", "").strip() != ""
-                                    and row.get("n_candidates", "").strip() != ""
-                                )
+                    bonds_inapplicable = "metal_presence_indeterminate" in reason_codes
+                    bonds_complete = not bonds_required or (
+                        bond_output_present
+                        and candidate_output_present
+                        and (
+                            bonds_inapplicable
+                            or (
+                                row.get("n_bonds", "").strip() != ""
+                                and row.get("n_candidates", "").strip() != ""
                             )
                         )
                     )

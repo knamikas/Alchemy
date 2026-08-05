@@ -94,9 +94,7 @@ ANALYSIS_COLUMNS = (
     "confidence_context_warning_reasons",
 )
 
-SCORABLE_INPUT_STATUSES = frozenset(
-    {"complete", "partial_geometry", "density_only"}
-)
+SCORABLE_INPUT_STATUSES = frozenset({"complete", "partial_geometry", "density_only"})
 INPUT_STATUS_POLICY = "explicit_scorable_statuses"
 
 
@@ -125,8 +123,7 @@ def _true(value):
 def _confidence_inputs_are_scorable(row):
     """Return whether upstream evidence collection authorized scoring."""
     return (
-        str(row.get("confidence_inputs_status", "")).strip()
-        in SCORABLE_INPUT_STATUSES
+        str(row.get("confidence_inputs_status", "")).strip() in SCORABLE_INPUT_STATUSES
     )
 
 

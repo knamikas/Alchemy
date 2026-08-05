@@ -496,9 +496,7 @@ def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(tmp_path):
     assert candidate["inferred_donor_allowed"] is False
     assert candidate["inferred_donor_rule"] == "outside_typical_donor_list"
     assert rows == []
-    his = next(
-        residue for residue in context.residues if residue.residue_name == "HIS"
-    )
+    his = next(residue for residue in context.residues if residue.residue_name == "HIS")
     assert his.source_polymer_position == "M"
 
 

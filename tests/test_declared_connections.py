@@ -1125,9 +1125,7 @@ def test_declared_zero_occupancy_donor_is_candidate_evidence_not_a_bond(tmp_path
     result = analyze(analysis_pdb, connection_path=source)
 
     assert result.rows_for("NE2") == []
-    (candidate,) = [
-        row for row in result.candidates if row["neighbor_atom"] == "NE2"
-    ]
+    (candidate,) = [row for row in result.candidates if row["neighbor_atom"] == "NE2"]
     assert candidate["candidate_source"] == "LINK"
     assert candidate["declared_connection"] is True
     assert candidate["neighbor_occupancy"] == pytest.approx(0.0)
@@ -1135,16 +1133,13 @@ def test_declared_zero_occupancy_donor_is_candidate_evidence_not_a_bond(tmp_path
     assert candidate["inferred_contact_eligible"] is False
     assert candidate["eligibility_status"] == "zero_occupancy"
     assert (
-        candidate["eligibility_reason"]
-        == "zero_occupancy_atom_is_not_contact_evidence"
+        candidate["eligibility_reason"] == "zero_occupancy_atom_is_not_contact_evidence"
     )
     assert candidate["context_warning"] is True
-    assert "zero_occupancy_neighbor" in candidate[
-        "context_warning_reasons"
-    ].split("|")
-    assert "declared_connection_zero_occupancy_partner" in result.metadata[
-        "warning_codes"
-    ]
+    assert "zero_occupancy_neighbor" in candidate["context_warning_reasons"].split("|")
+    assert (
+        "declared_connection_zero_occupancy_partner" in result.metadata["warning_codes"]
+    )
 
 
 def test_declared_contact_outside_first_sphere_keeps_measured_geometry(tmp_path):

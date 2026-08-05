@@ -138,8 +138,7 @@ def _source_residue_records(structure):
     polymer_sequence_lengths = {
         str(entity.name): len(entity.full_sequence)
         for entity in structure.entities
-        if entity.entity_type == gemmi.EntityType.Polymer
-        and entity.full_sequence
+        if entity.entity_type == gemmi.EntityType.Polymer and entity.full_sequence
     }
     records = []
     for model_index, model in enumerate(structure, start=1):
