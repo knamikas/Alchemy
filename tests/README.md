@@ -34,6 +34,41 @@ already on `PATH`, source the CCP4 setup script first:
 . /opt/xtal/ccp4-9/bin/ccp4.setup-sh
 ```
 
+## What CI runs, and what it does not
+
+CI runs the offline lane only — `--no-ccp4 --no-network --skip-slow` — alongside
+`ruff check`, `ruff format --check`, and the coverage floor. Provisioning CCP4
+and the pinned entry data in CI is deliberately not done: the setup cost is not
+considered worth it.
+
+The consequence is worth stating plainly, because it is not visible from a green
+run. Nothing in CI executes `mtzfix`, `fft`, `mapmask`, or `edstats`, and nothing
+runs the pipeline end to end. Every `slow` test is also `ccp4`-marked, so
+`--skip-slow` removes nothing that `--no-ccp4` had not already removed. A defect
+in how Alchemy invokes a CCP4 program, or parses what one writes, can pass CI
+with the whole suite green.
+
+That is not hypothetical. Commit `e0429d0` read the EDSTATS `NR` column as an
+ordinal over the whole model when EDSTATS restarts it per chain, which produced
+zero output for every multi-chain entry — most of the PDB. All 1142 offline
+tests passed, because the synthetic `stats.out` in `helpers.py` numbered `NR` the
+same incorrect way. Only a real `edstats` run distinguished them.
+
+So run the full lane locally before merging changes to CCP4 invocation, to the
+parsing of any CCP4 program's output (`metal_identification.py`,
+`density_analysis.py`), or to the worker's stage sequence:
+
+```bash
+python3 -m pytest --require-ccp4 --require-entry-data
+```
+
+Use those `--require-*` options rather than a plain `pytest`. Without them a
+missing capability skips silently, which looks identical to passing. With them
+the run fails instead, so an unexercised lane cannot be mistaken for a verified
+one. Keep synthetic fixtures honest about the real format they stand in for —
+where a fixture and the code it feeds share an assumption, the offline suite
+cannot tell you the assumption is wrong.
+
 ## Integration entries
 
 The end-to-end tests use checksum-pinned PDB-REDO files for:
