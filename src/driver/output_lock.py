@@ -31,6 +31,44 @@ _active_lock_handle: Optional[IO[str]] = None
 _active_lock_pid: Optional[int] = None
 
 
+def _open_lock_handle(path: str) -> IO[str]:
+    """Open one safe lock inode without following the final path component."""
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise OutputDirectoryLockError(
+            "Cannot safely open the output lock: this platform does not support "
+            "O_NOFOLLOW."
+        )
+    flags = os.O_RDWR | os.O_CREAT | nofollow
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise OutputDirectoryLockError(
+            f"Cannot safely open output lock {path}: {exc.strerror or exc}. "
+            "Symbolic links and other unsafe lock paths are refused."
+        ) from None
+
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            problem = "it is not a regular file"
+        elif metadata.st_uid != os.geteuid():
+            problem = "it is not owned by the current user"
+        elif metadata.st_nlink != 1:
+            problem = "it has multiple hard links"
+        else:
+            return os.fdopen(descriptor, "r+", encoding="utf-8")
+        raise OutputDirectoryLockError(
+            f"Cannot safely use output lock {path}: {problem}. Remove or rename "
+            "the unsafe path before running Alchemy."
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def _close_inherited_lock_after_fork() -> None:
     """Ensure a worker cannot keep its dead parent's output lease alive."""
     global _active_lock_handle, _active_lock_pid
@@ -80,7 +118,9 @@ class OutputDirectoryLock:
     def __enter__(self):
         global _active_lock_handle, _active_lock_pid
         try:
-            handle = open(self.path, "a+", encoding="utf-8")
+            handle = _open_lock_handle(self.path)
+        except OutputDirectoryLockError:
+            raise
         except OSError as exc:
             raise OutputDirectoryLockError(
                 f"Cannot lock output directory {self.output_dir}: {exc.strerror or exc}"

@@ -2810,6 +2810,41 @@ class TestFirstModelPdb:
 
 @pytest.mark.skipif(os.name != "posix", reason="uses POSIX advisory locks")
 class TestOutputDirectoryLock:
+    def test_lock_path_symlink_is_refused_without_touching_its_target(self, tmp_path):
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        target = tmp_path / "important.txt"
+        target.write_text("important data\n", encoding="utf-8")
+        lock_path = output_dir / output_lock.LOCK_FILENAME
+        lock_path.symlink_to(target)
+
+        with pytest.raises(
+            output_lock.OutputDirectoryLockError, match="unsafe lock paths are refused"
+        ):
+            with output_lock.OutputDirectoryLock(str(output_dir), "unsafe link"):
+                pass
+
+        assert lock_path.is_symlink()
+        assert target.read_text(encoding="utf-8") == "important data\n"
+
+    def test_multiply_linked_lock_is_refused_without_touching_its_target(
+        self, tmp_path
+    ):
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        target = tmp_path / "important.txt"
+        target.write_text("important data\n", encoding="utf-8")
+        lock_path = output_dir / output_lock.LOCK_FILENAME
+        os.link(target, lock_path)
+
+        with pytest.raises(
+            output_lock.OutputDirectoryLockError, match="multiple hard links"
+        ):
+            with output_lock.OutputDirectoryLock(str(output_dir), "unsafe hard link"):
+                pass
+
+        assert target.read_text(encoding="utf-8") == "important data\n"
+
     def test_second_owner_fails_with_first_owners_details(self, tmp_path):
         output_dir = tmp_path / "output"
         output_dir.mkdir()

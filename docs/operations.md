@@ -104,7 +104,9 @@ Running batches, resuming them, and reading what a run wrote. See
   touching those results. The lock file intentionally remains after exit; the
   operating-system lease, not the file's presence, determines whether the
   directory is busy, and the lease is released automatically if the process
-  exits or crashes.
+  exits or crashes. Alchemy refuses a lock path that is a symbolic link,
+  non-regular file, foreign-owned file, or an inode with multiple hard links,
+  so recording lease metadata cannot overwrite another file through that path.
 - Startup cleanup removes only Alchemy scratch directories carrying a valid
   disposable ownership marker. Unmarked directories, symlinks, malformed
   markers, and intermediates retained by `--keep-intermediates` are left alone.
