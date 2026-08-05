@@ -74,15 +74,13 @@ TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
 
 logger = logger_for(__name__)
 
-# Unanticipated exceptions that cannot come out differently on a retry of the
-# same inputs: a parse, lookup, or type error is a property of the entry's data
-# or of Alchemy's code, not of the machine. Recording those terminally stops a
-# resumed run from paying the whole CCP4 cost again for an entry that will fail
-# identically every time -- an EDSTATS parsing regression once cost exactly
-# that, silently, on every resume. Everything else stays retryable: an OSError,
-# a MemoryError, or a RuntimeError raised by a CCP4 program may well describe
-# the machine rather than the entry, and a wrongly terminal entry is worse than
-# a wasted retry.
+# Unanticipated exceptions that will recur on the same inputs: a parse, lookup,
+# or type error is a property of the entry's data or of Alchemy's code, not of
+# the machine. The distinction is advisory -- it separates "this will keep
+# failing until something changes" from "this may have been the machine", which
+# is what triage of a database-scale run needs. It deliberately does not change
+# what --resume does: an entry is retried either way, because nothing here can
+# establish that a later run reads the same bytes.
 DETERMINISTIC_PROCESSING_ERRORS = (
     ArithmeticError,
     AssertionError,
@@ -688,7 +686,12 @@ def process(pdb_id):
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = "error"
-        result.retryable = not deterministic
+        # Retryable regardless: the reason code says the failure will recur on
+        # the same inputs, but a resumed run cannot know the inputs are the
+        # same. A manual run may name a repaired file, and a mirror entry may
+        # have been re-downloaded, so skipping the entry could silently drop
+        # work the operator has already fixed.
+        result.retryable = True
         result.reason_codes = [
             ReasonCode.DETERMINISTIC_PROCESSING_ERROR
             if deterministic

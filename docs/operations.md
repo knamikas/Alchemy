@@ -108,19 +108,17 @@ Running batches, resuming them, and reading what a run wrote. See
   recorded as `partial` with `retryable=false`. Transient processing failures
   are recorded with `retryable=true`. `--resume` uses that field so terminal
   entries do not run forever.
-- An unanticipated exception ends the entry as `error`, and its type decides
-  whether a retry is worth anything. A parse, lookup, arithmetic, or type error
-  describes the entry's data or Alchemy's own code, so it cannot come out
-  differently on the same inputs: it is recorded as `deterministic_processing_error`
-  with `retryable=false` and `--resume` skips it, rather than spending the whole
-  CCP4 cost again to reach the identical failure. Anything else — an `OSError`,
-  a `MemoryError`, a `RuntimeError` from a CCP4 program — may describe the
-  machine rather than the entry, so it stays `unexpected_processing_error` with
-  `retryable=true`. The classification is by exception type, not by inspection
-  of the failure, so it is deliberately conservative: an entry wrongly marked
-  terminal is worse than a wasted retry. `--resume --retry-partials` releases
-  terminal errors along with terminal partials, which is how a run picks them up
-  after a fix.
+- An unanticipated exception ends the entry as `error`, and its type is recorded
+  so a large run can be triaged. A parse, lookup, arithmetic, or type error
+  describes the entry's data or Alchemy's own code and will recur while both
+  stay the same, so it is reported as `deterministic_processing_error`. Anything
+  else — an `OSError`, a `MemoryError`, a `RuntimeError` from a CCP4 program —
+  may describe the machine rather than the entry, and is reported as
+  `unexpected_processing_error`. The distinction is advisory and does not change
+  what `--resume` does: every `error` entry is retried either way, because a
+  resumed run may have been given a repaired input file or a re-downloaded
+  mirror entry, and Alchemy does not checksum its inputs to tell. Skipping an
+  entry the operator had just fixed would be worse than repeating one.
 - The manifest's `error` column holds one truncated line naming the exception.
   The traceback is written to the debug log, so `--log-file`, or `-v` on the
   console, is what locates an unanticipated failure without rerunning the entry

@@ -178,8 +178,8 @@ def parse_args(argv=None):
         "--retry-partials",
         action="store_true",
         help=(
-            "with --resume, reprocess non-retryable partial and error entries "
-            "from the manifest while still skipping successful entries; --id "
+            "with --resume, reprocess non-retryable partial entries from "
+            "the manifest while still skipping successful entries; --id "
             "or --id-file may restrict the retry set"
         ),
     )

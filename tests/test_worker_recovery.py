@@ -1095,7 +1095,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and len(workers) < 4:
             time.sleep(0.2)
-            workers = _child_pids(driver_pid)
+            workers = _descendant_pids(driver_pid)
         assert workers, "no pool workers appeared to be signalled"
 
         deadline = time.monotonic() + 30
@@ -1135,10 +1135,80 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
         channel.close()
 
 
+class _FakeLogQueue:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(monkeypatch):
+    """A batch with every row on disk must not hang at the very last step.
+
+    ``QueueListener.stop`` puts a sentinel and then joins its thread untimed,
+    and that put needs the log queue's cross-process write lock -- the lock a
+    worker SIGKILLed mid-write never released. Unbounded, the process would sit
+    there complete, with no run log and no exit status.
+    """
+    monkeypatch.setattr(driver_pool, "WORKER_SHUTDOWN_GRACE_S", 0.2)
+    release = threading.Event()
+
+    class _WedgedListener:
+        def stop(self):
+            release.wait(30)
+
+    log_queue = _FakeLogQueue()
+    started = time.monotonic()
+    try:
+        abandoned = driver_pool._stop_log_listener(_WedgedListener(), log_queue)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert abandoned is True
+    assert elapsed < 5.0, f"shutdown waited {elapsed:.1f}s on a wedged listener"
+    assert log_queue.closed, "the queue must still be dropped"
+
+
+def test_a_healthy_log_listener_stops_without_being_abandoned():
+    """The deadline must not report a normal stop as a failure."""
+    stopped = []
+
+    class _Listener:
+        def stop(self):
+            stopped.append(True)
+
+    log_queue = _FakeLogQueue()
+
+    assert driver_pool._stop_log_listener(_Listener(), log_queue) is False
+    assert stopped == [True]
+    assert log_queue.closed
+
+
 def _child_pids(pid):
-    """Direct children of ``pid`` (POSIX only, used to find pool workers)."""
+    """Direct children of ``pid`` (POSIX only)."""
     result = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True)
     return [int(line) for line in result.stdout.split()]
+
+
+def _descendant_pids(pid):
+    """Every descendant of ``pid``, not only its direct children.
+
+    Pool workers are direct children under the ``fork`` start method but
+    grandchildren of the driver under ``forkserver``, which became the
+    interpreter default in Python 3.14. Collecting only direct children
+    therefore silently reduced the assertion that workers die with the driver
+    to one about the fork server and the resource tracker, which die anyway.
+    Walking the tree keeps the check meaningful under either topology.
+    """
+    found: list[int] = []
+    frontier = [pid]
+    while frontier:
+        for child in _child_pids(frontier.pop()):
+            found.append(child)
+            frontier.append(child)
+    return found
 
 
 def _process_exists(pid):

@@ -153,24 +153,26 @@ def _manual_entry(
 
 
 @pytest.mark.parametrize(
-    "exception,expected_code,expected_retryable",
+    "exception,expected_code",
     [
-        (ValueError("no FWT column"), "deterministic_processing_error", False),
-        (KeyError("NR"), "deterministic_processing_error", False),
-        (TypeError("bad shape"), "deterministic_processing_error", False),
-        (OSError("disk full"), "unexpected_processing_error", True),
-        (MemoryError(), "unexpected_processing_error", True),
-        (RuntimeError("fft failed"), "unexpected_processing_error", True),
+        (ValueError("no FWT column"), "deterministic_processing_error"),
+        (KeyError("NR"), "deterministic_processing_error"),
+        (TypeError("bad shape"), "deterministic_processing_error"),
+        (OSError("disk full"), "unexpected_processing_error"),
+        (MemoryError(), "unexpected_processing_error"),
+        (RuntimeError("fft failed"), "unexpected_processing_error"),
     ],
 )
-def test_an_unanticipated_failure_is_retryable_only_if_a_retry_could_differ(
-    tmp_path, monkeypatch, exception, expected_code, expected_retryable
+def test_an_unanticipated_failure_reports_whether_it_will_recur(
+    tmp_path, monkeypatch, exception, expected_code
 ):
-    """The exception type decides whether resuming the entry is worth anything.
+    """The exception type separates a permanent failure from a possible fluke.
 
     A parse, lookup or type error describes the data or Alchemy's code and will
-    recur identically, so it is terminal. An OSError or a CCP4 RuntimeError may
-    describe the machine, so it stays retryable.
+    recur while both are unchanged. An OSError or a CCP4 RuntimeError may
+    describe the machine instead. The distinction is for triage: both stay
+    retryable, because nothing here can establish that a later run reads the
+    same bytes.
     """
 
     def failing_stage(*args, **kwargs):
@@ -180,7 +182,7 @@ def test_an_unanticipated_failure_is_retryable_only_if_a_retry_could_differ(
 
     assert result.status == "error"
     assert result.reason_codes == [expected_code]
-    assert result.retryable is expected_retryable
+    assert result.retryable is True
     assert type(exception).__name__ in result.error
 
 
@@ -536,10 +538,9 @@ class TestLoadDone:
             ("partial", "True", False),
             ("partial", "", False),
             ("error", "True", False),
-            # A deterministic failure cannot come out differently on the same
-            # inputs, so retrying it only spends the CCP4 cost again.
-            ("error", "False", True),
-            ("error", "0", True),
+            # An error is never done: a resumed run may have been handed a
+            # repaired input, and skipping would drop work already fixed.
+            ("error", "False", False),
             ("skip", "False", False),
             ("skip", "True", False),
             ("", "", False),
@@ -548,7 +549,7 @@ class TestLoadDone:
     def test_terminality_by_status_and_retryable(
         self, tmp_path, status, retryable, expected_done
     ):
-        """Only ok and non-retryable partial or error rows are skippable."""
+        """Only ok and non-retryable partial rows are skippable."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -563,12 +564,12 @@ class TestLoadDone:
         )
         assert ("109m" in _manifest_ids(path)) is expected_done
 
-    def test_a_terminal_error_is_done_despite_having_no_bond_counts(self, tmp_path):
-        """The bond-completeness rule cannot apply to an entry that never ran.
+    def test_an_error_is_retried_whatever_its_reason_code_claims(self, tmp_path):
+        """A deterministic-looking failure is still offered to the next resume.
 
-        A terminal error leaves ``n_bonds`` blank and always will, so requiring
-        bond output would reprocess it on every resume -- exactly the cost that
-        marking it terminal exists to avoid.
+        The reason code says the failure recurs on the same inputs, but a
+        resumed run may name a repaired file, so resume cannot treat the claim
+        as licence to skip.
         """
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -577,26 +578,11 @@ class TestLoadDone:
                     "pdbID": "109m",
                     "status": "error",
                     "retryable": "False",
-                    "n_bonds": "",
-                    "n_candidates": "",
+                    "reason_codes": "deterministic_processing_error",
                 },
             ],
         )
-        assert _manifest_ids(path, bonds_required=True) == {"109m"}
-
-    def test_retry_partials_releases_a_terminal_error(self, tmp_path):
-        """A fix is picked up through the same selector that releases partials."""
-        path = _write_manifest(
-            tmp_path / "manifest.csv",
-            [
-                {"pdbID": "109m", "status": "error", "retryable": "False"},
-                {"pdbID": "1cll", "status": "ok", "retryable": "False"},
-            ],
-        )
-
-        assert _manifest_ids(path) == {"109m", "1cll"}
-        # The ok row stays protected; only the terminal error is released.
-        assert _manifest_ids(path, retry_partial_ids={"109m", "1cll"}) == {"1cll"}
+        assert _manifest_ids(path) == set()
 
     def test_ids_are_normalized_to_lowercase(self, tmp_path):
         """Manifest IDs join against the driver's lowercased selection list."""

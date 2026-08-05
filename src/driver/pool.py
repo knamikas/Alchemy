@@ -249,13 +249,49 @@ def _dead_worker_pids(pool, known_pids):
 
 
 def _signal_worker_process_group(pid, sig):
-    """Signal one isolated worker group, ignoring an already-empty group."""
+    """Signal one isolated worker group, ignoring an already-empty group.
+
+    The group is signalled even once ``pid`` has been reaped, which is the
+    point: the worker is gone but the CCP4 programs it started are still in its
+    group, and killing them is the only thing that stops them outliving the
+    run. A reaped pid is free for reuse, so in principle this can reach an
+    unrelated group that has taken the number. Guarding on
+    ``os.getpgid(pid) == pid`` was tried and rejected: it also rejects the case
+    above, because a reaped leader no longer has a group to report, and the
+    external children then survive. Cleanup that works is worth more than
+    closing a window that needs pid wraparound inside a few milliseconds and a
+    replacement that has made itself a group leader.
+    """
     if os.name != "posix" or not hasattr(os, "killpg") or not pid:
         return
     try:
         os.killpg(pid, sig)
     except (OSError, ValueError):
         pass
+
+
+def _stop_log_listener(listener, queue):
+    """Stop the worker log listener on a deadline and drop its queue.
+
+    ``QueueListener.stop`` puts a sentinel and then joins its thread untimed.
+    That put has to take the queue's cross-process write lock, which a worker
+    SIGKILLed mid-write never released -- the same hazard ``_shutdown_pool``
+    already bounds for the task queue. Without a deadline here a batch whose
+    every row is safely on disk could hang at the very end of the run with no
+    log written and no exit status. The listener thread is a daemon, so
+    abandoning it does not keep the interpreter alive. Returns ``True`` when it
+    had to be abandoned.
+    """
+    stopper = threading.Thread(target=listener.stop, daemon=True)
+    stopper.start()
+    stopper.join(WORKER_SHUTDOWN_GRACE_S)
+    abandoned = stopper.is_alive()
+    # ``close`` only drops this process's handles; ``join_thread`` would wait on
+    # the same feeder the sentinel is stuck behind, so it is deliberately not
+    # called.
+    with contextlib.suppress(Exception):
+        queue.close()
+    return abandoned
 
 
 def _sweep_leaked_work_dirs(output_dir):
@@ -995,8 +1031,13 @@ def _dispatch_entries(
         forced = _shutdown_pool(pool)
         # Stopped after the pool is gone, so records emitted during shutdown
         # are still forwarded.
-        log_listener.stop()
-        log_queue.close()
+        if _stop_log_listener(log_listener, log_queue):
+            run_log.summary["worker_log_listener_abandoned"] = True
+            logger.warning(
+                "the worker log listener did not stop within %gs and was "
+                "abandoned; some worker records may be missing from this log",
+                WORKER_SHUTDOWN_GRACE_S,
+            )
         if forced:
             run_log.summary["worker_pool_forced_shutdown"] = True
             logger.warning(
