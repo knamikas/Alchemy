@@ -29,6 +29,35 @@ _MUST_NOT_READ_AT_IMPORT = (
 )
 
 
+def _clear_reference_data_caches():
+    """Drop every memoized read in ``reference_data``."""
+    for cached in (
+        reference_data.reference_data_checksums,
+        reference_data.reference_data_id,
+        reference_data._catalog,
+        reference_data.literature_distances,
+        reference_data.first_sphere_targets,
+    ):
+        cached.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_reference_data_caches():
+    """Clear the memoized reads around every test in this module.
+
+    ``reference_data_checksums`` and ``reference_data_id`` take no arguments, so
+    a value computed from stubbed files outlives the ``monkeypatch`` that
+    produced it: the patched ``CHECKSUM_SIDECARS`` is restored while the value
+    derived from it is not. Clearing only before use therefore left whichever
+    identity the last stubbing test computed visible for the rest of the
+    session, which failed unrelated tests in other modules and made this file's
+    own results depend on collection order.
+    """
+    _clear_reference_data_caches()
+    yield
+    _clear_reference_data_caches()
+
+
 def _catalog(tmp_path, lines, name="catalog.txt"):
     path = tmp_path / name
     path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
@@ -302,8 +331,9 @@ def _stub_reference_data(tmp_path, monkeypatch, catalog_text, distance_text):
         )
         paths[str(data)] = (str(sidecar), key)
     monkeypatch.setattr(reference_data, "CHECKSUM_SIDECARS", paths)
-    reference_data.reference_data_checksums.cache_clear()
-    reference_data.reference_data_id.cache_clear()
+    # Cleared here as well as by the autouse fixture: a test may re-stub
+    # mid-run, and the previous stub's identity would otherwise be returned.
+    _clear_reference_data_caches()
     return paths
 
 
