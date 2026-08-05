@@ -59,3 +59,17 @@ jobs:
         run: python -m pip install '.[test]'
       - name: Run the Windows offline suite
         run: python -m pytest --no-ccp4 --no-network --skip-slow
+
+  macos-offline:
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Alchemy's dependencies
+        run: python -m pip install '.[test]'
+      - name: Run the macOS offline suite
+        run: python -m pytest --no-ccp4 --no-network --skip-slow
