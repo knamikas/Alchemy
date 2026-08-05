@@ -20,6 +20,17 @@ from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
 
 
+def _complete_csv_row(row):
+    """Whether DictReader received every declared field exactly once."""
+    return None not in row and all(isinstance(value, str) for value in row.values())
+
+
+def _csv_text(row, column):
+    """Return one textual CSV cell, safely blanking absent older columns."""
+    value = row.get(column, "")
+    return value if isinstance(value, str) else ""
+
+
 def load_done(
     manifest_path,
     bonds_required=False,
@@ -47,16 +58,23 @@ def load_done(
             reader = csv.DictReader(f)
             if reader.fieldnames and {"pdbID", "status"}.issubset(reader.fieldnames):
                 for row in reader:
-                    status = row.get("status", "").strip().lower()
-                    retryable = row.get("retryable", "").strip().lower()
+                    # An interrupted writer can leave the final row shorter
+                    # than the header. DictReader fills those trailing cells
+                    # with None; skip the row so resume retries that entry.
+                    if not _complete_csv_row(row):
+                        continue
+                    status = _csv_text(row, "status").strip().lower()
+                    retryable = _csv_text(row, "retryable").strip().lower()
                     terminal_partial = status == "partial" and retryable in (
                         "false",
                         "0",
                         "no",
                     )
-                    pdb_id = row.get("pdbID", "").strip().lower()
+                    pdb_id = _csv_text(row, "pdbID").strip().lower()
                     reason_codes = {
-                        code for code in row.get("reason_codes", "").split("|") if code
+                        code
+                        for code in _csv_text(row, "reason_codes").split("|")
+                        if code
                     }
                     bonds_inapplicable = "metal_presence_indeterminate" in reason_codes
                     bonds_complete = not bonds_required or (
@@ -65,8 +83,8 @@ def load_done(
                         and (
                             bonds_inapplicable
                             or (
-                                row.get("n_bonds", "").strip() != ""
-                                and row.get("n_candidates", "").strip() != ""
+                                _csv_text(row, "n_bonds").strip() != ""
+                                and _csv_text(row, "n_candidates").strip() != ""
                             )
                         )
                     )
@@ -91,9 +109,11 @@ def _manifest_values_by_id(path, column):
         return values
     with open(path, newline="") as handle:
         for row in csv.DictReader(handle):
-            pdb_id = row.get("pdbID", "").strip().lower()
+            if not _complete_csv_row(row):
+                continue
+            pdb_id = _csv_text(row, "pdbID").strip().lower()
             if pdb_id:
-                values[pdb_id] = row.get(column, "")
+                values[pdb_id] = _csv_text(row, column)
     return values
 
 

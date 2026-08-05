@@ -573,6 +573,17 @@ class TestLoadDone:
         path.write_text("")
         assert _manifest_ids(path) == set()
 
+    def test_truncated_final_row_is_retried_without_losing_valid_rows(self, tmp_path):
+        """An interrupted writer may leave only the first cells of its row."""
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [{"pdbID": "109m", "status": "ok", "retryable": "False"}],
+        )
+        with open(path, "a", newline="") as handle:
+            csv.writer(handle).writerow(["1cll", "ok"])
+
+        assert _manifest_ids(path, bonds_required=False) == {"109m"}
+
     def test_row_without_a_pdb_id_is_not_done(self, tmp_path):
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -765,6 +776,16 @@ class TestManifestValuesById:
             columns=["pdbID", "status"],
         )
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": ""}
+
+    def test_truncated_rows_do_not_supply_carry_forward_values(self, tmp_path):
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [{"pdbID": "109m", "status": "ok", "n_bonds": "7"}],
+        )
+        with open(path, "a", newline="") as handle:
+            csv.writer(handle).writerow(["1cll", "ok"])
+
+        assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "7"}
 
     def test_blank_ids_are_dropped(self, tmp_path):
         path = _write_manifest(
