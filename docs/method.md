@@ -219,7 +219,10 @@ the DPI term stands for the donor alone. Using two atoms' worth of uncertainty
 would divide every z-score by up to `sqrt(2)` and reclassify borderline geometry
 outliers.
 
-Reference-covered contacts with `|Zbond| >= 6` are geometry outliers.
+Reference-covered contacts with `|Zbond| >= 6` are geometry outliers. This
+classification uses the unrounded coordinate distance and Zbond; the distance
+and Zbond written to CSV are rounded to three and four decimal places only for
+presentation.
 First-sphere contacts admitted by a same-element fallback, or without complete
 DPI inputs, are still emitted with their measured geometry and NaN derived
 values. The `geometry_outlier` and `geometry_consistent` columns are nullable

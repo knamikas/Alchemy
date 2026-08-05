@@ -1426,6 +1426,37 @@ def test_multiple_declarations_for_one_atom_image_are_all_recorded(tmp_path):
     assert row["distance"] == pytest.approx(2.03, abs=1e-6)
 
 
+def test_multiple_declaration_fields_preserve_record_correspondence(tmp_path):
+    """Parallel declaration columns retain repeated and blank record slots."""
+    builder, his, zinc = zinc_histidine_site()
+    builder.add_connection(
+        zinc.ref("ZN"),
+        his.ref("NE2"),
+        name="first",
+        type="covale",
+        reported_distance=2.03,
+    )
+    builder.add_connection(
+        zinc.ref("ZN"),
+        his.ref("NE2"),
+        name="second",
+        type="metalc",
+        link_id="ZN-NE2",
+        reported_distance=2.03,
+    )
+    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+
+    result = analyze(analysis_pdb, connection_path=source)
+
+    (row,) = result.rows_for("NE2")
+    assert row["coordination_source"] == "struct_conn|struct_conn"
+    assert row["connection_id"] == "first|second"
+    assert row["connection_type"] == "covale|metalc"
+    assert row["connection_link_id"] == "|ZN-NE2"
+    assert row["connection_asu"] == "same|same"
+    assert row["connection_reported_distance"] == "2.03|2.03"
+
+
 def test_connection_path_defaults_to_the_analyzed_coordinates(tmp_path):
     """Omitting ``connection_path`` reads declarations from the analyzed PDB."""
     builder, his, zinc = zinc_histidine_site()
@@ -1586,6 +1617,7 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(tmp_pa
     assert len(declared) == 1, candidates
     row = declared[0]
     assert row["neighbor_resname"] == "DG"
+    assert row["neighbor_class"] == "nucleotide"
     assert row["declared_connection"] is True
     assert row["connection_id"] == "metalc1"
     assert float(row["candidate_distance"]) == pytest.approx(2.15, abs=5e-3)

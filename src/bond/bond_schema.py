@@ -14,6 +14,8 @@ The builders are serialization only: every decision they report was made in
 
 from typing import Any, Mapping, Optional
 
+import gemmi
+
 from structure_analysis import NAN
 
 
@@ -307,13 +309,12 @@ def _connection_output_values(candidate):
     inferred = bool(candidate.inferred_contact_eligible)
 
     def joined(name):
-        return "|".join(
-            dict.fromkeys(
-                str(record[name])
-                for record in records
-                if str(record.get(name, "")) not in ("", "nan")
-            )
-        )
+        values = []
+        for record in records:
+            value = record.get(name, "")
+            text = "" if value is None else str(value)
+            values.append("" if text in ("", "nan") else text)
+        return "|".join(values)
 
     return {
         "coordination_status": (
@@ -337,6 +338,17 @@ def _donor_output_values(candidate):
         "inferred_donor_rule": candidate.inferred_donor_rule,
         "donor_rule_override": candidate.donor_rule_override,
     }
+
+
+def _neighbor_class(neighbor):
+    if neighbor.is_water:
+        return "water"
+    residue_info = gemmi.find_tabulated_residue(neighbor.residue_name)
+    if residue_info.is_nucleic_acid():
+        return "nucleotide"
+    if residue_info.is_amino_acid():
+        return "amino_acid"
+    return "other"
 
 
 def _context_warning_values(candidate, include_proximal=False):
@@ -510,7 +522,7 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_
             metal_residue.altloc_selection_fallback
             or neighbor_residue.altloc_selection_fallback
         ),
-        "neighbor_class": "water" if neighbor.is_water else "amino_acid",
+        "neighbor_class": _neighbor_class(neighbor),
         "candidate_contact": True,
         "reference_covered": contact.reference_covered,
         "geometry_outlier": contact.geometry_outlier,
@@ -585,7 +597,7 @@ def _candidate_row(pdb_id, structure, metal, candidate):
         "neighbor_icode": neighbor.insertion_code,
         "neighbor_altloc": neighbor.altloc,
         "neighbor_occupancy": neighbor.occupancy,
-        "neighbor_class": "water" if neighbor.is_water else "amino_acid",
+        "neighbor_class": _neighbor_class(neighbor),
         "neighbor_model_index": neighbor.model_index,
         "neighbor_chain_index": neighbor.output_chain_index,
         "neighbor_residue_index": neighbor.output_residue_index,

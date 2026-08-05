@@ -114,7 +114,7 @@ def _zscore(dist, mu, stdev, dpi):
     if not (math.isfinite(dpi) and math.isfinite(mu) and math.isfinite(stdev)):
         return NAN
     denom = math.sqrt(dpi**2 + stdev**2)
-    return round((dist - mu) / denom, 4) if denom > 0 else NAN
+    return (dist - mu) / denom if denom > 0 else NAN
 
 
 def _contact_sort_key(contact):
@@ -524,21 +524,29 @@ def _annotate_contacts(contacts, metal_element, dpi):
             _bonding_key(neighbor, neighbor.residue_name, metal_element)
         )
         if literature is None:
-            mu = stdev = zscore = NAN
+            mu = stdev = zscore_raw = NAN
         else:
             mu, stdev = literature
-            zscore = _zscore(reported_distance, mu, stdev, dpi)
+            zscore_raw = _zscore(contact.distance_raw, mu, stdev, dpi)
+        zscore = round(zscore_raw, 4) if math.isfinite(zscore_raw) else NAN
         contact.distance = reported_distance
         contact.literature_distance = mu
         contact.literature_stdev = stdev
         contact.zscore = zscore
         contact.reference_covered = literature is not None
-        contact.geometry_outlier = (
-            abs(zscore) >= ZSCORE_OUTLIER_CUTOFF if math.isfinite(zscore) else ""
-        )
-        contact.geometry_consistent = (
-            abs(zscore) < ZSCORE_OUTLIER_CUTOFF if math.isfinite(zscore) else ""
-        )
+        if math.isfinite(zscore_raw):
+            magnitude = abs(zscore_raw)
+            outlier = magnitude >= ZSCORE_OUTLIER_CUTOFF or math.isclose(
+                magnitude,
+                ZSCORE_OUTLIER_CUTOFF,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+            contact.geometry_outlier = outlier
+            contact.geometry_consistent = not outlier
+        else:
+            contact.geometry_outlier = ""
+            contact.geometry_consistent = ""
 
 
 def _residue_image_key(contact):

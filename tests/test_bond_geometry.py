@@ -767,9 +767,9 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
 
 
 def test_zscore_matches_the_documented_formula():
-    """z = (d - mu) / sqrt(DPI^2 + sigma^2), rounded to four decimals."""
+    """z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
     assert ba._zscore(2.30, 2.09, 0.05, 0.12) == pytest.approx(
-        round((2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2), 4)
+        (2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2)
     )
     # 0.12 / 0.05 / 0.13 is a right triangle, so this one is exact by hand.
     assert ba._zscore(2.87, 2.09, 0.05, 0.12) == pytest.approx(6.0)
@@ -788,10 +788,10 @@ def test_zscore_denominator_carries_exactly_one_dpi():
     single = (dist - mu) / math.sqrt(dpi**2 + sigma**2)
     two_atom = (dist - mu) / math.sqrt(2 * dpi**2 + sigma**2)
 
-    assert ba._zscore(dist, mu, sigma, dpi) == pytest.approx(round(single, 4))
+    assert ba._zscore(dist, mu, sigma, dpi) == pytest.approx(single)
     assert single == pytest.approx(6.0)
     assert two_atom < bond_schema.ZSCORE_OUTLIER_CUTOFF < single
-    assert ba._zscore(dist, mu, sigma, dpi) != pytest.approx(round(two_atom, 4))
+    assert ba._zscore(dist, mu, sigma, dpi) != pytest.approx(two_atom)
 
 
 @pytest.mark.parametrize(
@@ -845,6 +845,37 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     assert contact.literature_stdev == pytest.approx(0.05)
     assert contact.zscore == pytest.approx(expected_z)
     assert contact.reference_covered is True
+    assert contact.geometry_outlier is outlier
+    assert contact.geometry_consistent is (not outlier)
+
+
+@pytest.mark.parametrize(
+    ("raw_zscore", "outlier"),
+    [
+        (5.99996, False),
+        (6.00004, True),
+        (-5.99996, False),
+        (-6.00004, True),
+    ],
+)
+def test_outlier_verdict_uses_unrounded_distance_and_zscore(
+    tmp_path, raw_zscore, outlier
+):
+    """Identical displayed Zbond values may sit on opposite sides of the cutoff."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_water(101, (2.09, 0.0, 0.0), chain="B")
+    context = load_structure("test", builder.write_pdb(tmp_path / "borderline.pdb"))
+    water = next(residue for residue in context.residues if residue.is_water)
+    denominator = math.sqrt(0.12**2 + 0.05**2)
+    distance = 2.09 + raw_zscore * denominator
+    contact = _contact(water.contact_atoms[0], distance_raw=distance)
+
+    ba._annotate_contacts([contact], "ZN", 0.12)
+
+    assert contact.distance == pytest.approx(round(distance, 3))
+    assert contact.zscore == pytest.approx(round(raw_zscore, 4))
+    assert contact.zscore in (-6.0, 6.0)
     assert contact.geometry_outlier is outlier
     assert contact.geometry_consistent is (not outlier)
 
