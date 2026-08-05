@@ -163,6 +163,10 @@ cover every donor Alchemy will infer:
   reported and measured, but never receive a Zbond: they carry the
   same-element fallback and NaN derived values. This is a limitation of the
   bundled reference data, not of the geometry.
+- **Terminal donors have no reference entry.** N-terminal backbone `N` and
+  C-terminal `OXT`/`OT1`/`OT2` contacts are likewise reported through the
+  same-element fallback without a Zbond; they do not borrow chemically
+  different side-chain or backbone-carbonyl distributions.
 - **SER, THR and TYR values are approximations** derived from statements in
   Harding (2006) rather than from its tables, so their `sigma_lit` is not an
   empirical spread. Treat z-scores for these three donors as indicative.

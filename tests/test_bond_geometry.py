@@ -415,6 +415,39 @@ def test_n_terminal_nitrogen_is_a_donor_only_at_the_chain_start(
     assert len(rows) == (1 if allowed else 0)
 
 
+def test_n_terminal_histidine_n_does_not_borrow_side_chain_reference(tmp_path):
+    """Backbone N and imidazole N retain their distinct reference coverage."""
+    path = _probe_structure(
+        tmp_path,
+        "nterm_his.pdb",
+        resname="HIS",
+        positions={"N": (2.0, 0.0, 0.0), "NE2": (0.0, 2.03, 0.0)},
+        probe_index=0,
+    )
+    rows, candidates, _, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+
+    backbone_candidate = _only(candidates, "N")
+    assert backbone_candidate["inferred_donor_rule"] == "n_terminal_nitrogen"
+    assert backbone_candidate["assignment_reference_kind"] == "element_fallback"
+    assert backbone_candidate["assignment_reference"] == "*:N:ZN"
+
+    backbone = _only(rows, "N")
+    assert backbone["reference_covered"] is False
+    assert math.isnan(backbone["literature_distance"])
+    assert math.isnan(backbone["literature_stdev"])
+    assert math.isnan(backbone["zscore"])
+
+    side_chain_candidate = _only(candidates, "NE2")
+    assert side_chain_candidate["assignment_reference_kind"] == "exact"
+    assert side_chain_candidate["assignment_reference"] == "HIS:N:ZN"
+
+    side_chain = _only(rows, "NE2")
+    assert side_chain["reference_covered"] is True
+    assert not math.isnan(side_chain["literature_distance"])
+    assert not math.isnan(side_chain["literature_stdev"])
+    assert not math.isnan(side_chain["zscore"])
+
+
 @pytest.mark.parametrize("atom_name", ["OXT", "OT1", "OT2"])
 @pytest.mark.parametrize("probe_index,allowed", [(0, False), (1, False), (2, True)])
 def test_c_terminal_oxygens_are_donors_only_at_the_chain_end(

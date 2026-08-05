@@ -72,6 +72,11 @@ def _bonding_key(neighbor, nb_res, metal_el):
     name = neighbor.atom_name.strip()
     if neighbor.is_water:
         return ("HOH", "O", metal_el)
+    if name in N_TERMINAL_DONOR_ATOMS:
+        # No terminal-amine reference is bundled, so this key misses and falls
+        # through to the element fallback rather than borrowing the histidine
+        # side-chain nitrogen reference.
+        return ("NTERM", "N", metal_el)
     if name in C_TERMINAL_DONOR_ATOMS:
         # No terminal-carboxylate reference is bundled, so this key misses and
         # falls through to the element fallback rather than borrowing a
