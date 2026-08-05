@@ -7,6 +7,7 @@ environment exists.
 import os
 import sys
 from multiprocessing import cpu_count
+from typing import Callable, Optional, cast
 
 
 # Peak resident memory to budget for one worker, measured against the largest
@@ -16,13 +17,18 @@ AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
 PROC_MEMINFO_PATH = "/proc/meminfo"
 
 
-def available_cpu_count():
+def available_cpu_count() -> int:
     """Return the number of CPUs this process is actually permitted to use.
 
     ``multiprocessing.cpu_count()`` ignores CPU affinity, so in a container or
     under a scheduler allocation it reports far more than the job was granted.
     """
-    process_cpu_count = getattr(os, "process_cpu_count", None)  # Python 3.13+
+    # ``getattr`` is the only way to reach a 3.13+ probe from a 3.11 floor, and
+    # it erases the signature the standard library documents.
+    process_cpu_count = cast(
+        Optional[Callable[[], Optional[int]]],
+        getattr(os, "process_cpu_count", None),  # Python 3.13+
+    )
     if process_cpu_count is not None:
         count = process_cpu_count()
         if count:
@@ -40,7 +46,7 @@ def available_cpu_count():
         return 1
 
 
-def _read_linux_available_memory():
+def _read_linux_available_memory() -> Optional[int]:
     try:
         with open(PROC_MEMINFO_PATH, encoding="ascii") as handle:
             for line in handle:
@@ -51,7 +57,7 @@ def _read_linux_available_memory():
     return None
 
 
-def available_memory_bytes():
+def available_memory_bytes() -> Optional[int]:
     """Return memory currently available to this process, or ``None``.
 
     This reports what the *machine* has free. A cgroup memory limit -- which is
@@ -106,11 +112,11 @@ def available_memory_bytes():
     return None
 
 
-def automatic_worker_limits():
+def automatic_worker_limits() -> tuple[int, Optional[int]]:
     """Return the CPU and optional memory limits for automatic parallelism."""
     cpu_limit = max(1, available_cpu_count() - 2)
     available_memory = available_memory_bytes()
-    memory_limit = None
+    memory_limit: Optional[int] = None
     if available_memory is not None:
         memory_limit = max(1, available_memory // AUTO_WORKER_MEMORY_BYTES)
     return cpu_limit, memory_limit

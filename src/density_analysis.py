@@ -12,11 +12,13 @@ import struct
 import tempfile
 import time
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import IO, Any, Optional
 
 import gemmi
 import numpy as np
+import numpy.typing as npt
 
 from run_logging import logger_for, truncate
 
@@ -69,7 +71,9 @@ class DensityResult:
 class MtzfixValidationError(RuntimeError):
     """MTZFIX could not make map coefficients pass its consistency checks."""
 
-    def __init__(self, message, timings=None):
+    def __init__(
+        self, message: str, timings: Optional[Mapping[str, float]] = None
+    ) -> None:
         super().__init__(message)
         self.timings = dict(timings or {})
 
@@ -77,7 +81,14 @@ class MtzfixValidationError(RuntimeError):
 class Ccp4ToolTimeoutError(RuntimeError):
     """A CCP4 program ran past its time budget and was killed."""
 
-    def __init__(self, tool, timeout_s, elapsed_s, log_path, timings=None):
+    def __init__(
+        self,
+        tool: str,
+        timeout_s: float,
+        elapsed_s: float,
+        log_path: str,
+        timings: Optional[Mapping[str, float]] = None,
+    ) -> None:
         super().__init__(
             f"{tool} exceeded its {timeout_s:g}s time budget "
             f"(killed after {elapsed_s:.1f}s); partial log kept at {log_path}"
@@ -89,7 +100,7 @@ class Ccp4ToolTimeoutError(RuntimeError):
         self.timings = dict(timings or {})
 
 
-def _decoded_stderr(error_file):
+def _decoded_stderr(error_file: IO[bytes]) -> str:
     """Read a CCP4 program's captured stderr, tolerating any byte it wrote.
 
     Replacement decoding is deliberate: this text only ever reaches a log line
@@ -103,18 +114,30 @@ def _decoded_stderr(error_file):
         return ""
 
 
-def _complex_coefficients(amplitudes, degree_phases):
-    return amplitudes * np.exp(1j * np.deg2rad(degree_phases))
+def _complex_coefficients(
+    amplitudes: npt.NDArray[np.float64], degree_phases: npt.NDArray[np.float64]
+) -> npt.NDArray[np.complex128]:
+    # NumPy's stubs give every ufunc result dtype ``Any``, so the product below
+    # is inferred as its float64 left operand rather than the complex128 it is.
+    return amplitudes * np.exp(  # type: ignore[return-value]
+        1j * np.deg2rad(degree_phases)
+    )
 
 
-def _amplitudes_and_degree_phases(coefficients):
+def _amplitudes_and_degree_phases(
+    coefficients: npt.NDArray[np.complex128],
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     amplitudes = np.abs(coefficients)
     phases = np.rad2deg(np.angle(coefficients))
     phases[amplitudes == 0.0] = 0.0
     return amplitudes, phases
 
 
-def _coefficient_residual_ratio(observed, expected, *scale_terms):
+def _coefficient_residual_ratio(
+    observed: npt.NDArray[np.complex128],
+    expected: npt.NDArray[np.complex128],
+    *scale_terms: npt.NDArray[np.complex128],
+) -> float:
     """Largest scale-relative complex residual, with a 1-electron floor.
 
     ``scale_terms`` matter when ``observed`` is itself the small difference of
@@ -277,18 +300,18 @@ def normalize_refmac_twin_coefficients(
 
 
 def run_density_analysis(
-    pdb_id,
-    mtz_path,
-    pdb_path,
-    out_dir,
-    reslo,
-    reshi,
-    env=None,
-    map_scope="model-envelope",
-    keep_full_maps=False,
-    pdb_redo_is_twin=False,
-    tool_timeout_s=CCP4_TOOL_TIMEOUT_S,
-):
+    pdb_id: str,
+    mtz_path: str,
+    pdb_path: str,
+    out_dir: str,
+    reslo: float,
+    reshi: float,
+    env: Optional[Mapping[str, str]] = None,
+    map_scope: str = "model-envelope",
+    keep_full_maps: bool = False,
+    pdb_redo_is_twin: bool = False,
+    tool_timeout_s: float = CCP4_TOOL_TIMEOUT_S,
+) -> DensityResult:
     """Validate the MTZ, compute maps with `fft`, then run `edstats`.
 
     ``reslo``/``reshi`` are the common low/high limits of the four map columns,
@@ -310,9 +333,15 @@ def run_density_analysis(
     qq_out = os.path.join(out_dir, f"{pdb_id}_qq.out")
     twin_normalized_mtz = os.path.join(out_dir, f"{pdb_id}_twin_edstats.mtz")
 
-    timings = {}
+    timings: dict[str, float] = {}
 
-    def _run(cmd, stdin, logname, timing_name, timeout_s=tool_timeout_s):
+    def _run(
+        cmd: Sequence[str],
+        stdin: Optional[str],
+        logname: str,
+        timing_name: str,
+        timeout_s: float = tool_timeout_s,
+    ) -> None:
         log_path = os.path.join(out_dir, logname)
         resolved = shutil.which(cmd[0], path=(env or {}).get("PATH"))
         if resolved is None:
@@ -452,7 +481,13 @@ def run_density_analysis(
         map_mtz = mtz_path
         mtzfix_applied = False
 
-    def _fft(map_path, f_label, phi_label, log_suffix, timing_name):
+    def _fft(
+        map_path: str,
+        f_label: str,
+        phi_label: str,
+        log_suffix: str,
+        timing_name: str,
+    ) -> None:
         _run(
             ["fft", "HKLIN", map_mtz, "MAPOUT", map_path],
             f"labi F1={f_label} PHI={phi_label}\nGRID SAMP=5\n",
@@ -460,7 +495,9 @@ def run_density_analysis(
             timing_name,
         )
 
-    def _model_envelope(full_map, envelope_map, log_suffix, timing_name):
+    def _model_envelope(
+        full_map: str, envelope_map: str, log_suffix: str, timing_name: str
+    ) -> None:
         _run(
             ["mapmask", "MAPIN", full_map, "MAPOUT", envelope_map, "XYZIN", pdb_path],
             f"BORDER {MODEL_ENVELOPE_BORDER_ANGSTROM}\nEND\n",
@@ -468,7 +505,7 @@ def run_density_analysis(
             timing_name,
         )
 
-    def _map_size(path, stage):
+    def _map_size(path: str, stage: str) -> int:
         if not os.path.isfile(path):
             raise RuntimeError(f"{stage} produced no map file for {pdb_id}: {path}")
         size = os.path.getsize(path)
@@ -478,7 +515,7 @@ def run_density_analysis(
             )
         return size
 
-    def _map_extent_requires_full_map(path):
+    def _map_extent_requires_full_map(path: str) -> bool:
         """Return whether a positive translated crop is unsafe for EDSTATS.
 
         EDSTATS accepts cropped grids that overlap or extend in the negative

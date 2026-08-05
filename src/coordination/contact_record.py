@@ -1,14 +1,15 @@
 """One donor-like atom image near one metal, at each coordination stage."""
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from codes import CandidateSource, ContactScope, MultiDonorStatus
+from structure_analysis import AtomSite
 
 
 @dataclass(slots=True)
 class Candidate:
-    neighbor: Any
+    neighbor: AtomSite
     distance_raw: float
     transformed_position: tuple[float, float, float]
     symmetry_contact: bool
@@ -20,8 +21,12 @@ class Candidate:
     symmetry_operation: str
     translation: tuple[int, int, int]
     candidate_sources: set[CandidateSource]
+    #: One record per source declaration binding this image, with the fixed
+    #: keys ``_declared_candidate_for_connection`` writes.
     declared_connections: list[dict[str, Any]] = field(default_factory=list)
-    metal: Optional[Any] = None
+    #: Set only on declaration-derived candidates; proximity discovery leaves
+    #: it unset because the metal is already the search centre.
+    metal: Optional[AtomSite] = None
     #: False for donor classes no bundled reference covers. Those stay
     #: candidate evidence and are never promoted to bond rows.
     donor_class_supported: bool = True
@@ -52,8 +57,8 @@ class Candidate:
     reference_covered: Optional[bool] = None
     #: ``True``/``False`` where a z-score exists, blank where one does not: the
     #: outputs keep the two answers apart.
-    geometry_outlier: Any = None
-    geometry_consistent: Any = None
+    geometry_outlier: Union[bool, str, None] = None
+    geometry_consistent: Union[bool, str, None] = None
 
     multi_donor_detected: Optional[bool] = None
     multi_donor_contact_count: Optional[int] = None

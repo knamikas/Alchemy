@@ -92,21 +92,35 @@ ignore = [
     "B905",
 ]
 
-# There is deliberately no [tool.mypy] section. CI runs `mypy src tools` with
-# mypy's own defaults -- no strictness flags -- and the tree is clean under
-# them.
+[tool.mypy]
+# `python_version` is deliberately unset, so mypy checks against whichever
+# interpreter CI's matrix is running. Pinning it to 3.11 would read a 3.12-only
+# numpy's stubs at 3.11 syntax level and fail on PEP 695 `type` aliases.
 #
-# Read that result for what it is. Mypy's default is to allow functions
-# without annotations and to skip their bodies entirely, reporting only an
-# `annotation-unchecked` note. 84 of 333 functions in src/ are fully
-# annotated, so roughly three quarters of the bodies are never read, and
-# `mypy --check-untyped-defs src tools` finds 5 real errors inside them today.
-# A green type-check here therefore means "nothing broken in the annotated
-# parts", not "type-safe".
-#
-# Tightening was considered and declined. `--check-untyped-defs` would cost
-# those 5 fixes; `--disallow-untyped-defs` reports 272 missing signatures, and
-# roughly a third of them take result-row dictionaries whose honest annotation
-# is `list[dict[str, Any]]` -- a signature that satisfies a gate without
-# checking anything. Following the defaults keeps the signal honest instead of
-# manufacturing one.
+# `src` is not a package and is reached through sys.path at runtime, so the
+# type checker needs the same entry to resolve the flat module names.
+mypy_path = ["src", "tests"]
+strict = true
+warn_unreachable = true
+# Every optional error code mypy 1.19 ships. They are off by default because
+# each one is opinionated, not because they are unsound.
+enable_error_code = [
+    "deprecated",
+    "exhaustive-match",
+    "explicit-override",
+    "ignore-without-code",
+    "mutable-override",
+    "possibly-undefined",
+    "redundant-expr",
+    "redundant-self",
+    "truthy-bool",
+    "truthy-iterable",
+    "unimported-reveal",
+    "unused-awaitable",
+    "unused-ignore",
+]
+
+# `disallow_any_explicit` and `disallow_any_expr` are the two knobs left off.
+# Both forbid `Any` outright rather than requiring it be declared, which here
+# would ban the honest annotation for a heterogeneous CSV result row and push
+# the code toward casts that assert a shape nothing checks.

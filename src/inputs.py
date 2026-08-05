@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 from http.client import HTTPException
+from typing import Any
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -26,7 +27,7 @@ MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 logger = logger_for(__name__)
 
 
-def read_data_json_properties(data_json_path):
+def read_data_json_properties(data_json_path: str) -> dict[str, Any]:
     """Return a validated PDB-REDO ``properties`` object.
 
     Callers use this strict reader when a user explicitly supplied the file.
@@ -55,12 +56,12 @@ def read_data_json_properties(data_json_path):
     return properties
 
 
-def entry_dir_for(root, pdb_id):
+def entry_dir_for(root: str, pdb_id: str) -> str:
     """PDB-REDO layout: <root>/<middle two chars of id>/<id>/."""
     return os.path.join(root, pdb_id[1:3], pdb_id)
 
 
-def _gunzip_to(src_gz, dst):
+def _gunzip_to(src_gz: str, dst: str) -> str:
     if not os.path.exists(src_gz):
         raise FileNotFoundError(src_gz)
     with gzip.GzipFile(src_gz, "rb") as fi, open(dst, "wb") as fo:
@@ -68,7 +69,7 @@ def _gunzip_to(src_gz, dst):
     return dst
 
 
-def _first_existing(*paths):
+def _first_existing(*paths: str) -> str | None:
     return next((path for path in paths if os.path.exists(path)), None)
 
 
@@ -79,7 +80,7 @@ def _first_existing(*paths):
 _HTML_PREFIXES = (b"<!doctype", b"<html", b"<?xml")
 
 
-def _looks_like_a_web_page(path):
+def _looks_like_a_web_page(path: str) -> bool:
     """Whether a cached file holds a served document rather than entry data."""
     try:
         with open(path, "rb") as handle:
@@ -89,7 +90,7 @@ def _looks_like_a_web_page(path):
     return head.startswith(_HTML_PREFIXES)
 
 
-def _is_usable_entry_file(path):
+def _is_usable_entry_file(path: str | None) -> bool:
     """Whether a cached path is worth reading rather than re-fetching.
 
     Existence alone is not enough. A truncated or wrong-status body written
@@ -107,7 +108,7 @@ def _is_usable_entry_file(path):
     return not _looks_like_a_web_page(path)
 
 
-def prepare_inputs(pdb_id, entry_dir, work_dir):
+def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str]:
     """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
 
     The authoritative final mmCIF is preferred and converted for EDSTATS; the
@@ -127,6 +128,7 @@ def prepare_inputs(pdb_id, entry_dir, work_dir):
         os.path.join(entry_dir, f"{pdb_id}_final.cif"),
         os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
     )
+    pdb: str | None
     if cif is not None:
         pdb = _cif_to_pdb(cif, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb"))
         return mtz, pdb
@@ -142,7 +144,9 @@ def prepare_inputs(pdb_id, entry_dir, work_dir):
     return mtz, pdb
 
 
-def read_resolution(entry_dir, mtz_path, data_json_path=None):
+def read_resolution(
+    entry_dir: str, mtz_path: str, data_json_path: str | None = None
+) -> float:
     """Return the overall diffraction-data high-resolution limit.
 
     Only the high-resolution limit is reported, because that is what the DPI
@@ -150,7 +154,11 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
     ``read_map_column_resolution`` instead.
     """
     explicit = data_json_path is not None
-    dj = data_json_path if explicit else os.path.join(entry_dir, "data.json")
+    dj = (
+        data_json_path
+        if data_json_path is not None
+        else os.path.join(entry_dir, "data.json")
+    )
     if explicit or os.path.exists(dj):
         try:
             props = read_data_json_properties(dj)
@@ -166,7 +174,9 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
-def read_pdb_redo_is_twin(data_json_path, *, required=False):
+def read_pdb_redo_is_twin(
+    data_json_path: str | None, *, required: bool = False
+) -> bool:
     """Return only an explicit boolean PDB-REDO ``properties.ISTWIN`` value.
 
     Automatically discovered missing or malformed metadata, and string-valued
@@ -187,7 +197,7 @@ def read_pdb_redo_is_twin(data_json_path, *, required=False):
     return value is True
 
 
-def read_map_column_resolution(mtz_path):
+def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
     """Return the common finite resolution range of both EDSTATS maps.
 
     EDSTATS receives maps calculated from FWT/PHWT and DELFWT/PHDELWT, so its
@@ -201,7 +211,9 @@ def read_map_column_resolution(mtz_path):
     columns = []
     missing: list[str] = []
     for label in MAP_COEFFICIENT_COLUMNS:
-        column = mtz.column_with_label(label)
+        # gemmi's stub declares a plain Column here, but the binding returns
+        # None for a label the file does not carry.
+        column: gemmi.Mtz.Column | None = mtz.column_with_label(label)
         if column is None:
             missing.append(label)
         else:
@@ -231,7 +243,7 @@ def read_map_column_resolution(mtz_path):
     return float(usable_d.max()), float(usable_d.min())
 
 
-def has_final_files(entry_dir, pdb_id):
+def has_final_files(entry_dir: str, pdb_id: str) -> bool:
     """Whether an entry has final map coefficients and usable coordinates."""
     mtz = _first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
@@ -246,7 +258,7 @@ def has_final_files(entry_dir, pdb_id):
     return _is_usable_entry_file(mtz) and _is_usable_entry_file(coordinates)
 
 
-def _remove_partial_download(tmp):
+def _remove_partial_download(tmp: str) -> None:
     """Drop a ``.part`` file so no caller can mistake it for a complete one."""
     try:
         os.remove(tmp)
@@ -254,7 +266,7 @@ def _remove_partial_download(tmp):
         pass
 
 
-def _response_content_length(response, url):
+def _response_content_length(response: object, url: str) -> int | None:
     """Return a validated HTTP Content-Length, or ``None`` when absent."""
     getheader = getattr(response, "getheader", None)
     if callable(getheader):
@@ -276,7 +288,7 @@ def _response_content_length(response, url):
     return length
 
 
-def _download_stream(url, dst, timeout=30):
+def _download_stream(url: str, dst: str, timeout: float = 30) -> str:
     """Download URL to dst. Raise FileNotFoundError if no usable file results.
 
     A transfer that begins and then fails -- a reset connection, a read
@@ -323,13 +335,13 @@ def _download_stream(url, dst, timeout=30):
     return dst
 
 
-def download_entry_to_cache(pdb_id, cache_root):
+def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
     """Download final PDB-REDO files into a mirror-like ``cache_root``."""
     base = f"https://pdb-redo.eu/db/{pdb_id}/"
     entry = entry_dir_for(cache_root, pdb_id)
     os.makedirs(entry, exist_ok=True)
 
-    def try_fetch(name):
+    def try_fetch(name: str) -> bool:
         url = base + name
         dst = os.path.join(entry, name)
         try:
@@ -338,7 +350,7 @@ def download_entry_to_cache(pdb_id, cache_root):
         except FileNotFoundError:
             return False
 
-    def fetch_variant(name):
+    def fetch_variant(name: str) -> bool:
         # Reuse a cached file only if it is worth reading: short-circuiting on
         # existence alone makes an empty or served-document body permanent.
         cached = _first_existing(
@@ -358,7 +370,7 @@ def download_entry_to_cache(pdb_id, cache_root):
         raise FileNotFoundError(f"PDB-REDO entry {pdb_id} is missing final model files")
 
 
-def ensure_entry_available(pdb_id, mirror_root, cache_root):
+def ensure_entry_available(pdb_id: str, mirror_root: str, cache_root: str) -> str:
     """Return the root containing the final model files: mirror, then cache.
 
     A cache miss triggers a download into ``cache_root``.
@@ -376,8 +388,12 @@ def ensure_entry_available(pdb_id, mirror_root, cache_root):
 
 
 def resolve_manual_inputs(
-    pdb_id, pdb_file=None, mtz_file=None, cif_file=None, work_dir=None
-):
+    pdb_id: str,
+    pdb_file: str | None = None,
+    mtz_file: str | None = None,
+    cif_file: str | None = None,
+    work_dir: str | None = None,
+) -> tuple[str, str]:
     """Return (mtz_path, pdb_path) for a manually supplied local input set."""
     if not mtz_file:
         raise ValueError("manual mode requires --mtz-file")
@@ -398,7 +414,7 @@ def resolve_manual_inputs(
     raise ValueError("manual mode requires --pdb-file or --cif-file")
 
 
-def infer_pdb_id_from_path(path):
+def infer_pdb_id_from_path(path: str | None) -> str | None:
     """Infer a 4-char PDB id from a local file name if possible."""
     if not path:
         return None
@@ -407,7 +423,7 @@ def infer_pdb_id_from_path(path):
     return m.group(1).lower() if m else None
 
 
-def enumerate_entries(root, limit=None):
+def enumerate_entries(root: str, limit: int | None = None) -> list[str]:
     """All PDB ids under ``root`` that have final model files.
 
     ``limit`` stops the walk once that many sorted ids are collected, so a

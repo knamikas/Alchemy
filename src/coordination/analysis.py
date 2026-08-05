@@ -14,9 +14,20 @@ than in a low-resolution one. Missing inputs produce NaN derived values without
 discarding measured bond geometry.
 """
 
+from __future__ import annotations
+
 import math
 from dataclasses import replace
-from typing import Any, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Iterable,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 
 from coordination.schema import (
     ZSCORE_OUTLIER_CUTOFF,
@@ -51,11 +62,16 @@ from reference_data import (
 )
 from structure_analysis import (
     NAN,
+    AtomSite,
+    StructureContext,
     count_deposited_ni,
     count_ni,
     load_structure,
     position_distance,
 )
+
+if TYPE_CHECKING:
+    import gemmi
 
 
 CANDIDATE_SEARCH_RADIUS = 4.0
@@ -71,8 +87,21 @@ FIRST_SPHERE_TOLERANCE = 0.75
 # NeighborSearch returns those images unfiltered, so apply the cutoff here.
 SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 
+#: One deposited atom record, as ``AtomSite.source_key`` reports it.
+_AtomKey = tuple[int, int, int, int]
 
-def _bonding_key(neighbor, nb_res, metal_el):
+#: What makes two candidate records the same atom image around one metal.
+_CandidateIdentity = tuple[_AtomKey, str, tuple[int, int, int], tuple[float, ...]]
+
+#: What makes two contacts share one donor-residue image around one metal.
+_ResidueImageKey = tuple[
+    tuple[int, int, int], ContactScope, str, int, str, tuple[int, int, int]
+]
+
+
+def _bonding_key(
+    neighbor: AtomSite, nb_res: str, metal_el: str
+) -> tuple[str, str, str]:
     """Exact (residue, atom, metal) key matching metal_distances_info.txt columns."""
     name = neighbor.atom_name.strip()
     if neighbor.is_water:
@@ -94,7 +123,9 @@ def _bonding_key(neighbor, nb_res, metal_el):
     return (nb_res, neighbor.element, metal_el)
 
 
-def _parent_type(structure, metal, metal_res, metal_el):
+def _parent_type(
+    structure: StructureContext, metal: AtomSite, metal_res: str, metal_el: str
+) -> str:
     if metal_res in cluster_ids():
         return "cluster"
     if metal_res in heme_ids():
@@ -107,7 +138,7 @@ def _parent_type(structure, metal, metal_res, metal_el):
     return "other"
 
 
-def _zscore(dist, mu, stdev, dpi):
+def _zscore(dist: float, mu: float, stdev: float, dpi: float) -> float:
     """Bond-distance z-score, ``(dist - mu)/sqrt(stdev^2 + dpi^2)``.
 
     The denominator carries one DPI, not the ``sqrt(2) * DPI`` an
@@ -122,7 +153,9 @@ def _zscore(dist, mu, stdev, dpi):
     return (dist - mu) / denom if denom > 0 else NAN
 
 
-def _contact_sort_key(contact):
+def _contact_sort_key(
+    contact: Candidate,
+) -> tuple[int, int, int, str, tuple[int, int, int], tuple[float, float, float]]:
     neighbor = contact.neighbor
     return (
         neighbor.chain_index,
@@ -134,7 +167,7 @@ def _contact_sort_key(contact):
     )
 
 
-def _merge_candidate_provenance(target, source):
+def _merge_candidate_provenance(target: Candidate, source: Candidate) -> None:
     """Add discovery and declaration provenance without duplicating records."""
     target.candidate_sources.update(source.candidate_sources)
     known_connections = {
@@ -148,7 +181,9 @@ def _merge_candidate_provenance(target, source):
             known_connections.add(connection_key)
 
 
-def _special_position_preference(contact):
+def _special_position_preference(
+    contact: Candidate,
+) -> tuple[bool, float, int, str, tuple[int, int, int], tuple[float, float, float]]:
     """Order near-coincident symmetry images so the retained one is stable.
 
     An explicit image sorts first, so an off-axis refinement artifact cannot
@@ -164,17 +199,19 @@ def _special_position_preference(contact):
     )
 
 
-def _deduplicate_special_position_contacts(candidates):
+def _deduplicate_special_position_contacts(
+    candidates: Iterable[Candidate],
+) -> list[Candidate]:
     """Collapse near-coincident images of each deposited source atom.
 
     Sorting each source-atom group before the spatial comparison makes the
     result independent of Gemmi's NeighborSearch mark order.
     """
-    by_source: dict[Any, list[Candidate]] = {}
+    by_source: dict[_AtomKey, list[Candidate]] = {}
     for candidate in candidates:
         by_source.setdefault(candidate.neighbor.source_key, []).append(candidate)
 
-    contacts = []
+    contacts: list[Candidate] = []
     for source_key in sorted(by_source):
         retained: list[Candidate] = []
         for candidate in sorted(
@@ -201,10 +238,13 @@ def _deduplicate_special_position_contacts(candidates):
     return contacts
 
 
-def _first_sphere_rule(metal, neighbor):
+def _first_sphere_rule(
+    metal: AtomSite, neighbor: AtomSite
+) -> tuple[float, float, str, str]:
     """Return target, cutoff, and provenance for proximity eligibility."""
     exact_key = _bonding_key(neighbor, neighbor.residue_name, metal.element)
     literature = literature_distances().get(exact_key)
+    target: Optional[float]
     if literature is not None:
         target = literature[0]
         reference_kind = "exact"
@@ -221,7 +261,9 @@ def _first_sphere_rule(metal, neighbor):
     return target, cutoff, reference_kind, ":".join(reference_key)
 
 
-def _polymer_terminal_position(structure, atom):
+def _polymer_terminal_position(
+    structure: StructureContext, atom: AtomSite
+) -> tuple[bool, bool]:
     """Return ``(is_n_terminal, is_c_terminal)`` for a polymer residue."""
     import gemmi
 
@@ -261,7 +303,9 @@ def _polymer_terminal_position(structure, atom):
         return False, False
 
 
-def _inferred_donor_rule(structure, atom):
+def _inferred_donor_rule(
+    structure: StructureContext, atom: AtomSite
+) -> tuple[bool, str]:
     """Return whether ``atom`` is a typical geometry-inferable donor and why."""
     residue = structure.residue_for_atom(atom)
     atom_name = atom.atom_name.strip().upper()
@@ -288,7 +332,9 @@ def _inferred_donor_rule(structure, atom):
     return False, "outside_typical_donor_list"
 
 
-def _annotate_donor_policy(structure, candidates):
+def _annotate_donor_policy(
+    structure: StructureContext, candidates: Iterable[Candidate]
+) -> None:
     """Annotate candidates with inference permission and declaration override."""
     for candidate in candidates:
         allowed, rule = _inferred_donor_rule(structure, candidate.neighbor)
@@ -304,7 +350,7 @@ def _annotate_donor_policy(structure, candidates):
         )
 
 
-def _candidate_has_zero_occupancy(candidate, metal):
+def _candidate_has_zero_occupancy(candidate: Candidate, metal: AtomSite) -> bool:
     """Whether either endpoint is explicitly modeled with zero occupancy."""
     return any(
         atom.occupancy_valid and atom.occupancy == 0.0
@@ -312,15 +358,17 @@ def _candidate_has_zero_occupancy(candidate, metal):
     )
 
 
-def _identify_first_sphere_candidates(candidates, metal):
+def _identify_first_sphere_candidates(
+    candidates: Iterable[Candidate], metal: AtomSite
+) -> tuple[list[Candidate], set[tuple[str, str]]]:
     """Annotate every candidate with eligibility, and return those eligible.
 
     Also returns the metal-donor pairs no reference covers, which the caller
     reports as incomplete assignment evidence. Passing the distance rule does
     not by itself establish a chemically assigned bond.
     """
-    eligible = []
-    unsupported_pairs = set()
+    eligible: list[Candidate] = []
+    unsupported_pairs: set[tuple[str, str]] = set()
     for candidate in candidates:
         neighbor = candidate.neighbor
         donor_allowed = candidate.inferred_donor_allowed
@@ -388,7 +436,12 @@ def _identify_first_sphere_candidates(candidates, metal):
     return (_deduplicate_special_position_contacts(eligible), unsupported_pairs)
 
 
-def _collect_proximal_candidates(structure, search, metal, include_symmetry):
+def _collect_proximal_candidates(
+    structure: StructureContext,
+    search: gemmi.NeighborSearch,
+    metal: AtomSite,
+    include_symmetry: bool,
+) -> list[Candidate]:
     """Return donor-like candidates within 4 A for one search scope.
 
     Discovery only: no literature target, no first-sphere tolerance, no
@@ -396,7 +449,7 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
     """
     if not metal.coordinates_valid:
         return []
-    candidates = []
+    candidates: list[Candidate] = []
     marks = search.find_atoms(
         metal.pos, "\x00", min_dist=0.0, radius=CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON
     )
@@ -464,7 +517,9 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
                 crystallographic_contact=crystallographic_contact,
                 strict_ncs_contact=strict_ncs_contact,
                 strict_ncs_operation_id=strict_ncs_operation_id,
-                contact_scope=contact_scope,
+                # ``image_provenance`` widens the scope it returns to str;
+                # every value it can produce is a ContactScope member.
+                contact_scope=cast(ContactScope, contact_scope),
                 symmetry_image_index=image_index,
                 symmetry_operation=operation,
                 translation=translation,
@@ -476,7 +531,7 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
     return candidates
 
 
-def _candidate_identity(candidate):
+def _candidate_identity(candidate: Candidate) -> _CandidateIdentity:
     return (
         candidate.neighbor.source_key,
         candidate.symmetry_operation,
@@ -485,9 +540,9 @@ def _candidate_identity(candidate):
     )
 
 
-def _merge_candidates(*candidate_groups):
+def _merge_candidates(*candidate_groups: Iterable[Candidate]) -> list[Candidate]:
     """Merge proximity and declaration provenance for the same atom image."""
-    merged: dict[Any, Candidate] = {}
+    merged: dict[_CandidateIdentity, Candidate] = {}
     for candidates in candidate_groups:
         for candidate in candidates:
             key = _candidate_identity(candidate)
@@ -508,7 +563,9 @@ def _merge_candidates(*candidate_groups):
     return result
 
 
-def _current_contacts_from_candidates(candidates, metal):
+def _current_contacts_from_candidates(
+    candidates: Sequence[Candidate], metal: AtomSite
+) -> tuple[list[Candidate], set[tuple[str, str]]]:
     """Return typical inferred and explicitly declared contacts."""
     eligible, unsupported_pairs = _identify_first_sphere_candidates(candidates, metal)
     declared_not_inferred = [
@@ -525,7 +582,9 @@ def _current_contacts_from_candidates(candidates, metal):
     )
 
 
-def _annotate_contacts(contacts, metal_element, dpi):
+def _annotate_contacts(
+    contacts: Iterable[Candidate], metal_element: str, dpi: float
+) -> None:
     for contact in contacts:
         neighbor = contact.neighbor
         reported_distance = round(contact.distance_raw, 3)
@@ -558,7 +617,7 @@ def _annotate_contacts(contacts, metal_element, dpi):
             contact.geometry_consistent = ""
 
 
-def _residue_image_key(contact):
+def _residue_image_key(contact: Candidate) -> _ResidueImageKey:
     """Identity of one donor residue image around the current metal site."""
     return (
         contact.neighbor.residue_key,
@@ -570,13 +629,13 @@ def _residue_image_key(contact):
     )
 
 
-def _annotate_multi_donor_groups(contacts):
+def _annotate_multi_donor_groups(contacts: Iterable[Candidate]) -> None:
     """Annotate assigned contacts that share one donor-residue image.
 
     Group status is contextual: a suspect member marks every member as
     belonging to a suspect group without weakening any individual result.
     """
-    groups: dict[Any, list[Candidate]] = {}
+    groups: dict[_ResidueImageKey, list[Candidate]] = {}
     for contact in contacts:
         groups.setdefault(_residue_image_key(contact), []).append(contact)
 
@@ -616,7 +675,9 @@ def _annotate_multi_donor_groups(contacts):
             contact.score_exclusion_reason = "" if assessable else "zscore_unavailable"
 
 
-def _scope_summary(contacts, unavailable=False):
+def _scope_summary(
+    contacts: Sequence[Candidate], unavailable: bool = False
+) -> dict[str, Any]:
     if unavailable:
         return {
             "candidate": NAN,
@@ -692,9 +753,11 @@ def _scope_summary(contacts, unavailable=False):
     }
 
 
-def _site_context_values(contacts, candidates):
+def _site_context_values(
+    contacts: Sequence[Candidate], candidates: Sequence[Candidate]
+) -> dict[str, Union[bool, int, str]]:
     """Aggregate coordination-relevant context without changing confidence."""
-    reasons = []
+    reasons: list[str] = []
     for contact in contacts:
         values = _context_warning_values(contact)
         if values["context_warning_reasons"]:
@@ -729,16 +792,16 @@ _GENERATED_SCOPES = {
 
 
 def _site_summary(
-    metal,
-    explicit_contacts,
-    image_contacts,
-    dpi,
-    resolution,
-    ni,
-    deposited_ni,
-    dpi_reason,
-    structure,
-):
+    metal: AtomSite,
+    explicit_contacts: Sequence[Candidate],
+    image_contacts: Optional[Sequence[Candidate]],
+    dpi: float,
+    resolution: float,
+    ni: float,
+    deposited_ni: float,
+    dpi_reason: str,
+    structure: StructureContext,
+) -> dict[str, Any]:
     explicit = _scope_summary(explicit_contacts)
     image_search_available = image_contacts is not None
     image_inclusive = _scope_summary(
@@ -755,17 +818,17 @@ def _site_summary(
     )
     symmetry_count = (
         sum(contact.symmetry_contact for contact in image_contacts)
-        if image_search_available
+        if image_contacts is not None
         else NAN
     )
     crystallographic_count = (
         sum(contact.crystallographic_contact for contact in image_contacts)
-        if image_search_available
+        if image_contacts is not None
         else NAN
     )
     strict_ncs_count = (
         sum(contact.strict_ncs_contact for contact in image_contacts)
-        if image_search_available
+        if image_contacts is not None
         else NAN
     )
     combined_count = (
@@ -773,7 +836,7 @@ def _site_summary(
             contact.crystallographic_contact and contact.strict_ncs_contact
             for contact in image_contacts
         )
-        if image_search_available
+        if image_contacts is not None
         else NAN
     )
     # Blank where symmetry was never searched, boolean where it was: "not
@@ -856,14 +919,19 @@ def _site_summary(
 
 
 def run_bond_analysis(
-    pdb_id,
-    pdb_path,
-    stats_rows,
-    header,
-    dpi_inputs,
-    structure=None,
-    connection_path=None,
-):
+    pdb_id: str,
+    pdb_path: str,
+    stats_rows: Sequence[Mapping[str, Any]],
+    header: Optional[Sequence[str]],
+    dpi_inputs: Mapping[str, Any],
+    structure: Optional[StructureContext] = None,
+    connection_path: Optional[str] = None,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[_AtomKey, dict[str, Any]],
+    dict[str, Any],
+]:
     """Return contact rows, candidate rows, site summaries, and metadata.
 
     Bond rows come from first-sphere-eligible candidates and from source
@@ -910,9 +978,13 @@ def run_bond_analysis(
                 for metal in non_finite_metals
             )
         )
-    declared_by_metal: dict[Any, list[Candidate]] = {}
+    declared_by_metal: dict[_AtomKey, list[Candidate]] = {}
     for candidate in declared_candidates:
-        declared_by_metal.setdefault(candidate.metal.source_key, []).append(candidate)
+        # Every declaration-derived candidate carries the metal it was resolved
+        # against; only proximity discovery leaves the field unset.
+        declared_by_metal.setdefault(
+            cast(AtomSite, candidate.metal).source_key, []
+        ).append(candidate)
 
     dpi, resolution, dpi_reason = _calculate_dpi_details(structure, dpi_inputs)
     ni = count_ni(structure)
@@ -944,7 +1016,7 @@ def run_bond_analysis(
 
     rows: list[dict[str, Any]] = []
     candidate_rows: list[dict[str, Any]] = []
-    summaries = {}
+    summaries: dict[_AtomKey, dict[str, Any]] = {}
     for metal in metals_in_model:
         if not metal.coordinates_valid:
             summary = _site_summary(
@@ -980,8 +1052,8 @@ def run_bond_analysis(
         )
         _annotate_contacts(explicit, metal.element, dpi)
         _annotate_multi_donor_groups(explicit)
-        image_candidates = None
-        image_contacts = None
+        image_candidates: Optional[list[Candidate]] = None
+        image_contacts: Optional[list[Candidate]] = None
         if image_search is not None:
             image_candidates = _merge_candidates(
                 _collect_proximal_candidates(structure, image_search, metal, True),

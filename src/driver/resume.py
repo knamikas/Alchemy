@@ -15,32 +15,48 @@ import os
 import shutil
 import tempfile
 from collections import Counter
-from typing import Optional, Sequence
+from typing import (
+    AbstractSet,
+    Iterable,
+    Iterator,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 
 from codes import ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
+from worker import EntryResult
 
 
-def _complete_csv_row(row):
+# A row read back is not ``dict[str, str]``: DictReader fills a short row's
+# missing fields with ``None`` and collects a long row's surplus cells in a
+# list under the ``None`` key, which is exactly what the completeness checks
+# below look for.
+_CsvRow = dict[Optional[str], Union[str, list[str], None]]
+
+
+def _complete_csv_row(row: _CsvRow) -> bool:
     """Whether DictReader received every declared field exactly once."""
     return None not in row and all(isinstance(value, str) for value in row.values())
 
 
-def _csv_text(row, column):
+def _csv_text(row: _CsvRow, column: str) -> str:
     """Return one textual CSV cell, safely blanking absent older columns."""
     value = row.get(column, "")
     return value if isinstance(value, str) else ""
 
 
 def load_done(
-    manifest_path,
-    bonds_required=False,
-    bond_output_present=True,
-    candidate_output_present=True,
-    retry_partial_ids=(),
-):
+    manifest_path: str,
+    bonds_required: bool = False,
+    bond_output_present: bool = True,
+    candidate_output_present: bool = True,
+    retry_partial_ids: Iterable[str] = (),
+) -> set[str]:
     """PDB IDs whose requested result is terminal in an existing manifest.
 
     Blank ``n_bonds`` or ``n_candidates`` mean the bond stage never ran, so
@@ -59,7 +75,7 @@ def load_done(
         for pdb_id in retry_partial_ids
         if str(pdb_id).strip()
     }
-    done = set()
+    done: set[str] = set()
     if os.path.exists(manifest_path):
         with open(manifest_path, newline="") as f:
             reader = csv.DictReader(f)
@@ -105,13 +121,13 @@ def load_done(
     return done
 
 
-def _resume_replacement_succeeded(result):
+def _resume_replacement_succeeded(result: EntryResult) -> bool:
     """Whether a retry produced a terminal result suitable for replacement."""
     status = str(result.status).strip().lower()
     return status == "ok" or (status == "partial" and not bool(result.retryable))
 
 
-def _manifest_values_by_id(path, column):
+def _manifest_values_by_id(path: str, column: str) -> dict[str, str]:
     """Return one manifest column keyed by normalized PDB ID."""
     values: dict[str, str] = {}
     if not os.path.exists(path) or os.path.getsize(path) == 0:
@@ -126,23 +142,23 @@ def _manifest_values_by_id(path, column):
     return values
 
 
-def _csv_header(path):
+def _csv_header(path: str) -> Optional[list[str]]:
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
     with open(path, newline="") as handle:
         return next(csv.reader(handle), None)
 
 
-def _is_terminal_manifest_row(row):
+def _is_terminal_manifest_row(row: _CsvRow) -> bool:
     status = _csv_text(row, "status").strip().lower()
     retryable = _csv_text(row, "retryable").strip().lower()
     return status == "ok" or (status == "partial" and retryable in ("false", "0", "no"))
 
 
-def _terminal_manifest_rows(path):
+def _terminal_manifest_rows(path: str) -> dict[str, _CsvRow]:
     """Return protected rows, rejecting ambiguous duplicate manifest IDs."""
-    terminal_rows = {}
-    complete_ids = set()
+    terminal_rows: dict[str, _CsvRow] = {}
+    complete_ids: set[str] = set()
     if _csv_header(path) is None:
         return terminal_rows
     with open(path, newline="") as handle:
@@ -166,7 +182,9 @@ def _terminal_manifest_rows(path):
     return terminal_rows
 
 
-def _manifest_count(row, column, pdb_id, *, blank_is_zero=False):
+def _manifest_count(
+    row: _CsvRow, column: str, pdb_id: str, *, blank_is_zero: bool = False
+) -> int:
     value = _csv_text(row, column).strip()
     if blank_is_zero and not value:
         return 0
@@ -185,7 +203,9 @@ def _manifest_count(row, column, pdb_id, *, blank_is_zero=False):
     return count
 
 
-def _rows_for_ids(path, terminal_ids):
+def _rows_for_ids(
+    path: str, terminal_ids: AbstractSet[str]
+) -> Iterator[tuple[str, _CsvRow]]:
     """Yield complete output rows owned by protected manifest entries.
 
     Rows for other IDs may be remnants of a write interrupted before its
@@ -206,18 +226,18 @@ def _rows_for_ids(path, terminal_ids):
 
 
 def _validate_terminal_artifacts(
-    terminal_rows,
-    stats_path,
-    bonds_path,
-    candidates_path,
+    terminal_rows: Mapping[str, _CsvRow],
+    stats_path: str,
+    bonds_path: str,
+    candidates_path: str,
     *,
-    bonds_enabled,
-    confidence_path,
-):
+    bonds_enabled: bool,
+    confidence_path: Optional[str],
+) -> None:
     terminal_ids = set(terminal_rows)
 
-    selected_stats = Counter()
-    selected_sites = set()
+    selected_stats: Counter[str] = Counter()
+    selected_sites: set[tuple[str, tuple[str, ...]]] = set()
     site_columns = (
         "metal_model_index",
         "metal_chain_index",
@@ -251,7 +271,7 @@ def _validate_terminal_artifacts(
                 f"selected row(s) (expected {relation} {expected})."
             )
 
-    checks = []
+    checks: list[tuple[str, str]] = []
     if bonds_enabled:
         checks.extend(
             (
@@ -355,7 +375,9 @@ def validate_resume_schemas(
     )
 
 
-def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
+def remove_stale_disabled_bond_outputs(
+    paths: Iterable[str], resume: bool, bonds_enabled: bool
+) -> list[str]:
     """Remove previous bond-stage CSVs before a fresh run with bonds disabled.
 
     A non-resume run replaces the manifest and statistics outputs, so retaining
@@ -363,7 +385,7 @@ def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
     """
     if resume or bonds_enabled:
         return []
-    removed = []
+    removed: list[str] = []
     for path in paths:
         if os.path.lexists(path):
             os.unlink(path)
@@ -371,7 +393,9 @@ def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):
     return removed
 
 
-def _merge_csv_replacements(path, staged_path, pdb_ids):
+def _merge_csv_replacements(
+    path: str, staged_path: str, pdb_ids: Iterable[str]
+) -> None:
     """Atomically replace selected IDs with rows from a completed staging file.
 
     Rows for IDs absent from ``pdb_ids`` are copied verbatim.
@@ -394,7 +418,7 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
         except BaseException:
             os.close(fd)
             raise
-        destination_header = None
+        destination_header: Optional[list[str]] = None
         with replacement as dst:
             writer = csv.writer(dst)
             if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -445,7 +469,7 @@ class _ResumeStaging:
     and silently leaves behind any entry that was still being written.
     """
 
-    def __init__(self, output_dir, targets):
+    def __init__(self, output_dir: str, targets: Sequence[str]) -> None:
         self.targets = targets
         self.dir = create_owned_scratch_directory(
             output_dir,
@@ -455,9 +479,9 @@ class _ResumeStaging:
         self.staged = tuple(
             os.path.join(self.dir, os.path.basename(path)) for path in targets
         )
-        self.replacement_ids = set()
+        self.replacement_ids: set[str] = set()
 
-    def commit(self, bonds_enabled, confidence_enabled=False):
+    def commit(self, bonds_enabled: bool, confidence_enabled: bool = False) -> None:
         """Replace the retried entries' rows in the real output files."""
         if not self.replacement_ids:
             return
@@ -478,6 +502,6 @@ class _ResumeStaging:
                 _merge_csv_replacements(target, staged, self.replacement_ids)
         _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
 
-    def discard(self):
+    def discard(self) -> None:
         if os.path.isdir(self.dir):
             shutil.rmtree(self.dir, ignore_errors=True)

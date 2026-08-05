@@ -3,8 +3,12 @@
 import json
 import os
 import struct
+import subprocess
 import time
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from types import SimpleNamespace
+from typing import IO, Any, Callable, Optional
 
 import gemmi
 import numpy as np
@@ -15,8 +19,11 @@ import inputs
 
 
 def _write_refmac_mtz(
-    path, *, title="Output mtz file from refmac", difference=(2.0, 2.0)
-):
+    path: Path,
+    *,
+    title: str = "Output mtz file from refmac",
+    difference: tuple[float, float] = (2.0, 2.0),
+) -> str:
     """Write two raw-Refmac reflections: one centric and one acentric."""
     mtz = gemmi.Mtz(with_base=True)
     mtz.title = title
@@ -40,13 +47,15 @@ def _write_refmac_mtz(
     return str(path)
 
 
-def test_refmac_twin_normalization_uses_edstats_centric_convention(tmp_path):
+def test_refmac_twin_normalization_uses_edstats_centric_convention(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source.mtz"
     output = tmp_path / "normalized.mtz"
     _write_refmac_mtz(source)
     source_bytes = source.read_bytes()
 
-    provenance = density.normalize_refmac_twin_coefficients(source, output)
+    provenance = density.normalize_refmac_twin_coefficients(str(source), str(output))
 
     assert source.read_bytes() == source_bytes
     normalized = gemmi.read_mtz_file(str(output))
@@ -69,52 +78,66 @@ def test_refmac_twin_normalization_uses_edstats_centric_convention(tmp_path):
     assert any("Alchemy: normalized twin Refmac" in line for line in normalized.history)
 
 
-def test_refmac_twin_normalization_rejects_inconsistent_coefficients(tmp_path):
+def test_refmac_twin_normalization_rejects_inconsistent_coefficients(
+    tmp_path: Path,
+) -> None:
     source = _write_refmac_mtz(tmp_path / "inconsistent.mtz", difference=(3.0, 2.0))
     output = tmp_path / "normalized.mtz"
 
     with pytest.raises(ValueError, match="guarded raw identity"):
-        density.normalize_refmac_twin_coefficients(source, output)
+        density.normalize_refmac_twin_coefficients(source, str(output))
 
     assert not output.exists()
 
 
-def test_refmac_twin_normalization_requires_refmac_provenance(tmp_path):
+def test_refmac_twin_normalization_requires_refmac_provenance(tmp_path: Path) -> None:
     source = _write_refmac_mtz(
         tmp_path / "unknown.mtz", title="unidentified map coefficients"
     )
 
     with pytest.raises(ValueError, match="does not identify Refmac"):
-        density.normalize_refmac_twin_coefficients(source, tmp_path / "normalized.mtz")
+        density.normalize_refmac_twin_coefficients(
+            source, str(tmp_path / "normalized.mtz")
+        )
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
     [(True, True), (False, False), ("true", False), (1, False), (None, False)],
 )
-def test_twin_routing_requires_explicit_boolean_metadata(tmp_path, value, expected):
+def test_twin_routing_requires_explicit_boolean_metadata(
+    tmp_path: Path, value: object, expected: bool
+) -> None:
     path = tmp_path / "data.json"
     path.write_text(json.dumps({"properties": {"ISTWIN": value}}), encoding="utf-8")
-    assert inputs.read_pdb_redo_is_twin(path) is expected
+    assert inputs.read_pdb_redo_is_twin(str(path)) is expected
 
 
 @pytest.mark.parametrize("payload", [None, "{not valid json", "[]", "{}"])
-def test_explicit_twin_metadata_read_failures_are_not_non_twin(tmp_path, payload):
+def test_explicit_twin_metadata_read_failures_are_not_non_twin(
+    tmp_path: Path, payload: Optional[str]
+) -> None:
     """Unreadable explicit metadata cannot be collapsed into ``ISTWIN=false``."""
     path = tmp_path / "data.json"
     if payload is not None:
         path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError):
-        inputs.read_pdb_redo_is_twin(path, required=True)
+        inputs.read_pdb_redo_is_twin(str(path), required=True)
 
 
-def _fake_ccp4_run_factory(mtzfix_log_text):
+def _fake_ccp4_run_factory(mtzfix_log_text: str) -> Callable[..., SimpleNamespace]:
     """Return a subprocess stub sufficient for the full-map density path."""
 
     def fake_run(
-        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
-    ):
+        cmd: Sequence[str],
+        input: Optional[str] = None,
+        text: Optional[bool] = None,
+        stdout: Optional[IO[str]] = None,
+        stderr: Optional[IO[bytes]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "mtzfix":
             assert stdout is not None, "the runner must redirect stdout to a log"
@@ -133,7 +156,7 @@ def _fake_ccp4_run_factory(mtzfix_log_text):
     return fake_run
 
 
-def _stub_ccp4_program(tmp_path, name, script):
+def _stub_ccp4_program(tmp_path: Path, name: str, script: str) -> Path:
     """Install a real executable standing in for one CCP4 program."""
     path = tmp_path / name
     path.write_text(f"#!/bin/sh\n{script}\n", encoding="ascii")
@@ -142,8 +165,8 @@ def _stub_ccp4_program(tmp_path, name, script):
 
 
 def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A CCP4 program may write any byte to stderr; that must not raise.
 
     Decoding a pipe under ``text=True`` is strict, so one such byte used to
@@ -153,13 +176,17 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     identically.
     """
 
-    def non_utf8_failure(*args, stderr=None, **kwargs):
+    def non_utf8_failure(
+        *args: object, stderr: Optional[IO[bytes]] = None, **kwargs: object
+    ) -> SimpleNamespace:
         assert stderr is not None
         stderr.write(b"bad \xff\xfe byte")
         return SimpleNamespace(returncode=1)
 
-    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
-    monkeypatch.setattr(density.subprocess, "run", non_utf8_failure)
+    monkeypatch.setattr(
+        "density_analysis.shutil.which", lambda command, path=None: command
+    )
+    monkeypatch.setattr("density_analysis.subprocess.run", non_utf8_failure)
     source = tmp_path / "source.mtz"
     source.write_bytes(b"source")
     pdb = tmp_path / "model.pdb"
@@ -167,7 +194,13 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
 
     with pytest.raises(RuntimeError) as excinfo:
         density.run_density_analysis(
-            "test", source, pdb, tmp_path / "out", 20, 2, map_scope="full"
+            "test",
+            str(source),
+            str(pdb),
+            str(tmp_path / "out"),
+            20,
+            2,
+            map_scope="full",
         )
 
     message = str(excinfo.value)
@@ -180,7 +213,9 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
 @pytest.mark.skipif(
     os.name != "posix", reason="requires POSIX shell background-process semantics"
 )
-def test_a_helper_holding_stderr_does_not_fake_a_timeout(tmp_path, monkeypatch):
+def test_a_helper_holding_stderr_does_not_fake_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The budget bounds the program, not the lifetime of an inherited pipe.
 
     With stderr on a pipe, ``communicate`` waits for EOF, so a program that
@@ -191,7 +226,7 @@ def test_a_helper_holding_stderr_does_not_fake_a_timeout(tmp_path, monkeypatch):
         tmp_path, "mtzfix", "echo note >&2\n(sleep 30) &\nexit 1"
     )
     monkeypatch.setattr(
-        density.shutil, "which", lambda command, path=None: str(program)
+        "density_analysis.shutil.which", lambda command, path=None: str(program)
     )
     source = tmp_path / "source.mtz"
     source.write_bytes(b"source")
@@ -202,9 +237,9 @@ def test_a_helper_holding_stderr_does_not_fake_a_timeout(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError) as excinfo:
         density.run_density_analysis(
             "test",
-            source,
-            pdb,
-            tmp_path / "out",
+            str(source),
+            str(pdb),
+            str(tmp_path / "out"),
             20,
             2,
             map_scope="full",
@@ -216,18 +251,23 @@ def test_a_helper_holding_stderr_does_not_fake_a_timeout(tmp_path, monkeypatch):
     assert elapsed < 5, f"waited {elapsed:.1f}s on a program that exited at once"
 
 
-def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypatch):
+def test_mtzfix_retest_failure_normalizes_only_explicit_twins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
     monkeypatch.setattr(
-        density.subprocess, "run", _fake_ccp4_run_factory("FAILED a test on re-take\n")
+        "density_analysis.shutil.which", lambda command, path=None: command
     )
-    normalized_calls = []
+    monkeypatch.setattr(
+        "density_analysis.subprocess.run",
+        _fake_ccp4_run_factory("FAILED a test on re-take\n"),
+    )
+    normalized_calls: list[tuple[str, str]] = []
 
-    def fake_normalize(mtz_path, output_path):
+    def fake_normalize(mtz_path: str, output_path: str) -> dict[str, Any]:
         normalized_calls.append((mtz_path, output_path))
         with open(output_path, "wb") as handle:
             handle.write(b"normalized")
@@ -238,9 +278,9 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypa
     with pytest.raises(density.MtzfixValidationError):
         density.run_density_analysis(
             "test",
-            source,
-            pdb,
-            tmp_path / "not_twin",
+            str(source),
+            str(pdb),
+            str(tmp_path / "not_twin"),
             20,
             2,
             map_scope="full",
@@ -250,9 +290,9 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypa
 
     result = density.run_density_analysis(
         "test",
-        source,
-        pdb,
-        tmp_path / "twin",
+        str(source),
+        str(pdb),
+        str(tmp_path / "twin"),
         20,
         2,
         map_scope="full",
@@ -267,14 +307,19 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypa
     assert result.mtz_for_maps.endswith("test_twin_edstats.mtz")
 
 
-def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
+def test_generic_mtzfix_error_never_uses_twin_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
     monkeypatch.setattr(
-        density.subprocess, "run", _fake_ccp4_run_factory("some unrelated failure\n")
+        "density_analysis.shutil.which", lambda command, path=None: command
+    )
+    monkeypatch.setattr(
+        "density_analysis.subprocess.run",
+        _fake_ccp4_run_factory("some unrelated failure\n"),
     )
     monkeypatch.setattr(
         density,
@@ -285,9 +330,9 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="mtzfix failed"):
         density.run_density_analysis(
             "test",
-            source,
-            pdb,
-            tmp_path / "out",
+            str(source),
+            str(pdb),
+            str(tmp_path / "out"),
             20,
             2,
             map_scope="full",
@@ -296,8 +341,8 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(tmp_path, monkeypatch):
 
 
 def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A hung CCP4 step raises ``Ccp4ToolTimeoutError`` and keeps what it wrote.
 
     The driver detects workers that have died, but nothing detects one that is
@@ -307,20 +352,28 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
+    monkeypatch.setattr(
+        "density_analysis.shutil.which", lambda command, path=None: command
+    )
 
     def fake_run(
-        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
-    ):
+        cmd: Sequence[str],
+        input: Optional[str] = None,
+        text: Optional[bool] = None,
+        stdout: Optional[IO[str]] = None,
+        stderr: Optional[IO[bytes]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
         if cmd[0].rsplit("/", 1)[-1] == "mtzfix":
             assert stdout is not None, "the runner must redirect stdout to a log"
             assert timeout is not None, "the runner must pass a budget"
             stdout.write("mtzfix progress before the stall\n")
             stdout.flush()
-            raise density.subprocess.TimeoutExpired(cmd, timeout)
+            raise subprocess.TimeoutExpired(cmd, timeout)
         raise AssertionError("no program should run after a timeout")
 
-    monkeypatch.setattr(density.subprocess, "run", fake_run)
+    monkeypatch.setattr("density_analysis.subprocess.run", fake_run)
 
     with pytest.raises(density.Ccp4ToolTimeoutError) as excinfo:
         density.run_density_analysis(
@@ -349,20 +402,28 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
 
 
 def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Every CCP4 step gets the full budget rather than sharing one deadline."""
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
+    monkeypatch.setattr(
+        "density_analysis.shutil.which", lambda command, path=None: command
+    )
 
-    seen = []
+    seen: list[tuple[str, Optional[float], Optional[str]]] = []
 
     def fake_run(
-        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
-    ):
+        cmd: Sequence[str],
+        input: Optional[str] = None,
+        text: Optional[bool] = None,
+        stdout: Optional[IO[str]] = None,
+        stderr: Optional[IO[bytes]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         seen.append((program, timeout, input))
         if program == "fft":
@@ -373,7 +434,7 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
                 handle.write("stats\n")
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr(density.subprocess, "run", fake_run)
+    monkeypatch.setattr("density_analysis.subprocess.run", fake_run)
     density.run_density_analysis(
         "1abc",
         str(source),
@@ -397,7 +458,13 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     )
 
 
-def _ccp4_map(size, *, starts=(0, 0, 0), sampling=(64, 64, 64), mode=2):
+def _ccp4_map(
+    size: int,
+    *,
+    starts: tuple[int, int, int] = (0, 0, 0),
+    sampling: tuple[int, int, int] = (64, 64, 64),
+    mode: int = 2,
+) -> bytes:
     """A byte string that ``_map_extent_requires_full_map`` will parse.
 
     Only the first 1024 bytes are a real CCP4 header; the rest is padding to
@@ -415,12 +482,23 @@ def _ccp4_map(size, *, starts=(0, 0, 0), sampling=(64, 64, 64), mode=2):
     return header + b"\0" * (size - len(header))
 
 
-def _envelope_run_factory(*, full_size, envelope_size, envelope_starts=(0, 0, 0)):
+def _envelope_run_factory(
+    *,
+    full_size: int,
+    envelope_size: int,
+    envelope_starts: tuple[int, int, int] = (0, 0, 0),
+) -> Callable[..., SimpleNamespace]:
     """A stub CCP4 suite whose FFT and MAPMASK outputs have chosen extents."""
 
     def fake_run(
-        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
-    ):
+        cmd: Sequence[str],
+        input: Optional[str] = None,
+        text: Optional[bool] = None,
+        stdout: Optional[IO[str]] = None,
+        stderr: Optional[IO[bytes]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "fft":
             with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
@@ -436,13 +514,20 @@ def _envelope_run_factory(*, full_size, envelope_size, envelope_starts=(0, 0, 0)
     return fake_run
 
 
-def _run_envelope(tmp_path, monkeypatch, fake_run, **kwargs):
+def _run_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_run: Callable[..., SimpleNamespace],
+    **kwargs: Any,
+) -> density.DensityResult:
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
-    monkeypatch.setattr(density.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        "density_analysis.shutil.which", lambda command, path=None: command
+    )
+    monkeypatch.setattr("density_analysis.subprocess.run", fake_run)
     return density.run_density_analysis(
         "1abc",
         str(source),
@@ -457,8 +542,8 @@ def _run_envelope(tmp_path, monkeypatch, fake_run, **kwargs):
 
 
 def test_a_usable_envelope_is_cropped_and_the_full_maps_discarded(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The default path: a smaller, readable crop is what EDSTATS receives."""
     result = _run_envelope(
         tmp_path,
@@ -475,7 +560,9 @@ def test_a_usable_envelope_is_cropped_and_the_full_maps_discarded(
     assert not os.path.exists(tmp_path / "out" / "1abc_df_full.map")
 
 
-def test_keeping_intermediates_retains_the_pre_crop_maps(tmp_path, monkeypatch):
+def test_keeping_intermediates_retains_the_pre_crop_maps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``--keep-intermediates`` must preserve what cropping replaced."""
     _run_envelope(
         tmp_path,
@@ -489,8 +576,8 @@ def test_keeping_intermediates_retains_the_pre_crop_maps(tmp_path, monkeypatch):
 
 
 def test_an_envelope_larger_than_the_original_falls_back_to_the_full_map(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A model spanning the cell can produce a crop bigger than its input.
 
     Cropping is then pointless: the original is kept and MAPMASK is skipped for
@@ -510,8 +597,8 @@ def test_an_envelope_larger_than_the_original_falls_back_to_the_full_map(
 
 
 def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """EDSTATS wraps lookups when a stored axis starts past the positive edge.
 
     A translated model makes MAPMASK emit exactly that: a crop that is smaller
@@ -533,7 +620,9 @@ def test_an_envelope_beyond_the_cell_edge_falls_back_to_the_full_map(
     assert os.path.getsize(tmp_path / "out" / "1abc_fo.map") == 8192
 
 
-def test_a_crop_starting_inside_the_cell_is_accepted(tmp_path, monkeypatch):
+def test_a_crop_starting_inside_the_cell_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The last start the check accepts, one below the grid size.
 
     Paired with the test above, 63 accepted and 64 rejected pins the comparison
@@ -551,13 +640,19 @@ def test_a_crop_starting_inside_the_cell_is_accepted(tmp_path, monkeypatch):
 
 
 def test_an_unreadable_map_header_is_reported_rather_than_guessed(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A truncated or unrecognizable header must not be silently accepted."""
 
     def fake_run(
-        cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
-    ):
+        cmd: Sequence[str],
+        input: Optional[str] = None,
+        text: Optional[bool] = None,
+        stdout: Optional[IO[str]] = None,
+        stderr: Optional[IO[bytes]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "fft":
             with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:

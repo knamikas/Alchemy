@@ -20,17 +20,40 @@ Alchemy cannot bind must leave an audit trail, because dropping it silently is
 indistinguishable from a metal that has no coordination at all.
 """
 
+from __future__ import annotations
+
 import math
-from typing import NamedTuple, Optional
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Sequence,
+    cast,
+)
 
 from codes import CandidateSource, ContactScope, WarningCode
 from coordination.contact_record import Candidate
 from coordination.donor_chemistry import AA, DONOR_ELEMENTS
 from metal_elements import METAL_ELEMENTS, UNAMBIGUOUS_METAL_COMPONENT_IDS
-from structure_analysis import NAN, blank_if_missing, position_distance
+from structure_analysis import (
+    NAN,
+    AtomSite,
+    StructureContext,
+    blank_if_missing,
+    position_distance,
+)
+
+if TYPE_CHECKING:
+    import gemmi
+
+#: Identity of one selected metal atom, as ``AtomSite.source_key`` reports it.
+_MetalKey = tuple[int, int, int, int]
 
 
-def _connection_source(path):
+def _connection_source(path: Optional[str]) -> CandidateSource:
     lower = str(path or "").lower()
     if lower.endswith(".gz"):
         lower = lower[:-3]
@@ -41,11 +64,11 @@ def _connection_source(path):
     )
 
 
-def _enum_name(value):
+def _enum_name(value: object) -> str:
     return str(getattr(value, "name", value)).lower()
 
 
-def _analysis_chain_names(connection_path):
+def _analysis_chain_names(connection_path: str) -> dict[str, str]:
     """Map source chain names onto the analysis model's chain names.
 
     Replaying Gemmi's ``setup_entities`` and ``shorten_chain_names`` recovers
@@ -69,7 +92,9 @@ def _analysis_chain_names(connection_path):
     }
 
 
-def _analysis_atom_for_partner(structure, cra, chain_names):
+def _analysis_atom_for_partner(
+    structure: StructureContext, cra: gemmi.CRA, chain_names: Mapping[str, str]
+) -> Optional[AtomSite]:
     """Resolve one declared partner to an analysis atom by author identity.
 
     Returns ``None`` when the identity matches no residue, matches more than
@@ -106,7 +131,9 @@ def _analysis_atom_for_partner(structure, cra, chain_names):
     return named[0] if named else None
 
 
-def _selected_conformer_atom(structure, atom):
+def _selected_conformer_atom(
+    structure: StructureContext, atom: Optional[AtomSite]
+) -> Optional[AtomSite]:
     """Return the selected-conformer record for ``atom``'s chemical site.
 
     Contacts are measured on the selected conformer only. Returns ``None``
@@ -126,7 +153,9 @@ def _selected_conformer_atom(structure, atom):
     return None
 
 
-def _declared_partner_is_metal(address, cra):
+def _declared_partner_is_metal(
+    address: gemmi.AtomAddress, cra: Optional[gemmi.CRA]
+) -> bool:
     """Whether a source connection partner unambiguously names a metal.
 
     A resolved atom's element is authoritative. If resolution failed, only a
@@ -147,7 +176,12 @@ def _declared_partner_is_metal(address, cra):
     return residue_name in UNAMBIGUOUS_METAL_COMPONENT_IDS
 
 
-def _declared_candidate_geometry(structure, metal, neighbor, connection):
+def _declared_candidate_geometry(
+    structure: StructureContext,
+    metal: AtomSite,
+    neighbor: AtomSite,
+    connection: gemmi.Connection,
+) -> dict[str, Any]:
     """Return contact geometry for a resolved declared connection."""
     import gemmi
 
@@ -209,14 +243,21 @@ def _declared_candidate_geometry(structure, metal, neighbor, connection):
 class _PartnerResolution(NamedTuple):
     """What binding one declaration's two partners to the model produced."""
 
-    selected_conformer_atoms: Optional[list]
+    #: ``None`` exactly when ``failure_exception_name`` is set; otherwise the
+    #: two partners in declaration order, each ``None`` if it did not resolve.
+    selected_conformer_atoms: Optional[list[Optional[AtomSite]]]
     declares_metal: bool
     conformer_deselected: bool
     conformer_substituted: bool
     failure_exception_name: Optional[str]
 
 
-def _resolve_declared_partners(structure, source_model, connection, chain_names):
+def _resolve_declared_partners(
+    structure: StructureContext,
+    source_model: gemmi.Model,
+    connection: gemmi.Connection,
+    chain_names: Mapping[str, str],
+) -> _PartnerResolution:
     """Bind both partners of one declaration to selected-conformer atoms.
 
     The metal test runs twice. The first call reads the declaration's own
@@ -238,7 +279,7 @@ def _resolve_declared_partners(structure, source_model, connection, chain_names)
             _declared_partner_is_metal(address, cra)
             for address, cra in zip(addresses, source_cras)
         )
-        atoms = []
+        atoms: list[Optional[AtomSite]] = []
         deselected = False
         substituted = False
         for cra in source_cras:
@@ -258,8 +299,13 @@ def _resolve_declared_partners(structure, source_model, connection, chain_names)
 
 
 def _declared_candidate_for_connection(
-    structure, connection, connection_id, source, resolved, selected_metal_keys
-):
+    structure: StructureContext,
+    connection: gemmi.Connection,
+    connection_id: str,
+    source: CandidateSource,
+    resolved: _PartnerResolution,
+    selected_metal_keys: AbstractSet[_MetalKey],
+) -> tuple[Optional[Candidate], list[str], list[str]]:
     """Return ``(candidate, issues, warnings)`` for one resolved declaration.
 
     ``candidate`` is ``None`` whenever the declaration does not describe a
@@ -268,7 +314,7 @@ def _declared_candidate_for_connection(
     would understate a coordination number), a warning code, or nothing at all
     (a link between two amino acids is not Alchemy's subject).
     """
-    issues = []
+    issues: list[str] = []
     warnings: list[str] = []
     if resolved.failure_exception_name is not None:
         if resolved.declares_metal:
@@ -286,7 +332,9 @@ def _declared_candidate_for_connection(
             )
         return None, issues, warnings
 
-    first, second = resolved.selected_conformer_atoms
+    # Bound whenever no failure name was recorded, which the guard above has
+    # already returned on.
+    first, second = cast("list[Optional[AtomSite]]", resolved.selected_conformer_atoms)
     first_is_metal = first is not None and first.source_key in selected_metal_keys
     second_is_metal = second is not None and second.source_key in selected_metal_keys
     connection_involves_metal = (
@@ -363,7 +411,11 @@ def _declared_candidate_for_connection(
     return candidate, issues, warnings
 
 
-def _collect_declared_candidates(structure, connection_path, metals):
+def _collect_declared_candidates(
+    structure: StructureContext,
+    connection_path: Optional[str],
+    metals: Sequence[AtomSite],
+) -> tuple[list[Candidate], list[str], list[str]]:
     """Resolve source ``struct_conn``/``LINK`` claims to analysis atoms.
 
     Partners are matched by author identity -- chain, sequence number,
@@ -385,9 +437,9 @@ def _collect_declared_candidates(structure, connection_path, metals):
     source_model = declared_structure[0]
     chain_names = _analysis_chain_names(connection_path)
     selected_metal_keys = {metal.source_key for metal in metals}
-    candidates = []
-    issues = []
-    warnings = []
+    candidates: list[Candidate] = []
+    issues: list[str] = []
+    warnings: list[str] = []
     for index, connection in enumerate(declared_structure.connections, start=1):
         connection_id = str(connection.name).strip() or f"{source}_{index}"
         resolved = _resolve_declared_partners(

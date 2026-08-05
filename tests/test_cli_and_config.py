@@ -13,6 +13,8 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+from typing import Any, NoReturn, Optional, Sequence
 
 import pytest
 
@@ -37,7 +39,7 @@ def _option_help(option: str) -> str:
     return text[start : end if end != -1 else len(text)]
 
 
-def test_help_does_not_claim_that_no_bonds_defaults_to_true():
+def test_help_does_not_claim_that_no_bonds_defaults_to_true() -> None:
     """``--help`` must not read as "bonds are already skipped by default".
 
     ``ArgumentDefaultsHelpFormatter`` would append the default of the ``bonds``
@@ -50,7 +52,7 @@ def test_help_does_not_claim_that_no_bonds_defaults_to_true():
 
 
 @pytest.mark.parametrize("value", ["0", "-5"])
-def test_max_pdbs_rejects_non_positive_caps(value):
+def test_max_pdbs_rejects_non_positive_caps(value: str) -> None:
     """``--max-pdbs`` is a count, so zero and negatives are rejected by name."""
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
@@ -66,7 +68,7 @@ def test_max_pdbs_rejects_non_positive_caps(value):
     )
 
 
-def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
+def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end() -> None:
     """A negative cap is rejected, not applied as a tail-trimming ``ids[:n]``."""
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr):
@@ -114,7 +116,9 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
         ),
     ],
 )
-def test_an_unusable_combination_of_arguments_exits_two(arguments, fragment):
+def test_an_unusable_combination_of_arguments_exits_two(
+    arguments: list[str], fragment: str
+) -> None:
     """Every unusable argument combination exits 2, whichever check caught it.
 
     A script branching on the status must not have to know which one did.
@@ -135,7 +139,7 @@ def test_an_unusable_combination_of_arguments_exits_two(arguments, fragment):
         ["--id-file", "ids.txt"],
     ],
 )
-def test_retry_partials_accepts_optional_resume_selectors(selector):
+def test_retry_partials_accepts_optional_resume_selectors(selector: list[str]) -> None:
     args = cli.parse_args([*selector, "--resume", "--retry-partials"])
     assert args.resume is True
     assert args.retry_partials is True
@@ -146,14 +150,14 @@ def test_retry_partials_accepts_optional_resume_selectors(selector):
     [[], ["--id", "109m"], ["--id-file", "ids.txt"]],
     ids=["database", "single", "id-file"],
 )
-def test_data_json_is_rejected_outside_manual_mode(selector):
+def test_data_json_is_rejected_outside_manual_mode(selector: list[str]) -> None:
     with pytest.raises(SystemExit) as excinfo:
         cli.parse_args([*selector, "--data-json", "data.json"])
 
     assert excinfo.value.code == 2
 
 
-def test_manual_mode_accepts_an_optional_single_id():
+def test_manual_mode_accepts_an_optional_single_id() -> None:
     args = cli.parse_args(
         [
             "--id",
@@ -172,8 +176,8 @@ def test_manual_mode_accepts_an_optional_single_id():
 
 
 def test_confidence_reference_is_discovered_in_output_before_repo_default(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     output_dir = tmp_path / "output"
     output_reference = output_dir / "confidence_reference"
     output_reference.mkdir(parents=True)
@@ -191,7 +195,7 @@ def test_confidence_reference_is_discovered_in_output_before_repo_default(
     assert searched == (str(output_reference), str(repository_reference))
 
 
-def test_explicit_confidence_reference_is_authoritative(tmp_path):
+def test_explicit_confidence_reference_is_authoritative(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
     automatic_reference = output_dir / "confidence_reference"
     automatic_reference.mkdir(parents=True)
@@ -206,7 +210,7 @@ def test_explicit_confidence_reference_is_authoritative(tmp_path):
     assert searched == (str(explicit_reference),)
 
 
-def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
+def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path: Path) -> None:
     """Save and load agree that ``config_files[0]`` is authoritative.
 
     ``save_ccp4_setup`` writes only that file, so a later-file win would leave
@@ -228,7 +232,7 @@ def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path):
     assert loaded.get("ccp4_setup") == chosen
 
 
-def test_later_config_files_still_supply_keys_the_primary_omits(tmp_path):
+def test_later_config_files_still_supply_keys_the_primary_omits(tmp_path: Path) -> None:
     """First-wins precedence shadows only the keys the primary file defines."""
     primary = tmp_path / "user" / "ccp4.json"
     primary.parent.mkdir(parents=True)
@@ -247,7 +251,9 @@ def test_later_config_files_still_supply_keys_the_primary_omits(tmp_path):
     assert loaded["other_key"] == "kept"
 
 
-def test_the_driver_reads_the_setup_path_configuration_writes(monkeypatch, tmp_path):
+def test_the_driver_reads_the_setup_path_configuration_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """``--configure-ccp4`` and the next run must use the same file list.
 
     Redirecting the single ``DEFAULT_CONFIG_FILES`` is what proves it: a driver
@@ -276,7 +282,7 @@ def test_the_driver_reads_the_setup_path_configuration_writes(monkeypatch, tmp_p
     assert used == str(setup)
 
 
-def _stub_ccp4_dir(root, marker):
+def _stub_ccp4_dir(root: Path, marker: str) -> Path:
     """A directory holding the four CCP4 tool names, each echoing ``marker``."""
     bindir = root / f"ccp4-{marker}"
     bindir.mkdir(parents=True)
@@ -292,8 +298,8 @@ def _stub_ccp4_dir(root, marker):
 
 
 def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A typo'd ``--ccp4-setup`` must fail, not fall through to ``PATH``."""
     on_path = _stub_ccp4_dir(tmp_path, "ambient")
     monkeypatch.setenv("PATH", str(on_path))
@@ -310,8 +316,8 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
 
 @pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
 def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The requested installation is used, not the one the shell had sourced.
 
     Honouring ``PATH`` first would run the wrong binaries and record their
@@ -343,7 +349,9 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
-def test_posix_ccp4_setup_can_remove_an_inherited_variable(monkeypatch, tmp_path):
+def test_posix_ccp4_setup_can_remove_an_inherited_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     setup = tmp_path / "ccp4.setup-sh"
     setup.write_text("unset ALCHEMY_TEST_INHERITED\n", encoding="utf-8")
     monkeypatch.setenv("ALCHEMY_TEST_INHERITED", "must disappear")
@@ -353,7 +361,9 @@ def test_posix_ccp4_setup_can_remove_an_inherited_variable(monkeypatch, tmp_path
     assert "ALCHEMY_TEST_INHERITED" not in env
 
 
-def test_windows_ccp4_setup_output_is_authoritative(monkeypatch, tmp_path):
+def test_windows_ccp4_setup_output_is_authoritative(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     setup = tmp_path / "ccp4.setup.cmd"
     setup.write_text("@set ALCHEMY_TEST_INHERITED=\r\n", encoding="utf-8")
     monkeypatch.setenv("ALCHEMY_TEST_INHERITED", "must disappear")
@@ -364,7 +374,7 @@ def test_windows_ccp4_setup_output_is_authoritative(monkeypatch, tmp_path):
         stdout=f"launcher banner\n{ccp4_setup.ENV_SENTINEL}\nPath=C:\\CCP4\\bin\n",
         stderr="",
     )
-    monkeypatch.setattr(ccp4_setup.subprocess, "run", lambda *a, **k: completed)
+    monkeypatch.setattr("ccp4_setup.subprocess.run", lambda *a, **k: completed)
 
     env = ccp4_setup.resolve_env(str(setup))
 
@@ -372,7 +382,7 @@ def test_windows_ccp4_setup_output_is_authoritative(monkeypatch, tmp_path):
     assert env["PATH"] == r"C:\CCP4\bin"
 
 
-def test_the_three_timeout_budgets_are_distinct_and_ordered():
+def test_the_three_timeout_budgets_are_distinct_and_ordered() -> None:
     """Each class of subprocess gets a budget matched to its own work."""
     assert (
         pool.PROVENANCE_COMMAND_TIMEOUT_S
@@ -387,18 +397,18 @@ def test_the_three_timeout_budgets_are_distinct_and_ordered():
     ("setup_name", "shell"), [("ccp4.setup-sh", "bash"), ("ccp4.setup.bat", "cmd")]
 )
 def test_a_hanging_setup_script_aborts_the_run(
-    tmp_path, monkeypatch, setup_name, shell
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setup_name: str, shell: str
+) -> None:
     """A setup script that blocks stops the run rather than failing one entry."""
     setup = tmp_path / setup_name
     setup.write_text("sleep forever\n", encoding="utf-8")
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: Sequence[str], **kwargs: Any) -> NoReturn:
         timeout = kwargs.get("timeout")
         assert timeout == ccp4_setup.SETUP_SHELL_TIMEOUT_S
         raise subprocess.TimeoutExpired(cmd, float(timeout))
 
-    monkeypatch.setattr(ccp4_setup.subprocess, "run", fake_run)
+    monkeypatch.setattr("ccp4_setup.subprocess.run", fake_run)
 
     with pytest.raises(ccp4_setup.Ccp4SetupError) as excinfo:
         ccp4_setup.resolve_env(str(setup))
@@ -408,27 +418,29 @@ def test_a_hanging_setup_script_aborts_the_run(
     assert "stops the run" in message
 
 
-def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(monkeypatch):
+def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Provenance degrades to ``unknown`` instead of failing anything.
 
     ``git`` only stamps the run log, so a stuck index lock must not take the
     analysis with it.
     """
-    calls = []
+    calls: list[Optional[float]] = []
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd: Sequence[str], **kwargs: Any) -> NoReturn:
         timeout = kwargs.get("timeout")
         calls.append(timeout)
         assert timeout is not None, "provenance probes must be bounded"
         raise subprocess.TimeoutExpired(cmd, float(timeout))
 
-    monkeypatch.setattr(pool.subprocess, "run", fake_run)
+    monkeypatch.setattr("driver.pool.subprocess.run", fake_run)
 
     assert pool._alchemy_commit() == "unknown"
     assert calls and set(calls) == {pool.PROVENANCE_COMMAND_TIMEOUT_S}
 
 
-def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense():
+def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense() -> None:
     """``--ccp4-timeout`` is settable, and its default is the module constant."""
     assert cli.parse_args([]).ccp4_timeout == density.CCP4_TOOL_TIMEOUT_S
     assert cli.parse_args(["--ccp4-timeout", "3600"]).ccp4_timeout == 3600
@@ -438,7 +450,7 @@ def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense():
             cli.parse_args(["--ccp4-timeout", bad])
 
 
-def test_ccp4_timeout_help_states_its_default():
+def test_ccp4_timeout_help_states_its_default() -> None:
     """A reader must see the budget without reading the source."""
     help_text = _option_help("--ccp4-timeout")
     assert f"default: {density.CCP4_TOOL_TIMEOUT_S}" in help_text

@@ -12,6 +12,8 @@ import re
 import shlex
 import signal
 import sys
+from collections.abc import Callable, Sequence
+from types import FrameType
 
 from density_analysis import (
     CCP4_TOOL_TIMEOUT_S,
@@ -31,7 +33,7 @@ from driver.runlog import _RunLog
 logger = logger_for(__name__)
 
 
-def parse_pdb_id(value):
+def parse_pdb_id(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
             "PDB ID must contain exactly four alphanumeric characters"
@@ -39,7 +41,7 @@ def parse_pdb_id(value):
     return value.lower()
 
 
-def positive_int(value):
+def positive_int(value: str) -> int:
     """Argparse type for integer options that must be at least one."""
     try:
         parsed = int(value)
@@ -50,7 +52,7 @@ def positive_int(value):
     return parsed
 
 
-def parse_args(argv=None):
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -227,7 +229,9 @@ def parse_args(argv=None):
     return args
 
 
-def _install_termination_handler():
+def _install_termination_handler() -> (
+    Callable[[int, FrameType | None], object] | int | None
+):
     """Route SIGTERM through the same unwind path as Ctrl-C.
 
     SIGTERM's default disposition kills the process without running any
@@ -237,7 +241,9 @@ def _install_termination_handler():
     trapped.
     """
 
-    def _raise_interrupt(signum, frame):  # noqa: ARG001 - signal API
+    def _raise_interrupt(  # noqa: ARG001 - signal API
+        signum: int, frame: FrameType | None
+    ) -> None:
         raise KeyboardInterrupt
 
     try:
@@ -246,7 +252,7 @@ def _install_termination_handler():
         return None
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, execute the driver, and always emit a run log."""
     raw_args = None if argv is None else list(argv)
     args = parse_args(raw_args)

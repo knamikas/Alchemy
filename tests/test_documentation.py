@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tomllib
 import zipfile
+from pathlib import Path
 from typing import Set
 
 import pytest
@@ -51,7 +52,7 @@ def _read(path: str) -> str:
         return handle.read()
 
 
-def test_every_reason_code_is_documented():
+def test_every_reason_code_is_documented() -> None:
     """The manifest vocabulary is the most user-visible text Alchemy writes.
 
     ``docs/operations.md`` is where an operator looks a code up, so a code that
@@ -66,7 +67,7 @@ def test_every_reason_code_is_documented():
     assert not missing, f"reason codes absent from docs/operations.md: {missing}"
 
 
-def test_no_reason_code_is_emitted_outside_the_shared_vocabulary():
+def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
     """Reason codes are assigned from ``ReasonCode``, not spelled out again.
 
     ``driver.resume`` reads one of these back to decide whether a bond stage was
@@ -78,7 +79,7 @@ def test_no_reason_code_is_emitted_outside_the_shared_vocabulary():
     # of those two codes rather than reporting correct code as a defect.
     also_column_names = {code.value for code in ReasonCode} & set(STATS_COLUMNS)
     known = {code.value for code in ReasonCode} - also_column_names
-    offenders = []
+    offenders: list[str] = []
     for module in ("worker.py", "coordination/analysis.py", "coordination/dpi.py"):
         source = _read(os.path.join(SRC_DIR, module))
         for literal in re.findall(r'"([a-z][a-z0-9_]{6,})"', source):
@@ -165,7 +166,7 @@ def _third_party_imports() -> Set[str]:
     return found
 
 
-def test_readme_documents_every_declared_dependency():
+def test_readme_documents_every_declared_dependency() -> None:
     """Following the README installs everything ``pyproject.toml`` declares."""
     missing = _declared_dependencies() - _documented_dependencies()
     assert not missing, (
@@ -174,7 +175,7 @@ def test_readme_documents_every_declared_dependency():
     )
 
 
-def test_declared_dependencies_cover_every_third_party_import():
+def test_declared_dependencies_cover_every_third_party_import() -> None:
     """Nothing in ``src/`` imports a distribution that is not declared."""
     declared = _declared_dependencies()
     undeclared = {
@@ -188,7 +189,7 @@ def test_declared_dependencies_cover_every_third_party_import():
     )
 
 
-def test_main_docstring_requirements_match_the_declaration():
+def test_main_docstring_requirements_match_the_declaration() -> None:
     """``src/main.py``'s Requirements section names every declared dependency.
 
     That docstring is the third copy of the list, and this is what holds it to
@@ -203,7 +204,7 @@ def test_main_docstring_requirements_match_the_declaration():
     )
 
 
-def test_default_paths_land_in_the_checkout_not_inside_src():
+def test_default_paths_land_in_the_checkout_not_inside_src() -> None:
     """``REPO_DIR`` names the checkout root from every module that reads it.
 
     It walks up from ``__file__``, so the number of ``dirname`` calls is right
@@ -215,7 +216,10 @@ def test_default_paths_land_in_the_checkout_not_inside_src():
     from driver import pool
 
     assert ccp4_setup.REPO_DIR == REPO_ROOT
-    assert pool.REPO_DIR == REPO_ROOT, (
+    # Read out of the module namespace: what is under test is the value
+    # ``driver.pool`` itself binds, so importing the name from ``ccp4_setup``
+    # to satisfy no-implicit-reexport would assert the line above twice.
+    assert vars(pool)["REPO_DIR"] == REPO_ROOT, (
         "driver.pool must import REPO_DIR rather than recompute it: two "
         f"dirname calls from {os.path.join(SRC_DIR, 'driver')} name src/, "
         "not the checkout"
@@ -225,7 +229,7 @@ def test_default_paths_land_in_the_checkout_not_inside_src():
     )
 
 
-def test_the_density_cli_does_not_default_its_output_into_the_source_tree():
+def test_the_density_cli_does_not_default_its_output_into_the_source_tree() -> None:
     """``density_analysis.py``'s own CLI must not write where the code lives.
 
     It is a debugging entry point documented nowhere, and it once defaulted
@@ -270,7 +274,7 @@ def test_the_density_cli_does_not_default_its_output_into_the_source_tree():
     ]
     + ["main-docstring"],
 )
-def test_examples_do_not_assume_a_private_environment(path):
+def test_examples_do_not_assume_a_private_environment(path: str) -> None:
     """Documented commands run anywhere: Alchemy requires no named environment,
     and one a reader has no way to create is one they cannot follow."""
     offending = [
@@ -284,7 +288,7 @@ def test_examples_do_not_assume_a_private_environment(path):
     )
 
 
-def test_setuptools_declares_nothing_installable():
+def test_setuptools_declares_nothing_installable() -> None:
     """``pyproject.toml`` declares an empty distribution.
 
     The half of the empty-wheel invariant that needs no build toolchain, so it
@@ -305,7 +309,7 @@ def test_setuptools_declares_nothing_installable():
     )
 
 
-def test_built_wheel_contains_only_distribution_metadata(tmp_path):
+def test_built_wheel_contains_only_distribution_metadata(tmp_path: Path) -> None:
     """A built wheel ships metadata and dependencies, but no Alchemy code.
 
     Nothing else detects the loss of that invariant: the suite reaches ``src``
@@ -375,7 +379,7 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path):
     )
 
 
-def test_version_has_a_single_definition():
+def test_version_has_a_single_definition() -> None:
     """``pyproject.toml`` derives the version from ``src/_version.py``.
 
     The number is stamped into every manifest row as ``alchemy_version``, so a
@@ -403,9 +407,9 @@ def test_version_has_a_single_definition():
     )
 
 
-def test_every_documentation_link_resolves():
+def test_every_documentation_link_resolves() -> None:
     """The README is a table of contents, so a moved page breaks a link."""
-    broken = []
+    broken: list[str] = []
     for path in DOC_PATHS:
         directory = os.path.dirname(path)
         for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", _read(path)):
@@ -417,7 +421,7 @@ def test_every_documentation_link_resolves():
     assert not broken, f"documentation links point at missing files: {broken}"
 
 
-def test_the_readme_points_at_every_documentation_page():
+def test_the_readme_points_at_every_documentation_page() -> None:
     """No page is orphaned: each one is reachable from the front door."""
     readme = _read(README_PATH)
     unlinked = [
@@ -460,7 +464,7 @@ def _declared_cli_flags() -> Set[str]:
     return flags
 
 
-def test_every_cli_flag_appears_in_the_prose():
+def test_every_cli_flag_appears_in_the_prose() -> None:
     """A flag nobody documents is a flag nobody can find.
 
     ``--confidence-reference-dir`` was absent from every page for exactly as
@@ -486,7 +490,7 @@ _NON_FIELD_TERMS = frozenset(
 )
 
 
-def test_every_field_name_in_the_prose_still_exists():
+def test_every_field_name_in_the_prose_still_exists() -> None:
     """A renamed column must not leave the documentation describing the old one.
 
     The prose names specific fields and codes throughout, and a reader looks
@@ -494,7 +498,8 @@ def test_every_field_name_in_the_prose_still_exists():
     everything named still exists -- catches a rename without demanding that
     all 134 statistics columns be documented.
     """
-    from codes import StrEnum
+    from enum import StrEnum
+
     import codes as codes_module
     from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
@@ -532,7 +537,7 @@ def test_every_field_name_in_the_prose_still_exists():
     )
 
 
-def test_documented_thresholds_match_the_constants():
+def test_documented_thresholds_match_the_constants() -> None:
     """Numbers in the prose are the ones the code actually uses.
 
     Every one of these was verified by hand once. Pinning them means a
@@ -540,11 +545,8 @@ def test_documented_thresholds_match_the_constants():
     quoting the old value, which is the failure mode that leaves a reader
     confidently wrong about what a run did.
     """
-    from coordination.analysis import (
-        CANDIDATE_SEARCH_RADIUS,
-        FIRST_SPHERE_TOLERANCE,
-        ZSCORE_OUTLIER_CUTOFF,
-    )
+    from coordination.analysis import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
+    from coordination.schema import ZSCORE_OUTLIER_CUTOFF
     from density_analysis import CCP4_TOOL_TIMEOUT_S, MODEL_ENVELOPE_BORDER_ANGSTROM
     from driver.resources import AUTO_WORKER_MEMORY_BYTES
     from structure_analysis import OVERFULL_OCCUPANCY_NI_FRACTION

@@ -8,7 +8,9 @@ network, CCP4 or the PDB-REDO mirror.
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Sequence, Tuple
+import os
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import gemmi
 import pytest
@@ -20,9 +22,13 @@ from helpers import AtomSpec, StructureBuilder, simple_metal_site
 _OCC_COLUMN = 54  # PDB occupancy, columns 55-60 (0-based 54:60)
 _ELEMENT_COLUMN = 76  # PDB element, columns 77-78
 
+# Every writer below stringifies its argument, so callers pass ``tmp_path / ...``
+# as readily as a plain string.
+_StrPath = Union[str, os.PathLike[str]]
+
 
 def _rewrite_atom_field(
-    source: str, destination, *, atom_name: str, column: int, text: str
+    source: str, destination: _StrPath, *, atom_name: str, column: int, text: str
 ) -> str:
     """Copy a PDB file, overwriting a fixed-width field of one named atom.
 
@@ -99,7 +105,7 @@ def _site(
     )
 
 
-def _altloc_option_map(selection: sa.ResidueSelection) -> dict:
+def _altloc_option_map(selection: sa.ResidueSelection) -> Dict[str, str]:
     """Parse ``ResidueSelection.altloc_options`` into ``{label: text}``."""
     if not selection.altloc_options:
         return {}
@@ -122,7 +128,7 @@ def _residue(context: sa.StructureContext, name: str) -> sa.ResidueSelection:
 
 
 def _write_pdb_with_ncs(
-    builder: StructureBuilder, path, operations: Sequence[Tuple[str, bool]]
+    builder: StructureBuilder, path: _StrPath, operations: Sequence[Tuple[str, bool]]
 ) -> str:
     """Write ``builder`` as PDB with MTRIX records for ``(id, given)`` ops."""
     structure = builder.to_gemmi()
@@ -149,7 +155,9 @@ def _write_pdb_with_ncs(
         ("abcd", 24701),
     ],
 )
-def test_decode_pdb_resseq_matches_gemmi(field, expected, tmp_path):
+def test_decode_pdb_resseq_matches_gemmi(
+    field: str, expected: int, tmp_path: Path
+) -> None:
     """EDSTATS rows and raw PDB atoms are joined on this number, so any
     divergence from Gemmi's ``Residue.seqid.num`` mismatches residues."""
     assert sa._decode_pdb_resseq(field) == expected
@@ -165,19 +173,19 @@ def test_decode_pdb_resseq_matches_gemmi(field, expected, tmp_path):
     assert numbers == [expected]
 
 
-def test_decode_pdb_resseq_hybrid36_starts_immediately_after_9999():
+def test_decode_pdb_resseq_hybrid36_starts_immediately_after_9999() -> None:
     assert sa._decode_pdb_resseq("9999") == 9999
     assert sa._decode_pdb_resseq("A000") == sa._decode_pdb_resseq("9999") + 1
 
 
-def test_decode_pdb_resseq_is_case_insensitive():
+def test_decode_pdb_resseq_is_case_insensitive() -> None:
     """Gemmi treats resSeq letter case equivalently, so Alchemy must too."""
     for upper, lower in (("A000", "a000"), ("ABCD", "abcd"), ("ZZZZ", "zzzz")):
         assert sa._decode_pdb_resseq(upper) == sa._decode_pdb_resseq(lower)
 
 
 @pytest.mark.parametrize("field", ["  -1", "-999", " -12"])
-def test_decode_pdb_resseq_accepts_negative_decimal(field):
+def test_decode_pdb_resseq_accepts_negative_decimal(field: str) -> None:
     """Negative author numbering (expression tags) stays decimal, not base-36."""
     assert sa._decode_pdb_resseq(field) == int(field.strip())
 
@@ -194,7 +202,7 @@ def test_decode_pdb_resseq_accepts_negative_decimal(field):
         "$$$$",
     ],
 )
-def test_decode_pdb_resseq_rejects_undecodable_fields(field):
+def test_decode_pdb_resseq_rejects_undecodable_fields(field: str) -> None:
     with pytest.raises(ValueError):
         sa._decode_pdb_resseq(field)
 
@@ -213,19 +221,25 @@ def test_decode_pdb_resseq_rejects_undecodable_fields(field):
         ("0", "0"),
     ],
 )
-def test_canonical_pdb_residue_id_normalizes_every_input_form(value, expected):
+def test_canonical_pdb_residue_id_normalizes_every_input_form(
+    value: str, expected: str
+) -> None:
     """All accepted spellings must collapse to ``<decimal><icode>``."""
     assert sa.canonical_pdb_residue_id(value) == expected
 
 
 @pytest.mark.parametrize("value", ["10:AB", "9999AB", "10:  A"])
-def test_canonical_pdb_residue_id_rejects_multi_character_insertion(value):
+def test_canonical_pdb_residue_id_rejects_multi_character_insertion(
+    value: str,
+) -> None:
     """A PDB insertion code is a single column; anything wider is malformed."""
     with pytest.raises(ValueError):
         sa.canonical_pdb_residue_id(value)
 
 
-def test_canonical_pdb_residue_id_equals_loaded_residue_resnum(tmp_path):
+def test_canonical_pdb_residue_id_equals_loaded_residue_resnum(
+    tmp_path: Path,
+) -> None:
     """The stats table carries ``canonical_pdb_residue_id("10:A")`` and the
     coordinate side ``ResidueSelection.resnum``; if they differ the sigma join
     loses the residue."""
@@ -241,18 +255,18 @@ def test_canonical_pdb_residue_id_equals_loaded_residue_resnum(tmp_path):
 
 
 @pytest.mark.parametrize("token", list(sa.MISSING_VALUE_TOKENS))
-def test_blank_if_missing_blanks_every_missing_token(token):
+def test_blank_if_missing_blanks_every_missing_token(token: str) -> None:
     """Blank PDB columns, Gemmi's NUL altloc and mmCIF ``.``/``?`` all mean none."""
     assert sa.blank_if_missing(token) == ""
 
 
-def test_blank_if_missing_covers_the_documented_token_set():
+def test_blank_if_missing_covers_the_documented_token_set() -> None:
     """The missing-value vocabulary is shared with main.py's mmCIF conversion."""
     assert set(sa.MISSING_VALUE_TOKENS) == {"", " ", "\x00", ".", "?"}
 
 
 @pytest.mark.parametrize("value", ["A", "B", "0", "1", "-", "..", "  ", "?!"])
-def test_blank_if_missing_preserves_real_values(value):
+def test_blank_if_missing_preserves_real_values(value: str) -> None:
     """EDSTATS uses ``"0"`` as an ordered-water chain group, so it is a value."""
     assert sa.blank_if_missing(value) == value
 
@@ -280,7 +294,9 @@ def test_blank_if_missing_preserves_real_values(value):
         ([0.5], False),
     ],
 )
-def test_valid_occupancy_accepts_only_finite_values_in_unit_range(value, expected):
+def test_valid_occupancy_accepts_only_finite_values_in_unit_range(
+    value: object, expected: bool
+) -> None:
     assert sa._valid_occupancy(value) is expected
 
 
@@ -299,7 +315,9 @@ def test_valid_occupancy_accepts_only_finite_values_in_unit_range(value, expecte
         ("Q", "", "invalid"),
     ],
 )
-def test_parse_pdb_element_reports_deposited_provenance(field, element, status):
+def test_parse_pdb_element_reports_deposited_provenance(
+    field: str, element: str, status: str
+) -> None:
     """Blank and unrecognized element fields are flagged, never guessed."""
     assert sa._parse_pdb_element(field) == (element, status)
 
@@ -352,12 +370,12 @@ def test_parse_pdb_element_reports_deposited_provenance(field, element, status):
     ],
 )
 def test_site_is_better_ranks_validity_then_occupancy_then_order(
-    candidate, current, expected, why
-):
+    candidate: sa.AtomSite, current: sa.AtomSite, expected: bool, why: str
+) -> None:
     assert sa._site_is_better(candidate, current) is expected, why
 
 
-def test_select_residue_without_alternates_shares_every_blank_atom():
+def test_select_residue_without_alternates_shares_every_blank_atom() -> None:
     atoms = [
         _site("N", occupancy=1.0, source_order=0),
         _site("CA", occupancy=0.8, source_order=1),
@@ -374,7 +392,7 @@ def test_select_residue_without_alternates_shares_every_blank_atom():
     )
 
 
-def test_select_residue_shares_blank_atoms_with_the_selected_conformer():
+def test_select_residue_shares_blank_atoms_with_the_selected_conformer() -> None:
     atoms = [
         _site("N", occupancy=1.0, source_order=0),
         _site("CA", occupancy=1.0, source_order=1),
@@ -391,7 +409,7 @@ def test_select_residue_shares_blank_atoms_with_the_selected_conformer():
     ]
 
 
-def test_select_residue_uses_the_conformer_mean_not_the_single_best_atom():
+def test_select_residue_uses_the_conformer_mean_not_the_single_best_atom() -> None:
     """Selection compares mean occupancy per conformer, per the README.
 
     Conformer A holds the highest single atom (0.9) but the lower mean (0.5);
@@ -411,7 +429,7 @@ def test_select_residue_uses_the_conformer_mean_not_the_single_best_atom():
 
 
 @pytest.mark.parametrize("order", ["ab", "ba"])
-def test_select_residue_breaks_occupancy_ties_by_altloc_label(order):
+def test_select_residue_breaks_occupancy_ties_by_altloc_label(order: str) -> None:
     a_atoms = [
         _site("CB", altloc="A", occupancy=0.5, source_order=0),
         _site("CG", altloc="A", occupancy=0.5, source_order=1),
@@ -428,7 +446,7 @@ def test_select_residue_breaks_occupancy_ties_by_altloc_label(order):
     assert {atom.altloc for atom in selection.contact_atoms} == {"A"}
 
 
-def test_select_residue_averages_only_valid_occupancies():
+def test_select_residue_averages_only_valid_occupancies() -> None:
     """Conformer A is 0.4 plus an out-of-range 5.0: averaging the raw values
     gives 2.7 and hands A the selection, the valid subset gives 0.4 and B."""
     atoms = [
@@ -444,7 +462,7 @@ def test_select_residue_averages_only_valid_occupancies():
     assert float(_altloc_option_map(selection)["A"]) == pytest.approx(0.4)
 
 
-def test_select_residue_records_every_available_alternative():
+def test_select_residue_records_every_available_alternative() -> None:
     atoms = [
         _site("CB", altloc="A", occupancy=0.25, source_order=0),
         _site("CB", altloc="B", occupancy=0.35, source_order=1),
@@ -460,10 +478,10 @@ def test_select_residue_records_every_available_alternative():
     assert selection.selected_altloc == "C"
 
 
-def test_select_residue_keeps_one_coherent_conformer_across_all_atoms():
+def test_select_residue_keeps_one_coherent_conformer_across_all_atoms() -> None:
     """Mixing conformers would hand the contact search an invented residue."""
     names = ("CB", "CG", "ND1", "CD2", "CE1", "NE2")
-    atoms = []
+    atoms: List[sa.AtomSite] = []
     for index, name in enumerate(names):
         atoms.append(_site(name, altloc="A", occupancy=0.45, source_order=2 * index))
         atoms.append(
@@ -478,7 +496,7 @@ def test_select_residue_keeps_one_coherent_conformer_across_all_atoms():
     assert len(selection.source_atoms) == 2 * len(names)
 
 
-def test_select_residue_falls_back_when_no_conformer_has_valid_occupancy():
+def test_select_residue_falls_back_when_no_conformer_has_valid_occupancy() -> None:
     atoms = [
         _site("CB", altloc="B", occupancy=2.5, source_order=0),
         _site("CB", altloc="A", occupancy=float("nan"), source_order=1),
@@ -492,7 +510,7 @@ def test_select_residue_falls_back_when_no_conformer_has_valid_occupancy():
     assert {atom.altloc for atom in selection.contact_atoms} == {"A"}
 
 
-def test_select_residue_prefers_a_selected_conformer_over_a_blank_duplicate():
+def test_select_residue_prefers_a_selected_conformer_over_a_blank_duplicate() -> None:
     atoms = [
         _site("NE2", altloc="", occupancy=1.0, source_order=0),
         _site("NE2", altloc="A", occupancy=0.4, source_order=1),
@@ -505,7 +523,7 @@ def test_select_residue_prefers_a_selected_conformer_over_a_blank_duplicate():
     assert selection.selected_over_blank_duplicate_count == 1
 
 
-def test_select_residue_resolves_repeated_atom_names_by_occupancy():
+def test_select_residue_resolves_repeated_atom_names_by_occupancy() -> None:
     atoms = [
         _site("NE2", altloc="A", occupancy=0.4, source_order=0, pos=(1.0, 0.0, 0.0)),
         _site("NE2", altloc="A", occupancy=0.9, source_order=1, pos=(2.0, 0.0, 0.0)),
@@ -518,7 +536,7 @@ def test_select_residue_resolves_repeated_atom_names_by_occupancy():
     assert selection.malformed_duplicate_atom_name_count == 1
 
 
-def test_select_residue_orders_contact_atoms_by_source_order():
+def test_select_residue_orders_contact_atoms_by_source_order() -> None:
     """Deposited order keeps the downstream atom indices stable."""
     atoms = [
         _site("C", occupancy=1.0, source_order=7),
@@ -531,7 +549,9 @@ def test_select_residue_orders_contact_atoms_by_source_order():
     assert [atom.source_order for atom in selection.source_atoms] == [2, 5, 7]
 
 
-def test_load_structure_selects_conformer_and_keeps_both_for_counting(tmp_path):
+def test_load_structure_selects_conformer_and_keeps_both_for_counting(
+    tmp_path: Path,
+) -> None:
     """Occupancies 0.35/0.55 make the deposited sum (0.90) differ from both the
     selected conformer alone and from 1.0."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
@@ -559,7 +579,9 @@ def test_load_structure_selects_conformer_and_keeps_both_for_counting(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(9 + 0.35 + 0.55 + 1.0)
 
 
-def test_rounded_alternate_occupancy_is_reported_but_keeps_the_dpi(tmp_path):
+def test_rounded_alternate_occupancy_is_reported_but_keeps_the_dpi(
+    tmp_path: Path,
+) -> None:
     """0.46 + 0.55 is a two-decimal rounding artifact, not unusable occupancy.
 
     Deposited occupancies carry two decimals, so independently rounded
@@ -590,7 +612,9 @@ def test_rounded_alternate_occupancy_is_reported_but_keeps_the_dpi(tmp_path):
     assert math.isfinite(sa.count_ni(context))
 
 
-def test_overfull_excess_accumulated_across_sites_still_voids_the_dpi(tmp_path):
+def test_overfull_excess_accumulated_across_sites_still_voids_the_dpi(
+    tmp_path: Path,
+) -> None:
     """The threshold is on total excess against Ni, so many small sites add up."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
@@ -611,7 +635,7 @@ def test_overfull_excess_accumulated_across_sites_still_voids_the_dpi(tmp_path):
     assert math.isnan(sa.count_ni(context))
 
 
-def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path):
+def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path: Path) -> None:
     """A grossly overfull site still voids DPI: 0.6 excess against ~11 atoms."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
@@ -643,7 +667,7 @@ def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path):
     assert math.isnan(sa.count_ni(context))
 
 
-def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path):
+def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path: Path) -> None:
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
     builder.add_conformers(his, [("A", 1.50, {}), ("B", 2.50, {})], atom_names=["NE2"])
@@ -659,7 +683,7 @@ def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path):
     assert math.isnan(sa.count_deposited_ni(context))
 
 
-def _two_model_pdb(path) -> str:
+def _two_model_pdb(path: _StrPath) -> str:
     """Write a two-model PDB whose second model holds an atom the first lacks."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     structure = builder.to_gemmi()
@@ -684,7 +708,7 @@ def _two_model_pdb(path) -> str:
     return path
 
 
-def test_load_structure_analyzes_the_first_model_only(tmp_path):
+def test_load_structure_analyzes_the_first_model_only(tmp_path: Path) -> None:
     """The README forbids combining models."""
     path = _two_model_pdb(tmp_path / "two_models.pdb")
     context = sa.load_structure("test", path)
@@ -704,7 +728,9 @@ def test_load_structure_analyzes_the_first_model_only(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(2.0)
 
 
-def test_load_structure_reports_source_model_count_from_the_original_file(tmp_path):
+def test_load_structure_reports_source_model_count_from_the_original_file(
+    tmp_path: Path,
+) -> None:
     """``main`` strips MODEL/ENDMDL before EDSTATS, so the analysis file has one
     model where the deposited entry had several."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
@@ -718,13 +744,17 @@ def test_load_structure_reports_source_model_count_from_the_original_file(tmp_pa
     assert "multi_model_structure" in context.warning_codes
 
 
-def test_load_structure_rejects_a_source_model_count_below_the_file(tmp_path):
+def test_load_structure_rejects_a_source_model_count_below_the_file(
+    tmp_path: Path,
+) -> None:
     path = _two_model_pdb(tmp_path / "two_models.pdb")
     with pytest.raises(ValueError, match="source model count"):
         sa.load_structure("test", path, source_model_count=1)
 
 
-def test_load_structure_single_model_reports_no_multi_model_warning(tmp_path):
+def test_load_structure_single_model_reports_no_multi_model_warning(
+    tmp_path: Path,
+) -> None:
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     context = sa.load_structure("test", builder.write_pdb(tmp_path / "single.pdb"))
 
@@ -744,8 +774,8 @@ def test_load_structure_single_model_reports_no_multi_model_warning(tmp_path):
     ],
 )
 def test_invalid_occupancy_makes_dpi_unavailable_without_repair(
-    tmp_path, label, field, status, missing, invalid
-):
+    tmp_path: Path, label: str, field: str, status: str, missing: int, invalid: int
+) -> None:
     """The README makes malformed occupancy disable DPI rather than be repaired.
 
     The coordinates are retained so distance analysis can continue.
@@ -772,7 +802,7 @@ def test_invalid_occupancy_makes_dpi_unavailable_without_repair(
     assert (metal.x, metal.y, metal.z) == (0.0, 0.0, 0.0)
 
 
-def test_zero_occupancy_is_valid_for_ni(tmp_path):
+def test_zero_occupancy_is_valid_for_ni(tmp_path: Path) -> None:
     """Zero occupancy is a measured value: it keeps DPI available and adds 0."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     clean = builder.write_pdb(tmp_path / "clean.pdb")
@@ -795,7 +825,7 @@ def test_zero_occupancy_is_valid_for_ni(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(1.0)
 
 
-def test_missing_occupancy_is_not_counted_as_a_measured_zero(tmp_path):
+def test_missing_occupancy_is_not_counted_as_a_measured_zero(tmp_path: Path) -> None:
     """Gemmi parses the blank column as 0.0, so only the raw provenance can tell
     "not deposited" from "deposited as zero"."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
@@ -812,7 +842,7 @@ def test_missing_occupancy_is_not_counted_as_a_measured_zero(tmp_path):
     assert math.isnan(sa.count_deposited_ni(context))
 
 
-def test_unknown_element_makes_the_atom_count_indeterminate(tmp_path):
+def test_unknown_element_makes_the_atom_count_indeterminate(tmp_path: Path) -> None:
     """A blank element field is unknown, not inferred from the atom name."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     clean = builder.write_pdb(tmp_path / "clean.pdb")
@@ -837,7 +867,9 @@ def test_unknown_element_makes_the_atom_count_indeterminate(tmp_path):
     assert math.isnan(sa.count_ni(context))
 
 
-def test_count_deposited_ni_is_the_occupancy_weighted_heavy_atom_sum(tmp_path):
+def test_count_deposited_ni_is_the_occupancy_weighted_heavy_atom_sum(
+    tmp_path: Path,
+) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", occupancy=0.6)
     builder.add_water(101, (0.0, 2.09, 0.0), chain="B", occupancy=0.25)
@@ -847,7 +879,7 @@ def test_count_deposited_ni_is_the_occupancy_weighted_heavy_atom_sum(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(0.6 + 0.25 + 1.0)
 
 
-def test_count_deposited_ni_excludes_hydrogen_and_deuterium(tmp_path):
+def test_count_deposited_ni_excludes_hydrogen_and_deuterium(tmp_path: Path) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
     builder.add_hetero_residue(
@@ -867,7 +899,9 @@ def test_count_deposited_ni_excludes_hydrogen_and_deuterium(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(2.0)
 
 
-def test_count_deposited_ni_counts_alternate_positions_separately(tmp_path):
+def test_count_deposited_ni_counts_alternate_positions_separately(
+    tmp_path: Path,
+) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
     water = builder.add_water(101, (0.0, 2.09, 0.0), chain="B")
@@ -880,7 +914,7 @@ def test_count_deposited_ni_counts_alternate_positions_separately(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(1.0 + 0.3 + 0.5)
 
 
-def test_count_ni_multiplies_by_non_given_strict_ncs_copies(tmp_path):
+def test_count_ni_multiplies_by_non_given_strict_ncs_copies(tmp_path: Path) -> None:
     """Operations flagged ``given`` are already deposited and are not counted
     a second time."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
@@ -901,7 +935,7 @@ def test_count_ni_multiplies_by_non_given_strict_ncs_copies(tmp_path):
     )
 
 
-def test_count_ni_equals_deposited_without_strict_ncs(tmp_path):
+def test_count_ni_equals_deposited_without_strict_ncs(tmp_path: Path) -> None:
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     context = sa.load_structure("test", builder.write_pdb(tmp_path / "plain.pdb"))
 
@@ -910,7 +944,9 @@ def test_count_ni_equals_deposited_without_strict_ncs(tmp_path):
     assert sa.count_ni(context) == pytest.approx(sa.count_deposited_ni(context))
 
 
-def test_count_ni_stays_unavailable_when_the_deposited_count_is(tmp_path):
+def test_count_ni_stays_unavailable_when_the_deposited_count_is(
+    tmp_path: Path,
+) -> None:
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     clean = _write_pdb_with_ncs(builder, tmp_path / "ncs_clean.pdb", [("1", False)])
     path = _rewrite_atom_field(
@@ -928,7 +964,9 @@ def test_count_ni_stays_unavailable_when_the_deposited_count_is(tmp_path):
     assert math.isnan(sa.count_ni(context))
 
 
-def test_duplicate_atom_records_collapse_to_the_higher_occupancy(tmp_path):
+def test_duplicate_atom_records_collapse_to_the_higher_occupancy(
+    tmp_path: Path,
+) -> None:
     builder = StructureBuilder()
     builder.add_hetero_residue(
         "ZN",
@@ -953,7 +991,9 @@ def test_duplicate_atom_records_collapse_to_the_higher_occupancy(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(0.9 + 1.0)
 
 
-def test_duplicate_atom_records_at_different_positions_are_flagged(tmp_path):
+def test_duplicate_atom_records_at_different_positions_are_flagged(
+    tmp_path: Path,
+) -> None:
     """Duplicates further apart than the 0.001 A tolerance are a real conflict."""
     builder = StructureBuilder()
     builder.add_hetero_residue(
@@ -983,12 +1023,16 @@ def test_duplicate_atom_records_at_different_positions_are_flagged(tmp_path):
         ((5.0, 0.0, 0.0), (0.0, 0.0, 0.0), 5.0),
     ],
 )
-def test_position_distance_is_euclidean(a, b, expected):
+def test_position_distance_is_euclidean(
+    a: Tuple[float, float, float],
+    b: Tuple[float, float, float],
+    expected: float,
+) -> None:
     assert sa.position_distance(a, b) == pytest.approx(expected, abs=1e-12)
     assert sa.position_distance(b, a) == pytest.approx(expected, abs=1e-12)
 
 
-def test_position_distance_matches_gemmi_position_distance():
+def test_position_distance_matches_gemmi_position_distance() -> None:
     first = (1.5, -2.25, 7.75)
     second = (-3.0, 4.5, 0.25)
     expected = gemmi.Position(*first).dist(gemmi.Position(*second))
@@ -996,7 +1040,7 @@ def test_position_distance_matches_gemmi_position_distance():
 
 
 @pytest.fixture
-def ncs_context(tmp_path) -> sa.StructureContext:
+def ncs_context(tmp_path: Path) -> sa.StructureContext:
     """A loaded context with four symmetry operations and two strict-NCS ops."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     path = _write_pdb_with_ncs(
@@ -1024,15 +1068,20 @@ def ncs_context(tmp_path) -> sa.StructureContext:
     ],
 )
 def test_image_provenance_classifies_symmetry_and_ncs(
-    ncs_context, image_index, translation, expected
-):
+    ncs_context: sa.StructureContext,
+    image_index: int,
+    translation: Tuple[int, int, int],
+    expected: Tuple[bool, bool, str, str],
+) -> None:
     """Gemmi's ``setup_cell_images()`` lists the identity, then the remaining
     space-group operations, then one full block per strict-NCS transform. A
     nonzero cell translation is crystallographic even at the identity."""
-    assert ncs_context.image_provenance(image_index, tuple(translation)) == expected
+    assert ncs_context.image_provenance(image_index, translation) == expected
 
 
-def test_image_provenance_explicit_only_for_the_identity_image(ncs_context):
+def test_image_provenance_explicit_only_for_the_identity_image(
+    ncs_context: sa.StructureContext,
+) -> None:
     crystallographic, strict_ncs, ncs_id, scope = ncs_context.image_provenance(
         0, (0, 0, 0)
     )
@@ -1044,17 +1093,21 @@ def test_image_provenance_explicit_only_for_the_identity_image(ncs_context):
     )
 
 
-def test_image_provenance_rejects_a_negative_image_index(ncs_context):
+def test_image_provenance_rejects_a_negative_image_index(
+    ncs_context: sa.StructureContext,
+) -> None:
     with pytest.raises(ValueError, match="negative"):
         ncs_context.image_provenance(-1, (0, 0, 0))
 
 
-def test_image_provenance_rejects_an_image_beyond_the_ncs_blocks(ncs_context):
+def test_image_provenance_rejects_an_image_beyond_the_ncs_blocks(
+    ncs_context: sa.StructureContext,
+) -> None:
     with pytest.raises(ValueError, match="strict-NCS"):
         ncs_context.image_provenance(12, (0, 0, 0))
 
 
-def test_image_provenance_requires_symmetry_metadata(tmp_path):
+def test_image_provenance_requires_symmetry_metadata(tmp_path: Path) -> None:
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)], cell=None)
     context = sa.load_structure("test", builder.write_pdb(tmp_path / "nocell.pdb"))
 
@@ -1065,7 +1118,9 @@ def test_image_provenance_requires_symmetry_metadata(tmp_path):
         context.image_provenance(0, (0, 0, 0))
 
 
-def test_image_provenance_without_ncs_never_reports_a_strict_ncs_scope(tmp_path):
+def test_image_provenance_without_ncs_never_reports_a_strict_ncs_scope(
+    tmp_path: Path,
+) -> None:
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     context = sa.load_structure("test", builder.write_pdb(tmp_path / "noncs.pdb"))
 
@@ -1078,7 +1133,7 @@ def test_image_provenance_without_ncs_never_reports_a_strict_ncs_scope(tmp_path)
         context.image_provenance(context.crystallographic_operation_count, (0, 0, 0))
 
 
-def test_image_provenance_ncs_id_tracks_the_operation_block(tmp_path):
+def test_image_provenance_ncs_id_tracks_the_operation_block(tmp_path: Path) -> None:
     """The reported NCS identifier is the deposited MTRIX id, not an index."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     path = _write_pdb_with_ncs(
@@ -1091,7 +1146,7 @@ def test_image_provenance_ncs_id_tracks_the_operation_block(tmp_path):
     assert context.image_provenance(2 * operations, (0, 0, 0))[2] == "9"
 
 
-def test_load_structure_reads_mmcif_without_raw_pdb_matching(tmp_path):
+def test_load_structure_reads_mmcif_without_raw_pdb_matching(tmp_path: Path) -> None:
     """For mmCIF input the parser is authoritative; no raw-record join runs."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03), ("HOH", "O", 2.09)])
     context = sa.load_structure("test", builder.write_cif(tmp_path / "site.cif"))
@@ -1106,7 +1161,7 @@ def test_load_structure_reads_mmcif_without_raw_pdb_matching(tmp_path):
     )
 
 
-def test_mmcif_occupancy_out_of_range_still_disables_dpi(tmp_path):
+def test_mmcif_occupancy_out_of_range_still_disables_dpi(tmp_path: Path) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", occupancy=1.5)
     builder.add_water(101, (0.0, 2.09, 0.0), chain="B")
@@ -1119,7 +1174,7 @@ def test_mmcif_occupancy_out_of_range_still_disables_dpi(tmp_path):
     assert math.isnan(sa.count_deposited_ni(context))
 
 
-def test_context_indexes_only_contact_atoms_for_neighbor_marks(tmp_path):
+def test_context_indexes_only_contact_atoms_for_neighbor_marks(tmp_path: Path) -> None:
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
     builder.add_conformers(
@@ -1157,7 +1212,7 @@ def test_context_indexes_only_contact_atoms_for_neighbor_marks(tmp_path):
     )
 
 
-def test_context_residues_are_addressable_by_author_identity(tmp_path):
+def test_context_residues_are_addressable_by_author_identity(tmp_path: Path) -> None:
     """Author (name, chain, resnum) lookup is how EDSTATS rows find residues."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
@@ -1171,7 +1226,7 @@ def test_context_residues_are_addressable_by_author_identity(tmp_path):
     assert context.residue_for_atom(found[0].contact_atoms[0]) is found[0]
 
 
-def test_metal_atoms_uses_selected_conformers_by_default(tmp_path):
+def test_metal_atoms_uses_selected_conformers_by_default(tmp_path: Path) -> None:
     builder = StructureBuilder()
     metal = builder.add_metal("ZN", 1, chain="B")
     builder.add_conformers(metal, [("A", 0.4, {}), ("B", 0.6, {"ZN": (0.4, 0.0, 0.0)})])
@@ -1197,7 +1252,7 @@ def _oxygen_neighbors_of_the_metal(context: sa.StructureContext) -> List[str]:
     ]
 
 
-def test_neighbor_search_skips_zero_occupancy_atoms(tmp_path):
+def test_neighbor_search_skips_zero_occupancy_atoms(tmp_path: Path) -> None:
     """Zero occupancy counts for Ni but is not evidence for a contact.
 
     The full-occupancy control proves the search would otherwise find the water.
@@ -1222,8 +1277,8 @@ def test_neighbor_search_skips_zero_occupancy_atoms(tmp_path):
 
 @pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
 def test_neighbor_search_excludes_non_finite_coordinates(
-    tmp_path, monkeypatch, non_finite
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_finite: float
+) -> None:
     """Malformed coordinates remain auditable but never reach Gemmi's bins."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     path = builder.write_cif(tmp_path / "non_finite_donor.cif")
@@ -1236,7 +1291,7 @@ def test_neighbor_search_excludes_non_finite_coordinates(
         if atom.name == "NE2"
     )
     donor.pos = gemmi.Position(non_finite, donor.pos.y, donor.pos.z)
-    monkeypatch.setattr(sa.gemmi, "read_structure", lambda _path: parsed)
+    monkeypatch.setattr("structure_analysis.gemmi.read_structure", lambda _path: parsed)
 
     context = sa.load_structure("test", path)
     invalid = next(atom for atom in context.source_atoms if atom.atom_name == "NE2")
@@ -1253,7 +1308,7 @@ def test_neighbor_search_excludes_non_finite_coordinates(
     assert invalid not in found
 
 
-def test_neighbor_search_requires_symmetry_metadata_when_asked(tmp_path):
+def test_neighbor_search_requires_symmetry_metadata_when_asked(tmp_path: Path) -> None:
     """An image-inclusive search must fail loudly without a usable space group.
 
     mmCIF is used because the PDB writer substitutes ``P 1`` on CRYST1.

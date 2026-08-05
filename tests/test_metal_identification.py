@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from pathlib import Path
+from typing import Any, Callable, Iterable, Optional, Sequence, Union, cast
 
 import pytest
 
@@ -36,24 +38,31 @@ from metal_identification import (
     _zd_indices,
     extract_metal_statistics,
 )
-from structure_analysis import load_structure
+from structure_analysis import ResidueSelection, StructureContext, load_structure
 
 
 HEADER = list(helpers.EDSTATS_HEADER)
 INDICES = _validated_edstats_header(HEADER)
 
 
-def _normalize(fields):
+def _normalize(fields: Sequence[str]) -> list[str]:
     """``_normalize_edstats_row`` against the standard schema."""
     return _normalize_edstats_row(list(fields), HEADER, INDICES)
 
 
-def _validate(fields, line_number=2):
+def _validate(fields: Sequence[str], line_number: int = 2) -> int:
     """``_validate_edstats_row`` against the standard schema."""
     return _validate_edstats_row(list(fields), HEADER, INDICES, line_number)
 
 
-def _extract(stats_path, context, *, pdb_id="test", metals=None, cofactors=()):
+def _extract(
+    stats_path: Union[str, os.PathLike[str]],
+    context: StructureContext,
+    *,
+    pdb_id: str = "test",
+    metals: Optional[Iterable[str]] = None,
+    cofactors: Iterable[str] = (),
+) -> tuple[list[dict[str, Any]], list[str]]:
     """``extract_metal_statistics`` with the usual metal set and no cofactors."""
     return extract_metal_statistics(
         pdb_id,
@@ -64,7 +73,12 @@ def _extract(stats_path, context, *, pdb_id="test", metals=None, cofactors=()):
     )
 
 
-def _write_rows(tmp_path, rows, name="stats.out", **kwargs):
+def _write_rows(
+    tmp_path: Path,
+    rows: Sequence[Sequence[str]],
+    name: str = "stats.out",
+    **kwargs: Any,
+) -> str:
     return helpers.write_edstats(tmp_path / name, rows, **kwargs)
 
 
@@ -75,7 +89,13 @@ class _RemappedStructure:
     sequence number, so a genuine duplicate cannot be produced from a file.
     """
 
-    def __init__(self, context, author_key, residues, all_residues=None):
+    def __init__(
+        self,
+        context: StructureContext,
+        author_key: Sequence[str],
+        residues: Iterable[ResidueSelection],
+        all_residues: Optional[Iterable[ResidueSelection]] = None,
+    ) -> None:
         self._context = context
         self._author_key = tuple(author_key)
         self._residues = tuple(residues)
@@ -84,27 +104,29 @@ class _RemappedStructure:
         )
 
     @property
-    def model_analyzed(self):
+    def model_analyzed(self) -> int:
         return self._context.model_analyzed
 
     @property
-    def residues(self):
+    def residues(self) -> tuple[ResidueSelection, ...]:
         """Every coordinate residue, which is the ambiguous pair unless the
         caller needs unrelated residues in the model as well."""
         return self._all_residues
 
-    def residues_for_coordinate_author(self, residue_name, chain_id, resnum):
+    def residues_for_coordinate_author(
+        self, residue_name: str, chain_id: str, resnum: str
+    ) -> tuple[ResidueSelection, ...]:
         if (residue_name, chain_id, resnum) == self._author_key:
             return self._residues
         return self._context.residues_for_coordinate_author(
             residue_name, chain_id, resnum
         )
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._context, name)
 
 
-def test_valid_header_maps_every_documented_column_to_its_position():
+def test_valid_header_maps_every_documented_column_to_its_position() -> None:
     """The standard header validates and yields the schema's column indices."""
     indices = _validated_edstats_header(list(helpers.EDSTATS_HEADER))
 
@@ -121,7 +143,7 @@ def test_valid_header_maps_every_documented_column_to_its_position():
     assert (indices["MN"], indices["CP"], indices["NR"]) == (39, 40, 41)
 
 
-def _header_with(**changes):
+def _header_with(**changes: str) -> list[str]:
     fields = list(helpers.EDSTATS_HEADER)
     for name, replacement in changes.items():
         fields[fields.index(name)] = replacement
@@ -151,21 +173,23 @@ def _header_with(**changes):
         pytest.param([], "missing", id="empty"),
     ],
 )
-def test_header_deviations_from_the_fixed_schema_are_rejected(fields, fragment):
+def test_header_deviations_from_the_fixed_schema_are_rejected(
+    fields: Sequence[str], fragment: str
+) -> None:
     """Alchemy pins the EDSTATS schema; any deviation must fail loudly."""
     with pytest.raises(ValueError) as excinfo:
         _validated_edstats_header(list(fields))
     assert fragment in str(excinfo.value)
 
 
-def test_a_duplicate_column_is_reported_before_the_ordering_check():
+def test_a_duplicate_column_is_reported_before_the_ordering_check() -> None:
     """A repeated column is ambiguous, so it is named rather than reordered."""
     fields = _header_with(CP="RT")
     with pytest.raises(ValueError, match="duplicate columns: RT"):
         _validated_edstats_header(fields)
 
 
-def test_extract_rejects_a_reordered_header_file(tmp_path):
+def test_extract_rejects_a_reordered_header_file(tmp_path: Path) -> None:
     """A stats.out whose columns were shuffled fails the entry, not silently."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -177,7 +201,7 @@ def test_extract_rejects_a_reordered_header_file(tmp_path):
         _extract(stats, context)
 
 
-def test_a_wellformed_row_validates_and_returns_its_model_number():
+def test_a_wellformed_row_validates_and_returns_its_model_number() -> None:
     """Validation reports the row's MN so the caller can enforce model policy."""
     row = helpers.edstats_row("ZN", "B", "1", mn=3, metrics={"ZDm": -2.5})
     assert _validate(row) == 3
@@ -191,7 +215,9 @@ def test_a_wellformed_row_validates_and_returns_its_model_number():
         pytest.param(43, lambda row: row.append("0.0"), id="43-one-long"),
     ],
 )
-def test_row_width_must_match_the_header(width, mutate):
+def test_row_width_must_match_the_header(
+    width: int, mutate: Callable[[list[str]], object]
+) -> None:
     """Only the omitted trailing CP field is recoverable; other widths fail."""
     row = helpers.edstats_row("ZN", "B", "1")
     mutate(row)
@@ -206,7 +232,7 @@ def test_row_width_must_match_the_header(width, mutate):
 
 
 @pytest.mark.parametrize("null", ["n/a", "N/A", "N/a"])
-def test_the_documented_null_marker_is_accepted_for_every_metric(null):
+def test_the_documented_null_marker_is_accepted_for_every_metric(null: str) -> None:
     """``n/a`` is EDSTATS' null for an uncomputable statistic, case-blind."""
     row = helpers.edstats_row("ZN", "B", "1", default=null)
     assert _validate(row) == 1
@@ -214,7 +240,7 @@ def test_the_documented_null_marker_is_accepted_for_every_metric(null):
 
 
 @pytest.mark.parametrize("value", ["abc", "1.2.3", "--5", "n/a/", "2,5", "?"])
-def test_nonnumeric_statistics_are_rejected_and_name_the_column(value):
+def test_nonnumeric_statistics_are_rejected_and_name_the_column(value: str) -> None:
     """A metric that is neither a number nor ``n/a`` fails the entry."""
     row = helpers.edstats_row("ZN", "B", "1", metrics={"CCPa": value})
     with pytest.raises(ValueError) as excinfo:
@@ -226,7 +252,7 @@ def test_nonnumeric_statistics_are_rejected_and_name_the_column(value):
 
 
 @pytest.mark.parametrize("value", ["inf", "-inf", "nan", "NaN", "Infinity", "1e999"])
-def test_non_finite_statistics_are_rejected(value):
+def test_non_finite_statistics_are_rejected(value: str) -> None:
     """README: the table must contain *finite* numbers or the null marker."""
     row = helpers.edstats_row("ZN", "B", "1", metrics={"ZD-s": value})
     with pytest.raises(ValueError) as excinfo:
@@ -235,7 +261,7 @@ def test_non_finite_statistics_are_rejected(value):
 
 
 @pytest.mark.parametrize("metric", ["BAm", "ZOs", "ZD+a", "NPa"])
-def test_every_metric_column_is_checked_not_just_the_first(metric):
+def test_every_metric_column_is_checked_not_just_the_first(metric: str) -> None:
     """All 36 statistics are validated, main-chain, side-chain and all-atom."""
     row = helpers.edstats_row("ZN", "B", "1", metrics={metric: "oops"})
     with pytest.raises(ValueError) as excinfo:
@@ -244,7 +270,7 @@ def test_every_metric_column_is_checked_not_just_the_first(metric):
 
 
 @pytest.mark.parametrize("value", ["1.0", "x", "n/a", "-", ""])
-def test_a_model_number_that_is_not_an_integer_is_rejected(value):
+def test_a_model_number_that_is_not_an_integer_is_rejected(value: str) -> None:
     """MN selects the model; a float or marker cannot be silently truncated."""
     row = helpers.edstats_row("ZN", "B", "1")
     row[INDICES["MN"]] = value
@@ -253,7 +279,7 @@ def test_a_model_number_that_is_not_an_integer_is_rejected(value):
     assert "invalid EDSTATS MN model value on row 9" in str(excinfo.value)
 
 
-def test_rows_from_another_model_fail_the_entry(tmp_path):
+def test_rows_from_another_model_fail_the_entry(tmp_path: Path) -> None:
     """Alchemy analyses model 1 only; density from model 2 is never mixed in."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -279,7 +305,7 @@ def test_rows_from_another_model_fail_the_entry(tmp_path):
         pytest.param(["_"], id="bare-marker"),
     ],
 )
-def test_model_separator_rows_are_recognized(fields):
+def test_model_separator_rows_are_recognized(fields: Sequence[str]) -> None:
     """EDSTATS' synthetic MODEL row is skipped, in both captured shapes."""
     assert _is_edstats_separator(list(fields))
 
@@ -302,12 +328,14 @@ def test_model_separator_rows_are_recognized(fields):
         pytest.param([], "an empty field list"),
     ],
 )
-def test_rows_that_only_resemble_a_separator_are_left_to_validation(fields, why):
+def test_rows_that_only_resemble_a_separator_are_left_to_validation(
+    fields: Sequence[str], why: str
+) -> None:
     """Recognition is semantic, so malformed rows still reach row validation."""
     assert not _is_edstats_separator(list(fields)), why
 
 
-def test_extract_skips_separator_rows_without_counting_them(tmp_path):
+def test_extract_skips_separator_rows_without_counting_them(tmp_path: Path) -> None:
     """A MODEL separator contributes no residue and no density observation."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -327,7 +355,7 @@ def test_extract_skips_separator_rows_without_counting_them(tmp_path):
     assert [row["resname"] for row in rows] == ["ZN"]
 
 
-def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path):
+def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path: Path) -> None:
     """Separator-only output is not a successful parse of zero metals."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -344,7 +372,9 @@ def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path):
         pytest.param("_", "non-water residue with no chain identifier"),
     ],
 )
-def test_omitted_trailing_chain_field_is_restored_whatever_ci_says(ci, kind):
+def test_omitted_trailing_chain_field_is_restored_whatever_ci_says(
+    ci: str, kind: str
+) -> None:
     """Restoration keys on the row shape, never on CI.
 
     EDSTATS reports every ordered water as chain ``0`` regardless of its real
@@ -366,7 +396,7 @@ def test_omitted_trailing_chain_field_is_restored_whatever_ci_says(ci, kind):
 
 
 @pytest.mark.parametrize("marker", ["", ".", "?", "_"])
-def test_missing_chain_markers_normalize_to_blank(marker):
+def test_missing_chain_markers_normalize_to_blank(marker: str) -> None:
     """The several missing-chain spellings collapse to one canonical blank."""
     row = helpers.edstats_row("ZN", marker or "_", "1", cp=marker)
     row[INDICES["CI"]] = marker
@@ -375,7 +405,7 @@ def test_missing_chain_markers_normalize_to_blank(marker):
     assert normalized[INDICES["CP"]] == ""
 
 
-def test_a_water_group_label_is_not_mistaken_for_a_chain_marker():
+def test_a_water_group_label_is_not_mistaken_for_a_chain_marker() -> None:
     """CI ``0`` is EDSTATS' water group label and stays as reported."""
     row = helpers.edstats_row("HOH", "0", "101", cp="A")
     normalized = _normalize(row)
@@ -383,13 +413,13 @@ def test_a_water_group_label_is_not_mistaken_for_a_chain_marker():
     assert normalized[INDICES["CP"]] == "A"
 
 
-def test_a_complete_row_is_passed_through_untouched():
+def test_a_complete_row_is_passed_through_untouched() -> None:
     """The 42-field form must not be rewritten by the restoration path."""
     row = helpers.edstats_row("ZN", "B", "1", cp="B", nr=4, metrics={"ZDm": 2.5})
     assert _normalize(row) == row
 
 
-def test_a_short_row_that_is_not_the_blank_chain_shape_stays_short():
+def test_a_short_row_that_is_not_the_blank_chain_shape_stays_short() -> None:
     """Only the unambiguous CP-omitted shape is restored; other losses fail."""
     row = helpers.edstats_row("ZN", "B", "1")
     row.pop(3)  # drop an interior metric instead of the trailing chain
@@ -402,7 +432,7 @@ def test_a_short_row_that_is_not_the_blank_chain_shape_stays_short():
         _validate(normalized)
 
 
-def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path):
+def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path: Path) -> None:
     """A chain-less entry must not fail on its waters.
 
     Every row of a blank-chain coordinate file arrives with 41 fields; the
@@ -440,7 +470,7 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path):
     assert rows[0]["density_observation_id"].count("chain=_") == 1
 
 
-def test_density_observation_id_names_the_edstats_row_not_an_atom():
+def test_density_observation_id_names_the_edstats_row_not_an_atom() -> None:
     """The identifier is residue-level and case-normalized on the entry id."""
     fields = _normalize(helpers.edstats_row("FES", "B", "5", mn=1, nr=12))
     observation = _density_observation_id("1ABC", fields, INDICES)
@@ -451,7 +481,7 @@ def test_density_observation_id_names_the_edstats_row_not_an_atom():
     assert observation == _density_observation_id("1ABC", fields, INDICES)
 
 
-def test_density_observation_id_distinguishes_repeated_author_identifiers():
+def test_density_observation_id_distinguishes_repeated_author_identifiers() -> None:
     """NR disambiguates two EDSTATS rows with the same author residue id."""
     first = _normalize(helpers.edstats_row("ZN", "B", "1", nr=1))
     second = _normalize(helpers.edstats_row("ZN", "B", "1", nr=2))
@@ -460,7 +490,7 @@ def test_density_observation_id_distinguishes_repeated_author_identifiers():
     )
 
 
-def test_density_observation_id_renders_a_blank_chain_explicitly():
+def test_density_observation_id_renders_a_blank_chain_explicitly() -> None:
     """A blank chain becomes ``_`` so the identifier keeps six labelled parts."""
     fields = _normalize(helpers.edstats_row("ZN", "_", "1", omit_cp=True))
     observation = _density_observation_id("test", fields, INDICES)
@@ -468,7 +498,7 @@ def test_density_observation_id_renders_a_blank_chain_explicitly():
     assert len(observation.split("/")) == 6
 
 
-def test_distinct_metal_residues_get_distinct_observation_ids(tmp_path):
+def test_distinct_metal_residues_get_distinct_observation_ids(tmp_path: Path) -> None:
     """Two separate ions are two density observations, neither one shared."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -485,7 +515,9 @@ def test_distinct_metal_residues_get_distinct_observation_ids(tmp_path):
     assert not any(row["density_is_shared"] for row in rows)
 
 
-def test_shared_cofactor_repeats_one_observation_once_per_metal_site(tmp_path):
+def test_shared_cofactor_repeats_one_observation_once_per_metal_site(
+    tmp_path: Path,
+) -> None:
     """A 2Fe cluster emits two site rows over a single density observation."""
     builder = StructureBuilder()
     builder.add_hetero_residue(
@@ -519,7 +551,9 @@ def test_shared_cofactor_repeats_one_observation_once_per_metal_site(tmp_path):
 
 
 @pytest.fixture(scope="module")
-def classification_context(tmp_path_factory):
+def classification_context(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> StructureContext:
     """One structure holding every classification case, loaded once."""
     directory = tmp_path_factory.mktemp("classify")
     builder = StructureBuilder()
@@ -579,8 +613,12 @@ def classification_context(tmp_path_factory):
     ],
 )
 def test_residue_classification(
-    classification_context, resname, cofactors, category, site_count
-):
+    classification_context: StructureContext,
+    resname: str,
+    cofactors: set[str],
+    category: str,
+    site_count: int,
+) -> None:
     """Category follows the atoms' elements and the catalog, not the CCD id."""
     residue = next(
         r for r in classification_context.residues if r.residue_name == resname
@@ -594,14 +632,18 @@ def test_residue_classification(
     assert all(site.element in metals for site in metal_sites)
 
 
-def test_an_element_outside_the_configured_set_is_not_a_metal(classification_context):
+def test_an_element_outside_the_configured_set_is_not_a_metal(
+    classification_context: StructureContext,
+) -> None:
     """Classification is driven by the caller's metal set, not a fixed list."""
     residue = next(r for r in classification_context.residues if r.residue_name == "ZN")
     assert _classify_residue(residue, {"CU"}, set()) == ("", [])
     assert _classify_residue(residue, {"ZN"}, set())[0] == "metal"
 
 
-def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(tmp_path):
+def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(
+    tmp_path: Path,
+) -> None:
     """Alternate conformers of one ion are one chemical atom site, so a metal."""
     builder = StructureBuilder()
     zinc = builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -619,7 +661,7 @@ def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(tmp_path):
     assert [site.altloc for site in sites] == ["B"]
 
 
-def _alternate_fes_context(tmp_path):
+def _alternate_fes_context(tmp_path: Path) -> StructureContext:
     builder = StructureBuilder()
     residue = builder.add_hetero_residue(
         "FES",
@@ -640,7 +682,7 @@ def _alternate_fes_context(tmp_path):
     return load_structure("test", builder.write_pdb(tmp_path / "alternate_fes.pdb"))
 
 
-def test_usealt_density_follows_the_selected_residue_conformer(tmp_path):
+def test_usealt_density_follows_the_selected_residue_conformer(tmp_path: Path) -> None:
     """A discarded altloc cannot contribute density to the selected metal."""
     context = _alternate_fes_context(tmp_path)
     residue = context.residues[0]
@@ -661,7 +703,9 @@ def test_usealt_density_follows_the_selected_residue_conformer(tmp_path):
     assert rows[0]["fields"][header.index("ZDm")] == "1.6"
 
 
-def test_missing_selected_usealt_row_is_incomplete_density_output(tmp_path):
+def test_missing_selected_usealt_row_is_incomplete_density_output(
+    tmp_path: Path,
+) -> None:
     context = _alternate_fes_context(tmp_path)
     stats = _write_rows(
         tmp_path,
@@ -672,7 +716,9 @@ def test_missing_selected_usealt_row_is_incomplete_density_output(tmp_path):
         _extract(stats, context, cofactors={"FES"})
 
 
-def test_pooled_edstats_row_is_rejected_for_an_alternate_residue(tmp_path):
+def test_pooled_edstats_row_is_rejected_for_an_alternate_residue(
+    tmp_path: Path,
+) -> None:
     context = _alternate_fes_context(tmp_path)
     stats = _write_rows(
         tmp_path,
@@ -683,7 +729,7 @@ def test_pooled_edstats_row_is_rejected_for_an_alternate_residue(tmp_path):
         _extract(stats, context, cofactors={"FES"})
 
 
-def test_zero_occupancy_ion_is_not_a_selected_density_site(tmp_path):
+def test_zero_occupancy_ion_is_not_a_selected_density_site(tmp_path: Path) -> None:
     """A deposited zero contributes no metal-site density evidence."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", occupancy=0.0)
@@ -694,7 +740,7 @@ def test_zero_occupancy_ion_is_not_a_selected_density_site(tmp_path):
     assert _expected_edstats_residues(context, {"ZN"}, set()) == {}
 
 
-def test_only_metal_and_cofactor_residues_produce_rows(tmp_path):
+def test_only_metal_and_cofactor_residues_produce_rows(tmp_path: Path) -> None:
     """Donor residues and waters are density-scored but never emitted."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -726,7 +772,7 @@ def test_only_metal_and_cofactor_residues_produce_rows(tmp_path):
     assert row["site_key"] == residue.contact_atoms[0].source_key
 
 
-def test_null_statistics_reach_the_emitted_row_unchanged(tmp_path):
+def test_null_statistics_reach_the_emitted_row_unchanged(tmp_path: Path) -> None:
     """An uncomputable statistic stays ``n/a`` instead of becoming a number."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -743,7 +789,7 @@ def test_null_statistics_reach_the_emitted_row_unchanged(tmp_path):
     assert set(metrics.values()) == {"n/a"}
 
 
-def test_the_metal_element_set_is_matched_case_insensitively(tmp_path):
+def test_the_metal_element_set_is_matched_case_insensitively(tmp_path: Path) -> None:
     """Callers may pass lower-case element symbols; matching upper-cases them."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -753,7 +799,7 @@ def test_the_metal_element_set_is_matched_case_insensitively(tmp_path):
     assert [row["resname"] for row in rows] == ["ZN"]
 
 
-def test_an_entry_with_no_configured_metal_yields_no_rows(tmp_path):
+def test_an_entry_with_no_configured_metal_yields_no_rows(tmp_path: Path) -> None:
     """Zero metal sites is a valid, complete parse -- not an error."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -764,7 +810,9 @@ def test_an_entry_with_no_configured_metal_yields_no_rows(tmp_path):
     assert header == list(helpers.EDSTATS_HEADER)
 
 
-def test_a_cofactor_without_a_selected_metal_keeps_one_diagnostic_row(tmp_path):
+def test_a_cofactor_without_a_selected_metal_keeps_one_diagnostic_row(
+    tmp_path: Path,
+) -> None:
     """The residue-level observation survives, flagged as siteless."""
     builder = StructureBuilder()
     builder.add_hetero_residue(
@@ -793,7 +841,9 @@ def test_a_cofactor_without_a_selected_metal_keeps_one_diagnostic_row(tmp_path):
     assert row["residue_key"] == context.residues[0].key
 
 
-def test_a_cofactor_row_with_no_coordinate_residue_reports_a_join_failure(tmp_path):
+def test_a_cofactor_row_with_no_coordinate_residue_reports_a_join_failure(
+    tmp_path: Path,
+) -> None:
     """A row Alchemy cannot map is kept, but never claims a site."""
     path = simple_metal_site("ZN", [("HIS", "NE2", 2.03)]).write_pdb(
         tmp_path / "site.pdb"
@@ -819,7 +869,7 @@ def test_a_cofactor_row_with_no_coordinate_residue_reports_a_join_failure(tmp_pa
     assert phantom["density_shared_site_count"] == 0
 
 
-def _repeated_coordinate_identity(context):
+def _repeated_coordinate_identity(context: StructureContext) -> StructureContext:
     first, second = context.residues
     second = replace(
         second,
@@ -828,10 +878,16 @@ def _repeated_coordinate_identity(context):
         coordinate_residue_number=1,
         coordinate_resnum="1",
     )
-    return _RemappedStructure(context, ("ZN", "B", "1"), (first, second))
+    # The proxy is a stand-in for the context the parser is handed; the cast is
+    # the only way to say so, since no real StructureContext can carry the
+    # duplicated author key this exercises.
+    return cast(
+        StructureContext,
+        _RemappedStructure(context, ("ZN", "B", "1"), (first, second)),
+    )
 
 
-def test_nr_maps_repeated_author_rows_one_to_one(tmp_path):
+def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
     """Two observations and two residues produce two rows, never four."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -893,7 +949,9 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path):
     )
 
 
-def test_repeated_author_identity_completeness_keeps_multiplicity(tmp_path):
+def test_repeated_author_identity_completeness_keeps_multiplicity(
+    tmp_path: Path,
+) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     builder.add_metal("ZN", 1, chain="C", pos=(12.0, 0.0, 0.0))
@@ -906,7 +964,7 @@ def test_repeated_author_identity_completeness_keeps_multiplicity(tmp_path):
         _extract(stats, duplicated)
 
 
-def test_nr_must_resolve_an_ambiguous_author_identity(tmp_path):
+def test_nr_must_resolve_an_ambiguous_author_identity(tmp_path: Path) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     builder.add_metal("ZN", 1, chain="C", pos=(12.0, 0.0, 0.0))
@@ -920,7 +978,7 @@ def test_nr_must_resolve_an_ambiguous_author_identity(tmp_path):
 
 
 @pytest.mark.parametrize("nr", ["0", "-1", "not-a-number"])
-def test_nr_must_be_a_positive_integer(tmp_path, nr):
+def test_nr_must_be_a_positive_integer(tmp_path: Path, nr: str) -> None:
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
     path = builder.write_pdb(tmp_path / "site.pdb")
@@ -933,7 +991,9 @@ def test_nr_must_be_a_positive_integer(tmp_path, nr):
         _extract(stats, context)
 
 
-def test_nr_restarting_per_chain_is_the_normal_case_not_a_duplicate(tmp_path):
+def test_nr_restarting_per_chain_is_the_normal_case_not_a_duplicate(
+    tmp_path: Path,
+) -> None:
     """EDSTATS numbers NR within each chain, so every chain begins again at 1.
 
     Reading NR as an ordinal over the whole model made the first row of the
@@ -962,7 +1022,7 @@ def test_nr_restarting_per_chain_is_the_normal_case_not_a_duplicate(tmp_path):
     assert len({row["density_observation_id"] for row in rows}) == 2
 
 
-def test_nr_is_resolved_within_its_own_chain(tmp_path):
+def test_nr_is_resolved_within_its_own_chain(tmp_path: Path) -> None:
     """A repeated author identity resolves by position in its chain.
 
     Chain B's rows restart at NR 1, so indexing a model-wide residue list would
@@ -983,11 +1043,15 @@ def test_nr_is_resolved_within_its_own_chain(tmp_path):
         coordinate_residue_number=1,
         coordinate_resnum="1",
     )
-    duplicated = _RemappedStructure(
-        context,
-        ("MG", "B", "1"),
-        (second, third),
-        all_residues=(first, second, third),
+    # See _repeated_coordinate_identity for why the proxy has to be cast.
+    duplicated = cast(
+        StructureContext,
+        _RemappedStructure(
+            context,
+            ("MG", "B", "1"),
+            (second, third),
+            all_residues=(first, second, third),
+        ),
     )
 
     stats = _write_rows(
@@ -1005,7 +1069,9 @@ def test_nr_is_resolved_within_its_own_chain(tmp_path):
     assert len({row["density_observation_id"] for row in rows}) == 3
 
 
-def test_duplicate_nr_fails_instead_of_reusing_a_coordinate_residue(tmp_path):
+def test_duplicate_nr_fails_instead_of_reusing_a_coordinate_residue(
+    tmp_path: Path,
+) -> None:
     """Within one chain NR must still be unique; both rows here are chain B."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
@@ -1024,7 +1090,9 @@ def test_duplicate_nr_fails_instead_of_reusing_a_coordinate_residue(tmp_path):
         _extract(stats, context)
 
 
-def test_insertion_coded_residue_ids_join_after_canonicalization(tmp_path):
+def test_insertion_coded_residue_ids_join_after_canonicalization(
+    tmp_path: Path,
+) -> None:
     """EDSTATS writes ``10:A``; Alchemy joins it to the author id ``10A``."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 10, chain="B", pos=(0.0, 0.0, 0.0), icode="A")
@@ -1041,7 +1109,9 @@ def test_insertion_coded_residue_ids_join_after_canonicalization(tmp_path):
 
 
 @pytest.mark.parametrize("residue_id", ["1:AB", "12345A", "10*", "-"])
-def test_an_undecodable_residue_identifier_fails_the_entry(tmp_path, residue_id):
+def test_an_undecodable_residue_identifier_fails_the_entry(
+    tmp_path: Path, residue_id: str
+) -> None:
     """A residue number Alchemy cannot decode must not silently drop the row."""
     path = simple_metal_site("ZN", [("HIS", "NE2", 2.03)]).write_pdb(
         tmp_path / "site.pdb"
@@ -1056,7 +1126,7 @@ def test_an_undecodable_residue_identifier_fails_the_entry(tmp_path, residue_id)
     assert "invalid EDSTATS RN residue identifier" in str(excinfo.value)
 
 
-def test_a_missing_metal_residue_fails_the_entry(tmp_path):
+def test_a_missing_metal_residue_fails_the_entry(tmp_path: Path) -> None:
     """Incomplete EDSTATS output fails rather than under-reporting metals."""
     path = simple_metal_site("ZN", [("HOH", "O", 2.09)]).write_pdb(
         tmp_path / "site.pdb"
@@ -1075,7 +1145,7 @@ def test_a_missing_metal_residue_fails_the_entry(tmp_path):
     assert "ZN/B/1" in message
 
 
-def test_a_missing_cofactor_residue_also_fails_the_entry(tmp_path):
+def test_a_missing_cofactor_residue_also_fails_the_entry(tmp_path: Path) -> None:
     """The completeness demand covers exactly the rows Alchemy would emit."""
     builder = StructureBuilder()
     builder.add_hetero_residue(
@@ -1111,7 +1181,9 @@ def test_a_missing_cofactor_residue_also_fails_the_entry(tmp_path):
         ),
     ],
 )
-def test_unusable_edstats_output_fails_the_entry(tmp_path, content, fragment):
+def test_unusable_edstats_output_fails_the_entry(
+    tmp_path: Path, content: str, fragment: str
+) -> None:
     """Empty output is a failure, never an entry with zero metal sites."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -1122,7 +1194,7 @@ def test_unusable_edstats_output_fails_the_entry(tmp_path, content, fragment):
         _extract(stats, context)
 
 
-def test_blank_lines_between_rows_are_ignored(tmp_path):
+def test_blank_lines_between_rows_are_ignored(tmp_path: Path) -> None:
     """Stray blank lines in the table are not rows and must not fail the parse."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)
@@ -1136,7 +1208,7 @@ def test_blank_lines_between_rows_are_ignored(tmp_path):
     assert [row["resname"] for row in rows] == ["ZN"]
 
 
-def test_a_structure_is_required_for_identification(tmp_path):
+def test_a_structure_is_required_for_identification(tmp_path: Path) -> None:
     """Element-based identification cannot run against the table alone."""
     stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "1")])
     with pytest.raises(TypeError, match="structure"):
@@ -1146,7 +1218,7 @@ def test_a_structure_is_required_for_identification(tmp_path):
         )
 
 
-def test_parsing_leaves_no_files_behind(tmp_path):
+def test_parsing_leaves_no_files_behind(tmp_path: Path) -> None:
     """The parser only reads; it writes nothing next to its input."""
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
     context = load_structure("test", path)

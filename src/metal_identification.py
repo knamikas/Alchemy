@@ -6,9 +6,15 @@ line is the column header.
 
 import math
 from collections import Counter
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from structure_analysis import NAN, canonical_pdb_residue_id
+from structure_analysis import (
+    NAN,
+    AtomSite,
+    ResidueSelection,
+    StructureContext,
+    canonical_pdb_residue_id,
+)
 
 
 # EDSTATS 1.0.9's standard residue-table schema, whose twelve metrics repeat
@@ -46,7 +52,7 @@ EDSTATS_NULL_VALUE = "n/a"
 EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
 
 
-def _is_edstats_separator(fields):
+def _is_edstats_separator(fields: list[str]) -> bool:
     """Whether split fields are EDSTATS' synthetic model separator row.
 
     For a MODEL/ENDMDL-wrapped XYZIN, EDSTATS 1.0.9 emits a row whose residue
@@ -69,7 +75,9 @@ def _is_edstats_separator(fields):
     )
 
 
-def _normalize_edstats_row(fields, header, indices):
+def _normalize_edstats_row(
+    fields: Sequence[str], header: Sequence[str], indices: Mapping[str, int]
+) -> list[str]:
     """Restore and normalize EDSTATS' valid blank-chain representation.
 
     EDSTATS leaves the trailing chain field (CP) empty for a blank-chain
@@ -104,7 +112,7 @@ def _normalize_edstats_row(fields, header, indices):
     return normalized
 
 
-def _edstats_chain_and_altloc(value, line_number):
+def _edstats_chain_and_altloc(value: str, line_number: int) -> tuple[str, str]:
     """Split EDSTATS' USEALT chain label into deposited chain and altloc.
 
     With ``USEALT=true``, EDSTATS 1.0.9 writes ``CI`` as ``<chain>:<altloc>``
@@ -129,8 +137,12 @@ def _edstats_chain_and_altloc(value, line_number):
 
 
 def _row_matches_selected_altloc(
-    row_altloc, matched_residues, chain_residues, row_number, line_number
-):
+    row_altloc: str,
+    matched_residues: Sequence[ResidueSelection],
+    chain_residues: Sequence[ResidueSelection],
+    row_number: int,
+    line_number: int,
+) -> bool:
     """Whether one USEALT row is the conformer selected by Alchemy.
 
     Author identifiers normally provide the residue.  The chain-local EDSTATS
@@ -168,7 +180,7 @@ def _row_matches_selected_altloc(
     return True
 
 
-def _validated_edstats_header(fields):
+def _validated_edstats_header(fields: Sequence[str]) -> dict[str, int]:
     """Return column indices after validating the standard EDSTATS schema."""
     duplicates = sorted({name for name in fields if fields.count(name) > 1})
     if duplicates:
@@ -191,7 +203,12 @@ def _validated_edstats_header(fields):
     return {name: index for index, name in enumerate(fields)}
 
 
-def _validate_edstats_row(fields, header, indices, line_number):
+def _validate_edstats_row(
+    fields: Sequence[str],
+    header: Sequence[str],
+    indices: Mapping[str, int],
+    line_number: int,
+) -> int:
     """Validate one residue row and return its model number."""
     if len(fields) != len(header):
         raise ValueError(
@@ -223,7 +240,9 @@ def _validate_edstats_row(fields, header, indices, line_number):
         ) from exc
 
 
-def _classify_residue(residue, metals_upper, cofactor_set):
+def _classify_residue(
+    residue: ResidueSelection, metals_upper: set[str], cofactor_set: Iterable[str]
+) -> tuple[str, list[AtomSite]]:
     """Return ``(category, metal_sites)`` for one coordinate residue.
 
     ``category`` is ``"cofactor"``, ``"metal"``, or ``""`` when the residue is
@@ -245,7 +264,9 @@ def _classify_residue(residue, metals_upper, cofactor_set):
     return "", metal_sites
 
 
-def _expected_edstats_residues(structure, metals_upper, cofactor_set):
+def _expected_edstats_residues(
+    structure: StructureContext, metals_upper: set[str], cofactor_set: Iterable[str]
+) -> Counter[tuple[str, str, str]]:
     """Coordinate residue-key multiplicities Alchemy expects EDSTATS to report."""
     return Counter(
         residue.coordinate_author_key
@@ -254,7 +275,9 @@ def _expected_edstats_residues(structure, metals_upper, cofactor_set):
     )
 
 
-def _validated_edstats_row_number(fields, indices, line_number):
+def _validated_edstats_row_number(
+    fields: Sequence[str], indices: Mapping[str, int], line_number: int
+) -> int:
     """Return EDSTATS' one-based residue ordinal within the row's chain part."""
     value = fields[indices["NR"]]
     try:
@@ -270,7 +293,9 @@ def _validated_edstats_row_number(fields, indices, line_number):
     return row_number
 
 
-def _coordinate_residues_by_chain_part(structure):
+def _coordinate_residues_by_chain_part(
+    structure: StructureContext,
+) -> dict[str, tuple[ResidueSelection, ...]]:
     """Group coordinate residues by deposited chain, keeping coordinate order.
 
     EDSTATS restarts NR at 1 for each chain part it reports, so the ordinal
@@ -278,15 +303,19 @@ def _coordinate_residues_by_chain_part(structure):
     and is the field that matches ``coordinate_author_key``; CI cannot be used
     here because EDSTATS reports it as ``0`` for ordered waters.
     """
-    grouped: dict[str, list] = {}
+    grouped: dict[str, list[ResidueSelection]] = {}
     for residue in structure.residues:
         grouped.setdefault(residue.coordinate_author_key[1], []).append(residue)
     return {chain: tuple(residues) for chain, residues in grouped.items()}
 
 
 def _resolve_coordinate_residues(
-    chain_residues, matched_residues, row_number, line_number, coordinate_key
-):
+    chain_residues: Sequence[ResidueSelection],
+    matched_residues: tuple[ResidueSelection, ...],
+    row_number: int,
+    line_number: int,
+    coordinate_key: tuple[str, str, str],
+) -> tuple[ResidueSelection, ...]:
     """Use NR to reduce a repeated author identity to one coordinate residue.
 
     ``chain_residues`` are the coordinate residues of the row's own chain part,
@@ -312,7 +341,9 @@ def _resolve_coordinate_residues(
     )
 
 
-def _density_observation_id(pdb_id, fields, indices):
+def _density_observation_id(
+    pdb_id: str, fields: Sequence[str], indices: Mapping[str, int]
+) -> str:
     """Return a stable identifier for one residue-level EDSTATS observation.
 
     EDSTATS reports one observation per coordinate residue, which Alchemy can
@@ -335,17 +366,17 @@ def _density_observation_id(pdb_id, fields, indices):
 
 
 def _density_row(
-    pdb_id,
-    fields,
-    indices,
-    mapping_status,
+    pdb_id: str,
+    fields: Sequence[str],
+    indices: Mapping[str, int],
+    mapping_status: str,
     *,
-    category,
-    resname,
-    site,
-    residue_key,
-    shared_site_count,
-):
+    category: str,
+    resname: str,
+    site: Optional[AtomSite],
+    residue_key: Optional[tuple[int, int, int]],
+    shared_site_count: int,
+) -> dict[str, Any]:
     """Build one site-level row from an extracted EDSTATS residue row.
 
     ``site`` is ``None`` for a cofactor residue with no selected metal site,
@@ -379,7 +410,7 @@ def extract_metal_statistics(
     stats_out: str,
     metals_set: Iterable[str],
     cofactor_set: Iterable[str],
-    structure: Any,
+    structure: StructureContext,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Parse an EDSTATS ``stats.out``, returning ``(rows, header)``.
 
@@ -401,7 +432,7 @@ def extract_metal_statistics(
 
     metals_upper = {element.upper() for element in metals_set}
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     schema: Optional[tuple[list[str], dict[str, int]]] = None
     residue_row_count = 0
     observed_residues: Counter[tuple[str, str, str]] = Counter()
@@ -495,8 +526,8 @@ def extract_metal_statistics(
                 residue_observations[residue_key] = (chain_part, row_number)
 
             coordinate_name_is_cofactor = coordinate_resname in cofactor_set
-            matched_cofactor_names = []
-            selected_sites = []
+            matched_cofactor_names: list[str] = []
+            selected_sites: list[tuple[ResidueSelection, str, str, AtomSite]] = []
             for residue in matched_residues:
                 resname = residue.residue_name
                 category, metal_sites = _classify_residue(
@@ -595,11 +626,13 @@ def extract_metal_statistics(
 # The density-sigma join reads Z-difference metrics back out of an extracted
 # EDSTATS row, so it lives beside ``EDSTATS_COLUMNS``: a column-order change
 # breaks both.
-def _sigma_index(stats_rows):
+def _sigma_index(
+    stats_rows: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[tuple[Any, ...], Sequence[str]]]:
     """Index EDSTATS fields by site, with an unambiguous author-key fallback."""
-    by_site = {}
-    by_author = {}
-    ambiguous_authors = set()
+    by_site: dict[tuple[Any, ...], Sequence[str]] = {}
+    by_author: dict[tuple[Any, ...], Sequence[str]] = {}
+    ambiguous_authors: set[tuple[Any, ...]] = set()
     for row in stats_rows:
         fields = row["fields"]
         site_key = row.get("site_key")
@@ -618,7 +651,7 @@ def _sigma_index(stats_rows):
 ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
 
 
-def _zd_indices(header):
+def _zd_indices(header: Optional[Sequence[str]]) -> Optional[tuple[int, ...]]:
     """Return column indices for ZDm/ZD-m/ZD+m, or ``None`` if any is absent."""
     if not header:
         return None
@@ -628,8 +661,15 @@ def _zd_indices(header):
         return None
 
 
-def _sigma_for(sig, resname, chain, resnum, zd_idx, site_key=None):
-    fields = None
+def _sigma_for(
+    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]],
+    resname: str,
+    chain: str,
+    resnum: str,
+    zd_idx: Optional[Sequence[int]],
+    site_key: Optional[Sequence[Any]] = None,
+) -> tuple[float, float, float]:
+    fields: Optional[Sequence[str]] = None
     if site_key is not None:
         fields = sig["by_site"].get(tuple(site_key))
     if fields is None:

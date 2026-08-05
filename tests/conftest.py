@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable, Generator, Union
 
+import pluggy
 import pytest
 
 
@@ -29,7 +31,7 @@ import helpers  # noqa: E402  (needs the sys.path entries above)
 MINIMUM_GEMMI = (0, 7)
 
 
-def _gemmi_version_string():
+def _gemmi_version_string() -> str:
     """gemmi's reported version.
 
     Read through ``getattr``: gemmi ships ``py.typed`` but its stubs omit
@@ -38,15 +40,15 @@ def _gemmi_version_string():
     return str(getattr(gemmi, "__version__", "unknown"))
 
 
-def _gemmi_version():
-    parts = []
+def _gemmi_version() -> tuple[int, ...]:
+    parts: list[int] = []
     for field in _gemmi_version_string().split(".")[:2]:
         digits = "".join(c for c in field if c.isdigit())
         parts.append(int(digits) if digits else 0)
     return tuple(parts)
 
 
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config) -> None:
     """Fail fast, and legibly, on a gemmi too old for ``src`` to run against."""
     version = _gemmi_version()
     if version < MINIMUM_GEMMI:
@@ -68,17 +70,21 @@ def pytest_configure(config):
         if disabled:
             os.environ[f"ALCHEMY_TESTS_NO_{name.upper()}"] = "1"
 
-    config._alchemy_required_capabilities = tuple(
+    # Capability bookkeeping rides on the ``Config`` object for the rest of the
+    # session; pytest types no slot for plugin state, so it is reached here, and
+    # in the hooks below, through a deliberately untyped alias.
+    state: Any = config
+    state._alchemy_required_capabilities = tuple(
         name for name in ("ccp4", "network") if config.getoption(f"--require-{name}")
     )
     if config.getoption("--require-entry-data"):
-        config._alchemy_required_capabilities += ("entry_data",)
-    config._alchemy_capability_tests_ran = {
-        name: False for name in config._alchemy_required_capabilities
+        state._alchemy_required_capabilities += ("entry_data",)
+    state._alchemy_capability_tests_ran = {
+        name: False for name in state._alchemy_required_capabilities
     }
 
 
-def pytest_addoption(parser):
+def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("alchemy")
     group.addoption(
         "--skip-slow",
@@ -128,7 +134,9 @@ def pytest_addoption(parser):
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(config, items):
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
     """Skip marked tests whose external requirement is not satisfied.
 
     Must run after pytest's ``-m``/``-k`` selection: a deselected network test
@@ -143,7 +151,7 @@ def pytest_collection_modifyitems(config, items):
         ),
         "network": (helpers.network_available, "no network access to pdb-redo.eu"),
     }
-    results = {}
+    results: dict[str, tuple[bool, str]] = {}
     for name, (probe, reason) in probes.items():
         if any(item.get_closest_marker(name) for item in items):
             available = probe()
@@ -160,9 +168,10 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.skip(reason="--skip-slow"))
 
 
-def pytest_collection_finish(session):
+def pytest_collection_finish(session: pytest.Session) -> None:
     """Reject a strict capability lane that selected no matching tests."""
-    required = session.config._alchemy_required_capabilities
+    state: Any = session.config
+    required: tuple[str, ...] = state._alchemy_required_capabilities
     for name in required:
         if not any(item.get_closest_marker(name) for item in session.items):
             label = name.replace("_", "-")
@@ -172,27 +181,30 @@ def pytest_collection_finish(session):
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(item, call):
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pluggy.Result[pytest.TestReport], None]:
     """Remember whether a strict lane reached a non-skipped test call."""
     outcome = yield
     report = outcome.get_result()
     if report.when != "call" or report.skipped:
         return
-    ran = item.config._alchemy_capability_tests_ran
+    state: Any = item.config
+    ran: dict[str, bool] = state._alchemy_capability_tests_ran
     for name in ran:
         if item.get_closest_marker(name):
             ran[name] = True
 
 
-def pytest_sessionfinish(session, exitstatus):
+def pytest_sessionfinish(
+    session: pytest.Session, exitstatus: Union[int, pytest.ExitCode]
+) -> None:
     """Make an all-skipped strict capability lane fail at process level."""
     if exitstatus != pytest.ExitCode.OK or session.config.getoption("collectonly"):
         return
-    missing = [
-        name
-        for name, ran in session.config._alchemy_capability_tests_ran.items()
-        if not ran
-    ]
+    state: Any = session.config
+    tests_ran: dict[str, bool] = state._alchemy_capability_tests_ran
+    missing = [name for name, ran in tests_ran.items() if not ran]
     if not missing:
         return
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
@@ -223,7 +235,7 @@ def data_dir() -> str:
 
 
 @pytest.fixture
-def work_dir(tmp_path, monkeypatch) -> str:
+def work_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     """A tmp directory that is also the process cwd for the duration of a test.
 
     Use it for code that writes relative paths, so that anything left behind
@@ -234,7 +246,7 @@ def work_dir(tmp_path, monkeypatch) -> str:
 
 
 @pytest.fixture(scope="session")
-def ccp4_env():
+def ccp4_env() -> dict[str, str]:
     """Environment mapping with the CCP4 binaries on ``PATH``, else skip.
 
     Mark the test ``ccp4`` as well, so the reason is visible in a plain
@@ -247,7 +259,7 @@ def ccp4_env():
 
 
 @pytest.fixture(scope="session")
-def pdb_redo_cache(tmp_path_factory) -> str:
+def pdb_redo_cache(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Directory for PDB-REDO downloads, shared across the session.
 
     Falls back to a session tmp directory when no warm cache is configured,

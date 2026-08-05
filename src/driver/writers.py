@@ -7,7 +7,7 @@ back to decide what still needs running.
 """
 
 import csv
-from typing import Optional
+from typing import Any, Mapping, Optional, Sequence, TextIO
 
 from coordination.schema import (
     BOND_COLUMNS,
@@ -17,7 +17,7 @@ from coordination.schema import (
 )
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
-from worker import blank_if_unmeasured
+from worker import EntryResult, blank_if_unmeasured
 
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every
@@ -70,8 +70,12 @@ MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {"pdbID": "p
 
 
 def _manifest_row(
-    result, resume, bonds_enabled, prior_bond_counts, prior_candidate_counts
-):
+    result: EntryResult,
+    resume: bool,
+    bonds_enabled: bool,
+    prior_bond_counts: Mapping[str, str],
+    prior_candidate_counts: Mapping[str, str],
+) -> dict[str, Any]:
     """Project one worker result onto the manifest schema."""
     row = {
         column: blank_if_unmeasured(getattr(result, field))
@@ -98,14 +102,14 @@ class _OutputWriters:
 
     def __init__(
         self,
-        manifest_fh,
-        stats_fh,
-        bonds_fh,
-        candidates_fh,
-        confidence_fh=None,
-        confidence_columns=None,
-        confidence_inputs_fh=None,
-    ):
+        manifest_fh: TextIO,
+        stats_fh: TextIO,
+        bonds_fh: Optional[TextIO],
+        candidates_fh: Optional[TextIO],
+        confidence_fh: Optional[TextIO] = None,
+        confidence_columns: Optional[Sequence[str]] = None,
+        confidence_inputs_fh: Optional[TextIO] = None,
+    ) -> None:
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
         self._bonds_fh = bonds_fh
@@ -120,8 +124,8 @@ class _OutputWriters:
         )
         if confidence_fh is not None and confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
-        self._confidence: Optional[csv.DictWriter] = None
-        self._confidence_inputs: Optional[csv.DictWriter] = None
+        self._confidence: Optional[csv.DictWriter[str]] = None
+        self._confidence_inputs: Optional[csv.DictWriter[str]] = None
         if confidence_fh is not None and confidence_columns is not None:
             self._confidence = csv.DictWriter(
                 confidence_fh, fieldnames=confidence_columns
@@ -150,7 +154,7 @@ class _OutputWriters:
         if self._confidence_inputs is not None:
             self._confidence_inputs.writeheader()
 
-    def write_stats_rows(self, rows):
+    def write_stats_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if not rows:
             return
         for row in rows:
@@ -158,8 +162,8 @@ class _OutputWriters:
             self.n_rows += 1
         self._stats_fh.flush()
 
-    def write_bond_rows(self, bond_rows):
-        if self._bonds is None or not bond_rows:
+    def write_bond_rows(self, bond_rows: Sequence[Mapping[str, Any]]) -> None:
+        if self._bonds is None or self._bonds_fh is None or not bond_rows:
             return
         _check_row_schema(bond_rows[0], BOND_COLUMNS, "metal_bonds_all.csv")
         for bond in bond_rows:
@@ -167,8 +171,12 @@ class _OutputWriters:
             self.n_bonds += 1
         self._bonds_fh.flush()
 
-    def write_candidate_rows(self, candidate_rows):
-        if self._candidates is None or not candidate_rows:
+    def write_candidate_rows(self, candidate_rows: Sequence[Mapping[str, Any]]) -> None:
+        if (
+            self._candidates is None
+            or self._candidates_fh is None
+            or not candidate_rows
+        ):
             return
         _check_row_schema(
             candidate_rows[0], CANDIDATE_COLUMNS, "metal_candidates_all.csv"
@@ -180,11 +188,11 @@ class _OutputWriters:
             self.n_candidates += 1
         self._candidates_fh.flush()
 
-    def write_manifest_row(self, row):
+    def write_manifest_row(self, row: Mapping[str, Any]) -> None:
         self._manifest.writerow(row)
         self._manifest_fh.flush()
 
-    def write_confidence_rows(self, rows):
+    def write_confidence_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if self._confidence is None or not rows:
             return
         if self._confidence_columns is None or self._confidence_fh is None:

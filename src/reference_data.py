@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from functools import lru_cache
 from types import MappingProxyType
 
@@ -37,7 +38,7 @@ class ReferenceDataError(RuntimeError):
     """Bundled reference data is missing, unreadable, or not what it claims."""
 
 
-def _sha256(path):
+def _sha256(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for block in iter(lambda: handle.read(65536), b""):
@@ -45,7 +46,7 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def _verify_checksum(path):
+def _verify_checksum(path: str) -> None:
     """Fail unless a bundled file still hashes to what its sidecar recorded.
 
     Only the two bundled paths are checked; a caller supplying their own path
@@ -80,7 +81,9 @@ def _verify_checksum(path):
         )
 
 
-def _parse_cofactor_catalog(path):
+def _parse_cofactor_catalog(
+    path: str,
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
     """Return ``(component_ids, cluster_ids, heme_ids)`` from one pass.
 
     Tab-separated ``id<TAB>formula<TAB>structural_class``, written by
@@ -88,7 +91,9 @@ def _parse_cofactor_catalog(path):
     environment in ``parent_type``, where ``cluster`` takes precedence over
     ``heme`` for a component carrying both.
     """
-    ids, cluster, heme = set(), set(), set()
+    ids: set[str] = set()
+    cluster: set[str] = set()
+    heme: set[str] = set()
     with open(path, encoding="utf-8") as handle:
         for line in handle:
             fields = line.rstrip("\n").split("\t")
@@ -114,7 +119,7 @@ def _parse_cofactor_catalog(path):
 
 
 @lru_cache(maxsize=None)
-def reference_data_checksums():
+def reference_data_checksums() -> Mapping[str, str]:
     """``{filename: sha256}`` for both bundled files, verified as it goes."""
     return MappingProxyType(
         {os.path.basename(path): _verified_sha256(path) for path in CHECKSUM_SIDECARS}
@@ -122,7 +127,7 @@ def reference_data_checksums():
 
 
 @lru_cache(maxsize=None)
-def reference_data_id():
+def reference_data_id() -> str:
     """One short id for the reference data an entry was measured against.
 
     Both files decide results, so two rows are comparable only if both matched.
@@ -138,28 +143,30 @@ def reference_data_id():
     return digest.hexdigest()[:12]
 
 
-def _verified_sha256(path):
+def _verified_sha256(path: str) -> str:
     _verify_checksum(path)
     return _sha256(path)
 
 
 @lru_cache(maxsize=None)
-def _catalog(path=COFACTOR_CATALOG_PATH):
+def _catalog(
+    path: str = COFACTOR_CATALOG_PATH,
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
     _verify_checksum(path)
     return _parse_cofactor_catalog(path)
 
 
-def cofactor_ids(path=COFACTOR_CATALOG_PATH):
+def cofactor_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Every component id Alchemy treats as a metal-containing cofactor."""
     return _catalog(path)[0]
 
 
-def cluster_ids(path=COFACTOR_CATALOG_PATH):
+def cluster_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Components whose metals sit in an iron-sulfur-style cluster."""
     return _catalog(path)[1]
 
 
-def heme_ids(path=COFACTOR_CATALOG_PATH):
+def heme_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Components whose metals sit in a heme-style macrocycle."""
     return _catalog(path)[2]
 
@@ -169,7 +176,9 @@ def heme_ids(path=COFACTOR_CATALOG_PATH):
 DISTANCE_TABLE_HEADER = ("residue", "atom", "metal", "avg_bond_dist", "st_dev")
 
 
-def _load_literature(path):
+def _load_literature(
+    path: str,
+) -> dict[tuple[str, str, str], tuple[float, float]]:
     """Parse metal_distances_info.txt -> {(residue, atom, metal): (mu, stdev)}.
 
     Space-delimited ``residue atom metal avg_bond_dist st_dev``, one row per
@@ -181,8 +190,8 @@ def _load_literature(path):
     disable the z-score for its pair, which is indistinguishable in the output
     from a pair genuinely absent from the literature.
     """
-    lit = {}
-    first_line_by_key = {}
+    lit: dict[tuple[str, str, str], tuple[float, float]] = {}
+    first_line_by_key: dict[tuple[str, str, str], int] = {}
     with open(path) as f:
         for number, line in enumerate(f, start=1):
             parts = line.split()
@@ -231,14 +240,18 @@ def _load_literature(path):
 
 
 @lru_cache(maxsize=None)
-def literature_distances(path=DONOR_DISTANCE_PATH):
+def literature_distances(
+    path: str = DONOR_DISTANCE_PATH,
+) -> Mapping[tuple[str, str, str], tuple[float, float]]:
     """``{(residue, atom, metal): (mu, stdev)}`` from the literature table."""
     _verify_checksum(path)
     return MappingProxyType(_load_literature(path))
 
 
 @lru_cache(maxsize=None)
-def first_sphere_targets(path=DONOR_DISTANCE_PATH):
+def first_sphere_targets(
+    path: str = DONOR_DISTANCE_PATH,
+) -> Mapping[tuple[str, str], float]:
     """``{(metal_element, donor_element): longest reference distance}``."""
     targets: dict[tuple[str, str], float] = {}
     for (_, donor, metal_element), (target, _) in literature_distances(path).items():

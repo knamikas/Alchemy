@@ -11,6 +11,7 @@ import socket
 import stat
 import tempfile
 from datetime import datetime, timezone
+from types import TracebackType
 from typing import IO, Any, Optional
 
 
@@ -144,7 +145,7 @@ if _register_at_fork is not None:
     _register_at_fork(after_in_child=_close_inherited_lock_after_fork)
 
 
-def _owner_description(handle) -> str:
+def _owner_description(handle: IO[str]) -> str:
     try:
         handle.seek(0)
         metadata = json.load(handle)
@@ -165,9 +166,9 @@ class OutputDirectoryLock:
         self.output_dir = os.path.abspath(output_dir)
         self.path = os.path.join(self.output_dir, LOCK_FILENAME)
         self.command = str(command)
-        self._handle = None
+        self._handle: Optional[IO[str]] = None
 
-    def __enter__(self):
+    def __enter__(self) -> OutputDirectoryLock:
         global _active_lock_handle, _active_lock_pid
         try:
             handle = _open_lock_handle(self.path)
@@ -220,7 +221,12 @@ class OutputDirectoryLock:
         _active_lock_pid = os.getpid()
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None:
         global _active_lock_handle, _active_lock_pid
         handle = self._handle
         self._handle = None

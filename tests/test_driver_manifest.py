@@ -13,10 +13,17 @@ import io
 import json
 import logging
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from typing import Callable
 from typing import List
+from typing import Mapping
 from typing import NamedTuple
+from typing import Optional
+from typing import Sequence
+from typing import Union
+from typing import cast
 
 import gemmi
 import pytest
@@ -49,7 +56,7 @@ from driver import output_lock
 import confidence_score
 
 
-def _cfg(**overrides):
+def _cfg(**overrides: Any) -> worker.WorkerConfig:
     """A complete ``WorkerConfig`` with test placeholders."""
     fields: dict[str, Any] = {
         "root": "/nonexistent/root",
@@ -89,7 +96,7 @@ DERIVED_MANIFEST_COLUMNS = frozenset(
 )
 
 
-def _result(pdb_id="109m", **overrides):
+def _result(pdb_id: str = "109m", **overrides: Any) -> worker.EntryResult:
     """A worker result skeleton plus overrides, as the driver would see it."""
     result = worker._initial_result(pdb_id, CFG, None)
     for name, value in overrides.items():
@@ -98,15 +105,15 @@ def _result(pdb_id="109m", **overrides):
 
 
 def _manual_entry(
-    tmp_path,
-    monkeypatch,
-    density_stage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    density_stage: Callable[..., Any],
     *,
-    structure_builder=None,
-    pdb_transform=None,
-    bonds=False,
-    **cfg_overrides,
-):
+    structure_builder: Optional[helpers.StructureBuilder] = None,
+    pdb_transform: Optional[Callable[[Path], None]] = None,
+    bonds: bool = False,
+    **cfg_overrides: Any,
+) -> worker.EntryResult:
     """Run one manual-input entry through ``worker.process``.
 
     Only the three MTZ-dependent readers are stubbed; structure loading, result
@@ -165,8 +172,11 @@ def _manual_entry(
     ],
 )
 def test_an_unanticipated_failure_reports_whether_it_will_recur(
-    tmp_path, monkeypatch, exception, expected_code
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exception: Exception,
+    expected_code: str,
+) -> None:
     """The exception type separates a permanent failure from a possible fluke.
 
     A parse, lookup or type error describes the data or Alchemy's code and will
@@ -176,7 +186,7 @@ def test_an_unanticipated_failure_reports_whether_it_will_recur(
     same bytes.
     """
 
-    def failing_stage(*args, **kwargs):
+    def failing_stage(*args: Any, **kwargs: Any) -> None:
         raise exception
 
     result = _manual_entry(tmp_path, monkeypatch, failing_stage)
@@ -187,7 +197,9 @@ def test_an_unanticipated_failure_reports_whether_it_will_recur(
     assert type(exception).__name__ in result.error
 
 
-def _real_stats_density_stage(pdb_id, mtz, pdb, work_dir, *args, **kwargs):
+def _real_stats_density_stage(
+    pdb_id: str, mtz: str, pdb: str, work_dir: str, *args: Any, **kwargs: Any
+) -> density.DensityResult:
     """Write a synthetic ``stats.out`` covering every residue of the model."""
     context = structure_analysis.load_structure(pdb_id, pdb)
     stats_out = helpers.write_edstats_for_structure(
@@ -213,8 +225,8 @@ def _real_stats_density_stage(pdb_id, mtz, pdb, work_dir, *args, **kwargs):
 
 @pytest.mark.parametrize("bonds", [True, False], ids=["bonds", "no-bonds"])
 def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
-    tmp_path, monkeypatch, bonds
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bonds: bool
+) -> None:
     """The two stages select metals by different rules, and must say when they differ.
 
     Coordinate analysis takes every metal atom by element; statistics reports
@@ -257,7 +269,9 @@ def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
     assert result.rows == []
 
 
-def test_a_zero_occupancy_metal_is_excluded_but_not_silently(tmp_path, monkeypatch):
+def test_a_zero_occupancy_metal_is_excluded_but_not_silently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``no_metals`` must not read as an authoritative negative about this file.
 
     A metal modeled at zero occupancy is not evidence for a site, so it is
@@ -286,7 +300,9 @@ def test_a_zero_occupancy_metal_is_excluded_but_not_silently(tmp_path, monkeypat
     assert "zero_occupancy_metal_excluded" in result.warning_codes
 
 
-def test_a_positive_occupancy_metal_raises_no_exclusion_warning(tmp_path, monkeypatch):
+def test_a_positive_occupancy_metal_raises_no_exclusion_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The warning marks a real exclusion, not merely the presence of a metal."""
     builder = helpers.StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -304,7 +320,9 @@ def test_a_positive_occupancy_metal_raises_no_exclusion_warning(tmp_path, monkey
     assert "zero_occupancy_metal_excluded" not in result.warning_codes
 
 
-def test_a_catalogued_cofactor_metal_raises_no_such_code(tmp_path, monkeypatch):
+def test_a_catalogued_cofactor_metal_raises_no_such_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A single-atom ion is reported by both stages, so nothing is flagged."""
     builder = helpers.StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -323,15 +341,15 @@ def test_a_catalogued_cofactor_metal_raises_no_such_code(tmp_path, monkeypatch):
 
 
 def test_non_finite_selected_metal_is_partial_without_bond_analysis(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Coordinate validation is not disabled together with bond output."""
     builder = helpers.StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
 
-    def make_metal_x_nan(path):
+    def make_metal_x_nan(path: Path) -> None:
         lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        rewritten = []
+        rewritten: list[str] = []
         for line in lines:
             if line[:6].strip() == "HETATM" and line[76:78].strip() == "ZN":
                 line = line[:30] + "     nan" + line[38:]
@@ -354,14 +372,16 @@ def test_non_finite_selected_metal_is_partial_without_bond_analysis(
     assert "non_finite_metal_coordinates" in result.reason_codes
 
 
-def test_an_unanticipated_failure_logs_its_traceback(tmp_path, monkeypatch, caplog):
+def test_an_unanticipated_failure_logs_its_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """The manifest keeps one line; the debug log must keep the stack.
 
     Without this the only way to locate an unanticipated failure was to rerun
     the entry by hand under ``--keep-intermediates``.
     """
 
-    def failing_stage(*args, **kwargs):
+    def failing_stage(*args: Any, **kwargs: Any) -> None:
         raise ValueError("no FWT column")
 
     with caplog.at_level(logging.DEBUG, logger="alchemy.worker"):
@@ -370,10 +390,16 @@ def test_an_unanticipated_failure_logs_its_traceback(tmp_path, monkeypatch, capl
     assert result.status == "error"
     records = [r for r in caplog.records if r.exc_info and "1abc" in r.getMessage()]
     assert records, "the failing entry logged no traceback"
-    assert records[0].exc_info[0] is ValueError
+    # The comprehension already selected on ``exc_info``; the cast only carries
+    # that through to the subscript.
+    assert cast(tuple[Any, ...], records[0].exc_info)[0] is ValueError
 
 
-def _write_manifest(path, rows, columns=None):
+def _write_manifest(
+    path: Path,
+    rows: Sequence[Mapping[str, str]],
+    columns: Optional[Sequence[str]] = None,
+) -> str:
     """Write a manifest CSV with the real schema and the given partial rows."""
     columns = list(columns if columns is not None else MANIFEST_COLUMNS)
     with open(path, "w", newline="") as handle:
@@ -384,28 +410,35 @@ def _write_manifest(path, rows, columns=None):
     return str(path)
 
 
-def _manifest_ids(path, **kwargs):
+def _manifest_ids(path: Union[str, Path], **kwargs: Any) -> set[str]:
     return resume.load_done(str(path), **kwargs)
 
 
-def _read_csv(path):
+def _read_csv(path: Union[str, Path]) -> list[list[str]]:
     with open(path, newline="") as handle:
         return list(csv.reader(handle))
 
 
-def test_bond_stage_failure_invalidates_confidence_inputs(monkeypatch):
+def test_bond_stage_failure_invalidates_confidence_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A crashed geometry stage is not legitimate density-only evidence."""
     result = _result()
-    inputs = SimpleNamespace(
-        data_json=None,
-        pdb="/nonexistent/entry.pdb",
-        mtz="/nonexistent/entry.mtz",
-        data_reshi=2.0,
-        source_coordinate_path="/nonexistent/entry.cif",
+    inputs = cast(
+        worker._EntryInputs,
+        SimpleNamespace(
+            data_json=None,
+            pdb="/nonexistent/entry.pdb",
+            mtz="/nonexistent/entry.mtz",
+            data_reshi=2.0,
+            source_coordinate_path="/nonexistent/entry.cif",
+        ),
     )
-    structure = SimpleNamespace(warning_codes=[])
+    structure = cast(
+        structure_analysis.StructureContext, SimpleNamespace(warning_codes=[])
+    )
 
-    def fail_bond_analysis(*args, **kwargs):
+    def fail_bond_analysis(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("geometry unavailable")
 
     monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
@@ -422,13 +455,13 @@ def test_bond_stage_failure_invalidates_confidence_inputs(monkeypatch):
 
 class TestNoRecognizedMetalOutcome:
     @staticmethod
-    def _density_must_not_run(*args, **kwargs):
+    def _density_must_not_run(*args: Any, **kwargs: Any) -> None:
         pytest.fail("density analysis ran without a recognized metal site")
 
     @staticmethod
-    def _blank_metal_element(path):
+    def _blank_metal_element(path: Path) -> None:
         lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-        rewritten = []
+        rewritten: list[str] = []
         for line in lines:
             if line.startswith("HETATM") and line[12:16].strip() == "ZN":
                 newline = "\n" if line.endswith("\n") else ""
@@ -438,8 +471,8 @@ class TestNoRecognizedMetalOutcome:
         path.write_text("".join(rewritten), encoding="utf-8")
 
     def test_unknown_element_makes_metal_presence_indeterminate(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         builder = helpers.StructureBuilder()
         builder.add_metal("ZN", 1, chain="A")
 
@@ -461,11 +494,16 @@ class TestNoRecognizedMetalOutcome:
         assert result.no_metals is False
         assert "unknown_elements" in result.warning_codes
         assert result.confidence_inputs_missing_reason == "metal_presence_indeterminate"
-        assert pool._confidence_rows_for(result, SimpleNamespace(reference=None)) == []
+        assert (
+            pool._confidence_rows_for(
+                result, cast(pool._ConfidencePlan, SimpleNamespace(reference=None))
+            )
+            == []
+        )
 
     def test_known_nonmetal_structure_remains_an_authoritative_negative(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         builder = helpers.StructureBuilder()
         builder.add_amino_acid("GLY", 1, chain="A")
 
@@ -486,8 +524,8 @@ class TestNoRecognizedMetalOutcome:
         assert result.no_metals is True
 
     def test_zero_occupancy_metal_is_not_an_analyzable_site(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         builder = helpers.StructureBuilder()
         builder.add_metal("ZN", 1, chain="A", occupancy=0.0)
 
@@ -543,20 +581,20 @@ _CIF_HEADER_NO_OCCUPANCY = _CIF_HEADER.replace("_atom_site.occupancy\n", "")
 
 
 def _cif_atom(
-    serial,
-    element,
-    atom_name,
-    comp_id,
-    label_asym,
-    entity,
-    label_seq,
-    xyz,
-    occupancy,
-    auth_seq,
-    auth_asym,
-    group="ATOM",
-    with_occupancy=True,
-):
+    serial: Union[int, str],
+    element: str,
+    atom_name: str,
+    comp_id: str,
+    label_asym: str,
+    entity: int,
+    label_seq: Union[int, str],
+    xyz: tuple[float, float, float],
+    occupancy: Optional[str],
+    auth_seq: int,
+    auth_asym: str,
+    group: str = "ATOM",
+    with_occupancy: bool = True,
+) -> str:
     x, y, z = xyz
     fields = [
         group,
@@ -574,36 +612,40 @@ def _cif_atom(
         f"{z}",
     ]
     if with_occupancy:
-        fields.append(occupancy)
+        # ``occupancy`` is None only where the caller also drops the column, so
+        # the token appended here is always a string.
+        fields.append(cast(str, occupancy))
     fields += ["20.0", str(auth_seq), auth_asym, "1"]
     return " ".join(fields)
 
 
-def _write_cif(path, atom_lines, header=_CIF_HEADER):
+def _write_cif(path: Path, atom_lines: Sequence[str], header: str = _CIF_HEADER) -> str:
     text = header + "".join(line + "\n" for line in atom_lines)
     with open(path, "w") as handle:
         handle.write(text)
     return str(path)
 
 
-def _pdb_atom_lines(path):
+def _pdb_atom_lines(path: Union[str, Path]) -> list[str]:
     with open(path) as handle:
         return [
             line for line in handle if line[:6].strip().upper() in ("ATOM", "HETATM")
         ]
 
 
-def _occupancy_field(line):
+def _occupancy_field(line: str) -> str:
     """PDB columns 55-60, exactly as written."""
     return line[54:60]
 
 
-def _element_field(line):
+def _element_field(line: str) -> str:
     """PDB columns 77-78, exactly as written."""
     return line[76:78].strip()
 
 
-def _simple_structure(residues):
+def _simple_structure(
+    residues: Sequence[tuple[str, int, str, Sequence[tuple[str, str]]]],
+) -> gemmi.Structure:
     """Build a one-model gemmi structure from (chain, seqid, name, atoms).
 
     gemmi's ``add_chain``/``add_residue`` copy their argument, so each chain is
@@ -611,8 +653,8 @@ def _simple_structure(residues):
     """
     structure = gemmi.Structure()
     model = gemmi.Model(1)
-    chain_order = []
-    chains = {}
+    chain_order: list[str] = []
+    chains: dict[str, gemmi.Chain] = {}
     for chain_name, seqid, resname, atoms in residues:
         if chain_name not in chains:
             chains[chain_name] = gemmi.Chain(chain_name)
@@ -642,6 +684,9 @@ _BASE_RESIDUES = [
 class TestPositiveInt:
     """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
 
+    # ``value`` is typed ``Any`` throughout: argparse only ever hands it text,
+    # and the cases below deliberately include the ints and ``None`` a
+    # programmatic caller can pass, which the declared parameter type excludes.
     @pytest.mark.parametrize(
         "value,expected",
         [
@@ -654,12 +699,12 @@ class TestPositiveInt:
             (5, 5),  # already an int (programmatic callers)
         ],
     )
-    def test_accepts_integers_of_at_least_one(self, value, expected):
+    def test_accepts_integers_of_at_least_one(self, value: Any, expected: int) -> None:
         assert cli.positive_int(value) == expected
         assert isinstance(cli.positive_int(value), int)
 
     @pytest.mark.parametrize("value", ["0", "-1", "-28", 0, -3])
-    def test_rejects_zero_and_negative(self, value):
+    def test_rejects_zero_and_negative(self, value: Any) -> None:
         with pytest.raises(argparse.ArgumentTypeError) as excinfo:
             cli.positive_int(value)
         assert "at least 1" in str(excinfo.value)
@@ -680,12 +725,12 @@ class TestPositiveInt:
             "1,000",
         ],
     )
-    def test_rejects_non_integer_text(self, value):
+    def test_rejects_non_integer_text(self, value: Any) -> None:
         with pytest.raises(argparse.ArgumentTypeError) as excinfo:
             cli.positive_int(value)
         assert "positive integer" in str(excinfo.value)
 
-    def test_boundary_is_one_not_zero(self):
+    def test_boundary_is_one_not_zero(self) -> None:
         assert cli.positive_int("1") == 1
         with pytest.raises(argparse.ArgumentTypeError):
             cli.positive_int("0")
@@ -715,8 +760,8 @@ class TestLoadDone:
         ],
     )
     def test_terminality_by_status_and_retryable(
-        self, tmp_path, status, retryable, expected_done
-    ):
+        self, tmp_path: Path, status: str, retryable: str, expected_done: bool
+    ) -> None:
         """Only ok and non-retryable partial rows are skippable."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -732,7 +777,9 @@ class TestLoadDone:
         )
         assert ("109m" in _manifest_ids(path)) is expected_done
 
-    def test_an_error_is_retried_whatever_its_reason_code_claims(self, tmp_path):
+    def test_an_error_is_retried_whatever_its_reason_code_claims(
+        self, tmp_path: Path
+    ) -> None:
         """A deterministic-looking failure is still offered to the next resume.
 
         The reason code says the failure recurs on the same inputs, but a
@@ -752,7 +799,7 @@ class TestLoadDone:
         )
         assert _manifest_ids(path) == set()
 
-    def test_ids_are_normalized_to_lowercase(self, tmp_path):
+    def test_ids_are_normalized_to_lowercase(self, tmp_path: Path) -> None:
         """Manifest IDs join against the driver's lowercased selection list."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -762,7 +809,9 @@ class TestLoadDone:
         )
         assert _manifest_ids(path) == {"1cll"}
 
-    def test_explicit_terminal_retry_unprotects_only_selected_partials(self, tmp_path):
+    def test_explicit_terminal_retry_unprotects_only_selected_partials(
+        self, tmp_path: Path
+    ) -> None:
         """Forced resume never turns an explicitly selected ``ok`` into work."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -803,21 +852,25 @@ class TestLoadDone:
             "2par",
         }
 
-    def test_missing_manifest_is_an_empty_done_set(self, tmp_path):
+    def test_missing_manifest_is_an_empty_done_set(self, tmp_path: Path) -> None:
         assert _manifest_ids(tmp_path / "absent.csv") == set()
 
-    def test_manifest_without_the_required_columns_is_ignored(self, tmp_path):
+    def test_manifest_without_the_required_columns_is_ignored(
+        self, tmp_path: Path
+    ) -> None:
         path = tmp_path / "manifest.csv"
         with open(path, "w", newline="") as handle:
             csv.writer(handle).writerows([["id", "state"], ["109m", "ok"]])
         assert _manifest_ids(path) == set()
 
-    def test_empty_manifest_file_is_ignored(self, tmp_path):
+    def test_empty_manifest_file_is_ignored(self, tmp_path: Path) -> None:
         path = tmp_path / "manifest.csv"
         path.write_text("")
         assert _manifest_ids(path) == set()
 
-    def test_truncated_final_row_is_retried_without_losing_valid_rows(self, tmp_path):
+    def test_truncated_final_row_is_retried_without_losing_valid_rows(
+        self, tmp_path: Path
+    ) -> None:
         """An interrupted writer may leave only the first cells of its row."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -828,7 +881,7 @@ class TestLoadDone:
 
         assert _manifest_ids(path, bonds_required=False) == {"109m"}
 
-    def test_row_without_a_pdb_id_is_not_done(self, tmp_path):
+    def test_row_without_a_pdb_id_is_not_done(self, tmp_path: Path) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -855,8 +908,8 @@ class TestLoadDone:
         ],
     )
     def test_blank_counts_mean_the_bond_stage_never_ran(
-        self, tmp_path, n_bonds, n_candidates, expected_done
-    ):
+        self, tmp_path: Path, n_bonds: str, n_candidates: str, expected_done: bool
+    ) -> None:
         """README: blank counts = not run, 0 = ran and found nothing."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -873,7 +926,9 @@ class TestLoadDone:
         done = _manifest_ids(path, bonds_required=True)
         assert ("109m" in done) is expected_done
 
-    def test_blank_counts_are_irrelevant_when_bonds_are_not_required(self, tmp_path):
+    def test_blank_counts_are_irrelevant_when_bonds_are_not_required(
+        self, tmp_path: Path
+    ) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -888,7 +943,9 @@ class TestLoadDone:
         )
         assert _manifest_ids(path, bonds_required=False) == {"109m"}
 
-    def test_indeterminate_metal_presence_needs_no_bond_stage(self, tmp_path):
+    def test_indeterminate_metal_presence_needs_no_bond_stage(
+        self, tmp_path: Path
+    ) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -924,8 +981,12 @@ class TestLoadDone:
         ],
     )
     def test_absent_bond_outputs_make_the_result_incomplete(
-        self, tmp_path, bond_present, candidate_present, expected_done
-    ):
+        self,
+        tmp_path: Path,
+        bond_present: bool,
+        candidate_present: bool,
+        expected_done: bool,
+    ) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -946,7 +1007,9 @@ class TestLoadDone:
         )
         assert ("109m" in done) is expected_done
 
-    def test_selects_only_the_terminal_rows_of_a_mixed_manifest(self, tmp_path):
+    def test_selects_only_the_terminal_rows_of_a_mixed_manifest(
+        self, tmp_path: Path
+    ) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -989,7 +1052,7 @@ class TestLoadDone:
 class TestManifestValuesById:
     """Reading one prior manifest column for the resume carry-forward."""
 
-    def test_returns_the_column_keyed_by_normalized_id(self, tmp_path):
+    def test_returns_the_column_keyed_by_normalized_id(self, tmp_path: Path) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -1004,7 +1067,7 @@ class TestManifestValuesById:
             "1blu": "",
         }
 
-    def test_missing_and_empty_files_yield_no_values(self, tmp_path):
+    def test_missing_and_empty_files_yield_no_values(self, tmp_path: Path) -> None:
         empty = tmp_path / "empty.csv"
         empty.write_text("")
         assert (
@@ -1012,7 +1075,7 @@ class TestManifestValuesById:
         )
         assert resume._manifest_values_by_id(str(empty), "n_bonds") == {}
 
-    def test_unknown_column_yields_blanks_not_an_error(self, tmp_path):
+    def test_unknown_column_yields_blanks_not_an_error(self, tmp_path: Path) -> None:
         """An older manifest lacking the column must degrade to "not run"."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -1021,7 +1084,9 @@ class TestManifestValuesById:
         )
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": ""}
 
-    def test_truncated_rows_do_not_supply_carry_forward_values(self, tmp_path):
+    def test_truncated_rows_do_not_supply_carry_forward_values(
+        self, tmp_path: Path
+    ) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [{"pdbID": "109m", "status": "ok", "n_bonds": "7"}],
@@ -1031,7 +1096,7 @@ class TestManifestValuesById:
 
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "7"}
 
-    def test_blank_ids_are_dropped(self, tmp_path):
+    def test_blank_ids_are_dropped(self, tmp_path: Path) -> None:
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -1041,7 +1106,7 @@ class TestManifestValuesById:
         )
         assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "1"}
 
-    def test_a_later_row_supersedes_an_earlier_one(self, tmp_path):
+    def test_a_later_row_supersedes_an_earlier_one(self, tmp_path: Path) -> None:
         """Resume appends, so the last row for an ID is the current one."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
@@ -1056,7 +1121,7 @@ class TestManifestValuesById:
 class TestInitialResult:
     """The per-entry skeleton that guarantees a complete manifest row."""
 
-    def test_seeds_bond_counts_blank_not_zero(self):
+    def test_seeds_bond_counts_blank_not_zero(self) -> None:
         """``0`` is a measured result, so an unrun bond stage must stay blank."""
         result = worker._initial_result("109m", CFG, None)
         assert result.n_bonds is None
@@ -1064,7 +1129,7 @@ class TestInitialResult:
         assert result.n_bonds != 0
         assert result.n_candidates != 0
 
-    def test_every_non_derived_manifest_column_is_present_up_front(self):
+    def test_every_non_derived_manifest_column_is_present_up_front(self) -> None:
         """A failure at any stage still projects onto a complete row."""
         result = worker._initial_result("109m", CFG, None)
         required = set(MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
@@ -1073,18 +1138,18 @@ class TestInitialResult:
         }
         assert required.issubset(supplied)
 
-    def test_supplies_the_fields_manifest_row_reads_directly(self):
+    def test_supplies_the_fields_manifest_row_reads_directly(self) -> None:
         """``_manifest_row`` reads these without a default; they must exist."""
         result = worker._initial_result("109m", CFG, None)
         for name in ("n_metals", "runtime_s", "n_bonds", "n_candidates", "pdb_id"):
             assert hasattr(result, name)
 
-    def test_defaults_to_a_retryable_error(self):
+    def test_defaults_to_a_retryable_error(self) -> None:
         result = worker._initial_result("109m", CFG, None)
         assert result.status == "error"
         assert result.retryable is True
 
-    def test_carries_the_reference_data_identity(self):
+    def test_carries_the_reference_data_identity(self) -> None:
         """Two runs whose z-scores used different reference distances must be
         distinguishable in the output.
         """
@@ -1094,7 +1159,7 @@ class TestInitialResult:
         assert result.reference_data_id == CFG.reference_data_id
         assert row["reference_data_id"] == CFG.reference_data_id
 
-    def test_carries_run_provenance_from_the_config(self):
+    def test_carries_run_provenance_from_the_config(self) -> None:
         result = worker._initial_result("109m", CFG, None)
         assert result.alchemy_version == pool.ALCHEMY_VERSION
         assert result.alchemy_commit == CFG.alchemy_commit
@@ -1112,12 +1177,14 @@ class TestInitialResult:
             ({"pdb_file": "/x.pdb"}, "manual"),
         ],
     )
-    def test_refinement_state_reflects_manual_inputs(self, manual_inputs, expected):
+    def test_refinement_state_reflects_manual_inputs(
+        self, manual_inputs: Optional[dict[str, Optional[str]]], expected: str
+    ) -> None:
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
         result = worker._initial_result("109m", CFG, manual_inputs)
         assert result.refinement_state == expected
 
-    def test_row_lists_are_independent_between_entries(self):
+    def test_row_lists_are_independent_between_entries(self) -> None:
         first = worker._initial_result("109m", CFG, None)
         second = worker._initial_result("1cll", CFG, None)
         first.rows.append({"x": 1})
@@ -1125,7 +1192,7 @@ class TestInitialResult:
         assert second.rows == []
         assert second.reason_codes == []
 
-    def test_a_misspelled_field_cannot_be_assigned(self):
+    def test_a_misspelled_field_cannot_be_assigned(self) -> None:
         """``slots=True`` makes a misspelled assignment the error, not a field
         nobody reads and a stale value in the manifest.
         """
@@ -1136,7 +1203,7 @@ class TestInitialResult:
 
         assert result.retryable is True, "the real field must be untouched"
 
-    def test_unmeasured_fields_render_blank_not_none(self):
+    def test_unmeasured_fields_render_blank_not_none(self) -> None:
         """A ``None`` reaching a CSV as ``"None"`` reads back to the next
         ``--resume`` as a completed stage.
         """
@@ -1151,14 +1218,14 @@ class TestInitialResult:
 class TestManifestRow:
     """Projection of a worker result onto the manifest schema."""
 
-    def test_projects_exactly_the_manifest_columns(self):
+    def test_projects_exactly_the_manifest_columns(self) -> None:
         row = _manifest_row(_result(), False, True, {}, {})
         assert set(row) == set(MANIFEST_COLUMNS)
         assert "rows" not in row
         assert "bond_rows" not in row
         assert "timings" not in row
 
-    def test_renames_and_joins_the_derived_columns(self):
+    def test_renames_and_joins_the_derived_columns(self) -> None:
         """n/runtime become n_metals/runtime_s; code lists become pipe text."""
         result = _result(
             n_metals=3,
@@ -1176,18 +1243,18 @@ class TestManifestRow:
         assert row["reason_codes"] == "a|b"
         assert row["warning_codes"] == "w"
 
-    def test_empty_code_lists_render_blank(self):
+    def test_empty_code_lists_render_blank(self) -> None:
         """No codes must not become a spurious separator or literal '[]'."""
         row = _manifest_row(_result(), False, True, {}, {})
         assert row["reason_codes"] == ""
         assert row["warning_codes"] == ""
 
-    def test_bonds_enabled_reports_the_measured_zero(self):
+    def test_bonds_enabled_reports_the_measured_zero(self) -> None:
         row = _manifest_row(_result(n_bonds=0, n_candidates=0), False, True, {}, {})
         assert row["n_bonds"] == 0
         assert row["n_candidates"] == 0
 
-    def test_fresh_no_bonds_run_writes_blank_counts(self):
+    def test_fresh_no_bonds_run_writes_blank_counts(self) -> None:
         """Without --resume there is no prior stage to carry forward."""
         row = _manifest_row(
             _result(n_bonds=4, n_candidates=6),
@@ -1199,22 +1266,22 @@ class TestManifestRow:
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
-    def test_resume_no_bonds_carries_the_prior_counts_forward(self):
+    def test_resume_no_bonds_carries_the_prior_counts_forward(self) -> None:
         row = _manifest_row(_result("109M"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == "6"
         assert row["n_candidates"] == "8"
 
-    def test_resume_no_bonds_carry_forward_preserves_a_prior_zero(self):
+    def test_resume_no_bonds_carry_forward_preserves_a_prior_zero(self) -> None:
         row = _manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
         assert row["n_bonds"] == "0"
         assert row["n_candidates"] == "0"
 
-    def test_resume_no_bonds_without_a_prior_row_stays_blank(self):
+    def test_resume_no_bonds_without_a_prior_row_stays_blank(self) -> None:
         row = _manifest_row(_result("1cll"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
-    def test_prior_blank_counts_are_not_upgraded(self):
+    def test_prior_blank_counts_are_not_upgraded(self) -> None:
         row = _manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
@@ -1232,14 +1299,16 @@ class TestUnrunBondStageChain:
     """
 
     @staticmethod
-    def _write_rows(path, rows):
+    def _write_rows(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         with open(path, "w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=MANIFEST_COLUMNS)
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
 
-    def test_failed_bond_enabled_entry_is_not_marked_bond_complete(self, tmp_path):
+    def test_failed_bond_enabled_entry_is_not_marked_bond_complete(
+        self, tmp_path: Path
+    ) -> None:
         """Step 1: a pre-bond failure writes blank counts, so it is retried."""
         result = _result(
             "109m", status="error", retryable=True, error="density stage failed"
@@ -1254,8 +1323,8 @@ class TestUnrunBondStageChain:
         assert row["n_candidates"] == ""
 
     def test_resume_no_bonds_recovery_does_not_fake_a_completed_bond_stage(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         """Run 1 fails before the bond stage, run 2 recovers it under
         ``--no-bonds``, and run 3 must still schedule it: no bond analysis has
         ever run for the entry.
@@ -1326,12 +1395,12 @@ class TestResumeReplacementSucceeded:
             ("", True, False),
         ],
     )
-    def test_terminality(self, status, retryable, expected):
+    def test_terminality(self, status: str, retryable: bool, expected: bool) -> None:
         """A retryable or failed retry leaves the previous rows in place."""
         result = _result(status=status, retryable=retryable)
         assert resume._resume_replacement_succeeded(result) is expected
 
-    def test_an_untouched_partial_is_assumed_unfinished(self):
+    def test_an_untouched_partial_is_assumed_unfinished(self) -> None:
         """``retryable`` defaults to true, so a partial nothing cleared cannot
         replace.
         """
@@ -1348,12 +1417,12 @@ class TestResumeStaging:
         "metal_candidates_all.csv",
     )
 
-    def _outputs(self, output_dir, confidence=False):
+    def _outputs(self, output_dir: Path, confidence: bool = False) -> tuple[str, ...]:
         """Create the four (or five) output CSVs with two entries' rows."""
         names: List[str] = list(self.TARGET_NAMES)
         if confidence:
             names.append("confidence_inputs_all.csv")
-        paths = []
+        paths: List[str] = []
         for name in names:
             path = output_dir / name
             with open(path, "w", newline="") as handle:
@@ -1364,7 +1433,11 @@ class TestResumeStaging:
             paths.append(str(path))
         return tuple(paths)
 
-    def _stage(self, staging, names_and_rows):
+    def _stage(
+        self,
+        staging: resume._ResumeStaging,
+        names_and_rows: Mapping[int, Sequence[Sequence[str]]],
+    ) -> None:
         """Write staged rows for the given staged-file indices."""
         for index, rows in names_and_rows.items():
             with open(staging.staged[index], "w", newline="") as handle:
@@ -1373,7 +1446,9 @@ class TestResumeStaging:
                 for row in rows:
                     writer.writerow(row)
 
-    def test_staged_paths_mirror_the_targets_inside_the_output_dir(self, tmp_path):
+    def test_staged_paths_mirror_the_targets_inside_the_output_dir(
+        self, tmp_path: Path
+    ) -> None:
         """Staging is a sibling temp dir so a merge is a same-filesystem move."""
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1391,8 +1466,8 @@ class TestResumeStaging:
             staging.discard()
 
     def test_commit_without_replacement_ids_leaves_outputs_byte_identical(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1404,8 +1479,8 @@ class TestResumeStaging:
         assert {p: open(p, "rb").read() for p in targets} == before
 
     def test_an_interrupted_batch_commits_the_entries_it_finished(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The halted-run path is reached from ``_process_entries`` itself.
 
         The loss lived in the wiring: staging was discarded whenever the batch
@@ -1432,8 +1507,17 @@ class TestResumeStaging:
             csv.writer(handle).writerow([prior[name] for name in MANIFEST_COLUMNS])
 
         def _dispatch(
-            args, ids, cfg, workers, writers, plan, staging, counts, prior, run_log
-        ):
+            args: argparse.Namespace,
+            ids: Sequence[str],
+            cfg: worker.WorkerConfig,
+            workers: int,
+            writers: _OutputWriters,
+            plan: driver_pool._ConfidencePlan,
+            staging: resume._ResumeStaging,
+            counts: tuple[dict[str, str], dict[str, str]],
+            prior: set[str],
+            run_log: _RunLog,
+        ) -> None:
             for pdb_id in ids:
                 row = {name: "" for name in MANIFEST_COLUMNS}
                 row.update(pdbID=pdb_id, status="ok", retryable="False")
@@ -1442,14 +1526,17 @@ class TestResumeStaging:
             raise KeyboardInterrupt
 
         monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
-        args = SimpleNamespace(resume=True, bonds=True, output_dir=str(output_dir))
-        run_log = SimpleNamespace(summary={})
+        args = cast(
+            argparse.Namespace,
+            SimpleNamespace(resume=True, bonds=True, output_dir=str(output_dir)),
+        )
+        run_log = cast(_RunLog, SimpleNamespace(summary={}))
 
         with pytest.raises(KeyboardInterrupt):
             driver_pool._process_entries(
                 args,
                 ["bbbb", "cccc"],
-                None,
+                cast(worker.WorkerConfig, None),
                 1,
                 layout,
                 driver_pool._ConfidencePlan(),
@@ -1463,18 +1550,30 @@ class TestResumeStaging:
         ]
         assert run_log.summary["resume_entries_committed_after_interrupt"] == 2
 
-    def _interrupt(self, staging, tmp_path, *, bonds=True, confidence=False):
+    def _interrupt(
+        self,
+        staging: resume._ResumeStaging,
+        tmp_path: Path,
+        *,
+        bonds: bool = True,
+        confidence: bool = False,
+    ) -> dict[str, Any]:
         """Run the halted-resume path and return the run-log summary."""
-        summary: dict = {}
+        summary: dict[str, Any] = {}
         driver_pool._keep_completed_staging(
             staging,
-            SimpleNamespace(bonds=bonds, output_dir=str(tmp_path)),
-            SimpleNamespace(enabled=confidence),
-            SimpleNamespace(summary=summary),
+            cast(
+                argparse.Namespace,
+                SimpleNamespace(bonds=bonds, output_dir=str(tmp_path)),
+            ),
+            cast(driver_pool._ConfidencePlan, SimpleNamespace(enabled=confidence)),
+            cast(_RunLog, SimpleNamespace(summary=summary)),
         )
         return summary
 
-    def test_an_interrupted_resume_keeps_the_entries_it_completed(self, tmp_path):
+    def test_an_interrupted_resume_keeps_the_entries_it_completed(
+        self, tmp_path: Path
+    ) -> None:
         """A halted batch commits finished entries instead of destroying them.
 
         Discarding lost every entry the run had completed, including entries
@@ -1500,7 +1599,9 @@ class TestResumeStaging:
         assert summary["resume_entries_committed_after_interrupt"] == 1
         assert not os.path.isdir(staging.dir)
 
-    def test_an_interrupted_resume_drops_an_entry_that_never_completed(self, tmp_path):
+    def test_an_interrupted_resume_drops_an_entry_that_never_completed(
+        self, tmp_path: Path
+    ) -> None:
         """Rows without a manifest row are not promoted, so the entry retries.
 
         ``_write_entry`` adds the id only after the manifest row, so an entry
@@ -1517,7 +1618,9 @@ class TestResumeStaging:
         assert "resume_entries_committed_after_interrupt" not in summary
         assert not os.path.isdir(staging.dir)
 
-    def test_a_failed_interrupt_merge_leaves_the_staged_rows_on_disk(self, tmp_path):
+    def test_a_failed_interrupt_merge_leaves_the_staged_rows_on_disk(
+        self, tmp_path: Path
+    ) -> None:
         """A merge failure must not delete the only copy of the work."""
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1538,7 +1641,7 @@ class TestResumeStaging:
         finally:
             staging.discard()
 
-    def test_commit_replaces_only_the_retried_ids(self, tmp_path):
+    def test_commit_replaces_only_the_retried_ids(self, tmp_path: Path) -> None:
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
         try:
@@ -1561,7 +1664,9 @@ class TestResumeStaging:
             assert values["1cll"] == f"old-1cll-{name}"
             assert len(rows) == 3
 
-    def test_commit_drops_stale_rows_when_the_retry_produced_none(self, tmp_path):
+    def test_commit_drops_stale_rows_when_the_retry_produced_none(
+        self, tmp_path: Path
+    ) -> None:
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
         try:
@@ -1574,7 +1679,9 @@ class TestResumeStaging:
             values = {row[0] for row in _read_csv(target)[1:]}
             assert values == {"1cll"}
 
-    def test_commit_with_bonds_disabled_leaves_bond_outputs_untouched(self, tmp_path):
+    def test_commit_with_bonds_disabled_leaves_bond_outputs_untouched(
+        self, tmp_path: Path
+    ) -> None:
         targets = self._outputs(tmp_path)
         bond_paths = targets[2:4]
         before = {p: open(p, "rb").read() for p in bond_paths}
@@ -1600,7 +1707,9 @@ class TestResumeStaging:
             "1cll": "old-1cll-manifest.csv",
         }
 
-    def test_commit_replaces_confidence_rows_only_when_enabled(self, tmp_path):
+    def test_commit_replaces_confidence_rows_only_when_enabled(
+        self, tmp_path: Path
+    ) -> None:
         targets = self._outputs(tmp_path, confidence=True)
         confidence_path = targets[4]
         before = open(confidence_path, "rb").read()
@@ -1624,7 +1733,9 @@ class TestResumeStaging:
         values = {row[0]: row[1] for row in _read_csv(confidence_path)[1:]}
         assert values == {"109m": "new", "1cll": ("old-1cll-confidence_inputs_all.csv")}
 
-    def test_commit_replaces_every_enabled_confidence_output(self, tmp_path):
+    def test_commit_replaces_every_enabled_confidence_output(
+        self, tmp_path: Path
+    ) -> None:
         """Scored and input confidence rows participate in one staged commit."""
         targets = list(self._outputs(tmp_path, confidence=True))
         scores = tmp_path / "confidence_scores_all.csv"
@@ -1658,7 +1769,7 @@ class TestResumeStaging:
             )
             assert values == {"109m": f"new-{index}", "1cll": expected_old}
 
-    def test_discard_leaves_previous_rows_intact(self, tmp_path):
+    def test_discard_leaves_previous_rows_intact(self, tmp_path: Path) -> None:
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1668,7 +1779,7 @@ class TestResumeStaging:
         assert not os.path.exists(staging.dir)
         assert {p: open(p, "rb").read() for p in targets} == before
 
-    def test_discard_is_idempotent(self, tmp_path):
+    def test_discard_is_idempotent(self, tmp_path: Path) -> None:
         """Cleanup runs in a finally block and may be reached twice."""
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
@@ -1676,7 +1787,9 @@ class TestResumeStaging:
         staging.discard()
         assert not os.path.exists(staging.dir)
 
-    def test_replacement_ids_are_matched_case_insensitively(self, tmp_path):
+    def test_replacement_ids_are_matched_case_insensitively(
+        self, tmp_path: Path
+    ) -> None:
         targets = self._outputs(tmp_path)
         staging = resume._ResumeStaging(str(tmp_path), targets)
         try:
@@ -1690,8 +1803,8 @@ class TestResumeStaging:
         assert len(values) == 2
 
     def test_a_staged_schema_mismatch_aborts_without_touching_the_target(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         """A header disagreement must fail loudly, not silently misalign rows."""
         targets = self._outputs(tmp_path)
         before = open(targets[0], "rb").read()
@@ -1728,7 +1841,12 @@ class TestOutputWriters:
     """The streamed CSVs: headers on creation, running counts, schema guards."""
 
     @staticmethod
-    def _handles(tmp_path, bonds=True, candidates=True, confidence=None) -> _Handles:
+    def _handles(
+        tmp_path: Path,
+        bonds: bool = True,
+        candidates: bool = True,
+        confidence: Optional[bool] = None,
+    ) -> _Handles:
         return _Handles(
             manifest=open(tmp_path / "manifest.csv", "w", newline=""),
             stats=open(tmp_path / "stats.csv", "w", newline=""),
@@ -1746,12 +1864,12 @@ class TestOutputWriters:
         )
 
     @staticmethod
-    def _close(handles):
+    def _close(handles: _Handles) -> None:
         for handle in handles:
             if handle is not None:
                 handle.close()
 
-    def test_headers_survive_a_run_that_produced_no_rows(self, tmp_path):
+    def test_headers_survive_a_run_that_produced_no_rows(self, tmp_path: Path) -> None:
         """README: the CSVs keep their headers when nothing was found."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -1770,7 +1888,9 @@ class TestOutputWriters:
         ]
         assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
 
-    def test_running_counts_track_the_rows_actually_written(self, tmp_path):
+    def test_running_counts_track_the_rows_actually_written(
+        self, tmp_path: Path
+    ) -> None:
         """The end-of-run totals come from these counters, not from re-reading."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -1801,7 +1921,9 @@ class TestOutputWriters:
         assert len(_read_csv(tmp_path / "bonds.csv")) == 5
         assert len(_read_csv(tmp_path / "candidates.csv")) == 3
 
-    def test_stats_rows_are_projected_onto_the_fixed_schema(self, tmp_path):
+    def test_stats_rows_are_projected_onto_the_fixed_schema(
+        self, tmp_path: Path
+    ) -> None:
         """id and category lead each row; the EDSTATS block follows verbatim."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -1814,7 +1936,7 @@ class TestOutputWriters:
         assert rows[1] == ["109m", "cofactor"] + fields
         assert len(rows[1]) == len(STATS_COLUMNS)
 
-    def test_bond_rows_are_written_in_schema_order(self, tmp_path):
+    def test_bond_rows_are_written_in_schema_order(self, tmp_path: Path) -> None:
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -1825,7 +1947,9 @@ class TestOutputWriters:
         written = _read_csv(tmp_path / "bonds.csv")[1]
         assert written == [f"v-{column}" for column in coordination_schema.BOND_COLUMNS]
 
-    def test_disabled_bond_outputs_are_a_no_op_not_a_crash(self, tmp_path):
+    def test_disabled_bond_outputs_are_a_no_op_not_a_crash(
+        self, tmp_path: Path
+    ) -> None:
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
         writers = _OutputWriters(*handles)
@@ -1846,7 +1970,9 @@ class TestOutputWriters:
             ("add", "BOND_COLUMNS"),
         ],
     )
-    def test_bond_row_schema_drift_fails_loudly(self, tmp_path, mutate, columns_name):
+    def test_bond_row_schema_drift_fails_loudly(
+        self, tmp_path: Path, mutate: str, columns_name: str
+    ) -> None:
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -1871,7 +1997,7 @@ class TestOutputWriters:
         assert expected_clause in message
         assert writers.n_bonds == 0
 
-    def test_candidate_row_schema_drift_fails_loudly(self, tmp_path):
+    def test_candidate_row_schema_drift_fails_loudly(self, tmp_path: Path) -> None:
         """Same guard on the candidate stream, named for its own file."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -1885,7 +2011,7 @@ class TestOutputWriters:
         assert "metal_candidates_all.csv" in str(excinfo.value)
         assert "unexpected bogus" in str(excinfo.value)
 
-    def test_confidence_output_requires_its_columns(self, tmp_path):
+    def test_confidence_output_requires_its_columns(self, tmp_path: Path) -> None:
         handles = self._handles(tmp_path, confidence=True)
         try:
             with pytest.raises(ValueError):
@@ -1900,7 +2026,7 @@ class TestOutputWriters:
         finally:
             self._close(handles)
 
-    def test_confidence_header_and_counts(self, tmp_path):
+    def test_confidence_header_and_counts(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
         writers = _OutputWriters(
@@ -1922,11 +2048,13 @@ class TestOutputWriters:
         assert writers.n_confidence == 2
         assert len(rows) == 3
 
-    def test_scored_confidence_stream_projects_synchronized_inputs(self, tmp_path):
+    def test_scored_confidence_stream_projects_synchronized_inputs(
+        self, tmp_path: Path
+    ) -> None:
         """A targeted scored resume updates its reusable input rows as well."""
         scored_columns = [
             *confidence_score.CONFIDENCE_INPUT_COLUMNS,
-            *pool.CONFIDENCE_ANALYSIS_COLUMNS,
+            *confidence_score.ANALYSIS_COLUMNS,
         ]
         handles = self._handles(tmp_path, confidence=True)
         inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
@@ -1954,7 +2082,7 @@ class TestOutputWriters:
             row[column] for column in confidence_score.CONFIDENCE_INPUT_COLUMNS
         ]
 
-    def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path):
+    def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
         writers = _OutputWriters(
@@ -1974,7 +2102,9 @@ class TestOutputWriters:
             self._close(handles)
         assert writers.n_confidence == 0
 
-    def test_manifest_rows_round_trip_through_the_real_projection(self, tmp_path):
+    def test_manifest_rows_round_trip_through_the_real_projection(
+        self, tmp_path: Path
+    ) -> None:
         """A written manifest is readable by load_done without reinterpretation."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -2008,7 +2138,9 @@ class TestOutputWriters:
             "1cll": "",
         }
 
-    def test_each_stream_is_flushed_before_the_manifest_marker(self, tmp_path):
+    def test_each_stream_is_flushed_before_the_manifest_marker(
+        self, tmp_path: Path
+    ) -> None:
         """An interrupted batch must retain the rows of completed entries."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
@@ -2040,7 +2172,9 @@ class TestScheduleEntries:
     """
 
     @staticmethod
-    def _args(tmp_path, ids, **overrides):
+    def _args(
+        tmp_path: Path, ids: Sequence[str], **overrides: Any
+    ) -> argparse.Namespace:
         id_file = tmp_path / "ids.txt"
         id_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
         fields: dict[str, Any] = {
@@ -2057,10 +2191,10 @@ class TestScheduleEntries:
             "max_pdbs": None,
         }
         fields.update(overrides)
-        return SimpleNamespace(**fields)
+        return cast(argparse.Namespace, SimpleNamespace(**fields))
 
     @staticmethod
-    def _manifest(tmp_path, done_ids):
+    def _manifest(tmp_path: Path, done_ids: Sequence[str]) -> Path:
         path = tmp_path / "manifest.csv"
         with open(path, "w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=MANIFEST_COLUMNS)
@@ -2071,15 +2205,19 @@ class TestScheduleEntries:
                 writer.writerow(row)
         return path
 
-    def _schedule(self, tmp_path, args):
-        run_log = SimpleNamespace(details={})
+    def _schedule(
+        self, tmp_path: Path, args: argparse.Namespace
+    ) -> tuple[list[str], _RunLog]:
+        run_log = cast(_RunLog, SimpleNamespace(details={}))
         layout = pool._OutputLayout(str(tmp_path))
         ids, _root, _manual = pool._schedule_entries(
             args, layout, str(tmp_path), run_log
         )
         return ids, run_log
 
-    def test_a_capped_resume_reaches_entries_past_the_finished_prefix(self, tmp_path):
+    def test_a_capped_resume_reaches_entries_past_the_finished_prefix(
+        self, tmp_path: Path
+    ) -> None:
         """Two already-done entries must not consume the --max-pdbs budget."""
         all_ids = ["1abc", "2abc", "3abc", "4abc", "5abc"]
         self._manifest(tmp_path, ["1abc", "2abc"])
@@ -2092,7 +2230,9 @@ class TestScheduleEntries:
         assert run_log.details["entries_selected_before_resume"] == 5
         assert run_log.details["entries_scheduled"] == 2
 
-    def test_without_resume_the_cap_takes_the_first_entries(self, tmp_path):
+    def test_without_resume_the_cap_takes_the_first_entries(
+        self, tmp_path: Path
+    ) -> None:
         args = self._args(tmp_path, ["1abc", "2abc", "3abc"], max_pdbs=2)
         ids, _run_log = self._schedule(tmp_path, args)
         assert ids == ["1abc", "2abc"]
@@ -2107,25 +2247,32 @@ class TestWriteEntry:
     """
 
     class _RecordingWriters:
-        def __init__(self):
-            self.calls = []
+        def __init__(self) -> None:
+            self.calls: list[str] = []
 
-        def __getattr__(self, name):
-            def record(*args):
+        def __getattr__(self, name: str) -> Callable[..., None]:
+            def record(*args: Any) -> None:
                 self.calls.append(name)
 
             return record
 
     @staticmethod
-    def _args(**overrides):
-        fields = {"resume": False, "bonds": True}
+    def _args(**overrides: Any) -> argparse.Namespace:
+        fields: dict[str, Any] = {"resume": False, "bonds": True}
         fields.update(overrides)
-        return SimpleNamespace(**fields)
+        return cast(argparse.Namespace, SimpleNamespace(**fields))
 
-    def test_the_manifest_row_is_written_after_every_data_row(self):
+    def test_the_manifest_row_is_written_after_every_data_row(self) -> None:
         writers = self._RecordingWriters()
         plan = pool._ConfidencePlan()
-        pool._write_entry(_result(), self._args(), plan, writers, None, ({}, {}))
+        pool._write_entry(
+            _result(),
+            self._args(),
+            plan,
+            cast(_OutputWriters, writers),
+            None,
+            ({}, {}),
+        )
         assert writers.calls[-1] == "write_manifest_row"
         assert set(writers.calls[:-1]) == {
             "write_stats_rows",
@@ -2133,14 +2280,14 @@ class TestWriteEntry:
             "write_candidate_rows",
         }
 
-    def test_a_staged_entry_is_registered_for_replacement(self):
+    def test_a_staged_entry_is_registered_for_replacement(self) -> None:
         """Staging replaces rows by id, so every written entry must be listed."""
-        staging = SimpleNamespace(replacement_ids=set())
+        staging = cast(resume._ResumeStaging, SimpleNamespace(replacement_ids=set()))
         pool._write_entry(
             _result(),
             self._args(resume=True),
             pool._ConfidencePlan(),
-            self._RecordingWriters(),
+            cast(_OutputWriters, self._RecordingWriters()),
             staging,
             ({}, {}),
         )
@@ -2151,22 +2298,26 @@ class TestProgressReporter:
     """The heartbeat is throttled differently for a terminal and a log file."""
 
     class _Stream(io.StringIO):
-        def __init__(self, terminal):
+        def __init__(self, terminal: bool) -> None:
             super().__init__()
             self._terminal = terminal
 
-        def isatty(self):
+        # No @override: typing.override arrived in 3.12 and this project still
+        # supports 3.11, where importing it would fail at runtime.
+        def isatty(self) -> bool:  # type: ignore[explicit-override]
             return self._terminal
 
     @staticmethod
-    def _counts():
+    def _counts() -> dict[str, int]:
         return {"ok": 1, "partial": 0, "skip": 0, "error": 0}
 
-    def _reporter(self, terminal, clock):
+    def _reporter(
+        self, terminal: bool, clock: Callable[[], float]
+    ) -> tuple[_ProgressReporter, "TestProgressReporter._Stream"]:
         stream = self._Stream(terminal)
         return _ProgressReporter(total=10, stream=stream, clock=clock), stream
 
-    def test_a_redirected_run_renders_far_less_often_than_a_terminal(self):
+    def test_a_redirected_run_renders_far_less_often_than_a_terminal(self) -> None:
         """A run redirected to a file must not grow it by a line per second.
 
         The counts follow from stepping the clock by ``TERMINAL_INTERVAL_S``:
@@ -2182,7 +2333,7 @@ class TestProgressReporter:
                 f"terminal={terminal} rendered the wrong number of lines"
             )
 
-    def test_force_renders_regardless_of_the_interval(self):
+    def test_force_renders_regardless_of_the_interval(self) -> None:
         reporter, stream = self._reporter(False, lambda: 1000.0)
         reporter.render(1, self._counts(), 0)
         reporter.render(2, self._counts(), 0)
@@ -2195,19 +2346,27 @@ class TestProgressReporter:
 class TestRunLog:
     """The written log is the only record of how a finished run behaved."""
 
-    def test_the_log_goes_to_a_subdirectory_of_the_output_by_default(self, tmp_path):
+    def test_the_log_goes_to_a_subdirectory_of_the_output_by_default(
+        self, tmp_path: Path
+    ) -> None:
         """One log per invocation accumulates; the four result CSVs do not."""
-        args = SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1)
+        args = cast(
+            argparse.Namespace,
+            SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1),
+        )
 
         path = _RunLog(args, "pytest").write(0)
 
         assert os.path.dirname(path) == str(tmp_path / runlog.DEFAULT_LOG_DIRNAME)
         assert sorted(os.listdir(tmp_path)) == [runlog.DEFAULT_LOG_DIRNAME]
 
-    def test_an_explicit_log_dir_is_used_as_given(self, tmp_path):
+    def test_an_explicit_log_dir_is_used_as_given(self, tmp_path: Path) -> None:
         elsewhere = tmp_path / "shared-logs"
-        args = SimpleNamespace(
-            output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
+        args = cast(
+            argparse.Namespace,
+            SimpleNamespace(
+                output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
+            ),
         )
 
         path = _RunLog(args, "pytest").write(0)
@@ -2216,9 +2375,12 @@ class TestRunLog:
         assert not (tmp_path / "out").exists(), "the output dir is not created here"
 
     @staticmethod
-    def _log(tmp_path, runtimes):
+    def _log(tmp_path: Path, runtimes: Sequence[float]) -> _RunLog:
         run_log = _RunLog(
-            SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1),
+            cast(
+                argparse.Namespace,
+                SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1),
+            ),
             "pytest",
         )
         for index, runtime in enumerate(runtimes):
@@ -2234,7 +2396,9 @@ class TestRunLog:
             )
         return run_log
 
-    def test_the_slowest_entries_table_is_ordered_slowest_first(self, tmp_path):
+    def test_the_slowest_entries_table_is_ordered_slowest_first(
+        self, tmp_path: Path
+    ) -> None:
         """Reversed, the table still looks plausible while naming the entries
         that mattered least.
         """
@@ -2247,7 +2411,7 @@ class TestRunLog:
         ]
         assert listed == ["e1", "e2", "e0"]
 
-    def test_an_existing_log_is_never_overwritten(self, tmp_path):
+    def test_an_existing_log_is_never_overwritten(self, tmp_path: Path) -> None:
         first = self._log(tmp_path, [1.0]).write(0)
         second = self._log(tmp_path, [2.0]).write(1)
         assert first != second
@@ -2260,7 +2424,7 @@ class TestCifToPdb:
     """mmCIF -> analysis PDB conversion must not lose provenance."""
 
     @staticmethod
-    def _standard_cif(tmp_path, name="in.cif"):
+    def _standard_cif(tmp_path: Path, name: str = "in.cif") -> str:
         return _write_cif(
             tmp_path / name,
             [
@@ -2304,7 +2468,7 @@ class TestCifToPdb:
             ],
         )
 
-    def test_missing_occupancies_are_blank_not_one(self, tmp_path):
+    def test_missing_occupancies_are_blank_not_one(self, tmp_path: Path) -> None:
         """README: '.' and '?' become blank PDB occupancy, never 1.00."""
         cif = self._standard_cif(tmp_path)
         out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
@@ -2317,7 +2481,9 @@ class TestCifToPdb:
         assert float(occupancies[3]) == 0.75
         assert float(occupancies[4]) == 1.00
 
-    def test_blanking_occupancy_does_not_shift_the_other_columns(self, tmp_path):
+    def test_blanking_occupancy_does_not_shift_the_other_columns(
+        self, tmp_path: Path
+    ) -> None:
         """Only columns 55-60 change; coordinates, B and element stay put."""
         cif = self._standard_cif(tmp_path)
         out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
@@ -2329,8 +2495,8 @@ class TestCifToPdb:
         assert len(blanked.rstrip("\n")) >= 78
 
     def test_absent_occupancy_column_uses_dictionary_default_with_provenance(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         cif = _write_cif(
             tmp_path / "noocc.cif",
             [
@@ -2376,14 +2542,18 @@ class TestCifToPdb:
         assert "occupancy_dictionary_default_applied" in context.warning_codes
         assert structure_analysis.count_deposited_ni(context) == pytest.approx(2.0)
 
-    def test_type_symbol_is_written_into_the_pdb_element_field(self, tmp_path):
+    def test_type_symbol_is_written_into_the_pdb_element_field(
+        self, tmp_path: Path
+    ) -> None:
         """Alchemy reads the element column, never guesses from atom names."""
         cif = self._standard_cif(tmp_path)
         out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         elements = [_element_field(line) for line in _pdb_atom_lines(out)]
         assert elements == ["N", "C", "C", "ZN", "FE"]
 
-    def test_long_component_ids_are_truncated_but_recorded(self, tmp_path):
+    def test_long_component_ids_are_truncated_but_recorded(
+        self, tmp_path: Path
+    ) -> None:
         """A >3-character CCD id cannot fit the legacy field, so map it."""
         cif = self._standard_cif(tmp_path)
         out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
@@ -2401,7 +2571,7 @@ class TestCifToPdb:
         assert "SF4" in written_names
         assert "SF4X" not in written_names
 
-    def test_no_mapping_remark_when_every_name_fits(self, tmp_path):
+    def test_no_mapping_remark_when_every_name_fits(self, tmp_path: Path) -> None:
         cif = _write_cif(
             tmp_path / "short.cif",
             [
@@ -2428,7 +2598,9 @@ class TestCifToPdb:
         with open(out) as handle:
             assert not any(line.startswith(RESNAME_REMARK_PREFIX) for line in handle)
 
-    def test_conversion_round_trips_through_load_structure(self, tmp_path):
+    def test_conversion_round_trips_through_load_structure(
+        self, tmp_path: Path
+    ) -> None:
         """The mapping is reversible: the truncated name is what EDSTATS sees,
         while Alchemy's own output keeps the mmCIF identity.
         """
@@ -2449,7 +2621,9 @@ class TestCifToPdb:
         assert context.defaulted_occupancy_atom_count == 0
         assert "occupancy_dictionary_default_applied" not in context.warning_codes
 
-    def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(self, tmp_path):
+    def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(
+        self, tmp_path: Path
+    ) -> None:
         """Every source site survives when one-character chain ids run out."""
         source_chains = [f"C{index:02d}" for index in range(62)]
         source_chains.insert(20, "A")
@@ -2524,21 +2698,24 @@ class TestCifToPdb:
         source_chain = next(chain for chain in source[0] if chain.name == "A")
         source_residue = source_chain[0]
         source_atom = source_residue[0]
-        cra = SimpleNamespace(
-            chain=source_chain, residue=source_residue, atom=source_atom
+        cra = cast(
+            gemmi.CRA,
+            SimpleNamespace(
+                chain=source_chain, residue=source_residue, atom=source_atom
+            ),
         )
         resolved = declared_connections._analysis_atom_for_partner(context, cra, {})
         assert resolved is not None
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"
 
-    def test_missing_input_file_raises_file_not_found(self, tmp_path):
+    def test_missing_input_file_raises_file_not_found(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             conversion._cif_to_pdb(
                 str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb")
             )
 
-    def test_duplicate_atom_site_id_is_rejected(self, tmp_path):
+    def test_duplicate_atom_site_id_is_rejected(self, tmp_path: Path) -> None:
         """Serials key the occupancy restoration; duplicates make it ambiguous."""
         cif = _write_cif(
             tmp_path / "dup.cif",
@@ -2565,7 +2742,9 @@ class TestCifToPdb:
         with pytest.raises(ValueError, match="duplicate mmCIF atom_site id"):
             conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
-    def test_code_atom_site_ids_are_mapped_to_generated_pdb_serials(self, tmp_path):
+    def test_code_atom_site_ids_are_mapped_to_generated_pdb_serials(
+        self, tmp_path: Path
+    ) -> None:
         cif = _write_cif(
             tmp_path / "code-ids.cif",
             [
@@ -2613,7 +2792,7 @@ class TestCifToPdb:
         assert _occupancy_field(lines[1]).strip() == ""
         assert float(_occupancy_field(lines[2])) == pytest.approx(0.75)
 
-    def test_multiple_atom_site_blocks_are_rejected(self, tmp_path):
+    def test_multiple_atom_site_blocks_are_rejected(self, tmp_path: Path) -> None:
         atoms = [
             _cif_atom(1, "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A")
         ]
@@ -2629,14 +2808,14 @@ class TestCifToPdb:
         with pytest.raises(ValueError, match="exactly one block"):
             conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
-    def test_cif_without_atom_records_is_rejected(self, tmp_path):
+    def test_cif_without_atom_records_is_rejected(self, tmp_path: Path) -> None:
         """A metadata-only mmCIF is not a coordinate file."""
         path = tmp_path / "meta.cif"
         path.write_text("data_TEST\n_cell.length_a 60.0\n")
         with pytest.raises(ValueError, match="exactly one block"):
             conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
-    def test_creates_the_destination_directory(self, tmp_path):
+    def test_creates_the_destination_directory(self, tmp_path: Path) -> None:
         cif = self._standard_cif(tmp_path)
         dst = tmp_path / "nested" / "deeper" / "out.pdb"
         out = conversion._cif_to_pdb(cif, str(dst))
@@ -2647,12 +2826,12 @@ class TestCifToPdb:
 class TestResidueConversionRecords:
     """The identity assertions ``_cif_to_pdb`` enforces on gemmi's writer."""
 
-    def test_identical_structures_produce_no_records(self):
+    def test_identical_structures_produce_no_records(self) -> None:
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(_BASE_RESIDUES)
         assert conversion._residue_conversion_records(source, converted) == []
 
-    def test_a_renamed_residue_is_recorded_with_its_author_identity(self):
+    def test_a_renamed_residue_is_recorded_with_its_author_identity(self) -> None:
         """The record must locate the residue the way the PDB reader will."""
         source = _simple_structure(
             [
@@ -2670,14 +2849,14 @@ class TestResidueConversionRecords:
             (1, "B", "7", "SF4", "SF4X")
         ]
 
-    def test_reordering_is_rejected(self):
+    def test_reordering_is_rejected(self) -> None:
         """EDSTATS joins by position-independent identity only if order holds."""
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(list(reversed(_BASE_RESIDUES)))
         with pytest.raises(ValueError, match="changed residue ordering"):
             conversion._residue_conversion_records(source, converted)
 
-    def test_changed_author_identifiers_are_rejected(self):
+    def test_changed_author_identifiers_are_rejected(self) -> None:
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(
             [
@@ -2688,7 +2867,7 @@ class TestResidueConversionRecords:
         with pytest.raises(ValueError, match="ordering|author identifiers"):
             conversion._residue_conversion_records(source, converted)
 
-    def test_changed_atom_membership_is_rejected(self):
+    def test_changed_atom_membership_is_rejected(self) -> None:
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(
             [
@@ -2699,7 +2878,7 @@ class TestResidueConversionRecords:
         with pytest.raises(ValueError, match="atom membership"):
             conversion._residue_conversion_records(source, converted)
 
-    def test_changed_duplicate_multiplicity_is_rejected(self):
+    def test_changed_duplicate_multiplicity_is_rejected(self) -> None:
         source = _simple_structure(
             [
                 ("A", 1, "GLY", [("N", "N")]),
@@ -2714,14 +2893,14 @@ class TestResidueConversionRecords:
         with pytest.raises(ValueError, match="ordering|multiplicity"):
             conversion._residue_conversion_records(source, converted)
 
-    def test_the_index_keys_on_model_chain_and_author_resnum(self):
+    def test_the_index_keys_on_model_chain_and_author_resnum(self) -> None:
         """Residues are located by the identifiers EDSTATS also reports."""
         structure = _simple_structure(_BASE_RESIDUES)
         index, order = conversion._residue_index_by_author(structure, "mmCIF")
         assert order == [(0, "A", "1"), (0, "B", "2")]
         assert index[(0, "B", "2")] == [("ZN", (("ZN", "Zn"),))]
 
-    def test_duplicate_author_ids_are_indexed_together_in_order(self):
+    def test_duplicate_author_ids_are_indexed_together_in_order(self) -> None:
         structure = _simple_structure(
             [
                 ("A", 1, "GLY", [("N", "N")]),
@@ -2754,7 +2933,7 @@ END
 class TestFirstModelPdb:
     """Textual first-model extraction for EDSTATS."""
 
-    def test_single_model_file_is_used_in_place(self, tmp_path):
+    def test_single_model_file_is_used_in_place(self, tmp_path: Path) -> None:
         builder = helpers.simple_metal_site(
             "ZN", [("HIS", "NE2", 2.03), ("HOH", "O", 2.09)]
         )
@@ -2765,7 +2944,7 @@ class TestFirstModelPdb:
         assert count == 1
         assert not dst.exists()
 
-    def test_extracts_only_the_first_model(self, tmp_path):
+    def test_extracts_only_the_first_model(self, tmp_path: Path) -> None:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
@@ -2779,7 +2958,7 @@ class TestFirstModelPdb:
         assert [line[30:38].strip() for line in atom_lines] == ["20.000", "21.500"]
         assert "30.000" not in text
 
-    def test_model_wrappers_are_removed(self, tmp_path):
+    def test_model_wrappers_are_removed(self, tmp_path: Path) -> None:
         """EDSTATS emits a synthetic separator residue for any MODEL wrapper."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
@@ -2789,7 +2968,9 @@ class TestFirstModelPdb:
             assert line[:6].strip().upper() not in ("MODEL", "ENDMDL")
         assert gemmi.read_structure(str(dst)).__len__() == 1
 
-    def test_nummdl_is_dropped_but_crystallographic_header_is_kept(self, tmp_path):
+    def test_nummdl_is_dropped_but_crystallographic_header_is_kept(
+        self, tmp_path: Path
+    ) -> None:
         """NUMMDL would lie about a one-model file; CRYST1 must survive."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
@@ -2801,7 +2982,9 @@ class TestFirstModelPdb:
         assert any(line.startswith("HEADER") for line in lines)
         assert any(line.startswith("REMARK   3") for line in lines)
 
-    def test_trailing_records_after_the_first_model_are_dropped(self, tmp_path):
+    def test_trailing_records_after_the_first_model_are_dropped(
+        self, tmp_path: Path
+    ) -> None:
         """Bookkeeping records describe the full ensemble, not this extract."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
@@ -2811,7 +2994,7 @@ class TestFirstModelPdb:
         assert not any(line.startswith("MASTER") for line in lines)
         assert lines[-1] == "END"
 
-    def test_the_extract_preserves_records_byte_for_byte(self, tmp_path):
+    def test_the_extract_preserves_records_byte_for_byte(self, tmp_path: Path) -> None:
         """Extraction is textual so occupancies and identifiers are untouched."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
@@ -2824,14 +3007,16 @@ class TestFirstModelPdb:
             line.rstrip("\n") for line in _pdb_atom_lines(dst)
         ] == source_atom_lines[:2]
 
-    def test_creates_the_destination_directory(self, tmp_path):
+    def test_creates_the_destination_directory(self, tmp_path: Path) -> None:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "nested" / "first.pdb"
         path, _ = conversion._first_model_pdb(str(source), str(dst))
         assert os.path.isfile(path)
 
-    def test_reported_model_count_is_the_source_ensemble_size(self, tmp_path):
+    def test_reported_model_count_is_the_source_ensemble_size(
+        self, tmp_path: Path
+    ) -> None:
         """The manifest's input_model_count describes the deposited file."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
@@ -2842,16 +3027,16 @@ class TestFirstModelPdb:
 
 class TestOutputDirectoryLock:
     def test_windows_backend_uses_a_nonblocking_lock_outside_metadata(
-        self, tmp_path, monkeypatch
-    ):
-        calls = []
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[tuple[int, int, int]] = []
 
         class FakeMsvcrt:
             LK_UNLCK = 0
             LK_NBLCK = 2
 
             @staticmethod
-            def locking(descriptor, mode, size):
+            def locking(descriptor: int, mode: int, size: int) -> None:
                 position = os.lseek(descriptor, 0, os.SEEK_CUR)
                 calls.append((mode, position, size))
 
@@ -2871,7 +3056,9 @@ class TestOutputDirectoryLock:
             (FakeMsvcrt.LK_UNLCK, output_lock._WINDOWS_LOCK_OFFSET, 1),
         ]
 
-    def test_lock_path_symlink_is_refused_without_touching_its_target(self, tmp_path):
+    def test_lock_path_symlink_is_refused_without_touching_its_target(
+        self, tmp_path: Path
+    ) -> None:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         target = tmp_path / "important.txt"
@@ -2893,8 +3080,8 @@ class TestOutputDirectoryLock:
         assert target.read_text(encoding="utf-8") == "important data\n"
 
     def test_multiply_linked_lock_is_refused_without_touching_its_target(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         target = tmp_path / "important.txt"
@@ -2910,7 +3097,7 @@ class TestOutputDirectoryLock:
 
         assert target.read_text(encoding="utf-8") == "important data\n"
 
-    def test_second_owner_fails_with_first_owners_details(self, tmp_path):
+    def test_second_owner_fails_with_first_owners_details(self, tmp_path: Path) -> None:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
@@ -2930,7 +3117,9 @@ class TestOutputDirectoryLock:
             pass
 
     @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
-    def test_process_exit_releases_the_lock_without_deleting_its_file(self, tmp_path):
+    def test_process_exit_releases_the_lock_without_deleting_its_file(
+        self, tmp_path: Path
+    ) -> None:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         ready_read, ready_write = os.pipe()
@@ -2951,8 +3140,11 @@ class TestOutputDirectoryLock:
             pass
 
     def test_rejected_run_does_not_sweep_or_replace_outputs(
-        self, tmp_path, monkeypatch, capsys
-    ):
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
         monkeypatch.setattr(
             pool, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
         )
@@ -2991,18 +3183,18 @@ class TestOutputDirectoryLock:
 class TestLeakedWorkDirectorySweep:
     """The startup sweep removes only disposable scratch owned by Alchemy."""
 
-    def test_removes_per_entry_and_staging_directories(self, tmp_path):
+    def test_removes_per_entry_and_staging_directories(self, tmp_path: Path) -> None:
         """Both scratch shapes are swept, with their contents.
 
         A per-entry directory is otherwise removed only on the normal
         completion path, and holds that entry's maps.
         """
-        entry = output_lock.create_owned_scratch_directory(
+        entry: Union[str, Path] = output_lock.create_owned_scratch_directory(
             str(tmp_path), prefix=".alchemy-109m-", kind="entry"
         )
         entry = tmp_path / os.path.basename(entry)
         (entry / "2mFo-DFc.map").write_text("stale", encoding="utf-8")
-        staging = output_lock.create_owned_scratch_directory(
+        staging: Union[str, Path] = output_lock.create_owned_scratch_directory(
             str(tmp_path), prefix=".alchemy-resume-", kind="resume"
         )
         staging = tmp_path / os.path.basename(staging)
@@ -3013,7 +3205,7 @@ class TestLeakedWorkDirectorySweep:
         assert removed == 2
         assert sorted(os.listdir(tmp_path)) == []
 
-    def test_leaves_real_output_alone(self, tmp_path):
+    def test_leaves_real_output_alone(self, tmp_path: Path) -> None:
         """Names alone never authorize deleting output-directory contents.
 
         The unmarked directory has the exact shape of legacy entry scratch;
@@ -3034,7 +3226,7 @@ class TestLeakedWorkDirectorySweep:
             "manifest.csv",
         ]
 
-    def test_preserved_scratch_is_not_swept(self, tmp_path):
+    def test_preserved_scratch_is_not_swept(self, tmp_path: Path) -> None:
         kept = output_lock.create_owned_scratch_directory(
             str(tmp_path),
             prefix=".alchemy-109m-",
@@ -3045,7 +3237,9 @@ class TestLeakedWorkDirectorySweep:
         assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert os.path.isdir(kept)
 
-    def test_symlink_is_not_followed_even_if_its_target_is_marked(self, tmp_path):
+    def test_symlink_is_not_followed_even_if_its_target_is_marked(
+        self, tmp_path: Path
+    ) -> None:
         target_root = tmp_path / "elsewhere"
         target_root.mkdir()
         target = output_lock.create_owned_scratch_directory(
@@ -3058,14 +3252,14 @@ class TestLeakedWorkDirectorySweep:
         assert link.is_symlink()
         assert os.path.isdir(target)
 
-    def test_missing_directory_is_not_an_error(self, tmp_path):
+    def test_missing_directory_is_not_an_error(self, tmp_path: Path) -> None:
         assert pool._sweep_owned_scratch_dirs(str(tmp_path / "absent")) == 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
 def test_unwritable_output_dir_exits_cleanly_naming_the_path(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A read-only destination exits like every other unusable input.
 
     CCP4 resolution is stubbed because it runs before the directory is created,
@@ -3108,7 +3302,9 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="uses a POSIX-only stub env")
-def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
+def test_a_run_sweeps_leaked_scratch_before_processing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The sweep is wired into the driver, not merely available to it.
 
     Driven through ``main.main`` so that deleting the call site fails the test.
@@ -3120,7 +3316,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(tmp_path, monkeypatch):
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
-    leaked = output_lock.create_owned_scratch_directory(
+    leaked: Union[str, Path] = output_lock.create_owned_scratch_directory(
         str(output_dir), prefix=".alchemy-109m-", kind="entry"
     )
     leaked = output_dir / os.path.basename(leaked)
@@ -3151,7 +3347,7 @@ class TestDensityResultReachesTheResult:
     """The worker must report the density stage's own answers, not its request."""
 
     @staticmethod
-    def _density(**overrides):
+    def _density(**overrides: Any) -> density.DensityResult:
         fields: dict[str, Any] = {
             "stats_out": "/nonexistent/stats.out",
             "rszd": "/nonexistent/rszd.pdb",
@@ -3171,7 +3367,13 @@ class TestDensityResultReachesTheResult:
         fields.update(overrides)
         return density.DensityResult(**fields)
 
-    def _entry(self, tmp_path, monkeypatch, result, **cfg_overrides):
+    def _entry(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        result: density.DensityResult,
+        **cfg_overrides: Any,
+    ) -> worker.EntryResult:
         monkeypatch.setattr(
             worker, "extract_metal_statistics", lambda *a, **k: ([], [])
         )
@@ -3179,7 +3381,9 @@ class TestDensityResultReachesTheResult:
             tmp_path, monkeypatch, lambda *a, **k: result, **cfg_overrides
         )
 
-    def test_the_scope_reported_is_the_one_achieved(self, tmp_path, monkeypatch):
+    def test_the_scope_reported_is_the_one_achieved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A crop that could not be applied must not be reported as applied.
 
         Requested and achieved scope are separate fields because they disagree:
@@ -3199,7 +3403,9 @@ class TestDensityResultReachesTheResult:
         assert result.density_full_map_bytes == 8192
         assert result.density_edstats_map_bytes == 2048
 
-    def test_density_timings_reach_the_entry(self, tmp_path, monkeypatch):
+    def test_density_timings_reach_the_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """They are how a run log attributes an entry's cost to a CCP4 program."""
         result = self._entry(
             tmp_path, monkeypatch, self._density(timings={"edstats_s": 12.5})
@@ -3208,7 +3414,9 @@ class TestDensityResultReachesTheResult:
         assert result.timings["edstats_s"] == 12.5
         assert "density_total_s" in result.timings
 
-    def test_a_normalized_twin_entry_is_flagged(self, tmp_path, monkeypatch):
+    def test_a_normalized_twin_entry_is_flagged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The normalization is a real modification and must stay visible."""
         result = self._entry(
             tmp_path,
@@ -3223,8 +3431,8 @@ class TestDensityResultReachesTheResult:
 
     @pytest.mark.parametrize("keep", [False, True])
     def test_keep_intermediates_decides_the_scratch_directory(
-        self, tmp_path, monkeypatch, keep
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool
+    ) -> None:
         """The scratch directory holds the maps, so only the flag may keep it."""
         self._entry(tmp_path, monkeypatch, self._density(), keep=keep)
 
@@ -3239,7 +3447,9 @@ class TestDensityResultReachesTheResult:
             assert metadata["preserve"] is True
 
 
-def test_a_loaded_structure_fills_in_the_model_provenance(tmp_path, monkeypatch):
+def test_a_loaded_structure_fills_in_the_model_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The model fields start unmeasured, like the bond counts, so an entry that
     failed before ``load_structure`` cannot claim a model count; a successful
     load must fill them in.
@@ -3269,17 +3479,19 @@ class TestCcp4TimeoutOutcome:
     """
 
     @staticmethod
-    def _entry(tmp_path, monkeypatch, failure):
+    def _entry(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+    ) -> worker.EntryResult:
         """Run one manual-input entry whose density stage raises ``failure``."""
 
-        def fake_density(*args, **kwargs):
+        def fake_density(*args: Any, **kwargs: Any) -> None:
             raise failure
 
         return _manual_entry(tmp_path, monkeypatch, fake_density)
 
     def test_timeout_is_reported_as_a_named_retryable_outcome(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         result = self._entry(
             tmp_path,
             monkeypatch,
@@ -3303,7 +3515,9 @@ class TestCcp4TimeoutOutcome:
         # The abandoned attempt still cost time, and the run log reports it.
         assert result.timings.get("edstats_s") == 900.4
 
-    def test_the_partial_log_survives_scratch_cleanup(self, tmp_path, monkeypatch):
+    def test_the_partial_log_survives_scratch_cleanup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """``Ccp4ToolTimeoutError`` names a partial log, but ``process`` deletes
         the scratch directory unless --keep-intermediates is given, so the log
         alone is copied out: the maps beside it can be hundreds of megabytes.
@@ -3334,8 +3548,8 @@ class TestCcp4TimeoutOutcome:
             assert "before the stall" in handle.read()
 
     def test_only_the_log_is_kept_not_the_scratch_directory(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         scratch = tmp_path / "scratch"
         scratch.mkdir()
         (scratch / "edstats.log").write_text("stalled\n", encoding="utf-8")
@@ -3359,7 +3573,9 @@ class TestCcp4TimeoutOutcome:
             "only the log belongs in the retained directory"
         )
 
-    def test_a_missing_log_is_not_an_error(self, tmp_path, monkeypatch):
+    def test_a_missing_log_is_not_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         result = self._entry(
             tmp_path,
             monkeypatch,
@@ -3377,8 +3593,8 @@ class TestCcp4TimeoutOutcome:
         assert result.retryable is True
 
     def test_a_validation_failure_remains_terminal_and_distinct(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The neighbouring handler keeps its own, non-retryable meaning."""
         result = self._entry(
             tmp_path,

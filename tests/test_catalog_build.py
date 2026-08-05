@@ -20,6 +20,9 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Iterable, Mapping, Optional
 
 import gemmi
 import pytest
@@ -27,7 +30,7 @@ import pytest
 from helpers import REPO_ROOT
 
 
-def _load_tool():
+def _load_tool() -> ModuleType:
     """Import the builder by path.
 
     ``tools/`` must stay off ``sys.path``: it holds developer utilities the
@@ -46,7 +49,9 @@ def _load_tool():
 catalog = _load_tool()
 
 
-def component_block(component_id: str, atoms, bonds) -> gemmi.cif.Block:
+def component_block(
+    component_id: str, atoms: Mapping[str, str], bonds: Iterable[tuple[str, str]]
+) -> gemmi.cif.Block:
     """Return a CCD block for one component.
 
     ``atoms`` is ``{atom_id: element}``; ``bonds`` is pairs of atom ids. Only
@@ -68,7 +73,7 @@ def component_block(component_id: str, atoms, bonds) -> gemmi.cif.Block:
     return block
 
 
-def iron_sulfur_cube():
+def iron_sulfur_cube() -> tuple[dict[str, str], list[tuple[str, str]]]:
     """A 4Fe-4S cubane: every sulfur bridges three irons."""
     irons = [f"FE{index}" for index in range(1, 5)]
     sulfurs = [f"S{index}" for index in range(1, 5)]
@@ -87,7 +92,7 @@ def porphyrin(
     nitrogen_bonds: int = 4,
     carbons: int = 20,
     oxygens: int = 0,
-):
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
     """A porphyrin-sized macrocycle: one conjugated ring of C and N.
 
     The ring is a single cycle, so it is the one biconnected component the heme
@@ -123,19 +128,21 @@ def porphyrin(
         (None, {}),
     ],
 )
-def test_element_counts_parses_a_ccd_formula(formula, expected):
+def test_element_counts_parses_a_ccd_formula(
+    formula: Optional[str], expected: dict[str, int]
+) -> None:
     """The formula parse decides which components are even considered."""
     assert catalog.element_counts(formula) == expected
 
 
-def test_a_charge_suffix_is_not_read_as_an_element():
+def test_a_charge_suffix_is_not_read_as_an_element() -> None:
     """CCD formulae carry a trailing charge; it must not become an atom count."""
     counts = catalog.element_counts("Fe4 S4 2-")
 
     assert counts == {"FE": 4, "S": 4}
 
 
-def test_the_parser_reads_element_case_the_way_the_ccd_writes_it():
+def test_the_parser_reads_element_case_the_way_the_ccd_writes_it() -> None:
     """Two-letter symbols must arrive capitalized, and the CCD writes them so.
 
     ``FE4`` is not a misspelling this parser absorbs: it reads as fluorine
@@ -145,7 +152,7 @@ def test_the_parser_reads_element_case_the_way_the_ccd_writes_it():
     assert "FE" not in catalog.element_counts("FE4 S4")
 
 
-def test_a_simple_cycle_is_one_biconnected_component():
+def test_a_simple_cycle_is_one_biconnected_component() -> None:
     """The porphyrinoid core is found as a cycle, so this is the base case."""
     adjacency = {
         "A": {"B", "D"},
@@ -159,7 +166,7 @@ def test_a_simple_cycle_is_one_biconnected_component():
     assert components == [{"A", "B", "C", "D"}]
 
 
-def test_a_bridge_separates_two_rings():
+def test_a_bridge_separates_two_rings() -> None:
     """Two rings joined by a single bond are two components: a macrocycle fused
     to a substituent is not one oversized conjugated core."""
     adjacency = {
@@ -179,7 +186,7 @@ def test_a_bridge_separates_two_rings():
     assert {"D", "E", "F"} in components
 
 
-def test_atoms_outside_the_allowed_set_are_not_traversed():
+def test_atoms_outside_the_allowed_set_are_not_traversed() -> None:
     """The heme rule excludes metals and hydrogens before looking for a core:
     a four-coordinate metal bridges separate ligands into a false one."""
     adjacency = {
@@ -193,19 +200,19 @@ def test_atoms_outside_the_allowed_set_are_not_traversed():
     assert components == [{"A", "B"}]
 
 
-def test_an_isolated_atom_contributes_no_component():
+def test_an_isolated_atom_contributes_no_component() -> None:
     """A component needs an edge; a lone atom is not a ring of one."""
     assert catalog._biconnected_components({"A": set()}, {"A"}) == []
 
 
-def test_a_cubane_is_a_cluster():
+def test_a_cubane_is_a_cluster() -> None:
     """The 4Fe-4S case, which is what the class exists for."""
     atoms, bonds = iron_sulfur_cube()
 
     assert catalog.classify_component(component_block("SF4", atoms, bonds)) == "cluster"
 
 
-def test_a_single_metal_bonded_to_sulfur_is_not_a_cluster():
+def test_a_single_metal_bonded_to_sulfur_is_not_a_cluster() -> None:
     """One Fe-S bond is a thiolate ligand, not a metal-sulfur cluster.
 
     Stoichiometry cannot tell the two apart, which is why the rule requires a
@@ -217,7 +224,7 @@ def test_a_single_metal_bonded_to_sulfur_is_not_a_cluster():
     assert catalog.classify_component(component_block("XYZ", atoms, bonds)) == ""
 
 
-def test_two_metals_sharing_a_sulfur_is_a_cluster():
+def test_two_metals_sharing_a_sulfur_is_a_cluster() -> None:
     """The minimum the rule accepts: one bridging chalcogen, two metals."""
     atoms = {"FE1": "FE", "FE2": "FE", "S1": "S"}
     bonds = [("FE1", "S1"), ("FE2", "S1")]
@@ -225,7 +232,7 @@ def test_two_metals_sharing_a_sulfur_is_a_cluster():
     assert catalog.classify_component(component_block("FES", atoms, bonds)) == "cluster"
 
 
-def test_selenium_bridges_count_as_well_as_sulfur():
+def test_selenium_bridges_count_as_well_as_sulfur() -> None:
     """Selenium-substituted clusters are the same architecture."""
     atoms = {"FE1": "FE", "FE2": "FE", "SE1": "SE"}
     bonds = [("FE1", "SE1"), ("FE2", "SE1")]
@@ -233,7 +240,7 @@ def test_selenium_bridges_count_as_well_as_sulfur():
     assert catalog.classify_component(component_block("SEC", atoms, bonds)) == "cluster"
 
 
-def test_a_bridged_pair_of_non_cluster_metals_is_not_a_cluster():
+def test_a_bridged_pair_of_non_cluster_metals_is_not_a_cluster() -> None:
     """Only the metals that form these cofactors qualify: zinc bridged by a
     sulfur is an ordinary binuclear thiolate site."""
     atoms = {"ZN1": "ZN", "ZN2": "ZN", "S1": "S"}
@@ -242,21 +249,21 @@ def test_a_bridged_pair_of_non_cluster_metals_is_not_a_cluster():
     assert catalog.classify_component(component_block("ZNS", atoms, bonds)) == ""
 
 
-def test_an_iron_porphyrin_is_a_heme():
+def test_an_iron_porphyrin_is_a_heme() -> None:
     """The canonical case: one Fe in a 24-atom conjugated macrocycle."""
     atoms, bonds = porphyrin()
 
     assert catalog.classify_component(component_block("HEM", atoms, bonds)) == "heme"
 
 
-def test_a_porphyrin_without_iron_is_not_a_heme():
+def test_a_porphyrin_without_iron_is_not_a_heme() -> None:
     """A free-base porphyrin has the ring but coordinates nothing."""
     atoms, bonds = porphyrin(iron=False)
 
     assert catalog.classify_component(component_block("POR", atoms, bonds)) == ""
 
 
-def test_a_covalently_modified_heme_with_three_fe_n_bonds_is_still_a_heme():
+def test_a_covalently_modified_heme_with_three_fe_n_bonds_is_still_a_heme() -> None:
     """Three Fe-N bonds is the floor: CCD ``WRK`` and its relatives lose a
     fourth Fe-N bond to a covalent link."""
     atoms, bonds = porphyrin(nitrogen_bonds=3)
@@ -264,21 +271,21 @@ def test_a_covalently_modified_heme_with_three_fe_n_bonds_is_still_a_heme():
     assert catalog.classify_component(component_block("WRK", atoms, bonds)) == "heme"
 
 
-def test_two_fe_n_bonds_is_not_a_heme():
+def test_two_fe_n_bonds_is_not_a_heme() -> None:
     """The other side of the same threshold."""
     atoms, bonds = porphyrin(nitrogen_bonds=2)
 
     assert catalog.classify_component(component_block("XYZ", atoms, bonds)) == ""
 
 
-def test_a_ring_smaller_than_a_porphyrin_is_not_a_heme():
+def test_a_ring_smaller_than_a_porphyrin_is_not_a_heme() -> None:
     """An Fe-N chelate with a small ring is a synthetic complex, not a heme."""
     atoms, bonds = porphyrin(carbons=8)
 
     assert catalog.classify_component(component_block("XYZ", atoms, bonds)) == ""
 
 
-def test_a_core_one_atom_short_of_a_porphyrin_is_not_a_heme():
+def test_a_core_one_atom_short_of_a_porphyrin_is_not_a_heme() -> None:
     """The size floor is checked separately from the rest.
 
     This ring passes the carbon, nitrogen and Fe-N bond counts -- 18 C, 4 N,
@@ -291,7 +298,7 @@ def test_a_core_one_atom_short_of_a_porphyrin_is_not_a_heme():
     assert catalog.classify_component(component_block("XYZ", atoms, bonds)) == ""
 
 
-def test_an_oxaporphyrin_reaches_the_size_floor_on_heteroatoms():
+def test_an_oxaporphyrin_reaches_the_size_floor_on_heteroatoms() -> None:
     """Ring oxygens count toward size, not toward carbon.
 
     Oxaporphyrins replace a ring carbon with a heteroatom, which is why the
@@ -302,7 +309,7 @@ def test_an_oxaporphyrin_reaches_the_size_floor_on_heteroatoms():
     assert catalog.classify_component(component_block("OXA", atoms, bonds)) == "heme"
 
 
-def test_a_component_with_two_irons_is_not_a_heme():
+def test_a_component_with_two_irons_is_not_a_heme() -> None:
     """The heme rule is single-iron: a second one means a polynuclear site,
     which is either a cluster or outside both populations."""
     atoms, bonds = porphyrin()
@@ -312,7 +319,7 @@ def test_a_component_with_two_irons_is_not_a_heme():
     assert catalog.classify_component(component_block("XYZ", atoms, bonds)) == ""
 
 
-def test_cluster_wins_when_a_component_could_be_read_as_both():
+def test_cluster_wins_when_a_component_could_be_read_as_both() -> None:
     """Cluster wins, because ``_parent_type`` in the analysis resolves the same
     collision the same way and the two must agree."""
     atoms, bonds = porphyrin()
@@ -322,7 +329,7 @@ def test_cluster_wins_when_a_component_could_be_read_as_both():
     assert catalog.classify_component(component_block("XYZ", atoms, bonds)) == "cluster"
 
 
-def test_a_bond_naming_an_absent_atom_is_ignored_rather_than_fatal():
+def test_a_bond_naming_an_absent_atom_is_ignored_rather_than_fatal() -> None:
     """The CCD is 40,000 components; one bad bond row costs that component its
     classification, not the whole rebuild."""
     atoms = {"FE1": "FE", "FE2": "FE", "S1": "S"}
@@ -331,7 +338,7 @@ def test_a_bond_naming_an_absent_atom_is_ignored_rather_than_fatal():
     assert catalog.classify_component(component_block("FES", atoms, bonds)) == "cluster"
 
 
-def _load_stamp_tool():
+def _load_stamp_tool() -> ModuleType:
     """Import the distance-table stamper by path, like the catalog builder."""
     path = os.path.join(REPO_ROOT, "tools", "stamp_distance_table.py")
     spec = importlib.util.spec_from_file_location("_distance_stamper", path)
@@ -345,15 +352,19 @@ def _load_stamp_tool():
 stamper = _load_stamp_tool()
 
 
-def test_the_committed_sidecar_matches_the_committed_table(capsys):
+def test_the_committed_sidecar_matches_the_committed_table(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """``--check`` is what tells a maintainer the sidecar is still current."""
     assert stamper.main(["--check"]) == 0
     assert "sidecar matches" in capsys.readouterr().out
 
 
 def test_a_corrupt_sidecar_is_reported_rather_than_raised(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """A truncated sidecar is exactly what --check exists to catch.
 
     Only ``OSError`` was handled, so a half-written file raised
@@ -368,14 +379,18 @@ def test_a_corrupt_sidecar_is_reported_rather_than_raised(
     assert "unreadable sidecar" in capsys.readouterr().out
 
 
-def test_a_missing_sidecar_is_reported(tmp_path, monkeypatch, capsys):
+def test_a_missing_sidecar_is_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     monkeypatch.setattr(stamper, "SIDECAR_PATH", str(tmp_path / "absent.json"))
 
     assert stamper.main(["--check"]) == 1
     assert "no sidecar" in capsys.readouterr().out
 
 
-def test_the_recorded_row_count_comes_from_the_loader(tmp_path):
+def test_the_recorded_row_count_comes_from_the_loader(tmp_path: Path) -> None:
     """The count must describe what ``reference_data`` accepts, not raw lines.
 
     Counting lines would drift from the loader the moment a comment or blank
@@ -400,7 +415,9 @@ def test_the_recorded_row_count_comes_from_the_loader(tmp_path):
         ("HOH O ZN 2.09 0.11\nHOH O ZN 2.10 0.12\n", "duplicates"),
     ],
 )
-def test_stamping_refuses_invalid_reference_rows(tmp_path, text, message):
+def test_stamping_refuses_invalid_reference_rows(
+    tmp_path: Path, text: str, message: str
+) -> None:
     """A fresh checksum cannot legitimize invalid scientific inputs."""
     table = tmp_path / "distances.txt"
     table.write_text(text, encoding="utf-8")

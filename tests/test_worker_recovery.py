@@ -28,6 +28,8 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, NoReturn, Optional, cast
 
 import pytest
 
@@ -39,6 +41,14 @@ from driver.writers import MANIFEST_COLUMNS
 import cli
 from driver import pool as driver_pool
 import reference_data
+
+if TYPE_CHECKING:
+    # Annotations and casts only: the fakes below stand in for these nominal
+    # types without being able to subclass them.
+    from logging.handlers import QueueListener
+    from multiprocessing.pool import Pool
+    from multiprocessing.process import BaseProcess
+    from multiprocessing.synchronize import Event as MultiprocessingEvent
 
 
 _POSIX_KILL = pytest.mark.skipif(
@@ -52,38 +62,40 @@ _POSIX_KILL = pytest.mark.skipif(
 class _FakeWorker:
     """Stand-in for a ``multiprocessing.Process`` in ``pool._pool``."""
 
-    def __init__(self, pid):
+    def __init__(self, pid: Optional[int]) -> None:
         self.pid = pid
 
 
 class _FakePool:
     """Minimal object exposing the ``_pool`` roster ``_dead_worker_pids`` reads."""
 
-    def __init__(self, pids=()):
+    def __init__(self, pids: Iterable[Optional[int]] = ()) -> None:
         self.set_roster(pids)
 
-    def set_roster(self, pids):
+    def set_roster(self, pids: Iterable[Optional[int]]) -> None:
         self._pool = [_FakeWorker(pid) for pid in pids]
 
 
 class _BrokenQueue:
     """A notification queue whose pipe has been torn down."""
 
-    def __init__(self, error):
+    def __init__(self, error: Exception) -> None:
         self.error = error
         self.get_calls = 0
 
-    def empty(self):
+    def empty(self) -> bool:
         if isinstance(self.error, OSError):
             raise self.error
         return False
 
-    def get(self):
+    def get(self) -> NoReturn:
         self.get_calls += 1
         raise self.error
 
 
-def _reference_cfg(output_dir, manual_inputs=None):
+def _reference_cfg(
+    output_dir: str, manual_inputs: Optional[dict[str, Optional[str]]] = None
+) -> worker.WorkerConfig:
     """Build the worker config exactly as ``driver_pool._run`` assembles it."""
     env = dict(os.environ)
     return worker.WorkerConfig(
@@ -131,13 +143,19 @@ def _reference_cfg(output_dir, manual_inputs=None):
         ([], {}, "an empty queue leaves the map untouched"),
     ],
 )
-def test_drain_inflight_applies_notifications_in_order(notifications, expected, label):
+def test_drain_inflight_applies_notifications_in_order(
+    notifications: list[tuple[str, int, str]],
+    expected: dict[int, str],
+    label: str,
+) -> None:
     """Draining applies every queued start/end to the pid -> entry map.
 
     The map is the only record of which entry a killed process held, so a stale
     or missing assignment either loses an entry or blames the wrong one.
     """
-    inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
+    inflight: multiprocessing.SimpleQueue[tuple[str, int, str]] = (
+        multiprocessing.SimpleQueue()
+    )
     try:
         for notification in notifications:
             inflight.put(notification)
@@ -148,9 +166,11 @@ def test_drain_inflight_applies_notifications_in_order(notifications, expected, 
         inflight.close()
 
 
-def test_drain_inflight_preserves_unrelated_existing_assignments():
+def test_drain_inflight_preserves_unrelated_existing_assignments() -> None:
     """Draining only touches the pids it has notifications for."""
-    inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
+    inflight: multiprocessing.SimpleQueue[tuple[str, int, str]] = (
+        multiprocessing.SimpleQueue()
+    )
     try:
         inflight.put(("start", 22, "2xyz"))
         assignments = {11: "1abc"}
@@ -160,17 +180,19 @@ def test_drain_inflight_preserves_unrelated_existing_assignments():
         inflight.close()
 
 
-def test_drain_inflight_returns_promptly_on_an_empty_queue():
+def test_drain_inflight_returns_promptly_on_an_empty_queue() -> None:
     """An empty queue must not block the driver's polling loop.
 
     ``SimpleQueue.get`` on an empty queue blocks forever, so the drain runs in a
     daemon thread: losing this property must be a red test, not a hung CI job.
     """
-    inflight: multiprocessing.SimpleQueue = multiprocessing.SimpleQueue()
+    inflight: multiprocessing.SimpleQueue[tuple[str, int, str]] = (
+        multiprocessing.SimpleQueue()
+    )
     returned = threading.Event()
     assignments: dict[int, str] = {}
 
-    def drain():
+    def drain() -> None:
         driver_pool._drain_inflight(inflight, assignments)
         returned.set()
 
@@ -191,18 +213,21 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue():
 
 
 @pytest.mark.parametrize("error", [OSError("pipe gone"), EOFError()])
-def test_drain_inflight_survives_a_torn_down_queue(error):
+def test_drain_inflight_survives_a_torn_down_queue(error: Exception) -> None:
     """A dead notification pipe must not propagate out of bookkeeping.
 
     The queue's other end lives in worker processes that may all have exited; a
     raised error here would abort a batch the driver could still finish.
     """
     assignments = {11: "1abc"}
-    driver_pool._drain_inflight(_BrokenQueue(error), assignments)
+    driver_pool._drain_inflight(
+        cast("multiprocessing.SimpleQueue[tuple[str, int, str]]", _BrokenQueue(error)),
+        assignments,
+    )
     assert assignments == {11: "1abc"}
 
 
-def test_dead_worker_pids_reports_only_newly_missing_workers():
+def test_dead_worker_pids_reports_only_newly_missing_workers() -> None:
     """A pid leaving the roster is reported exactly once, then forgotten.
 
     The pool replaces a dead worker with a new pid, so the driver has to diff
@@ -212,25 +237,25 @@ def test_dead_worker_pids_reports_only_newly_missing_workers():
     known: set[int] = set()
     pool = _FakePool([101, 102])
 
-    assert driver_pool._dead_worker_pids(pool, known) == set()
+    assert driver_pool._dead_worker_pids(cast("Pool", pool), known) == set()
     assert known == {101, 102}
 
     pool.set_roster([101, 103])
-    assert driver_pool._dead_worker_pids(pool, known) == {102}
+    assert driver_pool._dead_worker_pids(cast("Pool", pool), known) == {102}
     assert known == {101, 103}
 
-    assert driver_pool._dead_worker_pids(pool, known) == set()
+    assert driver_pool._dead_worker_pids(cast("Pool", pool), known) == set()
     assert known == {101, 103}
 
 
-def test_dead_worker_pids_reports_several_simultaneous_deaths():
+def test_dead_worker_pids_reports_several_simultaneous_deaths() -> None:
     """Two workers lost between polls are both reported.
 
     An out-of-memory event typically kills more than one worker at a time.
     """
     known = {1, 2, 3}
     pool = _FakePool([1, 4, 5])
-    assert driver_pool._dead_worker_pids(pool, known) == {2, 3}
+    assert driver_pool._dead_worker_pids(cast("Pool", pool), known) == {2, 3}
     assert known == {1, 4, 5}
 
 
@@ -243,7 +268,9 @@ def test_dead_worker_pids_reports_several_simultaneous_deaths():
         (_FakePool([None, None]), "processes have not been assigned pids yet"),
     ],
 )
-def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(pool, label):
+def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(
+    pool: object, label: str
+) -> None:
     """An empty or absent roster must not declare every worker dead.
 
     The pool tears its roster down at shutdown and has not filled it in yet at
@@ -251,11 +278,13 @@ def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(pool, label):
     worker that ever ran.
     """
     known = {101, 102}
-    assert driver_pool._dead_worker_pids(pool, known) == set(), label
+    assert driver_pool._dead_worker_pids(cast("Pool", pool), known) == set(), label
     assert known == {101, 102}, "the known set must be left alone"
 
 
-def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
+def test_worker_death_result_is_a_complete_retryable_manifest_row(
+    tmp_path: Path,
+) -> None:
     """The synthesized result is a full, retryable, error-status entry row.
 
     The driver writes it straight to the manifest, and the retryable
@@ -292,7 +321,7 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(tmp_path):
     assert row["n_metals"] == 0
 
 
-def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
+def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path: Path) -> None:
     """A killed worker reports no bond counts, not a measured zero.
 
     Blank means "the bond stage did not run", ``0`` means "it ran and found
@@ -319,15 +348,19 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path):
     [(None, "final"), ({"pdb_file": "x.pdb"}, "manual")],
 )
 def test_worker_death_result_reports_the_run_refinement_state(
-    tmp_path, manual_inputs, expected_state
-):
+    tmp_path: Path,
+    manual_inputs: Optional[dict[str, Optional[str]]],
+    expected_state: str,
+) -> None:
     """Even a synthesized failure records which refinement the run targeted."""
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
     result = worker._worker_death_result("1abc", cfg, 7)
     assert result.refinement_state == expected_state
 
 
-def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
+def test_worker_death_reason_codes_discriminate_synthesized_from_real(
+    tmp_path: Path,
+) -> None:
     """``["worker_process_died"]`` alone identifies a synthesized result.
 
     The dispatch loop uses that exact list to tell its own synthesized row apart
@@ -355,12 +388,12 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
 #   claim      after finishing cleanly, announce a start for THIS other entry,
 #              leaving the driver with a stale attribution for it
 #   die_after  seconds after finishing cleanly to SIGKILL this now-idle worker
-_STUB_SCRIPT: dict = {}
-_STUB_MARKER_DIR = ""
-_DRIVER_HARD_TIMEOUT_S = 60.0
+_STUB_SCRIPT: dict[str, dict[str, Any]] = {}
+_STUB_MARKER_DIR: str = ""
+_DRIVER_HARD_TIMEOUT_S: float = 60.0
 
 
-def _announce(state, pdb_id):
+def _announce(state: str, pdb_id: str) -> None:
     """Announce like a real worker, on builds that have the mechanism.
 
     Without ``_announce_inflight`` the stub has to behave like an ordinary
@@ -370,7 +403,7 @@ def _announce(state, pdb_id):
     getattr(worker, "_announce_inflight", lambda *args: None)(state, pdb_id)
 
 
-def _first_visit(pdb_id):
+def _first_visit(pdb_id: str) -> bool:
     """True the first time this entry is seen, across every worker process."""
     marker = os.path.join(_STUB_MARKER_DIR, f"visited-{pdb_id}")
     try:
@@ -380,21 +413,21 @@ def _first_visit(pdb_id):
     return True
 
 
-def _kill_self_after(delay):
+def _kill_self_after(delay: float) -> None:
     """SIGKILL this worker ``delay`` seconds from now, from a helper thread.
 
     The delay has to outlast the entry's own return so the death lands after the
     result was delivered, which no in-band code path can arrange.
     """
 
-    def kill():
+    def kill() -> None:
         time.sleep(delay)
         os.kill(os.getpid(), signal.SIGKILL)
 
     threading.Thread(target=kill, daemon=True).start()
 
 
-def _stub_process(pdb_id):
+def _stub_process(pdb_id: str) -> worker.EntryResult:
     """Stand in for ``worker.process``: no CCP4, no downloads, scripted deaths.
 
     Every entry announces itself exactly as the real worker does, so the driver
@@ -441,7 +474,14 @@ def _stub_process(pdb_id):
     return result
 
 
-def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready):
+def _driver_child(
+    argv: list[str],
+    script: dict[str, dict[str, Any]],
+    marker_dir: str,
+    stall_grace: Optional[float],
+    channel: multiprocessing.Queue[tuple[str, Any]],
+    session_ready: MultiprocessingEvent,
+) -> None:
     """Run the real ``driver_pool._run`` with the per-entry pipeline stubbed out.
 
     Executed in its own process so the parent can impose a hard timeout: a
@@ -459,7 +499,10 @@ def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready)
     _STUB_MARKER_DIR = marker_dir
     try:
         driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
-        driver_pool.process = _stub_process
+        # The stub has to replace ``process`` as driver.pool sees it, and that
+        # module imported the name from worker; strict's no-implicit-reexport
+        # objects to reaching it there, not to the patch.
+        driver_pool.process = _stub_process  # type: ignore[attr-defined]
         if stall_grace is not None:
             driver_pool.WORKER_STALL_GRACE_S = stall_grace
         args = cli.parse_args(argv)
@@ -469,7 +512,9 @@ def _driver_child(argv, script, marker_dir, stall_grace, channel, session_ready)
         channel.put(("crash", f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
 
 
-def _terminate_driver_tree(child, session_ready):
+def _terminate_driver_tree(
+    child: BaseProcess, session_ready: MultiprocessingEvent
+) -> None:
     """Force-stop a timed-out driver and every process in its test session."""
     killed_group = False
     if (
@@ -491,7 +536,12 @@ def _terminate_driver_tree(child, session_ready):
     child.join(10)
 
 
-def _run_driver(tmp_path, script, stall_grace=None, workers=None):
+def _run_driver(
+    tmp_path: Path,
+    script: dict[str, dict[str, Any]],
+    stall_grace: Optional[float] = None,
+    workers: Optional[int] = None,
+) -> tuple[int, Path, float]:
     """Drive ``driver_pool._run`` over ``script`` in a child process, with a timeout."""
     ids = list(script)
     output_dir = tmp_path / "out"
@@ -540,15 +590,16 @@ def _run_driver(tmp_path, script, stall_grace=None, workers=None):
                 f"the driver process exited (code {child.exitcode}) without "
                 "reporting an outcome"
             )
-        assert kind == "exit_code", payload
-        return payload, output_dir, elapsed
+        else:
+            assert kind == "exit_code", payload
+            return payload, output_dir, elapsed
     finally:
         if child.is_alive():  # pragma: no cover - only on an unexpected hang
             _terminate_driver_tree(child, session_ready)
         channel.close()
 
 
-def _read_manifest(output_dir):
+def _read_manifest(output_dir: Path) -> list[dict[str, str]]:
     with open(output_dir / "manifest.csv", newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         assert reader.fieldnames == MANIFEST_COLUMNS
@@ -572,7 +623,11 @@ def _read_manifest(output_dir):
     ],
     ids=["worker_named_its_entry", "worker_died_before_naming_its_entry"],
 )
-def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
+def test_driver_recovers_from_a_sigkilled_worker(
+    tmp_path: Path,
+    script: dict[str, dict[str, Any]],
+    stall_grace: Optional[float],
+) -> None:
     """A worker killed mid-entry must not hang the batch.
 
     ``multiprocessing.Pool`` never yields a result for a task whose worker died
@@ -606,7 +661,9 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
 
 
 @_POSIX_KILL
-def test_driver_recovers_when_first_worker_dies_before_first_result_poll(tmp_path):
+def test_driver_recovers_when_first_worker_dies_before_first_result_poll(
+    tmp_path: Path,
+) -> None:
     """The initial roster exists before the first entry can kill its worker.
 
     The result loop waits up to a second before its first death poll. Without
@@ -628,9 +685,9 @@ def test_driver_recovers_when_first_worker_dies_before_first_result_poll(tmp_pat
 
 
 @_POSIX_KILL
-def test_worker_death_kills_its_external_process_group(tmp_path):
+def test_worker_death_kills_its_external_process_group(tmp_path: Path) -> None:
     """A SIGKILLed worker cannot leave its active CCP4-like child orphaned."""
-    child_pid = None
+    child_pid: Optional[int] = None
     try:
         exit_code, output_dir, _ = _run_driver(
             tmp_path,
@@ -658,7 +715,9 @@ def test_worker_death_kills_its_external_process_group(tmp_path):
 
 
 @_POSIX_KILL
-def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(tmp_path):
+def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(
+    tmp_path: Path,
+) -> None:
     """An idle death cannot be transferred to a healthy long-running entry.
 
     A worker waiting for its next task blocks inside the pool task queue's
@@ -690,7 +749,9 @@ def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(tmp_path):
 
 
 @_POSIX_KILL
-def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
+def test_silent_death_fallback_attributes_only_the_outstanding_entry(
+    tmp_path: Path,
+) -> None:
     """A silent fourth-task death must not be blamed on a completed first task.
 
     One worker completes ``aaaa``, ``bbbb`` and ``cccc`` in order, then dies
@@ -698,7 +759,7 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
     fallback time, so a fallback that ignores the ids already written blames
     ``aaaa`` -- a second, failed row for an entry that succeeded.
     """
-    script = {
+    script: dict[str, dict[str, Any]] = {
         "aaaa": {"runtime": 0.02},
         "bbbb": {"runtime": 0.02},
         "cccc": {"runtime": 0.02},
@@ -731,7 +792,7 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(tmp_path):
 # held by the first worker to run out of work, so "ffff" (far the quickest
 # entry, and never killed) owns it and the workers that do get killed queue
 # harmlessly behind it.
-_STALE_ATTRIBUTION_SCRIPT = {
+_STALE_ATTRIBUTION_SCRIPT: dict[str, dict[str, Any]] = {
     "aaaa": {"runtime": 3.0},  # late, real
     "bbbb": {"runtime": 3.8},  # keeps it open
     "cccc": {"runtime": 0.5, "claim": "aaaa", "die_after": 0.6},
@@ -742,7 +803,9 @@ _STALE_ATTRIBUTION_SCRIPT = {
 
 
 @pytest.fixture(scope="module")
-def stale_attribution_batch(tmp_path_factory):
+def stale_attribution_batch(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, Any]:
     """One real ``driver_pool._run`` over ``_STALE_ATTRIBUTION_SCRIPT``.
 
     Module-scoped: the run takes a few seconds and the three tests below read
@@ -761,8 +824,8 @@ def stale_attribution_batch(tmp_path_factory):
 
 @_POSIX_KILL
 def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
-    stale_attribution_batch,
-):
+    stale_attribution_batch: dict[str, Any],
+) -> None:
     """A genuine result for an already-declared-lost entry is dropped.
 
     Two manifest rows for one entry would make ``--resume`` see a completed
@@ -797,7 +860,9 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
 
 
 @_POSIX_KILL
-def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(stale_attribution_batch):
+def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(
+    stale_attribution_batch: dict[str, Any],
+) -> None:
     """An entry is declared lost once, however the roster churns.
 
     Two workers die a second apart, both holding a start notification for
@@ -815,8 +880,8 @@ def test_a_repeatedly_missing_pid_does_not_duplicate_its_entry(stale_attribution
 
 @_POSIX_KILL
 def test_an_entry_released_before_the_death_is_not_declared_lost(
-    stale_attribution_batch,
-):
+    stale_attribution_batch: dict[str, Any],
+) -> None:
     """A worker that finished its entry before dying loses nothing.
 
     Three workers are killed after announcing the end of their own entry and
@@ -834,7 +899,7 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
         assert row["reason_codes"] == ""
 
 
-def _spawn_task(payload):
+def _spawn_task(payload: tuple[str, str]) -> tuple[str, str, list[str]]:
     """Announce, then either finish or die abnormally, inside a spawn worker."""
     action, pdb_id = payload
     worker._announce_inflight("start", pdb_id)
@@ -849,7 +914,9 @@ def _spawn_task(payload):
     return (pdb_id, cfg.output_dir, sorted(cfg.cofactors)[:1])
 
 
-def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
+def test_spawn_workers_report_inflight_entries_and_their_deaths(
+    tmp_path: Path,
+) -> None:
     """The notification queue and config survive the spawn start method.
 
     Windows has no fork: ``SimpleQueue`` and the config reach the worker only by
@@ -862,7 +929,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
     assignments: dict[int, str] = {}
     worker_pids: set[int] = set()
     dead_pids: set[int] = set()
-    finished: list = []
+    finished: list[tuple[str, str, list[str]]] = []
 
     with ctx.Pool(2, initializer=worker._init_worker, initargs=(cfg, inflight)) as pool:
         # Prime the roster, as the driver's first loop iteration does.
@@ -874,7 +941,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
         while time.monotonic() < deadline and not (finished and dead_pids):
             try:
                 finished.append(results.next(timeout=0.5))
-            except driver_pool.MultiprocessingTimeoutError:
+            except multiprocessing.TimeoutError:
                 pass
             driver_pool._drain_inflight(inflight, assignments)
             dead_pids |= driver_pool._dead_worker_pids(pool, worker_pids)
@@ -902,7 +969,9 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(tmp_path):
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
     ],
 )
-def test_worker_config_is_picklable(tmp_path, manual_inputs):
+def test_worker_config_is_picklable(
+    tmp_path: Path, manual_inputs: Optional[dict[str, Optional[str]]]
+) -> None:
     """The worker config must survive pickling, as spawn requires.
 
     Under fork the config is inherited and an unpicklable member goes unnoticed;
@@ -920,7 +989,7 @@ def test_worker_config_is_picklable(tmp_path, manual_inputs):
     ) == worker._initial_result("1abc", cfg, cfg.manual_inputs)
 
 
-def test_worker_config_cannot_be_edited_by_a_worker(tmp_path):
+def test_worker_config_cannot_be_edited_by_a_worker(tmp_path: Path) -> None:
     """One run decides the config; no worker may change it for itself.
 
     Each worker holds its own unpickled copy, so an edit here is invisible to
@@ -937,7 +1006,7 @@ def test_worker_config_cannot_be_edited_by_a_worker(tmp_path):
     assert cfg.keep is False
 
 
-def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
+def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> None:
     """The one hand-written mapping from CLI options to config fields.
 
     ``WorkerConfig`` makes a missing or misspelled *field* impossible, but not a
@@ -1010,7 +1079,9 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
         manual,
         env,
         str(tmp_path / "root"),
-        None,
+        # A manual run never downloads, so this test gives it no cache root, but
+        # both ``_worker_config`` and ``WorkerConfig.cache_root`` declare ``str``.
+        None,  # type: ignore[arg-type]
         frozenset(),
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
         driver_pool._ConfidencePlan(),
@@ -1022,7 +1093,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
     assert run_log.details["ccp4_version"] == cfg.ccp4_version
 
 
-def _never_finishing_process(pdb_id):
+def _never_finishing_process(pdb_id: str) -> NoReturn:
     """Run a CCP4-like child that outlives the signal unless its group is killed.
 
     Module level, not a closure: ``Pool`` pickles the task callable even under
@@ -1039,13 +1110,18 @@ def _never_finishing_process(pdb_id):
     raise AssertionError("external test process unexpectedly exited normally")
 
 
-def _sigterm_driver_child(argv, ready, channel):
+def _sigterm_driver_child(
+    argv: list[str],
+    ready: MultiprocessingEvent,
+    channel: multiprocessing.Queue[tuple[str, Any]],
+) -> None:
     """Run the real ``main.main`` with a slow stub so SIGTERM lands mid-run."""
     if hasattr(os, "setsid"):
         os.setsid()
 
     driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
-    driver_pool.process = _never_finishing_process
+    # Replaced as driver.pool sees it; see _driver_child.
+    driver_pool.process = _never_finishing_process  # type: ignore[attr-defined]
     ready.set()
     try:
         channel.put(("exit_code", main.main(list(argv))))
@@ -1054,7 +1130,9 @@ def _sigterm_driver_child(argv, ready, channel):
 
 
 @_POSIX_KILL
-def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
+def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(
+    tmp_path: Path,
+) -> None:
     """SIGTERM must unwind through cleanup instead of killing the driver dead.
 
     Under SIGTERM's default disposition no ``finally`` runs: the pool is never
@@ -1133,14 +1211,16 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
 
 
 class _FakeLogQueue:
-    def __init__(self):
+    def __init__(self) -> None:
         self.closed = False
 
-    def close(self):
+    def close(self) -> None:
         self.closed = True
 
 
-def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(monkeypatch):
+def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A batch with every row on disk must not hang at the very last step.
 
     ``QueueListener.stop`` puts a sentinel and then joins its thread untimed,
@@ -1152,13 +1232,16 @@ def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(monkeypat
     release = threading.Event()
 
     class _WedgedListener:
-        def stop(self):
+        def stop(self) -> None:
             release.wait(30)
 
     log_queue = _FakeLogQueue()
     started = time.monotonic()
     try:
-        abandoned = driver_pool._stop_log_listener(_WedgedListener(), log_queue)
+        abandoned = driver_pool._stop_log_listener(
+            cast("QueueListener", _WedgedListener()),
+            cast("multiprocessing.Queue[Any]", log_queue),
+        )
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -1168,28 +1251,34 @@ def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(monkeypat
     assert log_queue.closed, "the queue must still be dropped"
 
 
-def test_a_healthy_log_listener_stops_without_being_abandoned():
+def test_a_healthy_log_listener_stops_without_being_abandoned() -> None:
     """The deadline must not report a normal stop as a failure."""
-    stopped = []
+    stopped: list[bool] = []
 
     class _Listener:
-        def stop(self):
+        def stop(self) -> None:
             stopped.append(True)
 
     log_queue = _FakeLogQueue()
 
-    assert driver_pool._stop_log_listener(_Listener(), log_queue) is False
+    assert (
+        driver_pool._stop_log_listener(
+            cast("QueueListener", _Listener()),
+            cast("multiprocessing.Queue[Any]", log_queue),
+        )
+        is False
+    )
     assert stopped == [True]
     assert log_queue.closed
 
 
-def _child_pids(pid):
+def _child_pids(pid: int) -> list[int]:
     """Direct children of ``pid`` (POSIX only)."""
     result = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True)
     return [int(line) for line in result.stdout.split()]
 
 
-def _descendant_pids(pid):
+def _descendant_pids(pid: int) -> list[int]:
     """Every descendant of ``pid``, not only its direct children.
 
     Pool workers are direct children under the ``fork`` start method but
@@ -1208,11 +1297,11 @@ def _descendant_pids(pid):
     return found
 
 
-def _process_exists(pid):
+def _process_exists(pid: int) -> bool:
     return os.path.exists(f"/proc/{pid}")
 
 
-def _wait_for_process_exit(pid, timeout=10.0):
+def _wait_for_process_exit(pid: int, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not _process_exists(pid):

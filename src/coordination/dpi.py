@@ -9,15 +9,21 @@ Nothing here raises for any of that. Each function degrades to ``NAN`` and
 missing, so the caller still emits the geometry it did measure.
 """
 
+from __future__ import annotations
+
 import json
 import math
 import re
+from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
 
 from codes import ReasonCode
-from structure_analysis import NAN, count_ni
+from structure_analysis import NAN, StructureContext, count_ni
+
+if TYPE_CHECKING:
+    import gemmi
 
 
-def _is_placeholder_cell(cell) -> bool:
+def _is_placeholder_cell(cell: gemmi.UnitCell) -> bool:
     """Whether ``cell`` is Gemmi's stand-in for a file with no CRYST1 record.
 
     ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default a
@@ -28,13 +34,15 @@ def _is_placeholder_cell(cell) -> bool:
     return not cell.is_crystal()
 
 
-def _asu_volume(mtz_path, pdb_path):
+def _asu_volume(mtz_path: str, pdb_path: str) -> float:
     """Asymmetric-unit volume (A^3) = unit-cell volume / number of symmetry ops.
 
     Prefer the MTZ, which matches the diffraction data; fall back to CRYST1.
     """
     import gemmi
 
+    cell: Optional[gemmi.UnitCell]
+    sg: Optional[gemmi.SpaceGroup]
     cell = sg = None
     try:
         mtz = gemmi.read_mtz_file(mtz_path)
@@ -45,16 +53,23 @@ def _asu_volume(mtz_path, pdb_path):
         try:
             st = gemmi.read_structure(pdb_path)
             cell = st.cell
-            sg = gemmi.find_spacegroup_by_name(st.spacegroup_hm)
+            # Gemmi returns None for a name it does not recognize, but its
+            # bundled stub declares a plain SpaceGroup return.
+            sg = cast(
+                Optional["gemmi.SpaceGroup"],
+                gemmi.find_spacegroup_by_name(st.spacegroup_hm),
+            )
         except Exception:
             return NAN
-    if cell is None or sg is None or cell.volume <= 0 or _is_placeholder_cell(cell):
+    # ``st.cell`` is a value member, so only the space group can still be
+    # absent on the fallback path.
+    if sg is None or cell.volume <= 0 or _is_placeholder_cell(cell):
         return NAN
     nops = len(list(sg.operations()))
     return cell.volume / nops if nops > 0 else NAN
 
 
-def _rfree_from_pdb(pdb_path):
+def _rfree_from_pdb(pdb_path: str) -> float:
     """Fallback R-free scrape from a PDB REMARK 3 header (final R-free only)."""
     try:
         with open(pdb_path) as f:
@@ -73,7 +88,9 @@ def _rfree_from_pdb(pdb_path):
     return NAN
 
 
-def _calculate_dpi_details(structure, dpi_inputs):
+def _calculate_dpi_details(
+    structure: StructureContext, dpi_inputs: Mapping[str, Any]
+) -> tuple[float, float, str]:
     """Return ``(dpi, resolution, reason_code)``. Never raises.
 
     Resolution is metadata only: it is implicit in va and nobs, not a term of
@@ -93,7 +110,7 @@ def _calculate_dpi_details(structure, dpi_inputs):
         return NAN, resolution, ReasonCode.MISSING_DPI_METADATA_SOURCE
 
     try:
-        props = {}
+        props: dict[str, Any] = {}
         try:
             with open(data_json) as f:
                 props = json.load(f).get("properties", {})

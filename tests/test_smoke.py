@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import urllib.request
+from pathlib import Path
 
 import gemmi
 import pytest
@@ -24,7 +25,7 @@ from helpers import (
 )
 
 
-def test_src_modules_import():
+def test_src_modules_import() -> None:
     """Every src module imports from a test process and exposes its entry points.
 
     ``src/`` is not a package, so this works only because ``conftest.py`` puts
@@ -63,7 +64,11 @@ def test_src_modules_import():
     assert callable(dpi._calculate_dpi_details)
     assert callable(declared_connections._collect_declared_candidates)
     assert schema.BOND_COLUMNS[0] == "pdbID"
-    assert codes.GeometryStatus.SUSPECT == "suspect"
+    # Compared as a bare string, not through ``.value``: that these members are
+    # ``str`` is what lets every status comparison across src/ and the written
+    # CSVs work, so a demotion to a plain Enum has to fail here. mypy reads the
+    # two literals as non-overlapping and cannot see the StrEnum base.
+    assert codes.GeometryStatus.SUSPECT == "suspect"  # type: ignore[comparison-overlap]
     assert callable(contact_record.Candidate)
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
     assert callable(density_analysis.run_density_analysis)
@@ -76,14 +81,18 @@ def test_src_modules_import():
     }
 
 
-def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
+def test_src_dir_fixture_points_at_the_modules(
+    src_dir: str, repo_root: str, data_dir: str
+) -> None:
     """The path fixtures address the real checkout, not a copy or a stale root."""
     assert os.path.isfile(os.path.join(src_dir, "coordination", "analysis.py"))
     assert os.path.dirname(src_dir) == repo_root
     assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
 
 
-def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_factory):
+def test_analysis_writes_nothing_into_the_current_directory(
+    work_dir: str, tmp_path_factory: pytest.TempPathFactory
+) -> None:
     """A full in-memory analysis leaves the process working directory empty.
 
     Every path below is absolute and under a different temporary directory, so
@@ -108,7 +117,9 @@ def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_f
     assert os.listdir(work_dir) == []
 
 
-def test_cache_directory_helper_uses_canonical_then_legacy(monkeypatch, tmp_path):
+def test_cache_directory_helper_uses_canonical_then_legacy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The shared helper prefers the canonical nonblank cache variable.
 
     Every cache fixture in the suite resolves through this helper, so the
@@ -135,7 +146,7 @@ def test_cache_directory_helper_uses_canonical_then_legacy(monkeypatch, tmp_path
     assert helpers.cache_dir_from_env() is None
 
 
-def test_pdb_redo_cache_fixture_is_a_writable_directory(pdb_redo_cache):
+def test_pdb_redo_cache_fixture_is_a_writable_directory(pdb_redo_cache: str) -> None:
     """The download cache fixture points somewhere downloads can actually go.
 
     A download test handed a missing or read-only path fails with an ``OSError``
@@ -150,7 +161,7 @@ def test_pdb_redo_cache_fixture_is_a_writable_directory(pdb_redo_cache):
 
 
 @pytest.mark.parametrize("suffix", [".pdb", ".cif"])
-def test_builder_output_loads_cleanly(tmp_path, suffix):
+def test_builder_output_loads_cleanly(tmp_path: Path, suffix: str) -> None:
     """A default synthetic structure loads with no complaints in either format.
 
     Every behavioural test starts from a builder structure, so a warning raised
@@ -179,7 +190,9 @@ def test_builder_output_loads_cleanly(tmp_path, suffix):
 
 
 @pytest.mark.parametrize("suffix", [".pdb", ".cif"])
-def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix):
+def test_simple_metal_site_places_donors_at_requested_distances(
+    tmp_path: Path, suffix: str
+) -> None:
     """``simple_metal_site`` donor distances survive into measured bond rows.
 
     Distance assertions across the suite are only meaningful if a donor
@@ -214,8 +227,8 @@ def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix
     [(".pdb", "LINK", "metalc1"), (".cif", "struct_conn", "metal1")],
 )
 def test_declared_connection_is_reported_for_both_formats(
-    tmp_path, suffix, expected_source, expected_id
-):
+    tmp_path: Path, suffix: str, expected_source: str, expected_id: str
+) -> None:
     """A declared connection is honoured from a PDB LINK and from mmCIF alike.
 
     LYS NZ at this distance is not a proximity-inferable Zn donor, so the row
@@ -253,7 +266,7 @@ def test_declared_connection_is_reported_for_both_formats(
     assert float(declared[0]["connection_reported_distance"]) == pytest.approx(2.10)
 
 
-def test_conformers_drive_the_altloc_selection_policy(tmp_path):
+def test_conformers_drive_the_altloc_selection_policy(tmp_path: Path) -> None:
     """Altloc selection picks the highest-occupancy conformer for contact search.
 
     Only the selected conformer reaches contact search, while both remain source
@@ -287,7 +300,7 @@ def test_conformers_drive_the_altloc_selection_policy(tmp_path):
     ]
 
 
-def test_connection_can_name_a_specific_conformer(tmp_path):
+def test_connection_can_name_a_specific_conformer(tmp_path: Path) -> None:
     """A declaration naming an unselected conformer is re-pointed and flagged.
 
     The connection names conformer A, but selection chose B, so the contact is
@@ -326,7 +339,7 @@ def test_connection_can_name_a_specific_conformer(tmp_path):
     assert "declared_connection_conformer_substituted" in metadata["warning_codes"]
 
 
-def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path):
+def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path: Path) -> None:
     """Partial occupancies survive the PDB round trip and reach the atom count.
 
     ``count_deposited_ni`` is an occupancy-weighted sum, so an occupancy rounded
@@ -345,7 +358,7 @@ def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path):
     assert count_deposited_ni(context) == pytest.approx(0.75)
 
 
-def test_hetero_residue_builds_a_multi_metal_cofactor(tmp_path):
+def test_hetero_residue_builds_a_multi_metal_cofactor(tmp_path: Path) -> None:
     """A het residue keeps its full atom composition and every element present.
 
     Cofactor handling keys off the residue's element set and chemical atom
@@ -370,7 +383,7 @@ def test_hetero_residue_builds_a_multi_metal_cofactor(tmp_path):
     assert residue.elements == frozenset({"FE", "S"})
 
 
-def test_builder_can_omit_symmetry_metadata(tmp_path):
+def test_builder_can_omit_symmetry_metadata(tmp_path: Path) -> None:
     """A structure with no cell reports symmetry search as unavailable, with cause.
 
     The loader must name the reason rather than fail later inside the contact
@@ -387,7 +400,7 @@ def test_builder_can_omit_symmetry_metadata(tmp_path):
     assert context.symmetry_search_failure_reason == "missing_or_invalid_unit_cell"
 
 
-def test_edstats_row_matches_the_documented_schema():
+def test_edstats_row_matches_the_documented_schema() -> None:
     """Synthetic EDSTATS rows match the parser's own column list exactly.
 
     EDSTATS writes 42 columns for a residue row, 41 for a blank-chain row and
@@ -412,7 +425,7 @@ def test_edstats_row_matches_the_documented_schema():
         helpers.edstats_row("ZN", "B", "1", metrics={"NOPE": 1})
 
 
-def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path):
+def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path: Path) -> None:
     """Helper-written EDSTATS output is accepted by the real statistics parser.
 
     This is the contract that lets the suite run without CCP4 at all.
@@ -435,7 +448,7 @@ def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path):
     assert stats_path.endswith("stats.out")
 
 
-def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
+def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path: Path) -> None:
     """Per-residue EDSTATS sigmas reach every bond row for that residue.
 
     A missed join leaves the sigma columns blank rather than wrong, so it is
@@ -461,7 +474,7 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
         assert row["sigma_pos"] == pytest.approx(4.0)
 
 
-def test_blank_chain_rows_round_trip_through_the_parser(tmp_path):
+def test_blank_chain_rows_round_trip_through_the_parser(tmp_path: Path) -> None:
     """A blank chain id survives the whitespace-delimited EDSTATS format.
 
     EDSTATS separates columns by spaces, so a blank-chain residue produces a row
@@ -492,7 +505,7 @@ def test_blank_chain_rows_round_trip_through_the_parser(tmp_path):
     assert rows[0]["chain"] == ""
 
 
-def test_cofactor_rows_repeat_once_per_metal_site(tmp_path):
+def test_cofactor_rows_repeat_once_per_metal_site(tmp_path: Path) -> None:
     """A two-metal cofactor yields one row per metal over one shared observation.
 
     EDSTATS measures the FES residue once but the cofactor holds two iron sites,
@@ -530,7 +543,7 @@ def test_cofactor_rows_repeat_once_per_metal_site(tmp_path):
     assert all(row["density_is_shared"] for row in rows)
 
 
-def test_insertion_codes_survive_into_the_edstats_join(tmp_path):
+def test_insertion_codes_survive_into_the_edstats_join(tmp_path: Path) -> None:
     """Insertion codes are preserved on the coordinate side of the join.
 
     The insertion code is part of the identity the statistics table joins on:
@@ -552,7 +565,7 @@ def test_insertion_codes_survive_into_the_edstats_join(tmp_path):
     assert [row["resnum"] for row in rows] == ["1"]
 
 
-def test_symmetry_image_contacts_are_reachable(tmp_path):
+def test_symmetry_image_contacts_are_reachable(tmp_path: Path) -> None:
     """A contact that exists only through a symmetry image is found and labelled.
 
     The deposited water is far from the metal, so the distance must be measured
@@ -581,7 +594,9 @@ def test_symmetry_image_contacts_are_reachable(tmp_path):
     assert rows[0]["symmetry_operation"] == "1_455"
 
 
-def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
+def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(
+    tmp_path: Path,
+) -> None:
     """Complete refinement metadata yields a finite DPI and a finite z-score.
 
     The positive control for the many tests that run without a data.json: a
@@ -615,7 +630,7 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     assert math.isfinite(rows[0]["zscore"])
 
 
-def test_ccp4_capability_probe_is_boolean_and_does_not_raise():
+def test_ccp4_capability_probe_is_boolean_and_does_not_raise() -> None:
     """The local CCP4 probe answers with a bool instead of raising.
 
     ``conftest`` calls it during collection, so a probe that raised on an
@@ -624,7 +639,9 @@ def test_ccp4_capability_probe_is_boolean_and_does_not_raise():
     assert isinstance(helpers.ccp4_available(), bool)
 
 
-def test_not_network_selection_does_not_call_the_network_probe(tmp_path, repo_root):
+def test_not_network_selection_does_not_call_the_network_probe(
+    tmp_path: Path, repo_root: str
+) -> None:
     """Marker deselection happens before the external capability probe.
 
     ``-m 'not network'`` is an offline selection boundary, not just a promise to
@@ -686,7 +703,9 @@ def test_not_network_selection_does_not_call_the_network_probe(tmp_path, repo_ro
 
 
 @pytest.mark.ccp4
-def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
+def test_ccp4_env_fixture_resolves_every_required_tool(
+    ccp4_env: dict[str, str],
+) -> None:
     """The ``ccp4_env`` fixture hands back an environment CCP4 can actually run in.
 
     An install that resolves but is broken -- missing shared libraries, a stale
@@ -736,7 +755,7 @@ def test_ccp4_env_fixture_resolves_every_required_tool(ccp4_env):
 
 
 @pytest.mark.network
-def test_network_marker_only_runs_with_connectivity():
+def test_network_marker_only_runs_with_connectivity() -> None:
     """PDB-REDO really answers, not merely a TCP handshake on port 443.
 
     A captive portal or a proxy that accepts connections and then refuses them
@@ -757,7 +776,7 @@ def test_network_marker_only_runs_with_connectivity():
     assert float(properties["DATARESH"]) > 0
 
 
-def test_element_inference_rejects_ambiguous_names():
+def test_element_inference_rejects_ambiguous_names() -> None:
     """Atom-name element inference follows PDB naming and refuses metal names.
 
     The leading character is the element for protein atom names, but not for
@@ -771,7 +790,7 @@ def test_element_inference_rejects_ambiguous_names():
         helpers.element_for_atom_name("ZN")
 
 
-def test_gemmi_is_the_expected_flavour():
+def test_gemmi_is_the_expected_flavour() -> None:
     """The installed gemmi has the APIs the helpers and src depend on.
 
     The helpers declare connections through ``Connection``/``AtomAddress``, and

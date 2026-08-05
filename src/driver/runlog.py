@@ -5,6 +5,7 @@ renders them into one complete temporary file before publishing it under a
 name that cannot overwrite an earlier run.
 """
 
+import argparse
 import os
 import platform
 import shutil
@@ -12,23 +13,26 @@ import tempfile
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from typing import Any, Mapping, Optional
 
 from driver.resources import available_cpu_count, available_memory_bytes
 
 
-from worker import blank_if_unmeasured
+from worker import EntryResult, blank_if_unmeasured
 
 # A subdirectory rather than the output directory itself: one log accumulates
 # per invocation, and the startup sweep never sees them beside the result CSVs.
 DEFAULT_LOG_DIRNAME = "logs"
 
 
-def log_dir_for(args):
+def log_dir_for(args: argparse.Namespace) -> str:
     """Return the directory this run writes its log to."""
-    return args.log_dir or os.path.join(args.output_dir, DEFAULT_LOG_DIRNAME)
+    log_dir: Optional[str] = args.log_dir
+    output_dir: str = args.output_dir
+    return log_dir or os.path.join(output_dir, DEFAULT_LOG_DIRNAME)
 
 
-def _copy_log_exclusively(source_path, destination_path):
+def _copy_log_exclusively(source_path: str, destination_path: str) -> None:
     """Copy a complete log into a newly claimed path without overwriting."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_CLOEXEC", 0)
@@ -54,7 +58,7 @@ def _copy_log_exclusively(source_path, destination_path):
     os.unlink(source_path)
 
 
-def _claim_log_path(directory, stem, source_path):
+def _claim_log_path(directory: str, stem: str, source_path: str) -> str:
     """Publish a finished log under the first free numbered name.
 
     ``os.link`` fails rather than overwrites when the name is taken, so two
@@ -91,19 +95,21 @@ def _claim_log_path(directory, stem, source_path):
 class _RunLog:
     """Collect compact run diagnostics and write one human-readable log."""
 
-    def __init__(self, args, command):
+    def __init__(self, args: argparse.Namespace, command: str) -> None:
         self.args = args
         self.command = command
         self.started_at = datetime.now(timezone.utc)
         self.started_monotonic = time.monotonic()
-        self.details = {
+        # The driver records whatever a stage learned about itself here, so the
+        # values are as heterogeneous as the stages that supply them.
+        self.details: dict[str, Any] = {
             "initial_available_memory_bytes": available_memory_bytes(),
         }
-        self.summary = {}
-        self.entries = []
+        self.summary: dict[str, Any] = {}
+        self.entries: list[dict[str, Any]] = []
         self.driver_error = ""
 
-    def record_entry(self, result):
+    def record_entry(self, result: EntryResult) -> None:
         """Retain diagnostic fields without keeping large result-row payloads."""
         self.entries.append(
             {
@@ -126,7 +132,7 @@ class _RunLog:
         )
 
     @staticmethod
-    def _clean(value):
+    def _clean(value: object) -> str:
         if value is None:
             return "none"
         if isinstance(value, bool):
@@ -134,7 +140,7 @@ class _RunLog:
         return str(value).replace("\r", " ").replace("\n", " ")
 
     @staticmethod
-    def _counter_text(counter):
+    def _counter_text(counter: Mapping[str, int]) -> str:
         if not counter:
             return "none"
         return ", ".join(
@@ -144,7 +150,7 @@ class _RunLog:
             )
         )
 
-    def _render(self, exit_code, finished_at, elapsed_s):
+    def _render(self, exit_code: int, finished_at: datetime, elapsed_s: float) -> str:
         lines = [
             "Alchemy detailed run log",
             "========================",
@@ -314,7 +320,7 @@ class _RunLog:
         lines.append("")
         return "\n".join(lines)
 
-    def write(self, exit_code):
+    def write(self, exit_code: int) -> str:
         """Write the final timestamped log without overwriting and return its path."""
         directory = log_dir_for(self.args)
         os.makedirs(directory, exist_ok=True)

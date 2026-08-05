@@ -7,17 +7,21 @@ held in ``_CFG``, because a pool initializer cannot return a value and passing
 the config with every task would pickle it per entry.
 """
 
+from __future__ import annotations
+
 import contextlib
+import logging
 import math
 import os
 import shutil
 import signal
 import time
 from dataclasses import dataclass, field
-from typing import Any, Collection, Dict, Optional
+from multiprocessing.queues import Queue, SimpleQueue
+from typing import Any, Collection, Dict, Mapping, Optional
 
 from _version import __version__
-from coordination.analysis import NAN, load_structure, run_bond_analysis
+from coordination.analysis import run_bond_analysis
 from codes import ReasonCode, WarningCode
 from coordination.schema import (
     STATS_EXTRA_COLUMNS,
@@ -44,6 +48,7 @@ from inputs import (
 from metal_elements import METAL_ELEMENTS
 from metal_identification import extract_metal_statistics
 from run_logging import configure_worker_logging, logger_for, truncate
+from structure_analysis import NAN, StructureContext, load_structure
 
 
 METALS_SET = set(METAL_ELEMENTS)
@@ -105,7 +110,7 @@ class WorkerConfig:
 
     root: str
     mirror_root: str
-    cache_root: Optional[str]
+    cache_root: str
     # Carries CCP4 on PATH, and is passed to every subprocess.
     env: Dict[str, str]
     output_dir: str
@@ -130,10 +135,14 @@ class WorkerConfig:
 
 
 _CFG: Optional[WorkerConfig] = None
-_INFLIGHT: Optional[Any] = None
+_INFLIGHT: Optional[SimpleQueue[tuple[str, int, str]]] = None
 
 
-def _init_worker(cfg: WorkerConfig, inflight=None, log_queue=None) -> None:
+def _init_worker(
+    cfg: WorkerConfig,
+    inflight: Optional[SimpleQueue[tuple[str, int, str]]] = None,
+    log_queue: Optional[Queue[logging.LogRecord]] = None,
+) -> None:
     global _CFG, _INFLIGHT
     _CFG = cfg
     _INFLIGHT = inflight
@@ -148,7 +157,7 @@ def _init_worker(cfg: WorkerConfig, inflight=None, log_queue=None) -> None:
     # the worker is doing, including the log queue's feeder-thread finalizer.
     with contextlib.suppress(AttributeError, OSError, ValueError):
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    configure_worker_logging(log_queue, level=cfg.log_level if cfg else 20)
+    configure_worker_logging(log_queue, level=cfg.log_level)
 
 
 def _announce_inflight(state: str, pdb_id: str) -> None:
@@ -168,7 +177,9 @@ def _announce_inflight(state: str, pdb_id: str) -> None:
         pass
 
 
-def _preserve_timeout_log(timeout, pdb_id, output_dir):
+def _preserve_timeout_log(
+    timeout: Ccp4ToolTimeoutError, pdb_id: str, output_dir: str
+) -> str:
     """Copy a timed-out program's partial log out of the scratch directory.
 
     Only the log: the maps beside it run to hundreds of megabytes per entry.
@@ -263,7 +274,11 @@ class EntryResult:
     multi_model_structure: Optional[bool] = None
 
 
-def _initial_result(pdb_id, cfg, manual_inputs):
+def _initial_result(
+    pdb_id: str,
+    cfg: WorkerConfig,
+    manual_inputs: Optional[Dict[str, Optional[str]]],
+) -> EntryResult:
     """Return the per-entry result skeleton, pre-filled with run provenance."""
     return EntryResult(
         pdb_id=pdb_id,
@@ -275,7 +290,7 @@ def _initial_result(pdb_id, cfg, manual_inputs):
     )
 
 
-def _worker_death_result(pdb_id, cfg, pid):
+def _worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult:
     """Synthesize the retryable result a killed worker could not return."""
     result = _initial_result(pdb_id, cfg, cfg.manual_inputs)
     result.status = "error"
@@ -288,7 +303,9 @@ def _worker_death_result(pdb_id, cfg, pid):
     return result
 
 
-def _coordinate_provenance(cfg, source_path):
+def _coordinate_provenance(
+    cfg: WorkerConfig, source_path: str
+) -> tuple[str, str, bool]:
     manual = cfg.manual_inputs
     if manual:
         converted = bool(manual.get("cif_file"))
@@ -298,7 +315,9 @@ def _coordinate_provenance(cfg, source_path):
     return ("mmcif" if converted else "pdb", "pdb", converted)
 
 
-def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
+def _source_coordinate_path(
+    cfg: WorkerConfig, pdb_id: str, entry: str, analysis_path: str
+) -> str:
     manual = cfg.manual_inputs
     if manual:
         return manual.get("cif_file") or manual.get("pdb_file") or ""
@@ -313,7 +332,7 @@ def _source_coordinate_path(cfg, pdb_id, entry, analysis_path):
     )
 
 
-def _resolve_entry_dir(pdb_id, cfg):
+def _resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
     if cfg.allow_download:
         used_root = ensure_entry_available(pdb_id, cfg.mirror_root, cfg.cache_root)
@@ -340,14 +359,19 @@ class _EntryInputs:
     data_json: Optional[str]
     # The diffraction data's own high-resolution limit, as distinct from the
     # map columns' range below.
-    data_reshi: Any
-    map_reslo: Any
-    map_reshi: Any
+    data_reshi: float
+    map_reslo: float
+    map_reshi: float
     pdb_redo_is_twin: bool
     source_coordinate_path: str
 
 
-def _run_density_stage(result, cfg, inputs, structure):
+def _run_density_stage(
+    result: EntryResult,
+    cfg: WorkerConfig,
+    inputs: _EntryInputs,
+    structure: StructureContext,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Calculate the maps, run EDSTATS, and extract this entry's statistics.
 
     Returns ``(rows, header)``, both empty when density could not be produced;
@@ -423,9 +447,9 @@ def _run_density_stage(result, cfg, inputs, structure):
     return rows, header
 
 
-def _identification_reason_codes(rows):
+def _identification_reason_codes(rows: list[dict[str, Any]]) -> list[ReasonCode]:
     """Deduplicated reason codes for EDSTATS rows that could not be joined."""
-    codes = []
+    codes: list[ReasonCode] = []
     for row in rows:
         mapping_status = row.get("coordinate_mapping_status", "")
         site_status = row.get("selected_metal_site_status", "")
@@ -438,7 +462,7 @@ def _identification_reason_codes(rows):
     return list(dict.fromkeys(codes))
 
 
-def _excluded_zero_occupancy_metals(structure):
+def _excluded_zero_occupancy_metals(structure: StructureContext) -> int:
     """Metal records dropped from site selection for a valid zero occupancy.
 
     Site selection excludes them deliberately -- a metal modeled as absent is
@@ -454,7 +478,9 @@ def _excluded_zero_occupancy_metals(structure):
     return len(with_absent) - len(selected)
 
 
-def _sites_without_density_rows(rows, structure):
+def _sites_without_density_rows(
+    rows: list[dict[str, Any]], structure: StructureContext
+) -> list[tuple[int, int, int, int]]:
     """Selected coordinate metal sites that the statistics table omits.
 
     Coordinate analysis selects every canonical metal atom by element, while
@@ -471,7 +497,13 @@ def _sites_without_density_rows(rows, structure):
     return [metal.source_key for metal in selected if metal.source_key not in reported]
 
 
-def _append_site_fields(rows, site_summaries, structure):
+def _append_site_fields(
+    rows: list[dict[str, Any]],
+    # Keyed by ``AtomSite.source_key``, but the lookup key below is a row's own
+    # ``site_key``, which is ``None`` for a cofactor that joined no metal site.
+    site_summaries: Mapping[Any, dict[str, Any]],
+    structure: StructureContext,
+) -> None:
     """Extend each EDSTATS row with its per-site contact and provenance values."""
     for index, row in enumerate(rows):
         summary = dict(site_summaries.get(row.get("site_key"), {}))
@@ -499,17 +531,29 @@ def _append_site_fields(rows, site_summaries, structure):
         )
 
 
-def _run_bond_stage(result, cfg, inputs, structure, rows, header):
+def _run_bond_stage(
+    result: EntryResult,
+    cfg: WorkerConfig,
+    inputs: _EntryInputs,
+    structure: StructureContext,
+    rows: list[dict[str, Any]],
+    header: list[str],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[tuple[int, int, int, int], dict[str, Any]],
+    dict[str, Any],
+]:
     """Evaluate the contacts around each site, unless ``--no-bonds`` cleared it.
 
     Returns ``(bond_rows, candidate_rows, site_summaries, bond_meta)``. A
     bond-stage failure must not lose the EDSTATS rows already computed, so it
     is recorded on ``result`` and the empty defaults are returned instead.
     """
-    bond_rows = []
-    candidate_rows = []
-    site_summaries = {}
-    bond_meta = {
+    bond_rows: list[dict[str, Any]] = []
+    candidate_rows: list[dict[str, Any]] = []
+    site_summaries: dict[tuple[int, int, int, int], dict[str, Any]] = {}
+    bond_meta: dict[str, Any] = {
         "partial_reason_codes": [],
         "warning_codes": list(structure.warning_codes),
         "messages": [],
@@ -561,7 +605,12 @@ def _run_bond_stage(result, cfg, inputs, structure, rows, header):
     return bond_rows, candidate_rows, site_summaries, bond_meta
 
 
-def _finalize_result(result, identification_codes, bond_meta, structure):
+def _finalize_result(
+    result: EntryResult,
+    identification_codes: list[ReasonCode],
+    bond_meta: dict[str, Any],
+    structure: StructureContext,
+) -> None:
     """Merge the stage outcomes into the final status, codes, and counts.
 
     The rows each stage produced are already on ``result``; only what no stage
@@ -599,7 +648,7 @@ def _finalize_result(result, identification_codes, bond_meta, structure):
     result.n_candidates = len(result.candidate_rows)
 
 
-def process(pdb_id):
+def process(pdb_id: str) -> EntryResult:
     """Run one entry in an initialized worker and return its result."""
     cfg = _CFG
     if cfg is None:
@@ -609,7 +658,7 @@ def process(pdb_id):
     # a predictable <output-dir>/<pdbID> path could already hold user data.
     work_dir: Optional[str] = None
     manual_inputs = cfg.manual_inputs
-    data_json = None
+    data_json: Optional[str] = None
     result = _initial_result(pdb_id, cfg, manual_inputs)
     _announce_inflight("start", pdb_id)
     try:

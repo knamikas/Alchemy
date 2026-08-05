@@ -12,11 +12,12 @@ The builders are serialization only: every decision they report was made in
 ``coordination.analysis`` before the row is built.
 """
 
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Union
 
 import gemmi
 
-from structure_analysis import NAN
+from coordination.contact_record import Candidate
+from structure_analysis import NAN, AtomSite, StructureContext
 
 
 # Cutoff for a reference-covered geometry outlier. Both CSVs publish it as a
@@ -286,12 +287,14 @@ STATS_EXTRA_COLUMNS = [
 ]
 
 
-def _check_row_schema(row, columns, name):
+def _check_row_schema(
+    row: Mapping[str, Any], columns: Iterable[str], name: str
+) -> None:
     """Fail loudly when a row builder and its CSV schema have drifted apart."""
     expected = set(columns)
     if row.keys() == expected:
         return
-    details = []
+    details: list[str] = []
     missing = sorted(expected - row.keys())
     unexpected = sorted(row.keys() - expected)
     if missing:
@@ -303,15 +306,15 @@ def _check_row_schema(row, columns, name):
     )
 
 
-def _bonded_to(is_water=False):
+def _bonded_to(is_water: bool = False) -> str:
     return "HOH" if is_water else "P"
 
 
-def _connection_output_values(candidate):
+def _connection_output_values(candidate: Candidate) -> dict[str, Union[str, bool]]:
     records = candidate.declared_connections
     inferred = bool(candidate.inferred_contact_eligible)
 
-    def joined(name):
+    def joined(name: str) -> str:
         values = []
         for record in records:
             value = record.get(name, "")
@@ -335,7 +338,7 @@ def _connection_output_values(candidate):
     }
 
 
-def _donor_output_values(candidate):
+def _donor_output_values(candidate: Candidate) -> dict[str, Union[bool, str, None]]:
     return {
         "inferred_donor_allowed": candidate.inferred_donor_allowed,
         "inferred_donor_rule": candidate.inferred_donor_rule,
@@ -343,7 +346,7 @@ def _donor_output_values(candidate):
     }
 
 
-def _neighbor_class(neighbor):
+def _neighbor_class(neighbor: AtomSite) -> str:
     if neighbor.is_water:
         return "water"
     residue_info = gemmi.find_tabulated_residue(neighbor.residue_name)
@@ -354,8 +357,10 @@ def _neighbor_class(neighbor):
     return "other"
 
 
-def _context_warning_values(candidate, include_proximal=False):
-    reasons = []
+def _context_warning_values(
+    candidate: Candidate, include_proximal: bool = False
+) -> dict[str, Any]:
+    reasons: list[str] = []
     if candidate.neighbor.occupancy_valid and candidate.neighbor.occupancy == 0.0:
         reasons.append("zero_occupancy_neighbor")
     if not candidate.inferred_donor_allowed:
@@ -375,14 +380,14 @@ def _context_warning_values(candidate, include_proximal=False):
 
 
 def stats_extra_values(
-    structure: Any,
-    metal: Optional[Any] = None,
+    structure: StructureContext,
+    metal: Optional[AtomSite] = None,
     summary: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Return fixed per-site values appended to an EDSTATS row."""
     summary = summary or {}
     residue = structure.residue_for_atom(metal) if metal is not None else None
-    values = {
+    values: dict[str, Any] = {
         "model_policy": structure.model_policy,
         "input_model_count": structure.input_model_count,
         "model_analyzed": structure.model_analyzed,
@@ -454,7 +459,16 @@ def stats_extra_values(
     return values
 
 
-def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_type):
+def _bond_row(
+    pdb_id: str,
+    structure: StructureContext,
+    metal: AtomSite,
+    contact: Candidate,
+    dpi: float,
+    resolution: float,
+    sigma: tuple[float, float, float],
+    parent_type: str,
+) -> dict[str, Any]:
     neighbor = contact.neighbor
     metal_residue = structure.residue_for_atom(metal)
     neighbor_residue = structure.residue_for_atom(neighbor)
@@ -559,7 +573,9 @@ def _bond_row(pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_
     }
 
 
-def _candidate_row(pdb_id, structure, metal, candidate):
+def _candidate_row(
+    pdb_id: str, structure: StructureContext, metal: AtomSite, candidate: Candidate
+) -> dict[str, Any]:
     """Return one discovered or declared candidate as a candidate CSV row."""
     neighbor = candidate.neighbor
     x, y, z = candidate.transformed_position

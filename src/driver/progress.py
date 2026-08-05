@@ -7,6 +7,7 @@ moves, a redirected log wants a file that does not grow by a megabyte an hour.
 
 import sys
 import time
+from typing import Callable, Mapping, Optional, TextIO
 
 
 class _ProgressReporter:
@@ -15,7 +16,12 @@ class _ProgressReporter:
     TERMINAL_INTERVAL_S = 1.0
     REDIRECTED_INTERVAL_S = 30.0
 
-    def __init__(self, total, stream=None, clock=None):
+    def __init__(
+        self,
+        total: int,
+        stream: Optional[TextIO] = None,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
         self.total = total
         self.stream = stream if stream is not None else sys.stdout
         self.clock = clock if clock is not None else time.monotonic
@@ -26,7 +32,7 @@ class _ProgressReporter:
         self.line_open = False
 
     @staticmethod
-    def _elapsed_text(elapsed_s):
+    def _elapsed_text(elapsed_s: float) -> str:
         elapsed = max(0, int(elapsed_s))
         hours, remainder = divmod(elapsed, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -34,7 +40,14 @@ class _ProgressReporter:
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes:02d}:{seconds:02d}"
 
-    def render(self, completed, counts, no_metal_count, force=False, final=False):
+    def render(
+        self,
+        completed: int,
+        counts: Mapping[str, int],
+        no_metal_count: int,
+        force: bool = False,
+        final: bool = False,
+    ) -> None:
         now = self.clock()
         interval = (
             self.TERMINAL_INTERVAL_S if self.terminal else self.REDIRECTED_INTERVAL_S
@@ -60,7 +73,7 @@ class _ProgressReporter:
             print(line, file=self.stream, flush=True)
         self.last_rendered = now
 
-    def close(self):
+    def close(self) -> None:
         """Finish an in-place terminal line after success or an exception."""
         if self.terminal and self.line_open:
             print(file=self.stream, flush=True)

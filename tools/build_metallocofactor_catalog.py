@@ -4,6 +4,8 @@
 A developer utility: the analysis pipeline never imports it and never networks.
 """
 
+from __future__ import annotations
+
 import argparse
 import gzip
 import hashlib
@@ -13,10 +15,15 @@ import re
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
+
+if TYPE_CHECKING:
+    import gemmi
 
 REPOSITORY_DIR = Path(__file__).resolve().parents[1]
 SOURCE_DIR = REPOSITORY_DIR / "src"
@@ -69,7 +76,7 @@ CANONICAL_CLASSES = {
 }
 
 
-def element_counts(formula):
+def element_counts(formula: str | None) -> dict[str, int]:
     """Return ``{ELEMENT: count}`` parsed from a CCD formula string."""
     counts: dict[str, int] = {}
     for symbol, number in ELEMENT_PATTERN.findall(formula or ""):
@@ -79,7 +86,9 @@ def element_counts(formula):
     return counts
 
 
-def _component_graph(block):
+def _component_graph(
+    block: gemmi.cif.Block,
+) -> tuple[dict[str, str], dict[str, set[str]]]:
     """Return CCD atom elements and undirected bond adjacency for ``block``."""
     elements = {
         atom_id: symbol.strip().upper()
@@ -104,15 +113,19 @@ def _component_graph(block):
     return elements, adjacency
 
 
-def _biconnected_components(adjacency, allowed_atoms):
+def _biconnected_components(
+    adjacency: Mapping[str, set[str]], allowed_atoms: Iterable[str]
+) -> list[set[str]]:
     """Return vertex sets for biconnected components of an atom subgraph."""
     allowed = set(allowed_atoms)
-    discovery, low, parent = {}, {}, {}
-    edge_stack = []
-    components = []
+    discovery: dict[str, int] = {}
+    low: dict[str, int] = {}
+    parent: dict[str, str] = {}
+    edge_stack: list[tuple[str, str]] = []
+    components: list[set[str]] = []
     clock = 0
 
-    def visit(atom):
+    def visit(atom: str) -> None:
         nonlocal clock
         clock += 1
         discovery[atom] = low[atom] = clock
@@ -143,7 +156,7 @@ def _biconnected_components(adjacency, allowed_atoms):
     return components
 
 
-def classify_component(block):
+def classify_component(block: gemmi.cif.Block) -> str:
     """Return ``"cluster"``, ``"heme"``, or ``""`` from CCD connectivity.
 
     Formula stoichiometry cannot establish either architecture: sulfur may be
@@ -191,7 +204,7 @@ def classify_component(block):
     return ""
 
 
-def _verify_canonical_classes(classes):
+def _verify_canonical_classes(classes: Mapping[str, str]) -> None:
     """Fail the build if a manuscript-named reference cofactor was lost."""
     wrong = {
         component_id: (expected, classes.get(component_id, "<absent>"))
@@ -217,11 +230,11 @@ def _sha256(path: str) -> str:
     return digest.hexdigest()
 
 
-def formula_has_metal(formula):
+def formula_has_metal(formula: str) -> bool:
     return any(element in METAL_ELEMENTS for element in element_counts(formula))
 
 
-def symbol_is_metal(symbol):
+def symbol_is_metal(symbol: str) -> bool:
     """Return whether one complete atom type symbol is a configured metal."""
     return bool(symbol) and symbol.strip().upper() in METAL_ELEMENTS
 
@@ -232,7 +245,7 @@ def _decompress_ccd(source_path: str, destination_path: str) -> None:
             shutil.copyfileobj(source, destination)
 
 
-def download_ccd(temp_dir):
+def download_ccd(temp_dir: str) -> tuple[str, dict[str, str | None]]:
     """Download and decompress the CCD, returning its path and provenance."""
     print(f"Downloading CCD from {CCD_URL} ...", flush=True)
     compressed_path = os.path.join(temp_dir, "components.cif.gz")
@@ -247,7 +260,7 @@ def download_ccd(temp_dir):
         status = response.getcode()
         if status != 200:
             raise RuntimeError(f"CCD download failed with HTTP {status}")
-        response_metadata = {
+        response_metadata: dict[str, str | None] = {
             "etag": response.headers.get("ETag"),
             "last_modified": response.headers.get("Last-Modified"),
         }
@@ -286,13 +299,15 @@ def download_ccd(temp_dir):
     }
 
 
-def prepare_local_ccd(source_path, temp_dir):
+def prepare_local_ccd(
+    source_path: str, temp_dir: str
+) -> tuple[str, dict[str, str | None]]:
     """Return an uncompressed local CCD path and source provenance."""
     source_path = os.path.abspath(source_path)
     if not os.path.isfile(source_path):
         raise FileNotFoundError(f"CCD input not found: {source_path}")
 
-    provenance = {"source": source_path}
+    provenance: dict[str, str | None] = {"source": source_path}
     if source_path.lower().endswith(".gz"):
         cif_path = os.path.join(temp_dir, "components.cif")
         _decompress_ccd(source_path, cif_path)
@@ -301,13 +316,13 @@ def prepare_local_ccd(source_path, temp_dir):
     return source_path, provenance
 
 
-def build_metallocofactors_list(cif_path, output_path):
+def build_metallocofactors_list(cif_path: str, output_path: str) -> dict[str, int]:
     """Build a deterministic catalog from a wwPDB CCD components file."""
     import gemmi
 
     print(f"Reading CCD from {cif_path}", flush=True)
     ccd = gemmi.cif.read_file(cif_path)
-    records = {}
+    records: dict[str, tuple[str, str]] = {}
     counts = {
         "with_metal": 0,
         "skipped_ions": 0,
@@ -383,7 +398,7 @@ def build_metallocofactors_list(cif_path, output_path):
     return counts
 
 
-def rebuild_catalog(output_dir, ccd_path=None):
+def rebuild_catalog(output_dir: str, ccd_path: str | None = None) -> dict[str, object]:
     """Rebuild the bundled catalog and its provenance metadata."""
     output_dir = os.path.abspath(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -399,7 +414,7 @@ def rebuild_catalog(output_dir, ccd_path=None):
         temporary_catalog = os.path.join(temp_dir, CATALOG_FILENAME)
         counts = build_metallocofactors_list(prepared_ccd, temporary_catalog)
         catalog_hash = _sha256(temporary_catalog)
-        metadata = {
+        metadata: dict[str, object] = {
             "generated": datetime.now(timezone.utc).isoformat(),
             "ccd_source": ccd_provenance["source"],
             "ccd_sha256": _sha256(prepared_ccd),
@@ -422,12 +437,12 @@ def rebuild_catalog(output_dir, ccd_path=None):
     return metadata
 
 
-def report_status(output_dir):
+def report_status(output_dir: str) -> dict[str, Any]:
     """Print the committed catalog's provenance and integrity status."""
     catalog_path = os.path.join(output_dir, CATALOG_FILENAME)
     metadata_path = os.path.join(output_dir, METADATA_FILENAME)
     with open(metadata_path, encoding="utf-8", errors="strict") as handle:
-        metadata = json.load(handle)
+        metadata: dict[str, Any] = json.load(handle)
     actual_hash = _sha256(catalog_path)
     recorded_hash = metadata.get("catalog_sha256")
 
@@ -452,7 +467,7 @@ def report_status(output_dir):
     return metadata
 
 
-def parse_args(argv=None):
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=("Explicitly rebuild Alchemy's bundled metallocofactor catalog.")
     )
@@ -476,7 +491,7 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.status:
         report_status(os.path.abspath(args.output_dir))

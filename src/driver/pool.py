@@ -7,6 +7,9 @@ worker killed while blocked on the task queue never releases that queue's lock,
 which wedges ``Pool.terminate``, so shutdown is bounded explicitly.
 """
 
+from __future__ import annotations
+
+import argparse
 import contextlib
 import json
 import os
@@ -20,7 +23,18 @@ from multiprocessing import (
     SimpleQueue,
     TimeoutError as MultiprocessingTimeoutError,
 )
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Collection,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    TextIO,
+    Tuple,
+    cast,
+)
 
 from _version import __version__
 from reference_data import (
@@ -53,6 +67,7 @@ from inputs import (
     read_data_json_properties,
 )
 from worker import (
+    EntryResult,
     WorkerConfig,
     _init_worker,
     _worker_death_result,
@@ -74,6 +89,7 @@ from driver.resume import (
     remove_stale_disabled_bond_outputs,
     validate_resume_schemas,
 )
+from driver.runlog import _RunLog
 from driver.writers import STATS_COLUMNS, _manifest_row, _OutputWriters
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
@@ -87,6 +103,14 @@ from confidence_score import (
     score_against_reference,
     validate_scored_reference,
 )
+
+if TYPE_CHECKING:
+    # ``multiprocessing.Pool`` and its queues are bound methods of the default
+    # context, not the classes they return, so the annotations name the classes
+    # themselves.
+    from logging.handlers import QueueListener
+    from multiprocessing.pool import Pool as WorkerPool
+    from multiprocessing.queues import Queue as WorkerLogQueue
 
 
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
@@ -109,7 +133,7 @@ PROVENANCE_COMMAND_TIMEOUT_S = 1
 logger = logger_for(__name__)
 
 
-def _verify_resolved_ccp4(env, setup_path):
+def _verify_resolved_ccp4(env: Mapping[str, str], setup_path: str) -> None:
     """Verify ``env``, naming the script that was run when it comes up short."""
     try:
         verify_ccp4(env)
@@ -119,7 +143,9 @@ def _verify_resolved_ccp4(env, setup_path):
         ) from None
 
 
-def _resolve_ccp4_environment(args):
+def _resolve_ccp4_environment(
+    args: argparse.Namespace,
+) -> tuple[Optional[dict[str, str]], Optional[str]]:
     """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
     config = load_ccp4_setup_config()
     if args.configure_ccp4:
@@ -171,7 +197,9 @@ def _resolve_ccp4_environment(args):
     return env, ccp4_setup
 
 
-def resolve_ccp4_environment(args):
+def resolve_ccp4_environment(
+    args: argparse.Namespace,
+) -> tuple[Optional[dict[str, str]], Optional[str]]:
     """Return ``(env, setup_path)`` for this run, or raise ``DriverError``."""
     try:
         return _resolve_ccp4_environment(args)
@@ -179,7 +207,7 @@ def resolve_ccp4_environment(args):
         raise DriverError(str(exc)) from None
 
 
-def _alchemy_commit():
+def _alchemy_commit() -> str:
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "--short=12", "HEAD"],
@@ -203,7 +231,7 @@ def _alchemy_commit():
         return "unknown"
 
 
-def _gemmi_version():
+def _gemmi_version() -> str:
     try:
         import gemmi
 
@@ -212,7 +240,7 @@ def _gemmi_version():
         return "unknown"
 
 
-def _ccp4_version(env):
+def _ccp4_version(env: Mapping[str, str]) -> str:
     for key in ("CCP4_VERSION", "CCP4_VERSION_CODE", "CCP4VER"):
         if env.get(key):
             return env[key]
@@ -220,7 +248,9 @@ def _ccp4_version(env):
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-def _drain_inflight(inflight, assignments):
+def _drain_inflight(
+    inflight: SimpleQueue[tuple[str, int, str]], assignments: dict[int, str]
+) -> None:
     """Apply pending worker notifications to the pid -> entry assignment map."""
     while True:
         try:
@@ -235,7 +265,7 @@ def _drain_inflight(inflight, assignments):
             assignments.pop(pid, None)
 
 
-def _dead_worker_pids(pool, known_pids):
+def _dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:
     """Return worker pids that have disappeared since the last check."""
     current = {
         child.pid for child in getattr(pool, "_pool", ()) or () if child.pid is not None
@@ -248,7 +278,7 @@ def _dead_worker_pids(pool, known_pids):
     return dead
 
 
-def _signal_worker_process_group(pid, sig):
+def _signal_worker_process_group(pid: int, sig: int) -> None:
     """Signal one isolated worker group, ignoring an already-empty group.
 
     The group is signalled even once ``pid`` has been reaped, which is the
@@ -270,7 +300,7 @@ def _signal_worker_process_group(pid, sig):
         pass
 
 
-def _stop_log_listener(listener, queue):
+def _stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bool:
     """Stop the worker log listener on a deadline and drop its queue.
 
     ``QueueListener.stop`` puts a sentinel and then joins its thread untimed.
@@ -294,11 +324,11 @@ def _stop_log_listener(listener, queue):
     return abandoned
 
 
-def _sweep_owned_scratch_dirs(output_dir):
+def _sweep_owned_scratch_dirs(output_dir: str) -> int:
     return sweep_owned_scratch_directories(output_dir)
 
 
-def _shutdown_pool(pool):
+def _shutdown_pool(pool: WorkerPool) -> bool:
     """Close a worker pool, killing its children if a clean shutdown hangs.
 
     A worker killed while blocked in the task queue's ``get()`` never releases
@@ -348,7 +378,9 @@ def _shutdown_pool(pool):
     return True
 
 
-def resolve_confidence_reference_dir(output_dir, configured_dir=None):
+def resolve_confidence_reference_dir(
+    output_dir: str, configured_dir: Optional[str] = None
+) -> tuple[Optional[str], tuple[str, ...]]:
     """Find a frozen confidence reference, honoring an explicit override."""
     candidates: Tuple[str, ...]
     if configured_dir is not None:
@@ -365,7 +397,7 @@ def resolve_confidence_reference_dir(output_dir, configured_dir=None):
     return None, candidates
 
 
-def _batch_exit_code(counts, retryable_partial_count):
+def _batch_exit_code(counts: Mapping[str, int], retryable_partial_count: int) -> int:
     """Return failure when one or more entries remain operationally incomplete."""
     incomplete = (
         counts.get("error", 0) + counts.get("skip", 0) + retryable_partial_count
@@ -373,7 +405,7 @@ def _batch_exit_code(counts, retryable_partial_count):
     return 1 if incomplete else 0
 
 
-def load_ids_from_file(path):
+def load_ids_from_file(path: str) -> list[str]:
     """Return a list of PDB ids from a comma/newline-separated text file.
 
     Read as ``utf-8-sig`` so a byte-order mark is consumed rather than glued to
@@ -403,7 +435,9 @@ class DriverError(Exception):
     """A user-facing driver failure: the message is reported and the run exits 1."""
 
 
-def _select_entry_ids(args, cache_root):
+def _select_entry_ids(
+    args: argparse.Namespace, cache_root: str
+) -> tuple[list[str], str, Optional[dict[str, Optional[str]]]]:
     """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
     root = args.pdb_redo_root
     if args.pdb_file or args.mtz_file or args.cif_file:
@@ -472,7 +506,7 @@ def _select_entry_ids(args, cache_root):
 class _OutputLayout:
     """Every path a run reads or writes, all derived from ``--output-dir``."""
 
-    def __init__(self, output_dir):
+    def __init__(self, output_dir: str) -> None:
         self.output_dir = output_dir
         self.manifest = os.path.join(output_dir, "manifest.csv")
         self.stats = os.path.join(output_dir, "metal_stats_all.csv")
@@ -496,7 +530,7 @@ class _ConfidencePlan:
     ``None`` means scoring is off.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.mode: Optional[str] = None
         self.reference: Optional[ConfidenceReference] = None
         self.stream_path: Optional[str] = None
@@ -511,12 +545,12 @@ class _ConfidencePlan:
 class _BatchTally:
     """Running totals for the batch and the exit code they imply."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
         self.no_metals = 0
         self.retryable_partials = 0
 
-    def record(self, result):
+    def record(self, result: EntryResult) -> None:
         status = result.status
         self.counts[status] = self.counts.get(status, 0) + 1
         if result.no_metals:
@@ -524,11 +558,11 @@ class _BatchTally:
         if status == "partial" and result.retryable:
             self.retryable_partials += 1
 
-    def exit_code(self):
+    def exit_code(self) -> int:
         return _batch_exit_code(self.counts, self.retryable_partials)
 
 
-def _load_cofactor_catalog():
+def _load_cofactor_catalog() -> frozenset[str]:
     """Read the bundled metallocofactor catalog, or fail the run naming it."""
     try:
         return cofactor_ids()
@@ -536,7 +570,7 @@ def _load_cofactor_catalog():
         raise DriverError(f"Invalid bundled metallocofactor catalog: {exc}") from None
 
 
-def _prepare_output_directory(output_dir):
+def _prepare_output_directory(output_dir: str) -> None:
     """Create ``--output-dir`` before its stable lock file is opened."""
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -546,7 +580,7 @@ def _prepare_output_directory(output_dir):
         ) from None
 
 
-def _classify_run(args):
+def _classify_run(args: argparse.Namespace) -> tuple[str, bool]:
     """Return ``(run_mode, database_run)`` for this invocation.
 
     ``database_run`` is the uncapped full-mirror case, the only one that may
@@ -573,7 +607,12 @@ def _classify_run(args):
     return run_mode, database_run
 
 
-def _plan_confidence(args, layout, database_run, run_log):
+def _plan_confidence(
+    args: argparse.Namespace,
+    layout: _OutputLayout,
+    database_run: bool,
+    run_log: _RunLog,
+) -> _ConfidencePlan:
     """Decide this run's confidence mode before any entry is processed."""
     plan = _ConfidencePlan()
     if not args.bonds:
@@ -623,7 +662,9 @@ def _plan_confidence(args, layout, database_run, run_log):
     return plan
 
 
-def _check_resume_is_compatible(args, layout: _OutputLayout, plan) -> None:
+def _check_resume_is_compatible(
+    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+) -> None:
     """Refuse to resume onto output this run cannot safely extend.
 
     Sets ``plan.synchronize_inputs`` as a side effect.
@@ -658,12 +699,21 @@ def _check_resume_is_compatible(args, layout: _OutputLayout, plan) -> None:
         raise DriverError(str(exc)) from None
     if plan.mode == "reference":
         try:
-            validate_scored_reference(plan.stream_path, plan.reference)
+            # ``_plan_confidence`` sets the mode only once both of these are
+            # bound, which no annotation on the plan can express.
+            validate_scored_reference(
+                cast(str, plan.stream_path), cast(ConfidenceReference, plan.reference)
+            )
         except (OSError, ValueError) as exc:
             raise DriverError(f"Cannot resume confidence output: {exc}") from None
 
 
-def _schedule_entries(args, layout, cache_root, run_log):
+def _schedule_entries(
+    args: argparse.Namespace,
+    layout: _OutputLayout,
+    cache_root: str,
+    run_log: _RunLog,
+) -> tuple[list[str], str, Optional[dict[str, Optional[str]]]]:
     """Return ``(ids, root, manual_inputs)`` for the entries this run will do.
 
     ``--resume`` removes finished entries before ``--max-pdbs`` caps what is
@@ -704,7 +754,7 @@ def _schedule_entries(args, layout, cache_root, run_log):
     return ids, root, manual_inputs
 
 
-def _finalize_confidence_reference(layout):
+def _finalize_confidence_reference(layout: _OutputLayout) -> tuple[int, int, int]:
     """Score the streamed inputs and freeze the database reference."""
     try:
         return finalize_database_confidence(
@@ -714,7 +764,9 @@ def _finalize_confidence_reference(layout):
         raise DriverError(f"Confidence finalization failed: {exc}") from None
 
 
-def _finish_without_entries(args, layout, plan):
+def _finish_without_entries(
+    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+) -> int:
     """Exit code for a run whose work list came back empty."""
     if (
         args.resume
@@ -736,7 +788,9 @@ def _finish_without_entries(args, layout, plan):
     return 0
 
 
-def _clear_stale_outputs(args, layout, plan):
+def _clear_stale_outputs(
+    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+) -> None:
     """Remove output from a previous run that this one is about to contradict."""
     try:
         removed = remove_stale_disabled_bond_outputs(
@@ -767,7 +821,9 @@ def _clear_stale_outputs(args, layout, plan):
         raise DriverError(f"Could not clear stale confidence output: {exc}") from None
 
 
-def _choose_worker_count(args, entry_count, run_log):
+def _choose_worker_count(
+    args: argparse.Namespace, entry_count: int, run_log: _RunLog
+) -> int:
     """Size the pool, never above the number of entries there are to run.
 
     A Pool creates every worker up front, and under the spawn start method each
@@ -806,8 +862,15 @@ def _choose_worker_count(args, entry_count, run_log):
 
 
 def _worker_config(
-    args, env, root, cache_root, cofactors, manual_inputs, plan, run_log
-):
+    args: argparse.Namespace,
+    env: dict[str, str],
+    root: str,
+    cache_root: str,
+    cofactors: Collection[str],
+    manual_inputs: Optional[dict[str, Optional[str]]],
+    plan: _ConfidencePlan,
+    run_log: _RunLog,
+) -> WorkerConfig:
     """Build the config every worker is initialized with, once per run."""
     cfg = WorkerConfig(
         root=root,
@@ -846,7 +909,9 @@ def _worker_config(
     return cfg
 
 
-def _output_targets(args, layout, plan):
+def _output_targets(
+    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+) -> tuple[str, ...]:
     """The output files this run writes, in the order staging expects them."""
     paths = [*layout.core]
     if plan.enabled:
@@ -858,13 +923,18 @@ def _output_targets(args, layout, plan):
     return tuple(paths)
 
 
-def _open_writers(handles, args, plan, write_paths) -> _OutputWriters:
+def _open_writers(
+    handles: contextlib.ExitStack,
+    args: argparse.Namespace,
+    plan: _ConfidencePlan,
+    write_paths: Sequence[str],
+) -> _OutputWriters:
     """Open every output stream this run writes and give them their headers."""
     manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
     confidence_path = write_paths[4] if plan.enabled else None
     confidence_inputs_path = write_paths[5] if plan.synchronize_inputs else None
 
-    def opened(path):
+    def opened(path: str) -> TextIO:
         return handles.enter_context(open(path, "w", newline=""))
 
     return _OutputWriters(
@@ -878,7 +948,9 @@ def _open_writers(handles, args, plan, write_paths) -> _OutputWriters:
     )
 
 
-def _confidence_rows_for(result, plan):
+def _confidence_rows_for(
+    result: EntryResult, plan: _ConfidencePlan
+) -> list[dict[str, Any]]:
     """The confidence rows one entry contributes, scored where a reference is."""
     rows = prepare_result_confidence_inputs(
         result.rows, result.bond_rows, STATS_COLUMNS
@@ -894,7 +966,9 @@ def _confidence_rows_for(result, plan):
     return rows
 
 
-def _should_write_entry(resuming, result, prior_ids):
+def _should_write_entry(
+    resuming: bool, result: EntryResult, prior_ids: set[str]
+) -> bool:
     """Whether this result's rows belong in the output.
 
     A resumed run suppresses a retry that did not improve on the row it would
@@ -911,7 +985,14 @@ def _should_write_entry(resuming, result, prior_ids):
     return _resume_replacement_succeeded(result)
 
 
-def _write_entry(result, args, plan, writers, staging, prior_counts):
+def _write_entry(
+    result: EntryResult,
+    args: argparse.Namespace,
+    plan: _ConfidencePlan,
+    writers: _OutputWriters,
+    staging: Optional[_ResumeStaging],
+    prior_counts: tuple[dict[str, str], dict[str, str]],
+) -> None:
     """Write one entry's rows, manifest row last.
 
     The manifest row is the entry's completion marker, so an interruption
@@ -942,14 +1023,20 @@ class _WorkerDeathWatch:
     run has gone quiet for long enough to rule out a live worker.
     """
 
-    def __init__(self, pool, inflight, ids, cfg):
+    def __init__(
+        self,
+        pool: WorkerPool,
+        inflight: SimpleQueue[tuple[str, int, str]],
+        ids: Sequence[str],
+        cfg: WorkerConfig,
+    ) -> None:
         self._pool = pool
         self._inflight = inflight
         self._ids = ids
         self._cfg = cfg
         self._assignments: Dict[int, str] = {}
-        self._worker_pids: set = set()
-        self._lost_ids: set = set()
+        self._worker_pids: set[int] = set()
+        self._lost_ids: set[str] = set()
         self._unattributed_deaths = 0
         # ``Pool`` has started its workers before its constructor returns, and
         # no tasks are submitted until after this watch is created. Snapshot
@@ -957,7 +1044,7 @@ class _WorkerDeathWatch:
         # the result loop's first poll, its vanished pid must still be known.
         _dead_worker_pids(self._pool, self._worker_pids)
 
-    def poll(self):
+    def poll(self) -> list[EntryResult]:
         """Results for the entries whose worker has died since the last call."""
         _drain_inflight(self._inflight, self._assignments)
         losses = []
@@ -971,7 +1058,9 @@ class _WorkerDeathWatch:
                 losses.append(self._lose(dead_id, dead_pid))
         return losses
 
-    def stalled_losses(self, completed_ids, stalled_for, remaining):
+    def stalled_losses(
+        self, completed_ids: set[str], stalled_for: float, remaining: int
+    ) -> Optional[list[EntryResult]]:
         """Results for the outstanding entries an unattributed death held.
 
         ``None`` until every unassigned outstanding entry can be accounted for
@@ -1007,19 +1096,28 @@ class _WorkerDeathWatch:
                 break
         return losses or None
 
-    def superseded(self, result):
+    def superseded(self, result: EntryResult) -> bool:
         """True when a synthesized loss row already stands for this entry."""
         died = result.reason_codes == ["worker_process_died"]
         return result.pdb_id in self._lost_ids and not died
 
-    def _lose(self, pdb_id, pid):
+    def _lose(self, pdb_id: str, pid: int) -> EntryResult:
         self._lost_ids.add(pdb_id)
         return _worker_death_result(pdb_id, self._cfg, pid)
 
 
 def _dispatch_entries(
-    args, ids, cfg, workers, writers, plan, staging, prior_counts, prior_ids, run_log
-):
+    args: argparse.Namespace,
+    ids: Sequence[str],
+    cfg: WorkerConfig,
+    workers: int,
+    writers: _OutputWriters,
+    plan: _ConfidencePlan,
+    staging: Optional[_ResumeStaging],
+    prior_counts: tuple[dict[str, str], dict[str, str]],
+    prior_ids: set[str],
+    run_log: _RunLog,
+) -> _BatchTally:
     """Run every entry across a worker pool and write the results as they land.
 
     The loop polls rather than iterating the pool's results, because waiting on
@@ -1027,8 +1125,8 @@ def _dispatch_entries(
     """
     tally = _BatchTally()
     progress = _ProgressReporter(len(ids))
-    inflight: SimpleQueue[Any] = SimpleQueue()
-    completed_ids: set = set()
+    inflight: SimpleQueue[tuple[str, int, str]] = SimpleQueue()
+    completed_ids: set[str] = set()
     last_progress = time.monotonic()
     # The start method is the interpreter's default, deliberately not pinned.
     # It changed from ``fork`` to ``forkserver`` in Python 3.14, so the process
@@ -1111,7 +1209,12 @@ def _dispatch_entries(
     return tally
 
 
-def _keep_completed_staging(staging, args, plan, run_log):
+def _keep_completed_staging(
+    staging: _ResumeStaging,
+    args: argparse.Namespace,
+    plan: _ConfidencePlan,
+    run_log: _RunLog,
+) -> None:
     """Promote the entries a halted resume finished, rather than dropping them.
 
     An id reaches ``replacement_ids`` only after its manifest row, which is the
@@ -1148,7 +1251,15 @@ def _keep_completed_staging(staging, args, plan, run_log):
     )
 
 
-def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
+def _process_entries(
+    args: argparse.Namespace,
+    ids: Sequence[str],
+    cfg: WorkerConfig,
+    workers: int,
+    layout: _OutputLayout,
+    plan: _ConfidencePlan,
+    run_log: _RunLog,
+) -> tuple[_BatchTally, _OutputWriters]:
     """Open the outputs, run the batch, and commit any staged retry rows.
 
     An interrupted batch still commits the entries that completed, so the work
@@ -1214,7 +1325,14 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
     return tally, opened_writers
 
 
-def _report_batch(args, layout, plan, tally, writers, run_log):
+def _report_batch(
+    args: argparse.Namespace,
+    layout: _OutputLayout,
+    plan: _ConfidencePlan,
+    tally: _BatchTally,
+    writers: _OutputWriters,
+    run_log: _RunLog,
+) -> int:
     """Print the human summary, finalize confidence, and return the exit code.
 
     Confidence is finalized only on a clean batch: a reference built from
@@ -1283,7 +1401,7 @@ def _report_batch(args, layout, plan, tally, writers, run_log):
     return exit_code
 
 
-def _run(args, run_log):
+def _run(args: argparse.Namespace, run_log: _RunLog) -> int:
     """Execute one batch, returning its exit code."""
     try:
         return _execute(args, run_log)
@@ -1293,7 +1411,12 @@ def _run(args, run_log):
         return 1
 
 
-def _execute_with_output_lock(args, run_log, cofactors, env):
+def _execute_with_output_lock(
+    args: argparse.Namespace,
+    run_log: _RunLog,
+    cofactors: Collection[str],
+    env: dict[str, str],
+) -> int:
     """Run every output-reading and output-writing phase under one lease."""
     _sweep_owned_scratch_dirs(args.output_dir)
     layout = _OutputLayout(args.output_dir)
@@ -1319,7 +1442,7 @@ def _execute_with_output_lock(args, run_log, cofactors, env):
     return _report_batch(args, layout, plan, tally, writers, run_log)
 
 
-def _execute(args, run_log):
+def _execute(args: argparse.Namespace, run_log: _RunLog) -> int:
     """Resolve prerequisites, then exclusively own the output for the run."""
     cofactors = _load_cofactor_catalog()
     env, _ = resolve_ccp4_environment(args)

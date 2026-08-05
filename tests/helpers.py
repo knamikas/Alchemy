@@ -14,9 +14,25 @@ import os
 import shutil
 import socket
 from dataclasses import dataclass, replace
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import gemmi
+
+if TYPE_CHECKING:
+    # Annotations only, so that the deliberate per-function imports below stay
+    # the only place this module reaches into ``src`` at run time.
+    from structure_analysis import StructureContext
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +40,10 @@ REPO_ROOT = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(REPO_ROOT, "src")
 
 Vec3 = Tuple[float, float, float]
+
+# Callers pass ``tmp_path / "name"`` as readily as a plain string; every writer
+# below stringifies its argument.
+_StrPath = Union[str, os.PathLike[str]]
 
 # ``P 21 21 21`` gives four symmetry operations, so symmetry search is available
 # and image contacts are exercised.
@@ -513,20 +533,20 @@ class StructureBuilder:
             structure.connections.append(_gemmi_connection(spec))
         return structure
 
-    def write_pdb(self, path) -> str:
+    def write_pdb(self, path: _StrPath) -> str:
         """Write legacy PDB (ATOM/HETATM + LINK); returns the path."""
         path = str(path)
         self.to_gemmi().write_pdb(path)
         return path
 
-    def write_cif(self, path) -> str:
+    def write_cif(self, path: _StrPath) -> str:
         """Write mmCIF (``_atom_site`` + ``_struct_conn``); returns the path."""
         path = str(path)
         structure = self.to_gemmi()
         structure.make_mmcif_document().write_file(path)
         return path
 
-    def write(self, path, fmt: Optional[str] = None) -> str:
+    def write(self, path: _StrPath, fmt: Optional[str] = None) -> str:
         """Write PDB or mmCIF, choosing the format from ``path``'s suffix."""
         path = str(path)
         if fmt is None:
@@ -661,7 +681,7 @@ def simple_metal_site(
     hetero_chain: str = "B",
     first_seqid: int = 10,
     directions: Sequence[Vec3] = DONOR_DIRECTIONS,
-    **builder_kwargs,
+    **builder_kwargs: Any,
 ) -> StructureBuilder:
     """One metal ion surrounded by donors at exactly the requested distances.
 
@@ -704,7 +724,7 @@ def simple_metal_site(
 
 
 def write_data_json(
-    path,
+    path: _StrPath,
     *,
     nrefcnt: object = 50000,
     rffin: object = 0.20,
@@ -731,7 +751,10 @@ def write_data_json(
 
 
 def dpi_inputs(
-    pdb_path=None, mtz_path=None, data_json=None, resolution: float = 1.50
+    pdb_path: Optional[_StrPath] = None,
+    mtz_path: Optional[_StrPath] = None,
+    data_json: Optional[_StrPath] = None,
+    resolution: float = 1.50,
 ) -> Dict[str, object]:
     """Build the ``dpi_inputs`` mapping ``run_bond_analysis`` expects.
 
@@ -810,7 +833,7 @@ def edstats_separator_row(model: int = 1, row_number: int = 1) -> List[str]:
 def edstats_row(
     rt: str,
     ci: str,
-    rn,
+    rn: object,
     *,
     mn: int = 1,
     cp: Optional[str] = None,
@@ -856,7 +879,7 @@ def edstats_text(
     return "\n".join(lines) + ("\n" if trailing_newline else "")
 
 
-def write_edstats(path, rows: Sequence[Sequence[str]], **kwargs) -> str:
+def write_edstats(path: _StrPath, rows: Sequence[Sequence[str]], **kwargs: Any) -> str:
     """Write an EDSTATS ``stats.out`` file and return its path."""
     path = str(path)
     with open(path, "w", encoding="utf-8") as handle:
@@ -865,7 +888,7 @@ def write_edstats(path, rows: Sequence[Sequence[str]], **kwargs) -> str:
 
 
 def edstats_rows_for_structure(
-    context,
+    context: StructureContext,
     *,
     metrics: Optional[Mapping[str, object]] = None,
     per_residue: Optional[Mapping[Tuple[str, str, str], Mapping[str, object]]] = None,
@@ -911,20 +934,22 @@ def edstats_rows_for_structure(
     return rows
 
 
-def write_edstats_for_structure(path, context, **kwargs) -> str:
+def write_edstats_for_structure(
+    path: _StrPath, context: StructureContext, **kwargs: Any
+) -> str:
     """Write a complete synthetic ``stats.out`` for a loaded structure."""
     return write_edstats(path, edstats_rows_for_structure(context, **kwargs))
 
 
 def stats_rows_for_structure(
-    context,
-    path,
+    context: StructureContext,
+    path: _StrPath,
     *,
     pdb_id: Optional[str] = None,
     metals: Optional[Iterable[str]] = None,
     cofactors: Optional[Iterable[str]] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Tuple[List[Dict[str, Any]], List[str], str]:
     """Write a synthetic ``stats.out``, then parse it back with the real code.
 
     Returns ``(rows, header, stats_path)``, ready to hand to

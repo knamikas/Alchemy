@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 
 
@@ -44,7 +45,7 @@ SOURCES = [
 ]
 
 
-def sha256(path):
+def sha256(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for block in iter(lambda: handle.read(65536), b""):
@@ -52,7 +53,7 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def count_rows(path):
+def count_rows(path: str) -> int:
     """Count the rows through the loader, so the count matches what it accepts."""
     sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
     from reference_data import _load_literature
@@ -60,7 +61,7 @@ def count_rows(path):
     return len(_load_literature(path))
 
 
-def build_metadata(path, generated):
+def build_metadata(path: str, generated: str) -> dict[str, object]:
     return {
         "generated": generated,
         "distance_table_sha256": sha256(path),
@@ -74,7 +75,7 @@ def build_metadata(path, generated):
     }
 
 
-def parse_args(argv=None):
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Record what src/data/metal_distances_info.txt currently is."
     )
@@ -86,7 +87,7 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     actual = sha256(TABLE_PATH)
     if args.check:

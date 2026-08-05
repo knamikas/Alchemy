@@ -1031,11 +1031,18 @@ def _symmetry_metadata(
     )
     try:
         cell = structure.cell
-        if cell is None or not cell.is_crystal() or cell.volume <= 0:
+        if not cell.is_crystal() or cell.volume <= 0:
             return False, "missing_or_invalid_unit_cell", 0, strict_ncs_ids
         spacegroup = structure.find_spacegroup()
         if spacegroup is None:
-            return False, "missing_or_invalid_space_group", 0, strict_ncs_ids
+            # Gemmi's stub declares a non-optional SpaceGroup, but the binding
+            # returns None for a file whose space group cannot be identified.
+            return (  # type: ignore[unreachable]
+                False,
+                "missing_or_invalid_space_group",
+                0,
+                strict_ncs_ids,
+            )
         operation_count = len(list(spacegroup.operations()))
         if operation_count <= 0:
             return False, "missing_or_invalid_space_group", 0, strict_ncs_ids

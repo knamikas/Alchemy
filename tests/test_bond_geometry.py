@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 import os
 from collections import defaultdict
-from typing import Any
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence, cast
 
 import gemmi
 import pytest
@@ -21,11 +22,18 @@ import helpers
 import reference_data
 from helpers import AtomSpec, EDSTATS_HEADER, StructureBuilder
 from metal_elements import METAL_ELEMENTS
-from structure_analysis import count_ni, load_structure
+from structure_analysis import AtomSite, StructureContext, count_ni, load_structure
 
+
+_AnalysisResult = tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[ba._AtomKey, dict[str, Any]],
+    dict[str, Any],
+]
 
 # Transcribed from README.md's geometry-inference donor table.
-README_SIDE_CHAIN_DONORS = {
+README_SIDE_CHAIN_DONORS: dict[str, set[str]] = {
     "ASN": {"OD1"},
     "ASP": {"OD1", "OD2"},
     "CYS": {"SG"},
@@ -40,7 +48,7 @@ README_SIDE_CHAIN_DONORS = {
 }
 
 # Atoms README names as *not* geometry-inferable donors.
-README_EXCLUDED_ATOMS = [
+README_EXCLUDED_ATOMS: list[tuple[str, str]] = [
     ("ALA", "N"),  # internal peptide nitrogen
     ("GLY", "N"),
     ("PRO", "N"),
@@ -69,7 +77,7 @@ REFERENCE_METALS = ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN", "NI")
 # The keys whose loss is least visible: every metal's water reference, the
 # thiolate and imidazole rows that define transition-metal sites, the
 # carboxylate rows, and the backbone-carbonyl pseudo residue.
-REQUIRED_REFERENCE_KEYS = frozenset(
+REQUIRED_REFERENCE_KEYS: frozenset[tuple[str, str, str]] = frozenset(
     [("HOH", "O", metal) for metal in REFERENCE_METALS]
     + [("ASP", "O", metal) for metal in REFERENCE_METALS]
     + [("GLU", "O", metal) for metal in REFERENCE_METALS]
@@ -85,16 +93,16 @@ REQUIRED_REFERENCE_KEYS = frozenset(
 
 
 def _probe_structure(
-    tmp_path,
-    name,
+    tmp_path: Path,
+    name: str,
     *,
-    resname,
-    positions,
-    metal="ZN",
-    probe_index=1,
-    chain_length=3,
-    metal_kwargs=None,
-):
+    resname: str,
+    positions: Mapping[str, Sequence[float]],
+    metal: str = "ZN",
+    probe_index: int = 1,
+    chain_length: int = 3,
+    metal_kwargs: Optional[Mapping[str, Any]] = None,
+) -> str:
     """A metal at the origin that only residue ``probe_index`` of chain A reaches.
 
     The chain's residues sit at widely separated origins, so ``positions`` --
@@ -123,7 +131,9 @@ def _probe_structure(
     return path
 
 
-def _analyze(path, *, data_json=None, resolution=1.50):
+def _analyze(
+    path: str, *, data_json: Optional[str] = None, resolution: float = 1.50
+) -> _AnalysisResult:
     """Run the real bond analysis on ``path`` and return its four outputs."""
     context = load_structure("test", path)
     if data_json is None:
@@ -140,7 +150,9 @@ def _analyze(path, *, data_json=None, resolution=1.50):
     )
 
 
-def test_non_finite_metal_is_partial_and_geometry_is_unscorable(tmp_path, monkeypatch):
+def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A malformed selected site is reported without aborting spatial analysis."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
@@ -181,12 +193,18 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(tmp_path, monkey
     assert metadata["retryable"] is False
 
 
-def _dpi_metadata(tmp_path, *, nrefcnt=50000, rffin=0.20, name="data.json"):
+def _dpi_metadata(
+    tmp_path: Path,
+    *,
+    nrefcnt: int = 50000,
+    rffin: float = 0.20,
+    name: str = "data.json",
+) -> str:
     """A PDB-REDO-style ``data.json`` giving a finite DPI."""
     return helpers.write_data_json(tmp_path / name, nrefcnt=nrefcnt, rffin=rffin)
 
 
-def _contact(neighbor, **fields):
+def _contact(neighbor: AtomSite, **fields: Any) -> Candidate:
     """A ``Candidate`` whose untouched discovery fields carry inert values."""
     defaults: dict[str, Any] = {
         "candidate_sources": {codes.CandidateSource.PROXIMITY_4A},
@@ -205,7 +223,7 @@ def _contact(neighbor, **fields):
     return Candidate(neighbor=neighbor, **defaults)
 
 
-def _only(rows, atom_name):
+def _only(rows: Sequence[dict[str, Any]], atom_name: str) -> dict[str, Any]:
     """The single row/candidate whose neighbour atom is ``atom_name``."""
     matches = [row for row in rows if row["neighbor_atom"] == atom_name]
     assert len(matches) == 1, (
@@ -218,14 +236,22 @@ def _only(rows, atom_name):
 class _StubAtom:
     """Minimal stand-in for an analysis atom, for pure-function tests."""
 
-    def __init__(self, element, residue_name="", atom_name="", is_water=False):
+    def __init__(
+        self,
+        element: str,
+        residue_name: str = "",
+        atom_name: str = "",
+        is_water: bool = False,
+    ) -> None:
         self.element = element
         self.residue_name = residue_name
         self.atom_name = atom_name
         self.is_water = is_water
 
 
-def _parse_reference_table(path):
+def _parse_reference_table(
+    path: str,
+) -> list[tuple[int, str, str, str, float, float]]:
     """Parse metal_distances_info.txt strictly, skipping nothing.
 
     ``reference_data._load_literature`` drops any line whose numeric columns do
@@ -240,7 +266,7 @@ def _parse_reference_table(path):
         f"{path}:1: unexpected header {lines[0]!r}"
     )
 
-    records = []
+    records: list[tuple[int, str, str, str, float, float]] = []
     for lineno, line in enumerate(lines[1:], start=2):
         if not line.strip():
             continue  # blank separator between metal blocks
@@ -260,7 +286,7 @@ def _parse_reference_table(path):
     return records
 
 
-def test_inferred_donor_table_matches_the_documented_atom_list():
+def test_inferred_donor_table_matches_the_documented_atom_list() -> None:
     """The donor table is exactly README's list: backbone O plus named side chains."""
     expected = {
         residue: {"O"} | README_SIDE_CHAIN_DONORS.get(residue, set())
@@ -286,7 +312,9 @@ def test_inferred_donor_table_matches_the_documented_atom_list():
         for atom in atoms
     ),
 )
-def test_named_side_chain_donors_become_inferred_bonds(tmp_path, resname, atom_name):
+def test_named_side_chain_donors_become_inferred_bonds(
+    tmp_path: Path, resname: str, atom_name: str
+) -> None:
     """Each README side-chain donor is inferable from geometry alone.
 
     2.0 A is inside the first-sphere cutoff for every donor element.
@@ -313,7 +341,9 @@ def test_named_side_chain_donors_become_inferred_bonds(tmp_path, resname, atom_n
 
 
 @pytest.mark.parametrize("resname", sorted(helpers.STANDARD_AMINO_ACIDS))
-def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(tmp_path, resname):
+def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(
+    tmp_path: Path, resname: str
+) -> None:
     """Main-chain ``O`` donates for all 20 residues and uses the generic reference.
 
     ``_bonding_key`` maps every backbone carbonyl onto the table's ``CA`` rows,
@@ -339,7 +369,7 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(tmp_path, resname
     )
 
 
-def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path):
+def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path: Path) -> None:
     """Water donates through ``O`` only; a non-oxygen water atom is not inferable.
 
     Water is recognised by residue name rather than through the amino-acid
@@ -374,8 +404,8 @@ def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path):
 
 @pytest.mark.parametrize("resname,atom_name", README_EXCLUDED_ATOMS)
 def test_excluded_nitrogen_donors_never_become_inferred_bonds(
-    tmp_path, resname, atom_name
-):
+    tmp_path: Path, resname: str, atom_name: str
+) -> None:
     """Peptide, amide, pyrrole and guanidinium N stay candidates, never bonds.
 
     2.0 A from the Zn is well inside the first-sphere distance, so only the
@@ -403,7 +433,7 @@ def test_excluded_nitrogen_donors_never_become_inferred_bonds(
     assert rows == []
 
 
-def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path):
+def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path: Path) -> None:
     """Only a *first-sphere* non-typical atom raises the site context warning.
 
     README: "A distant non-typical atom found only by the broad 4 A search does
@@ -435,8 +465,8 @@ def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path):
 
 @pytest.mark.parametrize("probe_index,allowed", [(0, True), (1, False), (2, False)])
 def test_n_terminal_nitrogen_is_a_donor_only_at_the_chain_start(
-    tmp_path, probe_index, allowed
-):
+    tmp_path: Path, probe_index: int, allowed: bool
+) -> None:
     """Backbone ``N`` donates from the first polymer residue and nowhere else."""
     path = _probe_structure(
         tmp_path,
@@ -456,7 +486,9 @@ def test_n_terminal_nitrogen_is_a_donor_only_at_the_chain_start(
     assert len(rows) == (1 if allowed else 0)
 
 
-def test_n_terminal_histidine_n_does_not_borrow_side_chain_reference(tmp_path):
+def test_n_terminal_histidine_n_does_not_borrow_side_chain_reference(
+    tmp_path: Path,
+) -> None:
     """Backbone N and imidazole N retain their distinct reference coverage."""
     path = _probe_structure(
         tmp_path,
@@ -492,8 +524,8 @@ def test_n_terminal_histidine_n_does_not_borrow_side_chain_reference(tmp_path):
 @pytest.mark.parametrize("atom_name", ["OXT", "OT1", "OT2"])
 @pytest.mark.parametrize("probe_index,allowed", [(0, False), (1, False), (2, True)])
 def test_c_terminal_oxygens_are_donors_only_at_the_chain_end(
-    tmp_path, atom_name, probe_index, allowed
-):
+    tmp_path: Path, atom_name: str, probe_index: int, allowed: bool
+) -> None:
     """``OXT``/``OT1``/``OT2`` donate from the last polymer residue and nowhere else."""
     path = _probe_structure(
         tmp_path,
@@ -517,7 +549,7 @@ def test_c_terminal_oxygens_are_donors_only_at_the_chain_end(
         assert candidate["assignment_reference"] == "*:O:ZN"
 
 
-def test_a_single_residue_chain_is_both_polymer_termini(tmp_path):
+def test_a_single_residue_chain_is_both_polymer_termini(tmp_path: Path) -> None:
     """A one-residue polymer is simultaneously the first and the last residue."""
     for atom_name, rule in (("N", "n_terminal_nitrogen"), ("OXT", "c_terminal_oxygen")):
         path = _probe_structure(
@@ -533,7 +565,9 @@ def test_a_single_residue_chain_is_both_polymer_termini(tmp_path):
         assert len(rows) == 1
 
 
-def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(tmp_path):
+def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(
+    tmp_path: Path,
+) -> None:
     """A visible internal residue stays internal after mmCIF -> PDB conversion."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -574,7 +608,7 @@ def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(tmp_path):
     assert his.source_polymer_position == "M"
 
 
-def test_incomplete_pdb_seqres_does_not_create_a_terminal_donor(tmp_path):
+def test_incomplete_pdb_seqres_does_not_create_a_terminal_donor(tmp_path: Path) -> None:
     """Direct PDB input also rejects modeled endpoints when SEQRES has gaps."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -602,7 +636,7 @@ def test_incomplete_pdb_seqres_does_not_create_a_terminal_donor(tmp_path):
     assert rows == []
 
 
-def test_terminal_rules_require_a_real_polymer_residue(tmp_path):
+def test_terminal_rules_require_a_real_polymer_residue(tmp_path: Path) -> None:
     """An amino acid modelled as a hetero component gets no terminal exception.
 
     ``_polymer_terminal_position`` keys on Gemmi's entity classification, so a
@@ -649,12 +683,20 @@ def test_terminal_rules_require_a_real_polymer_residue(tmp_path):
     ],
 )
 def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
-    metal, residue, atom, element, is_water, expected_key
-):
+    metal: str,
+    residue: str,
+    atom: str,
+    element: str,
+    is_water: bool,
+    expected_key: tuple[str, str, str],
+) -> None:
     """An exact reference sets target = mu and cutoff = mu + 0.75 A."""
-    stub_metal = _StubAtom(metal)
-    neighbor = _StubAtom(
-        element, residue_name=residue, atom_name=atom, is_water=is_water
+    # ``_first_sphere_rule`` reads only element, residue name, atom name and
+    # water flag, so the stub stands in for the dataclass it is typed against.
+    stub_metal = cast(AtomSite, _StubAtom(metal))
+    neighbor = cast(
+        AtomSite,
+        _StubAtom(element, residue_name=residue, atom_name=atom, is_water=is_water),
     )
     mu = reference_data.literature_distances()[expected_key][0]
 
@@ -667,15 +709,17 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     assert ba.FIRST_SPHERE_TOLERANCE == 0.75
 
 
-def test_missing_exact_reference_falls_back_to_the_largest_same_element_target():
+def test_missing_exact_reference_falls_back_to_the_largest_same_element_target() -> (
+    None
+):
     """The fallback uses the *largest* same-metal/same-element target, not any.
 
     ASN OD1 has no bundled Zn row, so membership uses the widest Zn-O target in
     the table (water, 2.09 A). The kind is flagged because a fallback target
     may not be used for a z-score.
     """
-    stub_metal = _StubAtom("ZN")
-    neighbor = _StubAtom("O", residue_name="ASN", atom_name="OD1")
+    stub_metal = cast(AtomSite, _StubAtom("ZN"))
+    neighbor = cast(AtomSite, _StubAtom("O", residue_name="ASN", atom_name="OD1"))
     widest_zn_o = max(
         mu
         for (_, atom, metal), (mu, _sd) in reference_data.literature_distances().items()
@@ -692,7 +736,9 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     assert cutoff > exact_asp + 0.75
 
 
-def test_first_sphere_targets_index_is_the_maximum_per_metal_and_donor_element():
+def test_first_sphere_targets_index_is_the_maximum_per_metal_and_donor_element() -> (
+    None
+):
     """``FIRST_SPHERE_TARGETS`` is exactly ``max`` over the reference table."""
     expected: dict[tuple[str, str], float] = {}
     for (_residue, atom, metal), (
@@ -703,7 +749,7 @@ def test_first_sphere_targets_index_is_the_maximum_per_metal_and_donor_element()
     assert reference_data.first_sphere_targets() == expected
 
 
-def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path):
+def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path: Path) -> None:
     """No target of any kind means candidate evidence only, plus a partial code.
 
     The table defines no K-S distance, so a potassium/cysteine contact has no
@@ -732,8 +778,8 @@ def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path):
 
 @pytest.mark.parametrize("distance,eligible", [(2.780, True), (2.781, False)])
 def test_first_sphere_membership_at_the_exact_cutoff_boundary(
-    tmp_path, distance, eligible
-):
+    tmp_path: Path, distance: float, eligible: bool
+) -> None:
     """His NE2 at Zn: 2.030 + 0.750 = 2.780 A is inside, 2.781 A is outside."""
     path = _probe_structure(
         tmp_path,
@@ -759,7 +805,7 @@ def test_first_sphere_membership_at_the_exact_cutoff_boundary(
     assert len(rows) == (1 if eligible else 0)
 
 
-def test_dpi_never_widens_the_chemical_cutoff(tmp_path):
+def test_dpi_never_widens_the_chemical_cutoff(tmp_path: Path) -> None:
     """A huge coordinate uncertainty must not admit an out-of-sphere contact.
 
     README: "DPI never expands the chemical cutoff."
@@ -787,7 +833,7 @@ def test_dpi_never_widens_the_chemical_cutoff(tmp_path):
     assert no_dpi_rows == [] and dpi_rows == []
 
 
-def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
+def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path: Path) -> None:
     """A 3.5 A Zn-O contact is discovered but not assigned.
 
     Discovery uses 4 A; assignment uses the Harding cutoff.
@@ -807,7 +853,9 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
     assert summary["candidate_contact_count"] == 1
 
 
-def test_overfull_occupancy_far_from_the_metal_is_not_charged_to_the_site(tmp_path):
+def test_overfull_occupancy_far_from_the_metal_is_not_charged_to_the_site(
+    tmp_path: Path,
+) -> None:
     """A distant overfull residue leaves the metal's own flag clear.
 
     The entry-level warning fires for any overfull site anywhere in the model,
@@ -830,7 +878,7 @@ def test_overfull_occupancy_far_from_the_metal_is_not_charged_to_the_site(tmp_pa
     assert summary["metal_overfull_occupancy"] is False
 
 
-def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path):
+def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path: Path) -> None:
     """Alternates of the metal itself summing over one are the site's own.
 
     This is the case the flag exists for: the deposition asserts more than one
@@ -851,7 +899,7 @@ def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path):
     assert summary["metal_overfull_occupancy"] is True
 
 
-def test_zscore_matches_the_documented_formula():
+def test_zscore_matches_the_documented_formula() -> None:
     """z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
     assert ba._zscore(2.30, 2.09, 0.05, 0.12) == pytest.approx(
         (2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2)
@@ -862,7 +910,7 @@ def test_zscore_matches_the_documented_formula():
     assert ba._zscore(2.09, 2.09, 0.05, 0.12) == pytest.approx(0.0)
 
 
-def test_zscore_denominator_carries_exactly_one_dpi():
+def test_zscore_denominator_carries_exactly_one_dpi() -> None:
     """Only one DPI enters the denominator, not ``sqrt(2) * DPI``.
 
     The metal is assumed far better ordered than the donor, so a single DPI
@@ -887,12 +935,14 @@ def test_zscore_denominator_carries_exactly_one_dpi():
         (2.09, float("nan"), 0.12),  # no literature spread
     ],
 )
-def test_zscore_propagates_missing_inputs_as_nan(mu, stdev, dpi):
+def test_zscore_propagates_missing_inputs_as_nan(
+    mu: float, stdev: float, dpi: float
+) -> None:
     """Any missing input yields NaN rather than a fabricated number."""
     assert math.isnan(ba._zscore(2.30, mu, stdev, dpi))
 
 
-def test_zscore_is_nan_when_the_denominator_vanishes():
+def test_zscore_is_nan_when_the_denominator_vanishes() -> None:
     """A zero spread and a zero DPI give no scale, so no z-score."""
     assert math.isnan(ba._zscore(2.30, 2.09, 0.0, 0.0))
     # A non-zero spread alone is still a usable scale.
@@ -909,8 +959,8 @@ def test_zscore_is_nan_when_the_denominator_vanishes():
     ],
 )
 def test_outlier_flag_switches_at_absolute_z_of_six(
-    tmp_path, distance, expected_z, outlier
-):
+    tmp_path: Path, distance: float, expected_z: float, outlier: bool
+) -> None:
     """``|Zbond| >= 6`` is an inclusive threshold, and it is symmetric.
 
     DPI 0.12 against the Zn-water spread of 0.05 gives a denominator of exactly
@@ -944,8 +994,8 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     ],
 )
 def test_outlier_verdict_uses_unrounded_distance_and_zscore(
-    tmp_path, raw_zscore, outlier
-):
+    tmp_path: Path, raw_zscore: float, outlier: bool
+) -> None:
     """Identical displayed Zbond values may sit on opposite sides of the cutoff."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -965,7 +1015,9 @@ def test_outlier_verdict_uses_unrounded_distance_and_zscore(
     assert contact.geometry_consistent is (not outlier)
 
 
-def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(tmp_path):
+def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
+    tmp_path: Path,
+) -> None:
     """A pipeline row's z-score equals the formula applied to its own dpi column."""
     path = _probe_structure(
         tmp_path, "zscore.pdb", resname="ASP", positions={"OD1": (2.40, 0.0, 0.0)}
@@ -1002,15 +1054,15 @@ DPI_ROUNDING = 5e-5
 
 
 def _atom_count_structure(
-    tmp_path,
-    name,
-    atom_count,
+    tmp_path: Path,
+    name: str,
+    atom_count: int,
     *,
-    cell_edge=60.0,
-    spacegroup="P 1",
-    occupancy=1.0,
-    donor_distance=None,
-):
+    cell_edge: float = 60.0,
+    spacegroup: str = "P 1",
+    occupancy: float = 1.0,
+    donor_distance: Optional[float] = None,
+) -> str:
     """A Zn plus waters totalling exactly ``atom_count`` non-hydrogen atoms.
 
     Every atom carries ``occupancy``, so ``ni`` is ``atom_count * occupancy``
@@ -1044,26 +1096,28 @@ def _atom_count_structure(
 class _DpiRun:
     """What one ``_calculate_dpi_details`` call needed and produced."""
 
-    def __init__(self, path, context, result):
+    def __init__(
+        self, path: str, context: StructureContext, result: tuple[float, float, str]
+    ) -> None:
         self.path = path
         self.context = context
         self.dpi, self.resolution, self.reason = result
 
 
 def _dpi_details(
-    tmp_path,
+    tmp_path: Path,
     *,
-    atom_count,
-    cell_edge,
-    nrefcnt,
-    rffin,
-    spacegroup="P 1",
-    resolution=1.50,
-    occupancy=1.0,
-    pdb_path=None,
-    mtz_path=None,
-    name="dpi",
-):
+    atom_count: int,
+    cell_edge: float,
+    nrefcnt: object,
+    rffin: object,
+    spacegroup: str = "P 1",
+    resolution: float = 1.50,
+    occupancy: float = 1.0,
+    pdb_path: Optional[str] = None,
+    mtz_path: Optional[str] = None,
+    name: str = "dpi",
+) -> _DpiRun:
     """``_calculate_dpi_details`` over a structure with known ni and va.
 
     ``mtz_path`` defaults to a path that does not exist, which makes
@@ -1091,14 +1145,14 @@ def _dpi_details(
     return _DpiRun(path, context, dpi_module._calculate_dpi_details(context, inputs))
 
 
-def _dpi_value(tmp_path, **kwargs):
+def _dpi_value(tmp_path: Path, **kwargs: Any) -> float:
     """Just the DPI, asserting the calculation reported no reason code."""
     run = _dpi_details(tmp_path, **kwargs)
     assert run.reason == "", f"unexpected DPI reason code {run.reason!r}"
     return run.dpi
 
 
-def test_dpi_equals_the_hand_computed_blow_value(tmp_path):
+def test_dpi_equals_the_hand_computed_blow_value(tmp_path: Path) -> None:
     """The DPI value itself, not merely its finiteness, is pinned.
 
     ni    = 16           -> ni**(1/2)    = 4
@@ -1128,7 +1182,7 @@ def test_dpi_equals_the_hand_computed_blow_value(tmp_path):
     assert run.resolution == pytest.approx(1.42)
 
 
-def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path):
+def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path: Path) -> None:
     """The same oracle with numbers a real entry could carry.
 
     ni    = 400 atoms            -> 20
@@ -1172,8 +1226,8 @@ def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path):
     ],
 )
 def test_each_dpi_input_moves_the_result_by_its_own_exponent(
-    tmp_path, override, expected
-):
+    tmp_path: Path, override: dict[str, float], expected: float
+) -> None:
     """One input at a time, against a value computed by hand from ``DPI_BASE``.
 
     Swapping any two exponents breaks at least two of these rows.
@@ -1183,7 +1237,7 @@ def test_each_dpi_input_moves_the_result_by_its_own_exponent(
     assert dpi == pytest.approx(expected, abs=DPI_ROUNDING)
 
 
-def test_the_dpi_exponents_are_pinned_individually(tmp_path):
+def test_the_dpi_exponents_are_pinned_individually(tmp_path: Path) -> None:
     """Each exponent is measured from the response to its own input.
 
     ``log(DPI(k*x) / DPI(x)) / log(k)`` recovers the exponent on ``x``, which a
@@ -1192,7 +1246,7 @@ def test_the_dpi_exponents_are_pinned_individually(tmp_path):
     base = _dpi_value(tmp_path, name="base", **DPI_BASE)
     assert base == pytest.approx(DPI_BASE_VALUE, abs=DPI_ROUNDING)
 
-    measured = {}
+    measured: dict[str, float] = {}
     for label, override, factor in (
         ("ni", {"atom_count": DPI_BASE["atom_count"] * 4}, 4),
         ("va", {"cell_edge": DPI_BASE["cell_edge"] * 2}, 8),  # volume * 8
@@ -1210,7 +1264,7 @@ def test_the_dpi_exponents_are_pinned_individually(tmp_path):
     assert measured["rfree"] == pytest.approx(1.0, abs=1e-3)
 
 
-def test_dpi_carries_the_1_28_coefficient(tmp_path):
+def test_dpi_carries_the_1_28_coefficient(tmp_path: Path) -> None:
     """The leading constant is 1.28 (Blow 2002 eq. 7), not 1.0 and not 1.2.
 
     The other terms multiply to exactly 4 * 100 / 1024 * 0.64 = 0.25, so the DPI
@@ -1221,7 +1275,7 @@ def test_dpi_carries_the_1_28_coefficient(tmp_path):
     assert dpi == pytest.approx(0.32, abs=DPI_ROUNDING)
 
 
-def test_dpi_is_rounded_to_four_decimals(tmp_path):
+def test_dpi_is_rounded_to_four_decimals(tmp_path: Path) -> None:
     """The stored DPI is the rounded value, so consumers see a stable number."""
     dpi = _dpi_value(tmp_path, **dict(DPI_BASE, nrefcnt=8192))
     exact = DPI_BASE_VALUE * 2 ** (-5 / 6)
@@ -1229,7 +1283,7 @@ def test_dpi_is_rounded_to_four_decimals(tmp_path):
     assert dpi == round(exact, 4) == 0.1403
 
 
-def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path):
+def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path: Path) -> None:
     """The pipeline's ``dpi`` column, and the z-score built on it, are pinned.
 
     ni = 400, va = 60**3, nobs = 6**6 and R-free 0.243 give DPI = 0.048 A, and
@@ -1271,7 +1325,7 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path):
     assert summary["dpi_unavailable_reason"] == ""
 
 
-def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path):
+def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path: Path) -> None:
     """``ni`` is occupancy-weighted, so partly occupied atoms count in part.
 
     The same 16 atoms at occupancy 0.25 give ni = 4, halving the DPI through
@@ -1304,8 +1358,8 @@ def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path):
     ],
 )
 def test_asu_volume_is_the_cell_volume_over_the_operation_count(
-    tmp_path, spacegroup, operations
-):
+    tmp_path: Path, spacegroup: str, operations: int
+) -> None:
     """va = V(cell) / number of symmetry operations, centring included.
 
     Counting only the point-group operations of ``C 2`` would inflate va by the
@@ -1322,7 +1376,7 @@ def test_asu_volume_is_the_cell_volume_over_the_operation_count(
     assert volume == pytest.approx(1.0e6 / operations)
 
 
-def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path):
+def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path: Path) -> None:
     """Gemmi's degenerate default cell is missing metadata, not a real ASU.
 
     A coordinate file with no usable CRYST1 record parses to Gemmi's placeholder
@@ -1347,7 +1401,7 @@ def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path):
     assert reason == "missing_or_invalid_asu_volume"
 
 
-def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path):
+def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path: Path) -> None:
     """The placeholder guard must not reject small but genuine unit cells.
 
     ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default, so
@@ -1364,7 +1418,9 @@ def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path):
     assert volume == pytest.approx(1000.0)
 
 
-def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(tmp_path):
+def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(
+    tmp_path: Path,
+) -> None:
     """The reflection file wins, because it is the cell the data were scaled on.
 
     The two files carry different cells and space groups, so the returned volume
@@ -1391,7 +1447,7 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(tmp_path):
     ) == pytest.approx(100.0**3)
 
 
-def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path):
+def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path: Path) -> None:
     """A missing or corrupt MTZ degrades to CRYST1 rather than to NaN.
 
     Alchemy is routinely run on coordinates alone.
@@ -1417,7 +1473,9 @@ def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path):
         "           O\nEND\n",  # parses, but has no CRYST1
     ],
 )
-def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(tmp_path, content):
+def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(
+    tmp_path: Path, content: Optional[str]
+) -> None:
     """No cell or no space group means no volume -- and NaN, not a guess.
 
     NaN is what makes ``_calculate_dpi_details`` report
@@ -1433,12 +1491,12 @@ def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(tmp_path, c
     assert math.isnan(volume)
 
 
-def _remark_3(*lines):
+def _remark_3(*lines: str) -> str:
     """Render REMARK 3 refinement-statistics lines as a PDB header fragment."""
     return "".join(f"REMARK   3   {line}\n" for line in lines)
 
 
-def test_rfree_is_read_from_the_remark_3_header(tmp_path):
+def test_rfree_is_read_from_the_remark_3_header(tmp_path: Path) -> None:
     """The final R-free is scraped when PDB-REDO's ``data.json`` has none."""
     path = tmp_path / "header.pdb"
     path.write_text(
@@ -1463,7 +1521,9 @@ def test_rfree_is_read_from_the_remark_3_header(tmp_path):
         "FREE R VALUE (NO CUTOFF) BIN     : 0.3100",
     ],
 )
-def test_rfree_ignores_test_set_estimate_and_per_bin_lines(tmp_path, line):
+def test_rfree_ignores_test_set_estimate_and_per_bin_lines(
+    tmp_path: Path, line: str
+) -> None:
     """Only the overall final R-free counts.
 
     A REMARK 3 block carries several near-identical lines; the test set *size*
@@ -1478,7 +1538,7 @@ def test_rfree_ignores_test_set_estimate_and_per_bin_lines(tmp_path, line):
     assert math.isnan(dpi_module._rfree_from_pdb(str(decoy_only)))
 
 
-def test_rfree_takes_the_first_matching_line(tmp_path):
+def test_rfree_takes_the_first_matching_line(tmp_path: Path) -> None:
     """Deterministic when a file repeats the record: the first one wins."""
     path = tmp_path / "twice.pdb"
     path.write_text(
@@ -1498,7 +1558,9 @@ def test_rfree_takes_the_first_matching_line(tmp_path):
         "REMARK   3   FREE R VALUE : .215\n",  # no integer part
     ],
 )
-def test_rfree_is_nan_when_absent_or_malformed(tmp_path, content):
+def test_rfree_is_nan_when_absent_or_malformed(
+    tmp_path: Path, content: Optional[str]
+) -> None:
     """A header that does not state a usable R-free yields NaN, never 0.0.
 
     0.0 would pass as a number and give a DPI of exactly zero, making every
@@ -1513,7 +1575,7 @@ def test_rfree_is_nan_when_absent_or_malformed(tmp_path, content):
     assert math.isnan(dpi_module._rfree_from_pdb(path))
 
 
-def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
+def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path: Path) -> None:
     """``data.json`` without ``RFFIN`` falls back to the coordinate header."""
     path = _atom_count_structure(tmp_path, "header_rfree.pdb", 16, cell_edge=100.0)
     # The scrape is a plain text scan, so appending after END is enough; gemmi
@@ -1544,7 +1606,7 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path):
         -1,  # nor a negative one
     ],
 )
-def test_missing_reflection_count_is_named(tmp_path, nrefcnt):
+def test_missing_reflection_count_is_named(tmp_path: Path, nrefcnt: object) -> None:
     """``NREFCNT`` missing or unusable is named, every other term being sound."""
     run = _dpi_details(
         tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=nrefcnt, rffin=0.20
@@ -1556,7 +1618,7 @@ def test_missing_reflection_count_is_named(tmp_path, nrefcnt):
     assert count_ni(run.context) == pytest.approx(16.0)
 
 
-def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path):
+def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path: Path) -> None:
     """A corrupt or absent metadata file is not a crash and not a silent zero."""
     path = _atom_count_structure(tmp_path, "site.pdb", 16, cell_edge=100.0)
     context = load_structure("test", path)
@@ -1583,7 +1645,7 @@ def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path):
         -0.1,
     ],
 )
-def test_missing_rfree_is_named(tmp_path, rffin):
+def test_missing_rfree_is_named(tmp_path: Path, rffin: object) -> None:
     """``NREFCNT`` alone, with no ``RFFIN`` and no REMARK 3 to fall back on."""
     run = _dpi_details(
         tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096, rffin=rffin
@@ -1593,7 +1655,7 @@ def test_missing_rfree_is_named(tmp_path, rffin):
     assert run.reason == "missing_or_invalid_rfree"
 
 
-def test_missing_asu_volume_is_named(tmp_path):
+def test_missing_asu_volume_is_named(tmp_path: Path) -> None:
     """Neither the MTZ nor the coordinate file yields a cell and a space group."""
     run = _dpi_details(
         tmp_path,
@@ -1608,7 +1670,7 @@ def test_missing_asu_volume_is_named(tmp_path):
     assert run.reason == "missing_or_invalid_asu_volume"
 
 
-def test_invalid_atom_count_is_named(tmp_path):
+def test_invalid_atom_count_is_named(tmp_path: Path) -> None:
     """Every atom at zero occupancy weighs nothing, so ``ni`` is zero.
 
     ``ni = 0`` would make the DPI zero and every z-score infinite. Each
@@ -1630,7 +1692,7 @@ def test_invalid_atom_count_is_named(tmp_path):
     assert count_ni(run.context) == pytest.approx(0.0)
 
 
-def test_the_missing_terms_are_reported_in_a_fixed_order(tmp_path):
+def test_the_missing_terms_are_reported_in_a_fixed_order(tmp_path: Path) -> None:
     """With several terms missing at once the reason names the first of them.
 
     The order -- reflection count, R-free, ASU volume, atom count -- is fixed so
@@ -1661,7 +1723,9 @@ def test_the_missing_terms_are_reported_in_a_fixed_order(tmp_path):
     assert no_rfree.reason == "missing_or_invalid_rfree"
 
 
-def test_a_non_numeric_reflection_count_is_a_calculation_failure(tmp_path):
+def test_a_non_numeric_reflection_count_is_a_calculation_failure(
+    tmp_path: Path,
+) -> None:
     """Garbage in ``data.json`` is caught and labelled, never raised.
 
     ``float("many")`` raises inside the calculation, and the caller must still
@@ -1686,8 +1750,8 @@ def test_a_non_numeric_reflection_count_is_a_calculation_failure(tmp_path):
 
 
 def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The ``invalid_dpi_metadata`` guard keeps its own reason code.
 
     No real input reaches the branch, since ``nobs`` and ``rfree`` have been
@@ -1712,7 +1776,7 @@ def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
     assert reason == "invalid_dpi_metadata"
 
 
-def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path):
+def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path: Path) -> None:
     """A reason code is not internal: it lands on the row's site summary.
 
     ``dpi_unavailable_reason`` is what tells a consumer why a site carries no
@@ -1743,7 +1807,7 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path):
     assert math.isnan(row["zscore"])
 
 
-def test_unassessable_geometry_renders_blank_and_never_false(tmp_path):
+def test_unassessable_geometry_renders_blank_and_never_false(tmp_path: Path) -> None:
     """Blank means "not assessed"; ``False`` would mean "assessed and passed".
 
     Both ways of losing the z-score are covered: no exact literature reference
@@ -1785,7 +1849,7 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path):
     assert row["distance"] == pytest.approx(1.99, abs=1e-6)
 
 
-def test_assessed_geometry_columns_are_complementary_booleans(tmp_path):
+def test_assessed_geometry_columns_are_complementary_booleans(tmp_path: Path) -> None:
     """When geometry is assessed the two flags are real, opposite booleans."""
     path = _probe_structure(
         tmp_path, "assessed.pdb", resname="ASP", positions={"OD1": (1.99, 0.0, 0.0)}
@@ -1804,7 +1868,9 @@ def test_assessed_geometry_columns_are_complementary_booleans(tmp_path):
     assert summary["image_inclusive_geometry_status"] == "plausible"
 
 
-def _bidentate(tmp_path, name, d1, d2, *, data_json=None):
+def _bidentate(
+    tmp_path: Path, name: str, d1: float, d2: float, *, data_json: Optional[str] = None
+) -> _AnalysisResult:
     """Asp chelating a Zn through both carboxylate oxygens."""
     path = _probe_structure(
         tmp_path,
@@ -1815,7 +1881,7 @@ def _bidentate(tmp_path, name, d1, d2, *, data_json=None):
     return _analyze(path, data_json=data_json)
 
 
-def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path):
+def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path: Path) -> None:
     """One contact per residue image: detected False, count 1, ``single_donor``."""
     path = _probe_structure(
         tmp_path, "mono.pdb", resname="HIS", positions={"NE2": (2.03, 0.0, 0.0)}
@@ -1832,7 +1898,7 @@ def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path):
     assert summary["multi_donor_contact_count"] == 0
 
 
-def test_two_donors_of_one_residue_form_a_consistent_group(tmp_path):
+def test_two_donors_of_one_residue_form_a_consistent_group(tmp_path: Path) -> None:
     """Two well-behaved contacts to one residue image: detected, not suspect."""
     rows, _, summaries, _ = _bidentate(
         tmp_path, "chelate_ok.pdb", 1.99, 2.00, data_json=_dpi_metadata(tmp_path)
@@ -1853,7 +1919,9 @@ def test_two_donors_of_one_residue_form_a_consistent_group(tmp_path):
     assert summary["indeterminate_multi_donor_residue_group_count"] == 0
 
 
-def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(tmp_path):
+def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(
+    tmp_path: Path,
+) -> None:
     """Group status spreads; the per-bond outlier flag does not.
 
     README: "If any member is an outlier, every member of the group records
@@ -1888,7 +1956,7 @@ def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(tmp_pa
     assert summary["image_inclusive_geometry_status"] == "suspect"
 
 
-def test_a_group_with_no_assessable_member_is_indeterminate(tmp_path):
+def test_a_group_with_no_assessable_member_is_indeterminate(tmp_path: Path) -> None:
     """All z-scores missing and no outlier -> ``indeterminate``, not ``consistent``.
 
     The same geometry that is "suspect" with a DPI must not become "consistent"
@@ -1913,7 +1981,9 @@ def test_a_group_with_no_assessable_member_is_indeterminate(tmp_path):
     assert summary["image_inclusive_geometry_status"] == "insufficient data"
 
 
-def test_backbone_and_side_chain_contacts_share_one_residue_group(tmp_path):
+def test_backbone_and_side_chain_contacts_share_one_residue_group(
+    tmp_path: Path,
+) -> None:
     """Grouping is by residue image, so a backbone O joins its own side chain.
 
     README: "Because backbone atoms carry the same residue identity in the
@@ -1938,7 +2008,7 @@ def test_backbone_and_side_chain_contacts_share_one_residue_group(tmp_path):
     assert next(iter(summaries.values()))["multi_donor_residue_group_count"] == 1
 
 
-def test_separate_residues_are_separate_groups(tmp_path):
+def test_separate_residues_are_separate_groups(tmp_path: Path) -> None:
     """Two donors from different residues are two single-donor groups."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
@@ -1969,7 +2039,7 @@ def test_separate_residues_are_separate_groups(tmp_path):
     assert summary["candidate_contact_count"] == 2
 
 
-def test_group_size_has_no_upper_limit(tmp_path):
+def test_group_size_has_no_upper_limit(tmp_path: Path) -> None:
     """A four-donor residue image reports all four; nothing is truncated."""
     path = _probe_structure(
         tmp_path,
@@ -1993,7 +2063,7 @@ def test_group_size_has_no_upper_limit(tmp_path):
     assert next(iter(summaries.values()))["multi_donor_contact_count"] == 4
 
 
-def test_reference_table_holds_exactly_the_expected_rows_and_keys():
+def test_reference_table_holds_exactly_the_expected_rows_and_keys() -> None:
     """Every bundled row is present, parsed strictly and reachable through ``LIT``.
 
     ``_load_literature`` silently drops any row whose numeric columns do not
@@ -2036,7 +2106,9 @@ def test_reference_table_holds_exactly_the_expected_rows_and_keys():
         "CYS S CU 2.20 0.2 0.3",  # a stray extra column
     ],
 )
-def test_the_strict_parser_rejects_a_corrupted_row(tmp_path, corruption):
+def test_the_strict_parser_rejects_a_corrupted_row(
+    tmp_path: Path, corruption: str
+) -> None:
     """Both parsers refuse the three ways a row can be damaged.
 
     A parser that dropped a bad row would make the row-count and key assertions
@@ -2054,7 +2126,7 @@ def test_the_strict_parser_rejects_a_corrupted_row(tmp_path, corruption):
         reference_data._load_literature(str(damaged))
 
 
-def test_reference_table_has_no_duplicate_keys():
+def test_reference_table_has_no_duplicate_keys() -> None:
     """A repeated (residue, atom, metal) key would be silently overwritten.
 
     ``_load_literature`` builds a dict, so a duplicate row is invisible at
@@ -2062,7 +2134,7 @@ def test_reference_table_has_no_duplicate_keys():
     """
     records = _parse_reference_table(REFERENCE_TABLE)
     seen: dict[tuple[str, str, str], int] = {}
-    duplicates = []
+    duplicates: list[tuple[tuple[str, str, str], int, int]] = []
     for lineno, residue, atom, metal, _mu, _sd in records:
         key = (residue, atom, metal)
         if key in seen:
@@ -2074,7 +2146,7 @@ def test_reference_table_has_no_duplicate_keys():
     assert set(seen) == set(reference_data.literature_distances())
 
 
-def test_reference_table_values_are_physically_plausible():
+def test_reference_table_values_are_physically_plausible() -> None:
     """Every bundled distance is a positive, credible metal-ligand bond length."""
     records = _parse_reference_table(REFERENCE_TABLE)
     assert records, "the reference table must not be empty"
@@ -2098,13 +2170,13 @@ def test_reference_table_values_are_physically_plausible():
     assert parsed == reference_data.literature_distances()
 
 
-def test_reference_table_is_internally_consistent_by_donor_element():
+def test_reference_table_is_internally_consistent_by_donor_element() -> None:
     """Chemistry cross-checks the numbers: S donors are longer than O donors.
 
     One metal's oxygen references also cluster rather than scatter. Both break
     if a row's metal or donor column is transposed.
     """
-    by_metal: defaultdict[str, defaultdict[str, list]] = defaultdict(
+    by_metal: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
         lambda: defaultdict(list)
     )
     for (_residue, atom, metal), (
@@ -2129,7 +2201,7 @@ def test_reference_table_is_internally_consistent_by_donor_element():
         assert ("HOH", "O", metal) in reference_data.literature_distances()
 
 
-def test_reference_table_ranks_ions_by_size():
+def test_reference_table_ranks_ions_by_size() -> None:
     """Larger ions have longer water bonds: K > Na > Ca > Mn > Zn > Mg.
 
     Ionic radius fixes this ordering, which catches a shuffled metal column that

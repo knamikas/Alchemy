@@ -15,6 +15,8 @@ import logging
 import logging.handlers  # importing logging alone does not bind it
 import multiprocessing
 import re
+from pathlib import Path
+from typing import Iterator
 
 import pytest
 
@@ -22,7 +24,7 @@ import run_logging
 
 
 @pytest.fixture(autouse=True)
-def _restore_logging():
+def _restore_logging() -> Iterator[None]:
     """Restore the ``alchemy`` logger: handler configuration is process-wide."""
     root = logging.getLogger(run_logging.LOGGER_NAME)
     saved = (list(root.handlers), root.level, root.propagate)
@@ -37,20 +39,20 @@ def _restore_logging():
         root.propagate = saved[2]
 
 
-def test_module_loggers_share_one_configurable_root():
+def test_module_loggers_share_one_configurable_root() -> None:
     """Every module logs through a child of ``alchemy``, so one configuration
     governs all of them, worker-only modules included."""
     assert run_logging.logger_for("bond_analysis").name == "alchemy.bond_analysis"
     assert run_logging.logger_for("alchemy.main").name == "alchemy.main"
 
 
-def test_the_script_entry_point_is_not_named_dunder_main():
+def test_the_script_entry_point_is_not_named_dunder_main() -> None:
     """``main.py`` runs as ``__main__``, which would name every driver record
     ``alchemy.__main__``."""
     assert run_logging.logger_for("__main__").name == "alchemy.main"
 
 
-def test_records_are_bounded_regardless_of_level():
+def test_records_are_bounded_regardless_of_level() -> None:
     """A level says how important a record is, not how long it may be."""
     stream = io.StringIO()
     run_logging.configure_driver_logging(level=logging.DEBUG, stream=stream)
@@ -61,7 +63,7 @@ def test_records_are_bounded_regardless_of_level():
     assert "more characters" in written, "a truncated record must say that it was cut"
 
 
-def test_truncation_is_marked_rather_than_silent():
+def test_truncation_is_marked_rather_than_silent() -> None:
     """A silently shortened traceback reads as a complete one that ended early."""
     assert run_logging.truncate("short", limit=50) == "short"
     assert "more characters" in run_logging.truncate("y" * 200, limit=50)
@@ -69,13 +71,15 @@ def test_truncation_is_marked_rather_than_silent():
 
 @pytest.mark.parametrize("limit", [8, 20, 30, 50, 300, 500])
 @pytest.mark.parametrize("length", [5, 49, 300, 5000])
-def test_truncation_never_exceeds_the_limit_it_was_given(limit, length):
+def test_truncation_never_exceeds_the_limit_it_was_given(
+    limit: int, length: int
+) -> None:
     """The marker counts against the budget rather than being added to it."""
     result = run_logging.truncate("z" * length, limit=limit)
     assert len(result) <= limit, f"{len(result)} > {limit}: {result!r}"
 
 
-def test_a_bounded_record_also_respects_the_limit():
+def test_a_bounded_record_also_respects_the_limit() -> None:
     """The handler filter uses the same accounting as ``truncate``."""
     stream = io.StringIO()
     run_logging.configure_driver_logging(level=logging.DEBUG, stream=stream)
@@ -97,11 +101,15 @@ def test_a_bounded_record_also_respects_the_limit():
         (2, True, logging.WARNING),
     ],
 )
-def test_verbosity_maps_to_levels_and_quiet_always_wins(verbose, quiet, expected):
+def test_verbosity_maps_to_levels_and_quiet_always_wins(
+    verbose: int, quiet: bool, expected: int
+) -> None:
     assert run_logging.level_for_verbosity(verbose, quiet) == expected
 
 
-def test_diagnostics_default_to_stderr_leaving_stdout_for_results(capsys):
+def test_diagnostics_default_to_stderr_leaving_stdout_for_results(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Redirecting stdout must yield results, not a mixture of results and logs."""
     run_logging.configure_driver_logging(level=logging.INFO)
     logging.getLogger("alchemy.test").info("a diagnostic")
@@ -111,7 +119,7 @@ def test_diagnostics_default_to_stderr_leaving_stdout_for_results(capsys):
     assert captured.out == ""
 
 
-def test_a_log_file_keeps_debug_detail_the_console_discarded(tmp_path):
+def test_a_log_file_keeps_debug_detail_the_console_discarded(tmp_path: Path) -> None:
     """The file records what the console level filtered out."""
     stream = io.StringIO()
     log_file = tmp_path / "run.log"
@@ -131,13 +139,15 @@ def test_a_log_file_keeps_debug_detail_the_console_discarded(tmp_path):
     assert "loud problem" in recorded
 
 
-def _worker_emits(queue, level, message):
+def _worker_emits(
+    queue: multiprocessing.Queue[logging.LogRecord], level: int, message: str
+) -> None:
     """Log from a genuinely separate process, as a pool worker would."""
     run_logging.configure_worker_logging(queue, level=level)
     logging.getLogger("alchemy.worker").warning(message)
 
 
-def test_worker_records_reach_the_drivers_handlers(tmp_path):
+def test_worker_records_reach_the_drivers_handlers(tmp_path: Path) -> None:
     """A record logged in another process is emitted by the driver's handlers.
 
     Workers cannot share those handlers: several processes writing one stream
@@ -170,7 +180,7 @@ def test_worker_records_reach_the_drivers_handlers(tmp_path):
     assert re.search(r"alchemy\.worker", recorded)
 
 
-def test_a_worker_never_writes_through_an_inherited_handler():
+def test_a_worker_never_writes_through_an_inherited_handler() -> None:
     """Forked handlers are dropped before the queue handler is attached.
 
     A forked copy of the driver's stream handler shares the parent's file
@@ -191,7 +201,7 @@ def test_a_worker_never_writes_through_an_inherited_handler():
         queue.close()
 
 
-def test_configuring_the_driver_twice_does_not_duplicate_records():
+def test_configuring_the_driver_twice_does_not_duplicate_records() -> None:
     """Re-configuration replaces handlers rather than stacking them."""
     stream = io.StringIO()
     run_logging.configure_driver_logging(level=logging.INFO, stream=stream)
@@ -201,7 +211,7 @@ def test_configuring_the_driver_twice_does_not_duplicate_records():
     assert stream.getvalue().count("once") == 1
 
 
-def test_a_log_file_raises_the_worker_level_to_debug():
+def test_a_log_file_raises_the_worker_level_to_debug() -> None:
     """Workers filter before the queue, so the console level would discard the
     DEBUG records the file handler is there to keep."""
     console = run_logging.level_for_verbosity(verbose=0, quiet=True)
@@ -210,12 +220,16 @@ def test_a_log_file_raises_the_worker_level_to_debug():
     assert run_logging.worker_level(console, log_file="run.log") == logging.DEBUG
 
 
-def _worker_emits_debug(queue, level, message):
+def _worker_emits_debug(
+    queue: multiprocessing.Queue[logging.LogRecord], level: int, message: str
+) -> None:
     run_logging.configure_worker_logging(queue, level=level)
     logging.getLogger("alchemy.worker").debug(message)
 
 
-def test_worker_debug_records_reach_a_log_file_under_a_quiet_console(tmp_path):
+def test_worker_debug_records_reach_a_log_file_under_a_quiet_console(
+    tmp_path: Path,
+) -> None:
     """The end-to-end case the option exists for: quiet console, full file."""
     log_file = tmp_path / "run.log"
     console = io.StringIO()
@@ -249,7 +263,9 @@ def test_worker_debug_records_reach_a_log_file_under_a_quiet_console(tmp_path):
     )
 
 
-def test_an_unusable_log_file_is_raised_for_the_caller_to_report(tmp_path):
+def test_an_unusable_log_file_is_raised_for_the_caller_to_report(
+    tmp_path: Path,
+) -> None:
     """An ``OSError`` rather than an exit: this runs before any handler exists,
     so only the caller can still report the failure."""
     with pytest.raises(OSError):
@@ -258,7 +274,9 @@ def test_an_unusable_log_file_is_raised_for_the_caller_to_report(tmp_path):
         )
 
 
-def test_main_reports_an_unusable_log_file_and_exits_one(tmp_path, capsys):
+def test_main_reports_an_unusable_log_file_and_exits_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """``--log-file`` on a directory is a fixable failure: name the path and
     exit 1, not a traceback and not argparse's usage status."""
     import cli
@@ -271,6 +289,6 @@ def test_main_reports_an_unusable_log_file_and_exits_one(tmp_path, capsys):
     assert "Traceback" not in message
 
 
-def test_repeated_verbose_flags_are_accepted_without_a_further_tier():
+def test_repeated_verbose_flags_are_accepted_without_a_further_tier() -> None:
     """One ``-v`` unlocks everything; further ones change nothing."""
     assert run_logging.level_for_verbosity(1) == run_logging.level_for_verbosity(5)

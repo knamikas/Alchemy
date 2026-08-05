@@ -23,6 +23,8 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Sequence, TypedDict, cast
 
 import pytest
 
@@ -40,14 +42,30 @@ from driver import pool
 from driver import runlog
 import confidence_score
 
+if TYPE_CHECKING:
+    # Annotations only, so gemmi and numpy stay imported inside the handful of
+    # helpers that build MTZ files, and ``worker`` is never imported at all.
+    import numpy as np
+    from numpy.typing import NDArray
+    from worker import EntryResult
 
-def _write_header(path, columns):
+
+class _ResumeOutputs(TypedDict):
+    """The four output paths ``resume_outputs`` hands to the resume validator."""
+
+    manifest_path: str
+    stats_path: str
+    bonds_path: str
+    candidates_path: str
+
+
+def _write_header(path: Path, columns: Sequence[str]) -> str:
     with open(path, "w", newline="", encoding="utf-8") as handle:
         csv.writer(handle).writerow(columns)
     return str(path)
 
 
-def _append_csv_row(path, columns, **values):
+def _append_csv_row(path: str, columns: Sequence[str], **values: str | int) -> None:
     with open(path, "a", newline="", encoding="utf-8") as handle:
         csv.DictWriter(handle, fieldnames=columns).writerow(
             {column: values.get(column, "") for column in columns}
@@ -55,7 +73,7 @@ def _append_csv_row(path, columns, **values):
 
 
 def _append_terminal_manifest(
-    outputs,
+    outputs: _ResumeOutputs,
     *,
     pdb_id: str = "1abc",
     status: str = "ok",
@@ -63,7 +81,7 @@ def _append_terminal_manifest(
     n_metals: str | int = 0,
     n_bonds: str | int = 0,
     n_candidates: str | int = 0,
-):
+) -> None:
     _append_csv_row(
         outputs["manifest_path"],
         MANIFEST_COLUMNS,
@@ -76,7 +94,9 @@ def _append_terminal_manifest(
     )
 
 
-def _append_selected_stats(outputs, pdb_id="1abc", atom_index="0"):
+def _append_selected_stats(
+    outputs: _ResumeOutputs, pdb_id: str = "1abc", atom_index: str = "0"
+) -> None:
     _append_csv_row(
         outputs["stats_path"],
         STATS_COLUMNS,
@@ -91,7 +111,7 @@ def _append_selected_stats(outputs, pdb_id="1abc", atom_index="0"):
 
 
 @pytest.fixture
-def resume_outputs(tmp_path):
+def resume_outputs(tmp_path: Path) -> _ResumeOutputs:
     """A set of output files whose headers all match the current schema."""
     return {
         "manifest_path": _write_header(tmp_path / "manifest.csv", MANIFEST_COLUMNS),
@@ -105,11 +125,11 @@ def resume_outputs(tmp_path):
     }
 
 
-def test_matching_headers_are_accepted(resume_outputs):
+def test_matching_headers_are_accepted(resume_outputs: _ResumeOutputs) -> None:
     resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_absent_outputs_are_accepted(tmp_path):
+def test_absent_outputs_are_accepted(tmp_path: Path) -> None:
     """A first run has nothing to be incompatible with."""
     resume.validate_resume_schemas(
         manifest_path=str(tmp_path / "manifest.csv"),
@@ -122,7 +142,11 @@ def test_absent_outputs_are_accepted(tmp_path):
 @pytest.mark.parametrize(
     "target", ["manifest_path", "stats_path", "bonds_path", "candidates_path"]
 )
-def test_an_incompatible_header_is_refused(resume_outputs, tmp_path, target):
+def test_an_incompatible_header_is_refused(
+    resume_outputs: _ResumeOutputs,
+    tmp_path: Path,
+    target: Literal["manifest_path", "stats_path", "bonds_path", "candidates_path"],
+) -> None:
     """Appending beneath a foreign header would misalign every column, and
     nothing downstream could tell that column N had changed meaning."""
     _write_header(tmp_path / os.path.basename(resume_outputs[target]), ["unexpected"])
@@ -132,8 +156,8 @@ def test_an_incompatible_header_is_refused(resume_outputs, tmp_path, target):
 
 
 def test_a_manifest_without_the_reference_data_column_is_refused(
-    resume_outputs, tmp_path
-):
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     """A manifest without the identity column cannot be resumed into.
 
     Its rows do not say which reference data produced them, so appending rows
@@ -148,7 +172,9 @@ def test_a_manifest_without_the_reference_data_column_is_refused(
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_the_refusal_names_the_columns_that_differ(resume_outputs, tmp_path):
+def test_the_refusal_names_the_columns_that_differ(
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     """The message names the columns that differ, leaving the operator with a
     cause rather than two headers to diff by hand."""
     _write_header(tmp_path / "manifest.csv", list(writers.MANIFEST_COLUMNS) + ["stray"])
@@ -157,7 +183,9 @@ def test_the_refusal_names_the_columns_that_differ(resume_outputs, tmp_path):
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_a_truncated_stats_header_is_refused(resume_outputs, tmp_path):
+def test_a_truncated_stats_header_is_refused(
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     """A different EDSTATS build shifts the density block, and a dropped metric
     column misaligns every value after it with no other symptom."""
     _write_header(tmp_path / "stats.csv", list(STATS_COLUMNS)[:-1])
@@ -167,8 +195,8 @@ def test_a_truncated_stats_header_is_refused(resume_outputs, tmp_path):
 
 
 def test_bond_headers_are_ignored_when_the_bond_stage_is_disabled(
-    resume_outputs, tmp_path
-):
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     """``--no-bonds`` writes no bond rows, so their schema cannot conflict."""
     _write_header(tmp_path / "bonds.csv", ["stale"])
     _write_header(tmp_path / "candidates.csv", ["stale"])
@@ -176,7 +204,9 @@ def test_bond_headers_are_ignored_when_the_bond_stage_is_disabled(
     resume.validate_resume_schemas(**resume_outputs, bonds_enabled=False)
 
 
-def test_confidence_output_requires_its_columns(resume_outputs, tmp_path):
+def test_confidence_output_requires_its_columns(
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     """A confidence path without its schema cannot be validated at all."""
     with pytest.raises(ValueError, match="confidence columns are required"):
         resume.validate_resume_schemas(
@@ -186,7 +216,9 @@ def test_confidence_output_requires_its_columns(resume_outputs, tmp_path):
         )
 
 
-def test_an_incompatible_confidence_header_is_refused(resume_outputs, tmp_path):
+def test_an_incompatible_confidence_header_is_refused(
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
     path = _write_header(tmp_path / "confidence.csv", columns[:-1])
 
@@ -197,7 +229,10 @@ def test_an_incompatible_confidence_header_is_refused(resume_outputs, tmp_path):
 
 
 @pytest.mark.parametrize("target", ["stats_path", "bonds_path", "candidates_path"])
-def test_terminal_manifest_requires_every_enabled_output(resume_outputs, target):
+def test_terminal_manifest_requires_every_enabled_output(
+    resume_outputs: _ResumeOutputs,
+    target: Literal["stats_path", "bonds_path", "candidates_path"],
+) -> None:
     _append_terminal_manifest(resume_outputs)
     os.unlink(resume_outputs[target])
 
@@ -205,7 +240,9 @@ def test_terminal_manifest_requires_every_enabled_output(resume_outputs, target)
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_terminal_manifest_does_not_require_disabled_bond_outputs(resume_outputs):
+def test_terminal_manifest_does_not_require_disabled_bond_outputs(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     _append_terminal_manifest(resume_outputs, n_bonds="", n_candidates="")
     os.unlink(resume_outputs["bonds_path"])
     os.unlink(resume_outputs["candidates_path"])
@@ -213,14 +250,18 @@ def test_terminal_manifest_does_not_require_disabled_bond_outputs(resume_outputs
     resume.validate_resume_schemas(**resume_outputs, bonds_enabled=False)
 
 
-def test_a_consistent_terminal_artifact_set_is_accepted(resume_outputs):
+def test_a_consistent_terminal_artifact_set_is_accepted(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     _append_terminal_manifest(resume_outputs, n_metals=1)
     _append_selected_stats(resume_outputs)
 
     resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_ok_manifest_metal_count_must_match_selected_stats(resume_outputs):
+def test_ok_manifest_metal_count_must_match_selected_stats(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     _append_terminal_manifest(resume_outputs, n_metals=1)
 
     with pytest.raises(ValueError, match=r"n_metals=1.*has 0 selected row"):
@@ -228,14 +269,18 @@ def test_ok_manifest_metal_count_must_match_selected_stats(resume_outputs):
 
 
 @pytest.mark.parametrize("n_metals", ["", "not-a-count", -1])
-def test_terminal_manifest_requires_a_valid_metal_count(resume_outputs, n_metals):
+def test_terminal_manifest_requires_a_valid_metal_count(
+    resume_outputs: _ResumeOutputs, n_metals: str | int
+) -> None:
     _append_terminal_manifest(resume_outputs, n_metals=n_metals)
 
     with pytest.raises(ValueError, match="invalid n_metals"):
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_duplicate_selected_site_keys_are_refused(resume_outputs):
+def test_duplicate_selected_site_keys_are_refused(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     _append_terminal_manifest(resume_outputs, n_metals=2)
     _append_selected_stats(resume_outputs)
     _append_selected_stats(resume_outputs)
@@ -244,7 +289,9 @@ def test_duplicate_selected_site_keys_are_refused(resume_outputs):
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_terminal_partial_may_have_fewer_stats_than_detected_metals(resume_outputs):
+def test_terminal_partial_may_have_fewer_stats_than_detected_metals(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     """A density-stage failure knows the metal count but writes no stats rows."""
     _append_terminal_manifest(
         resume_outputs,
@@ -262,8 +309,10 @@ def test_terminal_partial_may_have_fewer_stats_than_detected_metals(resume_outpu
     [("n_bonds", "bonds_path"), ("n_candidates", "candidates_path")],
 )
 def test_manifest_bond_stage_counts_must_match_rows(
-    resume_outputs, manifest_count, output_key
-):
+    resume_outputs: _ResumeOutputs,
+    manifest_count: str,
+    output_key: Literal["bonds_path", "candidates_path"],
+) -> None:
     if manifest_count == "n_bonds":
         _append_terminal_manifest(resume_outputs, n_bonds=1)
     else:
@@ -276,7 +325,9 @@ def test_manifest_bond_stage_counts_must_match_rows(
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_confidence_count_must_match_every_terminal_metal(resume_outputs, tmp_path):
+def test_confidence_count_must_match_every_terminal_metal(
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
     columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
     path = _write_header(tmp_path / "confidence.csv", columns)
     _append_terminal_manifest(resume_outputs, n_metals=1)
@@ -293,7 +344,9 @@ def test_confidence_count_must_match_every_terminal_metal(resume_outputs, tmp_pa
     )
 
 
-def test_duplicate_complete_manifest_ids_are_refused(resume_outputs):
+def test_duplicate_complete_manifest_ids_are_refused(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     _append_terminal_manifest(resume_outputs)
     _append_terminal_manifest(resume_outputs)
 
@@ -301,7 +354,9 @@ def test_duplicate_complete_manifest_ids_are_refused(resume_outputs):
         resume.validate_resume_schemas(**resume_outputs)
 
 
-def test_orphan_rows_from_a_pre_manifest_crash_remain_recoverable(resume_outputs):
+def test_orphan_rows_from_a_pre_manifest_crash_remain_recoverable(
+    resume_outputs: _ResumeOutputs,
+) -> None:
     _append_terminal_manifest(resume_outputs)
     _append_selected_stats(resume_outputs, pdb_id="2def")
     _append_csv_row(
@@ -330,8 +385,8 @@ def test_orphan_rows_from_a_pre_manifest_crash_remain_recoverable(resume_outputs
     ],
 )
 def test_the_exit_code_reports_operational_incompleteness(
-    counts, retryable_partials, expected
-):
+    counts: dict[str, int], retryable_partials: int, expected: int
+) -> None:
     """Nonzero exactly when something remains to be done.
 
     A *terminal* partial is usable but incomplete science that no rerun can
@@ -340,25 +395,25 @@ def test_the_exit_code_reports_operational_incompleteness(
     assert pool._batch_exit_code(counts, retryable_partials) == expected
 
 
-def test_a_missing_status_key_is_treated_as_zero():
+def test_a_missing_status_key_is_treated_as_zero() -> None:
     """Counts are accumulated per status, so an absent key means none seen."""
     assert pool._batch_exit_code({}, 0) == 0
     assert pool._batch_exit_code({"error": 2}, 0) == 1
 
 
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
-def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value):
+def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value: str) -> None:
     """IDs are lowercased so cache paths and manifest keys cannot diverge."""
     assert cli.parse_pdb_id(value) == value.lower()
 
 
 @pytest.mark.parametrize("value", ["abc", "abcde", "ab-c", "ab c", "", "9my_"])
-def test_malformed_pdb_ids_are_rejected(value):
+def test_malformed_pdb_ids_are_rejected(value: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError, match="four alphanumeric"):
         cli.parse_pdb_id(value)
 
 
-def test_an_id_file_accepts_mixed_separators_and_comments(tmp_path):
+def test_an_id_file_accepts_mixed_separators_and_comments(tmp_path: Path) -> None:
     path = tmp_path / "ids.txt"
     path.write_text(
         "9myr, 6NLR\n# a comment line\n\n9nxl 1abc   # trailing comment\n",
@@ -368,7 +423,7 @@ def test_an_id_file_accepts_mixed_separators_and_comments(tmp_path):
     assert pool.load_ids_from_file(str(path)) == ["9myr", "6nlr", "9nxl", "1abc"]
 
 
-def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path):
+def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path: Path) -> None:
     """A typo in a long ID list must name where it is, not just that it exists."""
     path = tmp_path / "ids.txt"
     path.write_text("9myr\n6nlr\nnot-an-id\n", encoding="utf-8")
@@ -377,14 +432,21 @@ def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path):
         pool.load_ids_from_file(str(path))
 
 
-def test_a_missing_id_file_is_reported_clearly(tmp_path):
+def test_a_missing_id_file_is_reported_clearly(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="id file not found"):
         pool.load_ids_from_file(str(tmp_path / "absent.txt"))
 
 
 def _make_entry(
-    root, pdb_id, *, mtz=True, cif=True, pdb=False, compressed=False, data_json=None
-):
+    root: Path,
+    pdb_id: str,
+    *,
+    mtz: bool = True,
+    cif: bool = True,
+    pdb: bool = False,
+    compressed: bool = False,
+    data_json: str | None = None,
+) -> str:
     """Create a mirror-layout entry directory with the requested files.
 
     ``cif`` and ``pdb`` are independent so a mirror carrying both can be built.
@@ -392,7 +454,7 @@ def _make_entry(
     entry_dir = inputs.entry_dir_for(str(root), pdb_id)
     os.makedirs(entry_dir, exist_ok=True)
 
-    def write(name, payload=b"x"):
+    def write(name: str, payload: bytes = b"x") -> None:
         path = os.path.join(entry_dir, name)
         if compressed:
             path += ".gz"
@@ -413,7 +475,9 @@ def _make_entry(
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
-def test_an_entry_is_final_only_with_both_inputs(tmp_path, compressed):
+def test_an_entry_is_final_only_with_both_inputs(
+    tmp_path: Path, compressed: bool
+) -> None:
     """Coordinates without map coefficients cannot be analyzed, and vice versa."""
     complete = _make_entry(tmp_path, "9myr", compressed=compressed)
     no_mtz = _make_entry(tmp_path, "6nlr", mtz=False, compressed=compressed)
@@ -427,7 +491,9 @@ def test_an_entry_is_final_only_with_both_inputs(tmp_path, compressed):
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
-def test_a_legacy_pdb_export_counts_as_usable_coordinates(tmp_path, compressed):
+def test_a_legacy_pdb_export_counts_as_usable_coordinates(
+    tmp_path: Path, compressed: bool
+) -> None:
     """``.pdb`` and ``.pdb.gz`` are accepted when the authoritative mmCIF is
     absent, so a mirror carrying only the legacy export is still analyzable."""
     entry_dir = _make_entry(
@@ -436,7 +502,7 @@ def test_a_legacy_pdb_export_counts_as_usable_coordinates(tmp_path, compressed):
     assert inputs.has_final_files(entry_dir, "9myr")
 
 
-def test_enumeration_returns_only_complete_entries(tmp_path):
+def test_enumeration_returns_only_complete_entries(tmp_path: Path) -> None:
     """Incomplete entries are skipped, and the order follows the mirror layout.
 
     Ordering is by hash directory then entry, not by PDB ID: ``9myr`` lives
@@ -450,7 +516,7 @@ def test_enumeration_returns_only_complete_entries(tmp_path):
     assert inputs.enumerate_entries(str(tmp_path)) == ["9myr", "6nlr"]
 
 
-def test_enumeration_stops_at_the_requested_limit(tmp_path):
+def test_enumeration_stops_at_the_requested_limit(tmp_path: Path) -> None:
     """``--max-pdbs`` must not walk the whole mirror to return three ids."""
     for pdb_id in ("1aaa", "1bbb", "2ccc", "2ddd"):
         _make_entry(tmp_path, pdb_id)
@@ -460,22 +526,24 @@ def test_enumeration_stops_at_the_requested_limit(tmp_path):
     assert limited == inputs.enumerate_entries(str(tmp_path))[:2]
 
 
-def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(tmp_path, monkeypatch):
+def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A partially-synced mirror must not abort the whole enumeration."""
     _make_entry(tmp_path, "9myr")
     _make_entry(tmp_path, "6nlr")
     real_listdir = os.listdir
 
-    def failing_listdir(path):
+    def failing_listdir(path: str) -> list[str]:
         if str(path).endswith(os.path.join(str(tmp_path), "nl")):
             raise PermissionError("locked down")
         return real_listdir(path)
 
-    monkeypatch.setattr(inputs.os, "listdir", failing_listdir)
+    monkeypatch.setattr("inputs.os.listdir", failing_listdir)
     assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
 
 
-def test_missing_map_coefficients_are_reported_by_path(tmp_path):
+def test_missing_map_coefficients_are_reported_by_path(tmp_path: Path) -> None:
     """The error must name the file that was looked for, not just fail."""
     entry_dir = _make_entry(tmp_path, "9myr", mtz=False)
     work_dir = tmp_path / "work"
@@ -486,7 +554,9 @@ def test_missing_map_coefficients_are_reported_by_path(tmp_path):
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
-def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(tmp_path, compressed):
+def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(
+    tmp_path: Path, compressed: bool
+) -> None:
     """The fallback path returns the PDB directly, decompressing if needed."""
     entry_dir = _make_entry(
         tmp_path, "9myr", cif=False, pdb=True, compressed=compressed
@@ -506,15 +576,17 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(tmp_path, compressed):
         )
 
 
-def test_the_authoritative_mmcif_wins_over_the_legacy_export(tmp_path, monkeypatch):
+def test_the_authoritative_mmcif_wins_over_the_legacy_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When a mirror carries both, the mmCIF is the one converted: the legacy
     export loses identifiers it retains."""
     entry_dir = _make_entry(tmp_path, "9myr", cif=True, pdb=True)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    converted = []
+    converted: list[str] = []
 
-    def fake_cif_to_pdb(cif_path, destination):
+    def fake_cif_to_pdb(cif_path: str, destination: str) -> str:
         converted.append(cif_path)
         with open(destination, "w", encoding="ascii") as handle:
             handle.write("FROM CIF\n")
@@ -528,7 +600,7 @@ def test_the_authoritative_mmcif_wins_over_the_legacy_export(tmp_path, monkeypat
         assert handle.read() == "FROM CIF\n", "the legacy export was used instead"
 
 
-def test_an_entry_with_neither_coordinate_format_names_both(tmp_path):
+def test_an_entry_with_neither_coordinate_format_names_both(tmp_path: Path) -> None:
     entry_dir = _make_entry(tmp_path, "9myr", cif=False, pdb=False)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -538,15 +610,15 @@ def test_an_entry_with_neither_coordinate_format_names_both(tmp_path):
 
 
 def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Compressed mirrors are accepted, and never modified in place."""
     entry_dir = _make_entry(tmp_path, "9myr", compressed=True)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    converted = []
+    converted: list[tuple[str, str]] = []
 
-    def fake_cif_to_pdb(cif_path, destination):
+    def fake_cif_to_pdb(cif_path: str, destination: str) -> str:
         converted.append((cif_path, destination))
         with open(destination, "w", encoding="ascii") as handle:
             handle.write("END\n")
@@ -561,7 +633,9 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
     assert converted, "the authoritative mmCIF should have been converted"
 
 
-def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(tmp_path):
+def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(
+    tmp_path: Path,
+) -> None:
     """Old bond rows must not be mistaken for this run's output.
 
     Resume is the exception: it retains completed entries, so their existing
@@ -594,12 +668,14 @@ def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(tmp_path):
     assert not any(os.path.exists(path) for path in paths)
 
 
-def test_removing_absent_bond_outputs_is_not_an_error(tmp_path):
+def test_removing_absent_bond_outputs_is_not_an_error(tmp_path: Path) -> None:
     paths = [str(tmp_path / "absent.csv")]
     assert resume.remove_stale_disabled_bond_outputs(paths, False, False) == []
 
 
-def test_worker_limits_leave_headroom_and_respect_memory(monkeypatch):
+def test_worker_limits_leave_headroom_and_respect_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Both limits are floored at one, so a small machine still runs.
 
     The CPU limit leaves two cores for the driver and the OS; the memory limit
@@ -619,7 +695,9 @@ def test_worker_limits_leave_headroom_and_respect_memory(monkeypatch):
     assert resources.automatic_worker_limits() == (1, 1)
 
 
-def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
+def test_unknown_memory_leaves_the_limit_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An unreadable ``/proc/meminfo`` must not silently cap parallelism."""
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 8)
     monkeypatch.setattr(resources, "available_memory_bytes", lambda: None)
@@ -632,50 +710,50 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
 class _FailingResponse:
     """A response that opens successfully and then fails partway through."""
 
-    def __init__(self, error):
+    def __init__(self, error: Exception) -> None:
         self._error = error
         self._served = False
 
-    def getcode(self):
+    def getcode(self) -> int:
         return 200
 
-    def read(self, _size):
+    def read(self, _size: int) -> bytes:
         if self._served:
             raise self._error
         self._served = True
         return b"partial body"
 
-    def __enter__(self):
+    def __enter__(self) -> _FailingResponse:
         return self
 
-    def __exit__(self, *exc_info):
+    def __exit__(self, *exc_info: object) -> Literal[False]:
         return False
 
 
 class _LengthResponse:
     """A cleanly ending response with an independently declared byte count."""
 
-    def __init__(self, body, content_length):
+    def __init__(self, body: bytes, content_length: int) -> None:
         self._body = body
         self._content_length = content_length
         self._served = False
 
-    def getcode(self):
+    def getcode(self) -> int:
         return 200
 
-    def getheader(self, name):
+    def getheader(self, name: str) -> int | None:
         return self._content_length if name.lower() == "content-length" else None
 
-    def read(self, _size):
+    def read(self, _size: int) -> bytes:
         if self._served:
             return b""
         self._served = True
         return self._body
 
-    def __enter__(self):
+    def __enter__(self) -> _LengthResponse:
         return self
 
-    def __exit__(self, *exc_info):
+    def __exit__(self, *exc_info: object) -> Literal[False]:
         return False
 
 
@@ -689,8 +767,8 @@ class _LengthResponse:
     ids=["reset", "timeout", "incomplete-read"],
 )
 def test_a_transfer_that_fails_midway_reports_no_usable_file(
-    tmp_path, monkeypatch, error
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
     """Only the opening request was guarded, so a mid-stream failure escaped.
 
     ``IncompleteRead`` is not even an ``OSError``, so a handler written for one
@@ -712,7 +790,9 @@ def test_a_transfer_that_fails_midway_reports_no_usable_file(
     assert list(tmp_path.glob("*.part")) == [], "a partial download was left behind"
 
 
-def test_a_clean_early_eof_is_not_promoted_into_the_cache(tmp_path, monkeypatch):
+def test_a_clean_early_eof_is_not_promoted_into_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """HTTPResponse can return EOF without raising for a short response body."""
     body = b"nonempty but truncated"
     monkeypatch.setattr(
@@ -731,7 +811,9 @@ def test_a_clean_early_eof_is_not_promoted_into_the_cache(tmp_path, monkeypatch)
     assert list(tmp_path.glob("*.part")) == []
 
 
-def test_a_body_matching_content_length_is_promoted(tmp_path, monkeypatch):
+def test_a_body_matching_content_length_is_promoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     body = b"complete response"
     monkeypatch.setattr(
         inputs,
@@ -746,7 +828,9 @@ def test_a_body_matching_content_length_is_promoted(tmp_path, monkeypatch):
     assert destination.read_bytes() == body
 
 
-def test_an_unwritable_cache_is_reported_as_a_driver_error(tmp_path, monkeypatch):
+def test_an_unwritable_cache_is_reported_as_a_driver_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A local failure is not a missing entry, and is not a traceback either.
 
     ``ensure_entry_available`` creates directories and writes files, so an
@@ -755,7 +839,7 @@ def test_an_unwritable_cache_is_reported_as_a_driver_error(tmp_path, monkeypatch
     ``FileNotFoundError``.
     """
 
-    def unwritable(pdb_id, mirror_root, cache_root):
+    def unwritable(pdb_id: str, mirror_root: str, cache_root: str) -> str:
         raise PermissionError(13, "Permission denied", str(cache_root))
 
     monkeypatch.setattr(pool, "ensure_entry_available", unwritable)
@@ -779,16 +863,20 @@ def test_an_unwritable_cache_is_reported_as_a_driver_error(tmp_path, monkeypatch
     )
 
 
-def _host_meminfo(tmp_path, monkeypatch, host_bytes):
+def _host_meminfo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host_bytes: int
+) -> Path:
     """Point the memory probe at a synthetic ``/proc/meminfo``."""
     meminfo = tmp_path / "meminfo"
     meminfo.write_text(f"MemAvailable: {host_bytes // 1024} kB\n", encoding="ascii")
     monkeypatch.setattr(resources, "PROC_MEMINFO_PATH", str(meminfo))
-    monkeypatch.setattr(resources.sys, "platform", "linux")
+    monkeypatch.setattr("driver.resources.sys.platform", "linux")
     return meminfo
 
 
-def test_available_memory_is_read_from_meminfo(tmp_path, monkeypatch):
+def test_available_memory_is_read_from_meminfo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Worker sizing follows what the machine reports as free."""
     budget = resources.AUTO_WORKER_MEMORY_BYTES
     _host_meminfo(tmp_path, monkeypatch, host_bytes=7 * budget)
@@ -798,20 +886,22 @@ def test_available_memory_is_read_from_meminfo(tmp_path, monkeypatch):
 
 
 def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A memory probe that fails must not be read as zero available memory."""
     monkeypatch.setattr(
         resources, "PROC_MEMINFO_PATH", str(tmp_path / "definitely-absent")
     )
-    monkeypatch.setattr(resources.sys, "platform", "linux")
-    monkeypatch.setattr(resources.os, "sysconf", lambda name: 0, raising=False)
+    monkeypatch.setattr("driver.resources.sys.platform", "linux")
+    monkeypatch.setattr("driver.resources.os.sysconf", lambda name: 0, raising=False)
 
     assert resources.available_memory_bytes() is None
     assert resources.automatic_worker_limits()[1] is None
 
 
-def test_a_cgroup_memory_limit_is_not_detected(tmp_path, monkeypatch):
+def test_a_cgroup_memory_limit_is_not_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Alchemy sizes from host memory, so a scheduler job needs --workers.
 
     A cgroup allowance is deliberately not consulted: it cannot affect a
@@ -830,11 +920,12 @@ def test_a_cgroup_memory_limit_is_not_detected(tmp_path, monkeypatch):
     assert not hasattr(resources, "CGROUP_ROOT")
 
 
-def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
+def test_missing_ccp4_tools_are_named_with_a_remedy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The message must say which tools are absent and how to fix it."""
     monkeypatch.setattr(
-        ccp4_setup.shutil,
-        "which",
+        "ccp4_setup.shutil.which",
         lambda tool, path=None: None if tool == "edstats" else "/x",
     )
 
@@ -846,19 +937,20 @@ def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
     assert "--configure-ccp4" in message, "the error should name the remedy"
 
 
-def test_a_complete_ccp4_installation_passes(monkeypatch):
+def test_a_complete_ccp4_installation_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        ccp4_setup.shutil, "which", lambda tool, path=None: f"/opt/{tool}"
+        "ccp4_setup.shutil.which", lambda tool, path=None: f"/opt/{tool}"
     )
     ccp4_setup.verify_ccp4({"PATH": "/opt"})
 
 
-def test_tool_availability_agrees_with_verification(monkeypatch):
+def test_tool_availability_agrees_with_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``ccp4_tools_available`` and ``verify_ccp4`` must not disagree, or the
     driver accepts an installation the setup helper rejects."""
     monkeypatch.setattr(
-        ccp4_setup.shutil,
-        "which",
+        "ccp4_setup.shutil.which",
         lambda tool, path=None: None if tool == "fft" else "/x",
     )
 
@@ -867,21 +959,23 @@ def test_tool_availability_agrees_with_verification(monkeypatch):
         ccp4_setup.verify_ccp4({"PATH": "/x"})
 
 
-def test_a_library_caller_never_has_to_catch_systemexit(monkeypatch):
+def test_a_library_caller_never_has_to_catch_systemexit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``ccp4_setup`` raises an ordinary exception, not ``SystemExit``.
 
     ``SystemExit`` derives from ``BaseException``, so a caller outside a CLI
     process -- a notebook, a service -- cannot contain it with ``except
     Exception``. The CLI's conversion to an exit is ``test_cli_and_config``.
     """
-    monkeypatch.setattr(ccp4_setup.shutil, "which", lambda tool, path=None: None)
+    monkeypatch.setattr("ccp4_setup.shutil.which", lambda tool, path=None: None)
 
     with pytest.raises(Exception) as excinfo:
         ccp4_setup.verify_ccp4({"PATH": "/x"})
     assert not isinstance(excinfo.value, SystemExit)
 
 
-def _minimal_mtz(path, high=1.5):
+def _minimal_mtz(path: Path, high: float = 1.5) -> str:
     """An MTZ whose only purpose is to carry a known resolution limit."""
     import gemmi
     import numpy as np
@@ -896,7 +990,12 @@ def _minimal_mtz(path, high=1.5):
     return str(path)
 
 
-def _map_coefficient_mtz(path, rows, *, columns=inputs.MAP_COEFFICIENT_COLUMNS):
+def _map_coefficient_mtz(
+    path: Path,
+    rows: Sequence[Sequence[float]],
+    *,
+    columns: Sequence[str] = inputs.MAP_COEFFICIENT_COLUMNS,
+) -> str:
     """An MTZ carrying the four EDSTATS map-coefficient columns.
 
     ``rows`` are ``(h, k, l, *values)`` with one value per column, so a caller
@@ -920,13 +1019,15 @@ def _map_coefficient_mtz(path, rows, *, columns=inputs.MAP_COEFFICIENT_COLUMNS):
     return str(path)
 
 
-def _d_spacing(mtz_path):
+def _d_spacing(mtz_path: str) -> NDArray[np.float32]:
     import gemmi
 
     return gemmi.read_mtz_file(mtz_path).make_d_array()
 
 
-def test_map_column_resolution_spans_only_wholly_finite_reflections(tmp_path):
+def test_map_column_resolution_spans_only_wholly_finite_reflections(
+    tmp_path: Path,
+) -> None:
     """EDSTATS is given the range where all four coefficients exist.
 
     ``docs/method.md`` states this deliberately: limits taken from the overall
@@ -956,7 +1057,7 @@ def test_map_column_resolution_spans_only_wholly_finite_reflections(tmp_path):
     assert reshi > float(spacings[2])
 
 
-def test_map_column_resolution_names_every_missing_column(tmp_path):
+def test_map_column_resolution_names_every_missing_column(tmp_path: Path) -> None:
     """The error says which coefficients are absent, not merely that one is."""
     path = _map_coefficient_mtz(
         tmp_path / "partial.mtz",
@@ -972,7 +1073,7 @@ def test_map_column_resolution_names_every_missing_column(tmp_path):
     assert "FWT" in message
 
 
-def test_map_column_resolution_rejects_a_wholly_unusable_set(tmp_path):
+def test_map_column_resolution_rejects_a_wholly_unusable_set(tmp_path: Path) -> None:
     """No reflection finite in all four columns is an error, not an empty range."""
     nan = float("nan")
     path = _map_coefficient_mtz(
@@ -987,7 +1088,7 @@ def test_map_column_resolution_rejects_a_wholly_unusable_set(tmp_path):
         inputs.read_map_column_resolution(path)
 
 
-def test_resolution_is_read_from_data_json_when_complete(tmp_path):
+def test_resolution_is_read_from_data_json_when_complete(tmp_path: Path) -> None:
     """data.json is authoritative because DPI metadata is derived from it."""
     entry_dir = _make_entry(
         tmp_path,
@@ -1009,7 +1110,9 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path):
         ("", "empty"),
     ],
 )
-def test_incomplete_metadata_falls_back_to_the_mtz(tmp_path, payload, reason):
+def test_incomplete_metadata_falls_back_to_the_mtz(
+    tmp_path: Path, payload: str, reason: str
+) -> None:
     """Both limits are required before data.json is believed, or a partial
     metadata source is mixed into DPI provenance."""
     entry_dir = _make_entry(tmp_path, "9myr", data_json=payload)
@@ -1017,11 +1120,11 @@ def test_incomplete_metadata_falls_back_to_the_mtz(tmp_path, payload, reason):
 
     resolution = inputs.read_resolution(entry_dir, mtz)
     assert resolution == pytest.approx(
-        inputs.read_resolution(tmp_path / "absent", mtz)
+        inputs.read_resolution(str(tmp_path / "absent"), mtz)
     ), f"{reason} should have fallen back to the MTZ"
 
 
-def test_absent_metadata_falls_back_to_the_mtz(tmp_path):
+def test_absent_metadata_falls_back_to_the_mtz(tmp_path: Path) -> None:
     """A mirror without data.json is still analyzable, DPI aside."""
     entry_dir = _make_entry(tmp_path, "9myr")
     mtz = _minimal_mtz(tmp_path / "only.mtz")
@@ -1029,7 +1132,9 @@ def test_absent_metadata_falls_back_to_the_mtz(tmp_path):
     assert inputs.read_resolution(entry_dir, mtz) > 0.0
 
 
-def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
+def test_an_explicit_data_json_path_overrides_the_entry_directory(
+    tmp_path: Path,
+) -> None:
     """``--data-json`` supplies metadata for manual inputs with no entry dir.
 
     It must win over any file sitting beside the coordinates, or a manual run
@@ -1062,8 +1167,8 @@ def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
     ],
 )
 def test_explicit_invalid_data_json_does_not_fall_back_to_mtz(
-    tmp_path, payload, message
-):
+    tmp_path: Path, payload: str | None, message: str
+) -> None:
     """A requested metadata file is an input contract, not an optional probe."""
     data_json = tmp_path / "explicit.json"
     if payload is not None:
@@ -1072,13 +1177,15 @@ def test_explicit_invalid_data_json_does_not_fall_back_to_mtz(
 
     with pytest.raises(ValueError, match=message):
         inputs.read_resolution(
-            tmp_path,
+            str(tmp_path),
             mtz,
             data_json_path=str(data_json),
         )
 
 
-def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(tmp_path):
+def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(
+    tmp_path: Path,
+) -> None:
     """A CLI typo fails as a driver input error instead of reaching a worker."""
     missing = tmp_path / "missing.json"
     args = cli.parse_args(
@@ -1098,14 +1205,14 @@ def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(tmp_pat
         pool._select_entry_ids(args, str(tmp_path / "cache"))
 
 
-def test_intermediates_are_discarded_unless_asked_for():
+def test_intermediates_are_discarded_unless_asked_for() -> None:
     """Per-entry maps are large, so retention is opt-in: ``process`` keys its
     scratch cleanup off this flag."""
     assert cli.parse_args([]).keep_intermediates is False
     assert cli.parse_args(["--keep-intermediates"]).keep_intermediates is True
 
 
-def test_an_id_file_with_a_byte_order_mark_is_read(tmp_path):
+def test_an_id_file_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
     """A BOM belongs to the encoding, not to the first id.
 
     Windows editors and spreadsheet exports add one routinely, and under plain
@@ -1138,7 +1245,9 @@ def test_an_id_file_with_a_byte_order_mark_is_read(tmp_path):
     ],
     ids=["pdb-alone", "cif-alone", "mtz-alone", "pdb-and-cif"],
 )
-def test_incomplete_manual_input_is_a_usage_error(argv, fragment, capsys):
+def test_incomplete_manual_input_is_a_usage_error(
+    argv: list[str], fragment: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Manual mode needs coordinates and reflections, and only one of each.
 
     These reached a worker before failing, and were reported as an unexpected
@@ -1157,8 +1266,8 @@ def test_incomplete_manual_input_is_a_usage_error(argv, fragment, capsys):
     ids=["empty", "captive-portal", "leading-space"],
 )
 def test_a_cached_body_that_is_not_entry_data_is_not_treated_as_cached(
-    tmp_path, content
-):
+    tmp_path: Path, content: bytes
+) -> None:
     """A 200 response can still carry a login page under the entry's own name.
 
     Existence alone was the cache test, so such a body was reused forever: the
@@ -1173,7 +1282,7 @@ def test_a_cached_body_that_is_not_entry_data_is_not_treated_as_cached(
     assert inputs.has_final_files(str(entry), "9myr") is False
 
 
-def test_real_entry_bytes_are_accepted_as_cached(tmp_path):
+def test_real_entry_bytes_are_accepted_as_cached(tmp_path: Path) -> None:
     """The validity check must not reject an ordinary entry."""
     entry = tmp_path / "my" / "9myr"
     entry.mkdir(parents=True)
@@ -1197,20 +1306,31 @@ def test_real_entry_bytes_are_accepted_as_cached(tmp_path):
     ],
 )
 def test_a_resumed_run_writes_new_entries_even_when_they_fail(
-    resuming, pdb_id, status, retryable, prior, expected, why
-):
+    resuming: bool,
+    pdb_id: str,
+    status: str,
+    retryable: bool,
+    prior: set[str],
+    expected: bool,
+    why: str,
+) -> None:
     """Suppression protects a previous row; a new entry has no previous row.
 
     Without the distinction a newly scheduled entry that failed left no
     manifest row at all, so the artifact --resume reads under-reported the set
     the run had actually scheduled.
     """
-    result = SimpleNamespace(pdb_id=pdb_id, status=status, retryable=retryable)
+    # A stand-in for EntryResult: _should_write_entry reads only these three
+    # fields, and the real dataclass would need six unrelated ones supplied.
+    result = cast(
+        "EntryResult",
+        SimpleNamespace(pdb_id=pdb_id, status=status, retryable=retryable),
+    )
 
     assert pool._should_write_entry(resuming, result, prior) is expected, why
 
 
-def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference():
+def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> None:
     """That run builds the reference, so it cannot be scored against one.
 
     The flag was accepted in silence, leaving an operator believing their
@@ -1226,7 +1346,11 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference():
     messages: list[str] = []
 
     class _Capture(logging.Handler):
-        def emit(self, record):
+        # No @override: typing.override arrived in 3.12 and this project still
+        # supports 3.11, where importing it would fail at run time.
+        def emit(  # type: ignore[explicit-override]
+            self, record: logging.LogRecord
+        ) -> None:
             messages.append(record.getMessage())
 
     alchemy_logger = logging.getLogger("alchemy.pool")
@@ -1235,7 +1359,11 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference():
     alchemy_logger.addHandler(handler)
     alchemy_logger.setLevel(logging.WARNING)
     try:
-        plan = pool._plan_confidence(args, pool._OutputLayout("/tmp/out"), True, None)
+        # ``None`` for the run log: the uncapped-database branch returns before
+        # it is touched, and the parameter is not declared Optional.
+        plan = pool._plan_confidence(
+            args, pool._OutputLayout("/tmp/out"), True, cast("runlog._RunLog", None)
+        )
     finally:
         alchemy_logger.removeHandler(handler)
         alchemy_logger.setLevel(previous_level)
@@ -1246,14 +1374,14 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference():
     assert any("/tmp/reference" in message for message in messages)
 
 
-def test_concurrent_run_logs_claim_distinct_names(tmp_path):
+def test_concurrent_run_logs_claim_distinct_names(tmp_path: Path) -> None:
     """Two runs sharing a --log-dir must not overwrite each other's record.
 
     The name was chosen with ``lexists`` and then renamed onto, and a run log
     is written outside the output-directory lease, so nothing prevented two
     runs from selecting the same suffix.
     """
-    claimed = []
+    claimed: list[str] = []
     for index in range(3):
         source = tmp_path / f"source-{index}"
         source.write_text(f"run {index}\n", encoding="utf-8")
@@ -1270,12 +1398,14 @@ def test_concurrent_run_logs_claim_distinct_names(tmp_path):
     assert [open(p).read() for p in claimed] == ["run 0\n", "run 1\n", "run 2\n"]
 
 
-def test_run_log_fallback_never_overwrites_same_day_logs(tmp_path, monkeypatch):
-    def hard_links_unavailable(*args):
+def test_run_log_fallback_never_overwrites_same_day_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def hard_links_unavailable(*args: object) -> None:
         raise OSError("hard links unavailable")
 
-    monkeypatch.setattr(runlog.os, "link", hard_links_unavailable)
-    claimed = []
+    monkeypatch.setattr("driver.runlog.os.link", hard_links_unavailable)
+    claimed: list[str] = []
     for index in range(3):
         source = tmp_path / f"fallback-source-{index}"
         source.write_text(f"fallback run {index}\n", encoding="utf-8")
@@ -1295,19 +1425,21 @@ def test_run_log_fallback_never_overwrites_same_day_logs(tmp_path, monkeypatch):
     ]
 
 
-def test_concurrent_run_log_fallback_claims_are_distinct(tmp_path, monkeypatch):
-    def hard_links_unavailable(*args):
+def test_concurrent_run_log_fallback_claims_are_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def hard_links_unavailable(*args: object) -> None:
         raise OSError("hard links unavailable")
 
-    monkeypatch.setattr(runlog.os, "link", hard_links_unavailable)
-    sources = []
+    monkeypatch.setattr("driver.runlog.os.link", hard_links_unavailable)
+    sources: list[Path] = []
     for index in range(8):
         source = tmp_path / f"concurrent-source-{index}"
         source.write_text(f"concurrent run {index}\n", encoding="utf-8")
         sources.append(source)
     ready = threading.Barrier(len(sources))
 
-    def claim(index):
+    def claim(index: int) -> tuple[int, str]:
         ready.wait()
         path = runlog._claim_log_path(
             str(tmp_path), "alchemy_run_20260805", str(sources[index])

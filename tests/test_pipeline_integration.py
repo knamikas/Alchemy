@@ -30,7 +30,17 @@ import socket
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import (
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 import pytest
 
@@ -42,6 +52,8 @@ from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 
+
+_StrPath = Union[str, os.PathLike[str]]
 
 ENTRY_IDS = ("9myr", "6nlr", "9nxl")
 
@@ -158,7 +170,10 @@ _ENTRY_SNAPSHOT_IS_WARM = bool(
 )
 
 
-def _requires_entry_data(test):
+_TestFunc = TypeVar("_TestFunc", bound=Callable[..., None])
+
+
+def _requires_entry_data(test: _TestFunc) -> _TestFunc:
     """Mark a snapshot-backed test, plus its conditional network requirement."""
     test = pytest.mark.entry_data(test)
     if not _ENTRY_SNAPSHOT_IS_WARM:
@@ -167,7 +182,7 @@ def _requires_entry_data(test):
 
 
 @pytest.fixture(scope="session")
-def entry_cache(tmp_path_factory) -> str:
+def entry_cache(tmp_path_factory: pytest.TempPathFactory) -> str:
     """A PDB-REDO cache root holding every entry in :data:`ENTRY_IDS`.
 
     An unreachable ``pdb-redo.eu`` skips, but a ``download_entry_to_cache`` that
@@ -237,7 +252,7 @@ class RunResult:
 
 
 @contextlib.contextmanager
-def _environment(overrides: Optional[Dict[str, str]]):
+def _environment(overrides: Optional[Dict[str, str]]) -> Iterator[None]:
     """Temporarily install ``overrides`` into ``os.environ``."""
     saved = os.environ.copy()
     if overrides:
@@ -250,13 +265,13 @@ def _environment(overrides: Optional[Dict[str, str]]):
 
 
 def run_alchemy(
-    output_dir,
-    *args,
-    ccp4_environ=None,
-    cache=None,
-    tmp_root=None,
-    mirror=None,
-    reference_dir=None,
+    output_dir: _StrPath,
+    *args: object,
+    ccp4_environ: Optional[Dict[str, str]] = None,
+    cache: Optional[_StrPath] = None,
+    tmp_root: Optional[_StrPath] = None,
+    mirror: Optional[_StrPath] = None,
+    reference_dir: Optional[_StrPath] = None,
 ) -> RunResult:
     """Invoke the driver in-process and return its exit code and output.
 
@@ -294,7 +309,7 @@ def run_alchemy(
     return RunResult(int(code or 0), out.getvalue(), err.getvalue(), output_dir)
 
 
-def id_file(directory, pdb_ids: Sequence[str]) -> str:
+def id_file(directory: _StrPath, pdb_ids: Sequence[str]) -> str:
     """Write a whitespace-separated ``--id-file`` and return its path."""
     os.makedirs(str(directory), exist_ok=True)
     path = os.path.join(str(directory), "ids.txt")
@@ -303,21 +318,21 @@ def id_file(directory, pdb_ids: Sequence[str]) -> str:
     return path
 
 
-def read_rows(output_dir, name: str) -> List[Dict[str, str]]:
+def read_rows(output_dir: _StrPath, name: str) -> List[Dict[str, str]]:
     with open(os.path.join(str(output_dir), name), newline="") as handle:
         return list(csv.DictReader(handle))
 
 
-def read_header(output_dir, name: str) -> List[str]:
+def read_header(output_dir: _StrPath, name: str) -> List[str]:
     with open(os.path.join(str(output_dir), name), newline="") as handle:
         return next(csv.reader(handle))
 
 
-def read_text(path) -> str:
+def read_text(path: _StrPath) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def manifest_by_id(output_dir) -> Dict[str, Dict[str, str]]:
+def manifest_by_id(output_dir: _StrPath) -> Dict[str, Dict[str, str]]:
     return {row["pdbID"]: row for row in read_rows(output_dir, "manifest.csv")}
 
 
@@ -325,7 +340,7 @@ def rows_for(rows: Sequence[Dict[str, str]], pdb_id: str) -> List[Dict[str, str]
     return [row for row in rows if row["pdbID"] == pdb_id]
 
 
-def log_paths(output_dir) -> List[str]:
+def log_paths(output_dir: _StrPath) -> List[str]:
     """Every run log in this output directory."""
     directory = os.path.join(str(output_dir), runlog.DEFAULT_LOG_DIRNAME)
     if not os.path.isdir(directory):
@@ -337,7 +352,9 @@ def log_paths(output_dir) -> List[str]:
     )
 
 
-def literature_reference(residue: str, atom_element: str, metal: str):
+def literature_reference(
+    residue: str, atom_element: str, metal: str
+) -> Tuple[float, float]:
     """(mu, sigma) for one row of ``src/data/metal_distances_info.txt``."""
     path = os.path.join(helpers.SRC_DIR, "data", "metal_distances_info.txt")
     with open(path, encoding="utf-8") as handle:
@@ -370,13 +387,13 @@ class Batch:
 
 
 def run_batch(
-    output_dir,
-    cache,
-    ccp4_environ,
-    pdb_ids=ENTRY_IDS,
-    extra=(),
-    tmp_root=None,
-    reference_dir=None,
+    output_dir: _StrPath,
+    cache: _StrPath,
+    ccp4_environ: Optional[Dict[str, str]],
+    pdb_ids: Sequence[str] = ENTRY_IDS,
+    extra: Sequence[str] = (),
+    tmp_root: Optional[_StrPath] = None,
+    reference_dir: Optional[_StrPath] = None,
 ) -> Batch:
     """Run ``--id-file`` over ``pdb_ids`` and parse every output CSV."""
     output_dir = str(output_dir)
@@ -407,7 +424,9 @@ def run_batch(
 
 
 @pytest.fixture(scope="session")
-def batch(tmp_path_factory, entry_cache, ccp4_env) -> Batch:
+def batch(
+    tmp_path_factory: pytest.TempPathFactory, entry_cache: str, ccp4_env: Dict[str, str]
+) -> Batch:
     """A single completed three-entry run, shared read-only by several tests."""
     root = tmp_path_factory.mktemp("batch")
     result = run_batch(root / "output", entry_cache, ccp4_env, tmp_root=root)
@@ -418,7 +437,9 @@ def batch(tmp_path_factory, entry_cache, ccp4_env) -> Batch:
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_env):
+def test_single_entry_run_writes_documented_outputs(
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """One ``--id`` run writes exactly the documented output set.
 
     README "Results are written to": manifest, statistics, bond and candidate
@@ -509,7 +530,7 @@ def test_single_entry_run_writes_documented_outputs(tmp_path, entry_cache, ccp4_
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
+def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> None:
     """9myr yields two Cys3-His zinc sites with measured density and geometry.
 
     The z-scores are re-derived from the README formula and the bundled
@@ -588,7 +609,9 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch):
+def test_6nlr_multi_element_sites_report_their_measured_difference_density(
+    batch: Batch,
+) -> None:
     """All eleven PIXE-remodelled 6nlr sites carry their own RSZD triple.
 
     Four elements, three chains and repeated residue numbers: a map that is
@@ -627,7 +650,9 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(batch
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_declared_connections_measure_their_own_reported_distance(batch):
+def test_declared_connections_measure_their_own_reported_distance(
+    batch: Batch,
+) -> None:
     """Every declared contact's measured distance matches the one it declares.
 
     gemmi's PDB writer emits a TER after each polymer and every TER consumes a
@@ -668,7 +693,9 @@ def test_declared_connections_measure_their_own_reported_distance(batch):
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(batch):
+def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(
+    batch: Batch,
+) -> None:
     """Both 9myr zinc sites resolve to the deposited Cys3-His tetrad.
 
     Donor identity pins the serial mapping independently of geometry.
@@ -700,7 +727,7 @@ def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(batch):
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_no_metal_entry_is_reported_not_dropped(batch):
+def test_no_metal_entry_is_reported_not_dropped(batch: Batch) -> None:
     """9nxl finishes as a successful negative result with zeroed counts.
 
     README: "structures with no recognized metal atoms finish with n_metals=0
@@ -738,7 +765,7 @@ def test_no_metal_entry_is_reported_not_dropped(batch):
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch):
+def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch: Batch) -> None:
     """A batch writes one manifest row per requested id and no cross-talk."""
     manifest_ids = [row["pdbID"] for row in batch.manifest_rows]
     assert len(batch.manifest_rows) == len(ENTRY_IDS)
@@ -771,7 +798,9 @@ def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch):
 @pytest.mark.ccp4
 @pytest.mark.slow
 @pytest.mark.parametrize("pdb_id", ENTRY_IDS)
-def test_manifest_counts_match_the_rows_actually_written(batch, pdb_id):
+def test_manifest_counts_match_the_rows_actually_written(
+    batch: Batch, pdb_id: str
+) -> None:
     """``n_metals``/``n_bonds``/``n_candidates`` agree with the CSV contents.
 
     README: ``n_metals`` counts distinct selected coordinate-model sites, not
@@ -796,7 +825,9 @@ def test_manifest_counts_match_the_rows_actually_written(batch, pdb_id):
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
+def test_each_run_writes_its_own_immutable_log(
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """A second invocation adds a suffixed log instead of replacing the first.
 
     README: "Additional runs on the same UTC date receive a numeric suffix ...
@@ -839,8 +870,8 @@ def test_each_run_writes_its_own_immutable_log(tmp_path, entry_cache, ccp4_env):
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
-    tmp_path, entry_cache, ccp4_env
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """Resuming a finished batch reprocesses nothing and rewrites nothing.
 
     README: ``--resume`` skips ``ok`` and terminal ``partial`` outcomes without
@@ -877,8 +908,8 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
-    tmp_path, entry_cache, ccp4_env
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """``--no-bonds`` erases stale bond output; a later resume fills it back in.
 
     README: "Entries originating from a bond-disabled run retain blank n_bonds
@@ -931,8 +962,8 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
-    tmp_path, entry_cache, ccp4_env
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """A pre-bond failure leaves blank counts, so bonds are still filled later.
 
     A seeded ``0`` would read as a measured zero: ``--resume --no-bonds``
@@ -1014,8 +1045,8 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
-    tmp_path, entry_cache, ccp4_env, batch
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str], batch: Batch
+) -> None:
     """Manual ``--cif-file/--mtz-file/--data-json`` matches the automatic run.
 
     Manual mode selects inputs; it is not a different analysis.
@@ -1068,8 +1099,8 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_manual_files_without_data_json_are_a_terminal_partial(
-    tmp_path, entry_cache, ccp4_env, batch
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str], batch: Batch
+) -> None:
     """Omitting ``--data-json`` costs DPI only, and is not a failure.
 
     README: "Without --data-json there is no reflection count, so DPI and every
@@ -1123,8 +1154,8 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_full_and_model_envelope_map_scopes_give_identical_statistics(
-    tmp_path, entry_cache, ccp4_env
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """Cropping the FFT map to the model envelope changes no EDSTATS number.
 
     README: "Model-envelope mode still calculates each complete FFT map before
@@ -1158,7 +1189,7 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
     assert not re.search(r"density_map_scope=model-envelope\b", full_log)
     assert re.search(r"density_map_scope=full\b", full_log)
 
-    def key(row):
+    def key(row: Dict[str, str]) -> Tuple[str, str, str, str]:
         return (row["pdbID"], row["RT"], row["CI"], row["RN"])
 
     cropped_sites = {key(row): row for row in cropped.stats}
@@ -1170,7 +1201,7 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
         for metric in helpers.EDSTATS_METRICS:
             assert row[metric] == other[metric], (site_key, metric)
 
-    def bond_key(row):
+    def bond_key(row: Dict[str, str]) -> Tuple[str, str, str, str]:
         return (
             row["pdbID"],
             row["metal_resnum"],
@@ -1186,7 +1217,7 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
             assert row[column] == full_bonds[bond_id][column], (bond_id, column)
 
 
-def _mtz_without_map_coefficients(source_mtz: str, destination) -> str:
+def _mtz_without_map_coefficients(source_mtz: str, destination: _StrPath) -> str:
     """Write an MTZ with real indices but none of FWT/PHWT/DELFWT/PHDELWT."""
     import gemmi
     import numpy as np
@@ -1216,15 +1247,15 @@ def _mtz_without_map_coefficients(source_mtz: str, destination) -> str:
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
-    tmp_path, ccp4_env, monkeypatch
-):
+    tmp_path: Path, ccp4_env: Dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An id that exists nowhere ends the run with an explanation and exit 1.
 
     The downloader is stubbed because this test carries no ``network`` marker
     and so must never open a socket.
     """
 
-    def unavailable(pdb_id, cache_root):
+    def unavailable(pdb_id: str, cache_root: str) -> None:
         raise FileNotFoundError(pdb_id)
 
     monkeypatch.setattr(inputs, "download_entry_to_cache", unavailable)
@@ -1252,8 +1283,8 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
-    tmp_path, entry_cache, ccp4_env
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """A missing FWT/PHWT/DELFWT/PHDELWT set fails one entry, not the process.
 
     README: "The MTZ input must contain FWT, PHWT, DELFWT, and PHDELWT
@@ -1300,7 +1331,9 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 
 
 @pytest.mark.parametrize("value", ["0", "-1"])
-def test_workers_below_one_is_rejected_before_any_work(tmp_path, value):
+def test_workers_below_one_is_rejected_before_any_work(
+    tmp_path: Path, value: str
+) -> None:
     """``--workers`` must be at least 1, and is refused during argument parsing.
 
     Rejection precedes the run, so no output directory and no log are created.
@@ -1348,7 +1381,7 @@ _9MYR_B_CONFIDENCE = 98.75
 _9MYR_B_CONFIDENCE_TOLERANCE = 3.75
 
 
-def _severity(value: float, anchors) -> float:
+def _severity(value: float, anchors: Sequence[Tuple[float, float]]) -> float:
     """Piecewise-linear bounded severity, re-derived from ``anchors``."""
     if not math.isfinite(value) or value < 0.0:
         return math.nan
@@ -1379,7 +1412,7 @@ def readme_confidence(rszd: float, max_abs_zbond: float, coverage: float) -> flo
     return min(100.0, max(0.0, score))
 
 
-def frozen_cohort(reference_dir) -> List[Tuple[float, int]]:
+def frozen_cohort(reference_dir: _StrPath) -> List[Tuple[float, int]]:
     """``[(score, count)]`` read straight from a published distribution file."""
     path = os.path.join(
         str(reference_dir), confidence_score.REFERENCE_DISTRIBUTION_FILE
@@ -1391,14 +1424,17 @@ def frozen_cohort(reference_dir) -> List[Tuple[float, int]]:
         ]
 
 
-def reference_metadata(reference_dir) -> Dict[str, object]:
+def reference_metadata(reference_dir: _StrPath) -> Dict[str, object]:
     """The published policy metadata of a frozen reference directory."""
     path = os.path.join(str(reference_dir), confidence_score.REFERENCE_METADATA_FILE)
     with open(path, encoding="utf-8") as handle:
-        return json.load(handle)
+        metadata: Dict[str, object] = json.load(handle)
+    return metadata
 
 
-def average_rank_percentile(cohort, score: float, tolerance: float = 1e-6) -> float:
+def average_rank_percentile(
+    cohort: Sequence[Tuple[float, int]], score: float, tolerance: float = 1e-6
+) -> float:
     """Average-rank ECDF of ``score`` in ``cohort``, computed independently.
 
     ``tolerance`` groups a CSV score, rounded to six decimals, with the
@@ -1412,7 +1448,9 @@ def average_rank_percentile(cohort, score: float, tolerance: float = 1e-6) -> fl
 
 
 def frozen_reference(
-    directory, rszd_values=_COHORT_RSZD, zbond_values=_COHORT_ZBOND
+    directory: _StrPath,
+    rszd_values: Sequence[float] = _COHORT_RSZD,
+    zbond_values: Sequence[float] = _COHORT_ZBOND,
 ) -> str:
     """Publish a frozen confidence reference and return its directory.
 
@@ -1481,7 +1519,9 @@ CONFIDENCE_COLUMNS = list(confidence_score.CONFIDENCE_INPUT_COLUMNS) + list(
 )
 
 
-def assert_policy_was_applied(rows, reference_dir):
+def assert_policy_was_applied(
+    rows: Sequence[Dict[str, str]], reference_dir: _StrPath
+) -> int:
     """Every scored row obeys the README formula and the frozen cohort's ECDF.
 
     The percentile must place the score in the frozen database cohort, not in
@@ -1521,7 +1561,7 @@ def assert_policy_was_applied(rows, reference_dir):
     return scored
 
 
-def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path):
+def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> None:
     """The anchors and weights this module re-implements are Alchemy's own.
 
     ``assert_policy_was_applied`` is an independent oracle only while the two
@@ -1543,8 +1583,8 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path):
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_installed_reference_scores_every_selected_site_against_the_database(
-    tmp_path, entry_cache, ccp4_env, batch
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str], batch: Batch
+) -> None:
     """``--confidence-reference-dir`` makes a run emit its confidence scores.
 
     README: such runs load the reference once, derive each new site's compact
@@ -1623,8 +1663,8 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
-    tmp_path, entry_cache, ccp4_env
-):
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """A run over a whole mirror streams inputs and then freezes a reference.
 
     README: confidence inputs are collected "as part of an uncapped
@@ -1729,7 +1769,9 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
 @_requires_entry_data
 @pytest.mark.ccp4
 @pytest.mark.slow
-def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp4_env):
+def test_resume_refuses_to_mix_two_database_snapshots(
+    tmp_path: Path, entry_cache: str, ccp4_env: Dict[str, str]
+) -> None:
     """Resuming against a different frozen reference is refused, not blended.
 
     A percentile is meaningful only relative to one cohort, so half a file
@@ -1837,8 +1879,12 @@ def test_resume_refuses_to_mix_two_database_snapshots(tmp_path, entry_cache, ccp
     ],
 )
 def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
-    tmp_path, entry_cache, ccp4_env, damage, message
-):
+    tmp_path: Path,
+    entry_cache: str,
+    ccp4_env: Dict[str, str],
+    damage: str,
+    message: str,
+) -> None:
     """A reference that is not the one it claims to be aborts the run.
 
     Either damage -- a policy that no longer matches this code, a distribution

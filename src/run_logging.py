@@ -17,7 +17,7 @@ import logging.handlers
 import multiprocessing
 import os
 import sys
-from typing import Optional
+from typing import IO, Optional
 
 
 # Longest message a single record may carry. External programs and tracebacks
@@ -85,11 +85,15 @@ class _BoundedMessage(logging.Filter):
     logging call cannot forget it.
     """
 
-    def __init__(self, limit: int = MAX_RECORD_CHARS):
+    def __init__(self, limit: int = MAX_RECORD_CHARS) -> None:
         super().__init__()
         self.limit = limit
 
-    def filter(self, record: logging.LogRecord) -> bool:
+    # No @override: typing.override arrived in 3.12 and this project still
+    # supports 3.11, where importing it would fail at runtime.
+    def filter(  # type: ignore[explicit-override]
+        self, record: logging.LogRecord
+    ) -> bool:
         message = record.getMessage()
         if len(message) > self.limit:
             record.msg = truncate(message, self.limit)
@@ -122,7 +126,7 @@ def worker_level(console_level: int, log_file: Optional[str] = None) -> int:
 
 def configure_driver_logging(
     level: int = logging.INFO,
-    stream=None,
+    stream: Optional[IO[str]] = None,
     log_file: Optional[str] = None,
 ) -> logging.Logger:
     """Attach the process-wide handlers. Called once, in the driver.
@@ -162,7 +166,7 @@ def configure_driver_logging(
     return root
 
 
-def create_worker_log_queue():
+def create_worker_log_queue() -> multiprocessing.Queue[logging.LogRecord]:
     """Return the queue workers will forward their records over.
 
     Separate from :func:`start_worker_log_listener` because ``fork`` copies
@@ -173,7 +177,9 @@ def create_worker_log_queue():
     return multiprocessing.Queue(-1)
 
 
-def start_worker_log_listener(queue):
+def start_worker_log_listener(
+    queue: multiprocessing.Queue[logging.LogRecord],
+) -> logging.handlers.QueueListener:
     """Return a started listener re-emitting queued records in this process.
 
     The caller must ``stop()`` it after the pool is gone, so records emitted
@@ -187,7 +193,10 @@ def start_worker_log_listener(queue):
     return listener
 
 
-def configure_worker_logging(queue, level: int = logging.INFO) -> None:
+def configure_worker_logging(
+    queue: Optional[multiprocessing.Queue[logging.LogRecord]],
+    level: int = logging.INFO,
+) -> None:
     """Point this worker's ``alchemy`` logger at the driver's queue.
 
     Handlers inherited through ``fork`` are removed first: a forked copy of the
