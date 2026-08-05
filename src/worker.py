@@ -17,9 +17,13 @@ from dataclasses import dataclass, field
 from typing import Any, Collection, Dict, Optional
 
 from _version import __version__
-from bond.bond_analysis import NAN, load_structure, run_bond_analysis
+from coordination.analysis import NAN, load_structure, run_bond_analysis
 from codes import WarningCode
-from bond.bond_schema import STATS_EXTRA_COLUMNS, _check_row_schema, stats_extra_values
+from coordination.schema import (
+    STATS_EXTRA_COLUMNS,
+    _check_row_schema,
+    stats_extra_values,
+)
 from coordinate_conversion import _first_model_pdb
 from density_analysis import (
     Ccp4ToolTimeoutError,

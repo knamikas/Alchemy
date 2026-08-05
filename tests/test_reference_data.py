@@ -23,7 +23,7 @@ from helpers import SRC_DIR
 
 
 _MUST_NOT_READ_AT_IMPORT = (
-    "bond.bond_analysis",
+    "coordination.analysis",
     "metal_identification",
     "reference_data",
 )
@@ -167,12 +167,12 @@ def test_first_sphere_targets_is_the_longest_distance_per_metal_and_donor():
 
 def test_building_the_targets_leaves_nothing_in_the_module_namespace():
     """A loop variable left bound at module scope reads as a module constant."""
-    from bond import bond_analysis
+    from coordination import analysis as coordination_analysis
 
     leaked = [
         name
         for name in ("donor", "metal_element", "target", "key")
-        if hasattr(reference_data, name) or hasattr(bond_analysis, name)
+        if hasattr(reference_data, name) or hasattr(coordination_analysis, name)
     ]
     assert not leaked, f"loop variables left in a module namespace: {leaked}"
 

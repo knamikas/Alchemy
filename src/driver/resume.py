@@ -15,7 +15,7 @@ import shutil
 import tempfile
 from typing import Optional, Sequence
 
-from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
 

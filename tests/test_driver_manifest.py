@@ -22,9 +22,9 @@ import gemmi
 import pytest
 
 import helpers
-from bond import bond_schema
+from coordination import schema as coordination_schema
 import coordinate_conversion as conversion
-from bond import declared_connections
+from coordination import declared_connections
 import density_analysis as density
 import main
 import metal_identification
@@ -1383,9 +1383,11 @@ class TestOutputWriters:
 
         assert _read_csv(tmp_path / "manifest.csv") == [MANIFEST_COLUMNS]
         assert _read_csv(tmp_path / "stats.csv") == [list(STATS_COLUMNS)]
-        assert _read_csv(tmp_path / "bonds.csv") == [list(bond_schema.BOND_COLUMNS)]
+        assert _read_csv(tmp_path / "bonds.csv") == [
+            list(coordination_schema.BOND_COLUMNS)
+        ]
         assert _read_csv(tmp_path / "candidates.csv") == [
-            list(bond_schema.CANDIDATE_COLUMNS)
+            list(coordination_schema.CANDIDATE_COLUMNS)
         ]
         assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
 
@@ -1401,9 +1403,11 @@ class TestOutputWriters:
             }
             for _ in range(3)
         ]
-        bond_rows = [dict.fromkeys(bond_schema.BOND_COLUMNS, "") for _ in range(4)]
+        bond_rows = [
+            dict.fromkeys(coordination_schema.BOND_COLUMNS, "") for _ in range(4)
+        ]
         candidate_rows = [
-            dict.fromkeys(bond_schema.CANDIDATE_COLUMNS, "") for _ in range(2)
+            dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "") for _ in range(2)
         ]
         writers.write_stats_rows(stats_rows)
         writers.write_bond_rows(bond_rows)
@@ -1435,19 +1439,21 @@ class TestOutputWriters:
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = {column: f"v-{column}" for column in bond_schema.BOND_COLUMNS}
+        row = {column: f"v-{column}" for column in coordination_schema.BOND_COLUMNS}
         shuffled = {key: row[key] for key in reversed(list(row))}
         writers.write_bond_rows([shuffled])
         self._close(handles)
         written = _read_csv(tmp_path / "bonds.csv")[1]
-        assert written == [f"v-{column}" for column in bond_schema.BOND_COLUMNS]
+        assert written == [f"v-{column}" for column in coordination_schema.BOND_COLUMNS]
 
     def test_disabled_bond_outputs_are_a_no_op_not_a_crash(self, tmp_path):
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
         writers = _OutputWriters(*handles)
-        writers.write_bond_rows([dict.fromkeys(bond_schema.BOND_COLUMNS, "")])
-        writers.write_candidate_rows([dict.fromkeys(bond_schema.CANDIDATE_COLUMNS, "")])
+        writers.write_bond_rows([dict.fromkeys(coordination_schema.BOND_COLUMNS, "")])
+        writers.write_candidate_rows(
+            [dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")]
+        )
         self._close(handles)
         assert writers.n_bonds == 0
         assert writers.n_candidates == 0
@@ -1465,7 +1471,7 @@ class TestOutputWriters:
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = dict.fromkeys(getattr(bond_schema, columns_name), "")
+        row = dict.fromkeys(getattr(coordination_schema, columns_name), "")
         if mutate == "drop":
             drifted = next(iter(row))
             row.pop(drifted)
@@ -1490,7 +1496,7 @@ class TestOutputWriters:
         """Same guard on the candidate stream, named for its own file."""
         handles = self._handles(tmp_path)
         writers = _OutputWriters(*handles)
-        row = dict.fromkeys(bond_schema.CANDIDATE_COLUMNS, "")
+        row = dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")
         row["bogus"] = ""
         try:
             with pytest.raises(RuntimeError) as excinfo:
@@ -1636,7 +1642,7 @@ class TestOutputWriters:
                 }
             ]
         )
-        writers.write_bond_rows([dict.fromkeys(bond_schema.BOND_COLUMNS, "")])
+        writers.write_bond_rows([dict.fromkeys(coordination_schema.BOND_COLUMNS, "")])
         writers.write_manifest_row(
             _manifest_row(_result(status="ok"), False, True, {}, {})
         )

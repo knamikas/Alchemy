@@ -32,9 +32,9 @@ import pytest
 
 import gemmi
 
-import bond.bond_analysis as ba
+import coordination.analysis as ba
 import codes
-from bond.contact_record import Candidate
+from coordination.contact_record import Candidate
 import structure_analysis as sa
 from metal_elements import METAL_ELEMENTS
 

@@ -31,16 +31,16 @@ def test_src_modules_import():
     it on ``sys.path``; failing here names that cause before the rest of the
     suite fails with ``ModuleNotFoundError``.
     """
-    from bond import bond_analysis
-    from bond import bond_schema
+    from coordination import analysis
+    from coordination import schema
     import ccp4_setup
     import codes
     import confidence_score
-    from bond import contact_record
-    from bond import declared_connections
+    from coordination import contact_record
+    from coordination import declared_connections
     import density_analysis
-    from bond import donor_chemistry
-    from bond import dpi
+    from coordination import donor_chemistry
+    from coordination import dpi
     import main
     import metal_elements
     import metal_identification  # noqa: F401 - imported to prove it loads
@@ -50,7 +50,7 @@ def test_src_modules_import():
     from driver import pool, progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
-    assert bond_analysis.CUTOFF == 4.0
+    assert analysis.CUTOFF == 4.0
     assert callable(structure_analysis.load_structure)
     assert callable(main.main), "src/main.py must keep working as the entry point"
     assert main.main is cli.main, "the entry point must delegate, not reimplement"
@@ -62,7 +62,7 @@ def test_src_modules_import():
     assert resources.available_cpu_count() >= 1
     assert callable(dpi._calculate_dpi_details)
     assert callable(declared_connections._collect_declared_candidates)
-    assert bond_schema.BOND_COLUMNS[0] == "pdbID"
+    assert schema.BOND_COLUMNS[0] == "pdbID"
     assert codes.GeometryStatus.SUSPECT == "suspect"
     assert callable(contact_record.Candidate)
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
@@ -78,7 +78,7 @@ def test_src_modules_import():
 
 def test_src_dir_fixture_points_at_the_modules(src_dir, repo_root, data_dir):
     """The path fixtures address the real checkout, not a copy or a stale root."""
-    assert os.path.isfile(os.path.join(src_dir, "bond", "bond_analysis.py"))
+    assert os.path.isfile(os.path.join(src_dir, "coordination", "analysis.py"))
     assert os.path.dirname(src_dir) == repo_root
     assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
 
@@ -90,7 +90,7 @@ def test_analysis_writes_nothing_into_the_current_directory(work_dir, tmp_path_f
     a file appearing in the cwd is src code writing to a relative path, which on
     a normal run would land in the checkout.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     inputs = tmp_path_factory.mktemp("isolated_inputs")
@@ -186,7 +186,7 @@ def test_simple_metal_site_places_donors_at_requested_distances(tmp_path, suffix
     requested at 2.03 Angstrom really is 2.03 Angstrom from the metal after the
     file round-trip, and if nothing else falls inside the 4 Angstrom search.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     donors = [("HIS", "NE2", 2.03), ("ASP", "OD1", 1.99), ("HOH", "O", 2.09)]
@@ -221,7 +221,7 @@ def test_declared_connection_is_reported_for_both_formats(
     LYS NZ at this distance is not a proximity-inferable Zn donor, so the row
     exists only because the connection was declared.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     builder = StructureBuilder()
@@ -293,7 +293,7 @@ def test_connection_can_name_a_specific_conformer(tmp_path):
     The connection names conformer A, but selection chose B, so the contact is
     measured against B and the substitution is recorded rather than silent.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
@@ -441,7 +441,7 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path):
     A missed join leaves the sigma columns blank rather than wrong, so it is
     invisible unless asserted.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
@@ -558,7 +558,7 @@ def test_symmetry_image_contacts_are_reachable(tmp_path):
     The deposited water is far from the metal, so the distance must be measured
     against the image and marked crystallographic, not deposited.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     # This small P 1 cell puts the water's -a image 1.0 A from the metal.
@@ -587,7 +587,7 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(tmp_path):
     The positive control for the many tests that run without a data.json: a
     blank z-score elsewhere means missing metadata, not a broken formula.
     """
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
     path = simple_metal_site().write_pdb(tmp_path / "site.pdb")

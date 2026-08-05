@@ -9,7 +9,7 @@ back to decide what still needs running.
 import csv
 from typing import Optional
 
-from bond.bond_schema import (
+from coordination.schema import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
     STATS_EXTRA_COLUMNS,

@@ -18,23 +18,23 @@ import math
 from dataclasses import replace
 from typing import Any, Union
 
-from bond.bond_schema import (
+from coordination.schema import (
     ZSCORE_OUTLIER_CUTOFF,
     _bond_row,
     _candidate_row,
     _context_warning_values,
 )
 from codes import CandidateSource, ContactScope, GeometryStatus, MultiDonorStatus
-from bond.contact_record import Candidate
-from bond.declared_connections import _collect_declared_candidates
-from bond.donor_chemistry import (
+from coordination.contact_record import Candidate
+from coordination.declared_connections import _collect_declared_candidates
+from coordination.donor_chemistry import (
     AA,
     C_TERMINAL_DONOR_ATOMS,
     DONOR_ELEMENTS,
     INFERRED_DONOR_ATOMS,
     N_TERMINAL_DONOR_ATOMS,
 )
-from bond.dpi import _calculate_dpi_details
+from coordination.dpi import _calculate_dpi_details
 from metal_elements import METAL_ELEMENTS
 from metal_identification import _sigma_for, _sigma_index, _zd_indices
 from reference_data import (

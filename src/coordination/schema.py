@@ -9,7 +9,7 @@ would surface downstream as a bare ``KeyError``. ``_check_row_schema`` catches
 both.
 
 The builders are serialization only: every decision they report was made in
-``bond_analysis`` before the row is built.
+``coordination.analysis`` before the row is built.
 """
 
 from typing import Any, Mapping, Optional

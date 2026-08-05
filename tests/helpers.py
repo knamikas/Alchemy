@@ -922,7 +922,7 @@ def stats_rows_for_structure(
     """Write a synthetic ``stats.out``, then parse it back with the real code.
 
     Returns ``(rows, header, stats_path)``, ready to hand to
-    ``bond_analysis.run_bond_analysis`` as its sigma join input.
+    ``coordination.analysis.run_bond_analysis`` as its sigma join input.
     """
     from metal_elements import METAL_ELEMENTS
     from metal_identification import extract_metal_statistics

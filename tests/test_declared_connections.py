@@ -18,9 +18,9 @@ import gemmi
 import helpers
 from helpers import AtomRef, AtomSpec, StructureBuilder
 
-from bond import bond_analysis
+from coordination import analysis as coordination_analysis
 import coordinate_conversion as conversion
-from bond import declared_connections
+from coordination import declared_connections
 from structure_analysis import StructureContext, load_structure
 import reference_data
 
@@ -86,7 +86,7 @@ def analyze(
 ) -> Analysis:
     """Run the real bond analysis over an already-written analysis PDB."""
     context = load_structure(pdb_id, analysis_pdb)
-    rows, candidates, summaries, metadata = bond_analysis.run_bond_analysis(
+    rows, candidates, summaries, metadata = coordination_analysis.run_bond_analysis(
         pdb_id,
         analysis_pdb,
         [],
@@ -1554,7 +1554,7 @@ def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(tmp_path
     analysis_builder.add_metal("ZN", 99, chain="Z", pos=(20.0, 20.0, 20.0))
     analysis = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
     context = load_structure("test", analysis)
-    rows, candidates, _, metadata = bond_analysis.run_bond_analysis(
+    rows, candidates, _, metadata = coordination_analysis.run_bond_analysis(
         "test",
         analysis,
         [],
@@ -1601,7 +1601,7 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(tmp_pa
     path = builder.write_cif(tmp_path / "nucleotide.cif")
 
     context = load_structure("test", path)
-    rows, candidates, _, metadata = bond_analysis.run_bond_analysis(
+    rows, candidates, _, metadata = coordination_analysis.run_bond_analysis(
         "test",
         path,
         [],

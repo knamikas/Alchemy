@@ -20,7 +20,7 @@ import pytest
 
 import confidence_score as cs
 import helpers
-from bond.bond_schema import STATS_EXTRA_COLUMNS
+from coordination.schema import STATS_EXTRA_COLUMNS
 
 
 # Compact rows are built directly; the pipeline is run only by the one
@@ -415,12 +415,13 @@ def test_geometry_coverage_with_no_assigned_contacts_is_zero_not_an_error():
 def test_rejected_broad_search_candidates_stay_out_of_the_qg_denominator(tmp_path):
     """Only assigned bond rows count in QG; a rejected 4 A candidate must not.
 
-    Built from real bond_analysis output: HIS NE2 at 2.03 A is assigned, MET SD
+    Built from real coordination-analysis output: HIS NE2 at 2.03 A is assigned,
+    MET SD
     at 3.60 A is found by the broad search and rejected as outside the first
     sphere.
     """
     from structure_analysis import load_structure
-    from bond.bond_analysis import run_bond_analysis
+    from coordination.analysis import run_bond_analysis
 
     builder = helpers.simple_metal_site(
         "ZN", [("HIS", "NE2", 2.03), ("MET", "SD", 3.60)]

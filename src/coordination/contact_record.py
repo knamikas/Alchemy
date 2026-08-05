@@ -1,4 +1,4 @@
-"""One donor-like atom image near one metal, at each stage of analysis."""
+"""One donor-like atom image near one metal, at each coordination stage."""
 
 from dataclasses import dataclass, field
 from typing import Any, Optional

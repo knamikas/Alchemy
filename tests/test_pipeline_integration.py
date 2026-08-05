@@ -40,7 +40,7 @@ import inputs
 import main
 from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
-from bond.bond_schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 
 
 ENTRY_IDS = ("9myr", "6nlr", "9nxl")

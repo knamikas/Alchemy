@@ -30,7 +30,7 @@ python src/main.py \
 ```
 
 Results are written to (the column lists and row builders live in
-`src/bond/bond_schema.py`):
+`src/coordination/schema.py`):
 
 - `output/metal_stats_all.csv` — one row per selected metal site, with
   real-space statistics, DPI and validation provenance, and explicit-only
