@@ -36,6 +36,12 @@ Running batches, resuming them, and reading what a run wrote. See
   incomplete.
 - Statistics, bond, and candidate CSV files retain their column headers when a
   completed run finds no metals, contacts, or proximal candidates.
+- Before appending on resume, Alchemy verifies that every terminal manifest
+  entry is backed by the enabled output files and that its selected-statistics,
+  bond, candidate, and confidence row counts agree with the manifest. Duplicate
+  complete manifest IDs and duplicate selected-site keys are refused. Rows
+  written before an interrupted entry reached its manifest row remain eligible
+  for staged replacement and do not invalidate the resume.
 - The statistics header is a fixed schema rather than a copy of whatever EDSTATS
   emitted, because `extract_metal_statistics` already requires the EDSTATS
   residue table to match the standard column set and order.

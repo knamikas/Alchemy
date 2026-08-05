@@ -14,6 +14,7 @@ import csv
 import os
 import shutil
 import tempfile
+from collections import Counter
 from typing import Optional, Sequence
 
 from codes import ReasonCode
@@ -132,6 +133,153 @@ def _csv_header(path):
         return next(csv.reader(handle), None)
 
 
+def _is_terminal_manifest_row(row):
+    status = _csv_text(row, "status").strip().lower()
+    retryable = _csv_text(row, "retryable").strip().lower()
+    return status == "ok" or (status == "partial" and retryable in ("false", "0", "no"))
+
+
+def _terminal_manifest_rows(path):
+    """Return protected rows, rejecting ambiguous duplicate manifest IDs."""
+    terminal_rows = {}
+    complete_ids = set()
+    if _csv_header(path) is None:
+        return terminal_rows
+    with open(path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            # A crash may leave the last manifest row incomplete. It was never
+            # committed and remains eligible for replacement on resume.
+            if not _complete_csv_row(row):
+                continue
+            pdb_id = _csv_text(row, "pdbID").strip().lower()
+            if not pdb_id:
+                continue
+            if pdb_id in complete_ids:
+                raise ValueError(
+                    f"Existing {os.path.basename(path)} contains duplicate rows "
+                    f"for {pdb_id}. Resume cannot determine which result owns "
+                    "that entry; choose a new --output-dir."
+                )
+            complete_ids.add(pdb_id)
+            if _is_terminal_manifest_row(row):
+                terminal_rows[pdb_id] = row
+    return terminal_rows
+
+
+def _manifest_count(row, column, pdb_id, *, blank_is_zero=False):
+    value = _csv_text(row, column).strip()
+    if blank_is_zero and not value:
+        return 0
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"Existing manifest has invalid {column}={value!r} for {pdb_id}; "
+            "resume requires a non-negative integer."
+        ) from exc
+    if count < 0:
+        raise ValueError(
+            f"Existing manifest has invalid {column}={value!r} for {pdb_id}; "
+            "resume requires a non-negative integer."
+        )
+    return count
+
+
+def _rows_for_ids(path, terminal_ids):
+    """Yield complete output rows owned by protected manifest entries.
+
+    Rows for other IDs may be remnants of a write interrupted before its
+    manifest row. The replacement merge intentionally removes them if that ID
+    is retried, so they must not make an otherwise safe resume fail.
+    """
+    with open(path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            pdb_id = _csv_text(row, "pdbID").strip().lower()
+            if pdb_id not in terminal_ids:
+                continue
+            if not _complete_csv_row(row):
+                raise ValueError(
+                    f"Existing {os.path.basename(path)} contains an incomplete "
+                    f"row for terminal entry {pdb_id}; choose a new --output-dir."
+                )
+            yield pdb_id, row
+
+
+def _validate_terminal_artifacts(
+    terminal_rows,
+    stats_path,
+    bonds_path,
+    candidates_path,
+    *,
+    bonds_enabled,
+    confidence_path,
+):
+    terminal_ids = set(terminal_rows)
+
+    selected_stats = Counter()
+    selected_sites = set()
+    site_columns = (
+        "metal_model_index",
+        "metal_chain_index",
+        "metal_residue_index",
+        "metal_atom_index",
+    )
+    for pdb_id, row in _rows_for_ids(stats_path, terminal_ids):
+        if _csv_text(row, "selected_metal_site_status").strip() != "selected":
+            continue
+        site = tuple(_csv_text(row, column).strip() for column in site_columns)
+        if not all(site) or (pdb_id, site) in selected_sites:
+            detail = "an incomplete" if not all(site) else "a duplicate"
+            raise ValueError(
+                f"Existing {os.path.basename(stats_path)} contains {detail} "
+                f"selected-site key for terminal entry {pdb_id}; choose a new "
+                "--output-dir."
+            )
+        selected_sites.add((pdb_id, site))
+        selected_stats[pdb_id] += 1
+
+    for pdb_id, row in terminal_rows.items():
+        expected = _manifest_count(row, "n_metals", pdb_id)
+        actual = selected_stats[pdb_id]
+        status = _csv_text(row, "status").strip().lower()
+        stats_match = actual == expected if status == "ok" else actual <= expected
+        if not stats_match:
+            relation = "exactly" if status == "ok" else "no more than"
+            raise ValueError(
+                f"Resume artifact mismatch for {pdb_id}: manifest n_metals="
+                f"{expected}, but {os.path.basename(stats_path)} has {actual} "
+                f"selected row(s) (expected {relation} {expected})."
+            )
+
+    checks = []
+    if bonds_enabled:
+        checks.extend(
+            (
+                (bonds_path, "n_bonds"),
+                (candidates_path, "n_candidates"),
+            )
+        )
+    if confidence_path is not None:
+        checks.append((confidence_path, "n_metals"))
+
+    for path, manifest_column in checks:
+        counts = Counter(pdb_id for pdb_id, _row in _rows_for_ids(path, terminal_ids))
+        for pdb_id, row in terminal_rows.items():
+            expected = _manifest_count(
+                row,
+                manifest_column,
+                pdb_id,
+                blank_is_zero=manifest_column != "n_metals",
+            )
+            actual = counts[pdb_id]
+            if actual != expected:
+                raise ValueError(
+                    f"Resume artifact mismatch for {pdb_id}: manifest "
+                    f"{manifest_column}={expected}, but {os.path.basename(path)} "
+                    f"has {actual} row(s)."
+                )
+
+
 def validate_resume_schemas(
     manifest_path: str,
     stats_path: str,
@@ -141,11 +289,15 @@ def validate_resume_schemas(
     confidence_path: Optional[str] = None,
     confidence_columns: Optional[Sequence[str]] = None,
 ) -> None:
-    """Refuse to append rows beneath an incompatible old header.
+    """Refuse to resume into incompatible or internally inconsistent output.
 
     Whole headers are compared, including the EDSTATS block of
     metal_stats_all.csv: a header from a different EDSTATS build would misalign
-    every density column with no other symptom.
+    every density column with no other symptom. Once the manifest contains a
+    terminal result, every enabled output is required and its per-entry rows
+    must agree with the manifest. Orphan rows without a complete manifest row
+    remain recoverable and are ignored here because retry replacement removes
+    them.
     """
     checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
@@ -157,6 +309,7 @@ def validate_resume_schemas(
             raise ValueError("confidence columns are required with a confidence output")
         checks.append((confidence_path, list(confidence_columns)))
     for path, expected in checks:
+        expected = list(expected)
         header = _csv_header(path)
         if header is None or header == expected:
             continue
@@ -179,6 +332,27 @@ def validate_resume_schemas(
             "build, and resume can only append beneath a matching header; "
             "choose a new --output-dir."
         )
+
+    terminal_rows = _terminal_manifest_rows(manifest_path)
+    if not terminal_rows:
+        return
+
+    for path, _expected in checks:
+        if _csv_header(path) is None:
+            raise ValueError(
+                f"Existing {os.path.basename(path)} is missing or empty, but "
+                "the manifest contains terminal rows. Resume cannot verify the "
+                "completed entries; choose a new --output-dir."
+            )
+
+    _validate_terminal_artifacts(
+        terminal_rows,
+        stats_path,
+        bonds_path,
+        candidates_path,
+        bonds_enabled=bonds_enabled,
+        confidence_path=confidence_path,
+    )
 
 
 def remove_stale_disabled_bond_outputs(paths, resume, bonds_enabled):

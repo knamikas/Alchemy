@@ -45,6 +45,49 @@ def _write_header(path, columns):
     return str(path)
 
 
+def _append_csv_row(path, columns, **values):
+    with open(path, "a", newline="", encoding="utf-8") as handle:
+        csv.DictWriter(handle, fieldnames=columns).writerow(
+            {column: values.get(column, "") for column in columns}
+        )
+
+
+def _append_terminal_manifest(
+    outputs,
+    *,
+    pdb_id: str = "1abc",
+    status: str = "ok",
+    retryable: str = "False",
+    n_metals: str | int = 0,
+    n_bonds: str | int = 0,
+    n_candidates: str | int = 0,
+):
+    _append_csv_row(
+        outputs["manifest_path"],
+        MANIFEST_COLUMNS,
+        pdbID=pdb_id,
+        status=status,
+        retryable=retryable,
+        n_metals=n_metals,
+        n_bonds=n_bonds,
+        n_candidates=n_candidates,
+    )
+
+
+def _append_selected_stats(outputs, pdb_id="1abc", atom_index="0"):
+    _append_csv_row(
+        outputs["stats_path"],
+        STATS_COLUMNS,
+        pdbID=pdb_id,
+        category="metal",
+        selected_metal_site_status="selected",
+        metal_model_index="0",
+        metal_chain_index="0",
+        metal_residue_index="0",
+        metal_atom_index=atom_index,
+    )
+
+
 @pytest.fixture
 def resume_outputs(tmp_path):
     """A set of output files whose headers all match the current schema."""
@@ -149,6 +192,128 @@ def test_an_incompatible_confidence_header_is_refused(resume_outputs, tmp_path):
         resume.validate_resume_schemas(
             **resume_outputs, confidence_path=path, confidence_columns=columns
         )
+
+
+@pytest.mark.parametrize("target", ["stats_path", "bonds_path", "candidates_path"])
+def test_terminal_manifest_requires_every_enabled_output(resume_outputs, target):
+    _append_terminal_manifest(resume_outputs)
+    os.unlink(resume_outputs[target])
+
+    with pytest.raises(ValueError, match="missing or empty"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_terminal_manifest_does_not_require_disabled_bond_outputs(resume_outputs):
+    _append_terminal_manifest(resume_outputs, n_bonds="", n_candidates="")
+    os.unlink(resume_outputs["bonds_path"])
+    os.unlink(resume_outputs["candidates_path"])
+
+    resume.validate_resume_schemas(**resume_outputs, bonds_enabled=False)
+
+
+def test_a_consistent_terminal_artifact_set_is_accepted(resume_outputs):
+    _append_terminal_manifest(resume_outputs, n_metals=1)
+    _append_selected_stats(resume_outputs)
+
+    resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_ok_manifest_metal_count_must_match_selected_stats(resume_outputs):
+    _append_terminal_manifest(resume_outputs, n_metals=1)
+
+    with pytest.raises(ValueError, match=r"n_metals=1.*has 0 selected row"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+@pytest.mark.parametrize("n_metals", ["", "not-a-count", -1])
+def test_terminal_manifest_requires_a_valid_metal_count(resume_outputs, n_metals):
+    _append_terminal_manifest(resume_outputs, n_metals=n_metals)
+
+    with pytest.raises(ValueError, match="invalid n_metals"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_duplicate_selected_site_keys_are_refused(resume_outputs):
+    _append_terminal_manifest(resume_outputs, n_metals=2)
+    _append_selected_stats(resume_outputs)
+    _append_selected_stats(resume_outputs)
+
+    with pytest.raises(ValueError, match="duplicate selected-site key"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_terminal_partial_may_have_fewer_stats_than_detected_metals(resume_outputs):
+    """A density-stage failure knows the metal count but writes no stats rows."""
+    _append_terminal_manifest(
+        resume_outputs,
+        status="partial",
+        n_metals=1,
+        n_bonds="",
+        n_candidates="",
+    )
+
+    resume.validate_resume_schemas(**resume_outputs)
+
+
+@pytest.mark.parametrize(
+    ("manifest_count", "output_key"),
+    [("n_bonds", "bonds_path"), ("n_candidates", "candidates_path")],
+)
+def test_manifest_bond_stage_counts_must_match_rows(
+    resume_outputs, manifest_count, output_key
+):
+    if manifest_count == "n_bonds":
+        _append_terminal_manifest(resume_outputs, n_bonds=1)
+    else:
+        _append_terminal_manifest(resume_outputs, n_candidates=1)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{manifest_count}=1.*{os.path.basename(resume_outputs[output_key])}",
+    ):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_confidence_count_must_match_every_terminal_metal(resume_outputs, tmp_path):
+    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+    path = _write_header(tmp_path / "confidence.csv", columns)
+    _append_terminal_manifest(resume_outputs, n_metals=1)
+    _append_selected_stats(resume_outputs)
+
+    with pytest.raises(ValueError, match=r"n_metals=1.*confidence.csv has 0 row"):
+        resume.validate_resume_schemas(
+            **resume_outputs, confidence_path=path, confidence_columns=columns
+        )
+
+    _append_csv_row(path, columns, pdbID="1abc")
+    resume.validate_resume_schemas(
+        **resume_outputs, confidence_path=path, confidence_columns=columns
+    )
+
+
+def test_duplicate_complete_manifest_ids_are_refused(resume_outputs):
+    _append_terminal_manifest(resume_outputs)
+    _append_terminal_manifest(resume_outputs)
+
+    with pytest.raises(ValueError, match=r"duplicate rows for 1abc"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_orphan_rows_from_a_pre_manifest_crash_remain_recoverable(resume_outputs):
+    _append_terminal_manifest(resume_outputs)
+    _append_selected_stats(resume_outputs, pdb_id="2def")
+    _append_csv_row(
+        resume_outputs["bonds_path"],
+        coordination_schema.BOND_COLUMNS,
+        pdbID="2def",
+    )
+    _append_csv_row(
+        resume_outputs["candidates_path"],
+        coordination_schema.CANDIDATE_COLUMNS,
+        pdbID="2def",
+    )
+
+    resume.validate_resume_schemas(**resume_outputs)
 
 
 @pytest.mark.parametrize(
