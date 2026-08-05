@@ -1030,6 +1030,18 @@ def _dispatch_entries(
     inflight: SimpleQueue[Any] = SimpleQueue()
     completed_ids: set = set()
     last_progress = time.monotonic()
+    # The start method is the interpreter's default, deliberately not pinned.
+    # It changed from ``fork`` to ``forkserver`` in Python 3.14, so the process
+    # topology does depend on which interpreter is installed, and both pins
+    # were tried and rejected. ``forkserver`` is the safer method -- ``Pool``
+    # respawns a dead worker from its ``_handle_workers`` thread, and forking a
+    # threaded process risks the child deadlocking on a lock no thread there
+    # holds -- but the worker-death tests inject their scripted pipeline by
+    # patching this module, which only reaches a worker through ``fork``.
+    # Pinning ``fork`` would instead extend that deadlock hazard to 3.14, where
+    # the default already avoids it, to satisfy a test-only dependency.
+    # Making those tests start-method agnostic is the prerequisite for pinning.
+    #
     # Not a ``with`` block: ``Pool.__exit__`` calls the same ``terminate`` a
     # killed idle worker can wedge, so the ``finally`` below bounds shutdown.
     # The log listener thread starts only after the pool: forking a process

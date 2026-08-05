@@ -427,3 +427,149 @@ def test_the_readme_points_at_every_documentation_page():
     ]
 
     assert not unlinked, f"docs/ pages nothing links to: {unlinked}"
+
+
+def _all_prose() -> str:
+    return "".join(_read(path) for path in DOC_PATHS)
+
+
+def _output_prose() -> str:
+    """The pages describing what a run produces.
+
+    ``tests/README.md`` is excluded: it documents the suite, so its backticked
+    names are pytest fixtures rather than anything a result file contains.
+    """
+    return "".join(_read(path) for path in DOC_PATHS if "tests" not in path)
+
+
+def _declared_cli_flags() -> Set[str]:
+    """Every ``--flag`` ``src/cli.py`` accepts, read from the source.
+
+    The parser is built inside ``parse_args`` and not returned, so it is read
+    statically rather than constructed.
+    """
+    tree = ast.parse(_read(os.path.join(SRC_DIR, "cli.py")))
+    flags: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == (
+            "add_argument"
+        ):
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and str(arg.value).startswith("--"):
+                    flags.add(str(arg.value))
+    return flags
+
+
+def test_every_cli_flag_appears_in_the_prose():
+    """A flag nobody documents is a flag nobody can find.
+
+    ``--confidence-reference-dir`` was absent from every page for exactly as
+    long as nothing checked, and it is the flag that enables confidence scoring
+    at all. Reading the flags from the parser means adding one without a
+    sentence about it fails here rather than in a user's search.
+    """
+    prose = _all_prose()
+    undocumented = sorted(flag for flag in _declared_cli_flags() if flag not in prose)
+
+    assert not undocumented, (
+        f"CLI flags documented nowhere: {undocumented}. Add them to "
+        "docs/usage.md, or to the page that owns the behaviour."
+    )
+
+
+# Backticked snake_case words in the prose that name something other than an
+# output field or a status code: a formula symbol, an mmCIF item, a function,
+# and the informational subset of ``ok``. Listed so the check below can be
+# strict about everything else.
+_NON_FIELD_TERMS = frozenset(
+    ("sigma_lit", "label_seq_id", "extract_metal_statistics", "no_metals")
+)
+
+
+def test_every_field_name_in_the_prose_still_exists():
+    """A renamed column must not leave the documentation describing the old one.
+
+    The prose names specific fields and codes throughout, and a reader looks
+    them up in an output file. Checking the direction that matters -- that
+    everything named still exists -- catches a rename without demanding that
+    all 134 statistics columns be documented.
+    """
+    from codes import StrEnum
+    import codes as codes_module
+    from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
+    from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+    from driver.writers import MANIFEST_COLUMNS
+
+    known: Set[str] = set()
+    for columns in (
+        MANIFEST_COLUMNS,
+        STATS_COLUMNS,
+        BOND_COLUMNS,
+        CANDIDATE_COLUMNS,
+        CONFIDENCE_INPUT_COLUMNS,
+        ANALYSIS_COLUMNS,
+    ):
+        known |= set(columns)
+    for name in dir(codes_module):
+        candidate = getattr(codes_module, name)
+        if (
+            isinstance(candidate, type)
+            and issubclass(candidate, StrEnum)
+            and candidate is not StrEnum
+        ):
+            known |= {member.value for member in candidate}
+
+    cited = {
+        term
+        for term in re.findall(r"`([a-z][a-z0-9_]{6,})`", _output_prose())
+        if "_" in term
+    }
+    unknown = sorted(cited - known - _NON_FIELD_TERMS)
+
+    assert not unknown, (
+        f"the prose names fields or codes that no longer exist: {unknown}. "
+        "Rename them, or add genuinely non-field terms to _NON_FIELD_TERMS."
+    )
+
+
+def test_documented_thresholds_match_the_constants():
+    """Numbers in the prose are the ones the code actually uses.
+
+    Every one of these was verified by hand once. Pinning them means a
+    threshold cannot be tuned in ``src/`` while the documentation goes on
+    quoting the old value, which is the failure mode that leaves a reader
+    confidently wrong about what a run did.
+    """
+    from coordination.analysis import (
+        CUTOFF,
+        FIRST_SPHERE_TOLERANCE,
+        ZSCORE_OUTLIER_CUTOFF,
+    )
+    from density_analysis import CCP4_TOOL_TIMEOUT_S, MODEL_ENVELOPE_BORDER_ANGSTROM
+    from driver.resources import AUTO_WORKER_MEMORY_BYTES
+    from structure_analysis import OVERFULL_OCCUPANCY_NI_FRACTION
+
+    prose = _all_prose()
+    documented = [
+        ("broad candidate search radius", CUTOFF, "4 Å"),
+        ("z-score outlier cutoff", ZSCORE_OUTLIER_CUTOFF, ">= 6"),
+        ("first-sphere tolerance", FIRST_SPHERE_TOLERANCE, "0.75"),
+        ("model-envelope border", MODEL_ENVELOPE_BORDER_ANGSTROM, "10 Angstrom"),
+        ("per-program CCP4 budget", CCP4_TOOL_TIMEOUT_S, "900"),
+        ("per-worker memory budget", AUTO_WORKER_MEMORY_BYTES, "1.25 GiB"),
+        ("overfull occupancy fraction", OVERFULL_OCCUPANCY_NI_FRACTION, "0.2%"),
+    ]
+
+    missing = [
+        f"{label} ({value}) is documented as {text!r}, which no page contains"
+        for label, value, text in documented
+        if text not in prose
+    ]
+    assert not missing, missing
+
+    # The constants themselves, so a change to one is visible here as well as
+    # in the prose that quotes it.
+    assert (CUTOFF, ZSCORE_OUTLIER_CUTOFF, FIRST_SPHERE_TOLERANCE) == (4.0, 6.0, 0.75)
+    assert (MODEL_ENVELOPE_BORDER_ANGSTROM, CCP4_TOOL_TIMEOUT_S) == (10, 15 * 60)
+    assert AUTO_WORKER_MEMORY_BYTES == 1280 * 1024 * 1024
+    assert OVERFULL_OCCUPANCY_NI_FRACTION == 0.002
