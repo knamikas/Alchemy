@@ -97,6 +97,21 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end():
             ],
             "manual structure inputs",
         ),
+        (
+            [
+                "--id-file",
+                "ids.txt",
+                "--pdb-file",
+                "109m.pdb",
+                "--mtz-file",
+                "109m.mtz",
+            ],
+            "--id-file cannot be combined with manual structure inputs",
+        ),
+        (
+            ["--id", "109m", "--data-json", "data.json"],
+            "--data-json requires manual structure inputs",
+        ),
     ],
 )
 def test_an_unusable_combination_of_arguments_exits_two(arguments, fragment):
@@ -124,6 +139,36 @@ def test_retry_partials_accepts_optional_resume_selectors(selector):
     args = cli.parse_args([*selector, "--resume", "--retry-partials"])
     assert args.resume is True
     assert args.retry_partials is True
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [[], ["--id", "109m"], ["--id-file", "ids.txt"]],
+    ids=["database", "single", "id-file"],
+)
+def test_data_json_is_rejected_outside_manual_mode(selector):
+    with pytest.raises(SystemExit) as excinfo:
+        cli.parse_args([*selector, "--data-json", "data.json"])
+
+    assert excinfo.value.code == 2
+
+
+def test_manual_mode_accepts_an_optional_single_id():
+    args = cli.parse_args(
+        [
+            "--id",
+            "109m",
+            "--pdb-file",
+            "model.pdb",
+            "--mtz-file",
+            "data.mtz",
+            "--data-json",
+            "data.json",
+        ]
+    )
+
+    assert args.id == "109m"
+    assert args.id_file is None
 
 
 def test_confidence_reference_is_discovered_in_output_before_repo_default(

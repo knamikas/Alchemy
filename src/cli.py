@@ -213,6 +213,17 @@ def parse_args(argv=None):
     # Both name the coordinates, and the cif silently won.
     if args.pdb_file and args.cif_file:
         ap.error("use either --pdb-file or --cif-file, not both")
+    manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
+    if manual_requested and args.id_file:
+        ap.error(
+            "--id-file cannot be combined with manual structure inputs; "
+            "use --id to identify the single manual structure"
+        )
+    if args.data_json and not manual_requested:
+        ap.error(
+            "--data-json requires manual structure inputs: --mtz-file with "
+            "either --pdb-file or --cif-file"
+        )
     return args
 
 
