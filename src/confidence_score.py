@@ -752,11 +752,15 @@ def validate_scored_reference(path, reference):
         reader = csv.DictReader(handle)
         if "confidence_reference_id" not in (reader.fieldnames or ()):
             raise ValueError("existing confidence output has no reference identifier")
-        identifiers = {
-            row["confidence_reference_id"].strip()
-            for row in reader
-            if row["confidence_reference_id"].strip()
-        }
+        identifiers = set()
+        for row in reader:
+            identifier = (row.get("confidence_reference_id") or "").strip()
+            if not identifier:
+                raise ValueError(
+                    "existing confidence output has a blank reference identifier "
+                    f"at CSV row {reader.line_num}"
+                )
+            identifiers.add(identifier)
     if identifiers and identifiers != {reference.reference_id}:
         raise ValueError(
             "existing confidence output uses a different database reference"

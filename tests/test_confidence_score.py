@@ -1160,6 +1160,30 @@ def test_validate_scored_reference_tolerates_an_empty_scored_file(tmp_path):
         cs.validate_scored_reference(populated, reference)
 
 
+def test_validate_scored_reference_rejects_a_blank_identifier_row(tmp_path):
+    """A populated file cannot use header-only tolerance."""
+    reference = _frozen_reference(tmp_path)
+    columns = list(cs.CONFIDENCE_INPUT_COLUMNS) + list(cs.ANALYSIS_COLUMNS)
+    blank = {column: "" for column in columns}
+    path = _write_input_csv(tmp_path / "blank_id.csv", [blank], columns)
+
+    with pytest.raises(ValueError, match=r"blank reference identifier at CSV row 2"):
+        cs.validate_scored_reference(path, reference)
+
+
+def test_validate_scored_reference_rejects_blank_ids_mixed_with_valid_ids(tmp_path):
+    """Valid IDs elsewhere cannot conceal a damaged row."""
+    reference = _frozen_reference(tmp_path)
+    columns = list(cs.CONFIDENCE_INPUT_COLUMNS) + list(cs.ANALYSIS_COLUMNS)
+    valid = {column: "" for column in columns}
+    valid["confidence_reference_id"] = reference.reference_id
+    blank = {column: "" for column in columns}
+    path = _write_input_csv(tmp_path / "mixed_ids.csv", [valid, blank], columns)
+
+    with pytest.raises(ValueError, match=r"blank reference identifier at CSV row 3"):
+        cs.validate_scored_reference(path, reference)
+
+
 @pytest.mark.parametrize(
     "coverage, label",
     [
