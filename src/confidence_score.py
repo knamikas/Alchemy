@@ -14,7 +14,8 @@ import math
 import os
 import sys
 from collections import Counter, defaultdict
-from typing import Any, Iterable, Mapping, Optional, Sequence, TextIO
+from typing import Any, TextIO
+from collections.abc import Iterable, Mapping, Sequence
 
 from reference_data import reference_data_id
 
@@ -99,7 +100,7 @@ INPUT_STATUS_POLICY = "explicit_scorable_statuses"
 
 
 def _required_columns(
-    fieldnames: Optional[Sequence[str]], required: Iterable[str], label: str
+    fieldnames: Sequence[str] | None, required: Iterable[str], label: str
 ) -> None:
     missing = [column for column in required if column not in (fieldnames or ())]
     if missing:
@@ -398,7 +399,7 @@ def severity(value: float, anchors: Sequence[tuple[float, float]]) -> float:
 
 def score_site(
     rszd_magnitude: float, max_abs_zbond: float, geometry_coverage: float
-) -> Optional[dict[str, float]]:
+) -> dict[str, float] | None:
     """Return the provisional score and its auditable weighted components."""
     density_severity = severity(rszd_magnitude, DENSITY_ANCHORS)
     if not math.isfinite(density_severity):
@@ -623,7 +624,7 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
 
 def _score_prepared_row(
     row: Mapping[str, Any], reference: "ConfidenceReference"
-) -> tuple[dict[str, Any], Optional[float]]:
+) -> tuple[dict[str, Any], float | None]:
     rszd = _finite_float(row.get("rszd_magnitude", ""))
     zbond = _finite_float(row.get("max_abs_zbond", ""))
     coverage = _finite_float(row.get("geometry_coverage", ""))
@@ -838,7 +839,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "finalize":

@@ -17,7 +17,7 @@ import logging.handlers
 import multiprocessing
 import os
 import sys
-from typing import IO, Optional
+from typing import IO
 
 
 # Longest message a single record may carry. External programs and tracebacks
@@ -114,7 +114,7 @@ def level_for_verbosity(verbose: int = 0, quiet: bool = False) -> int:
     return logging.DEBUG if verbose else logging.INFO
 
 
-def worker_level(console_level: int, log_file: Optional[str] = None) -> int:
+def worker_level(console_level: int, log_file: str | None = None) -> int:
     """The level a worker filters at.
 
     A worker discards records below its own level before they reach the queue,
@@ -126,8 +126,8 @@ def worker_level(console_level: int, log_file: Optional[str] = None) -> int:
 
 def configure_driver_logging(
     level: int = logging.INFO,
-    stream: Optional[IO[str]] = None,
-    log_file: Optional[str] = None,
+    stream: IO[str] | None = None,
+    log_file: str | None = None,
 ) -> logging.Logger:
     """Attach the process-wide handlers. Called once, in the driver.
 
@@ -194,7 +194,7 @@ def start_worker_log_listener(
 
 
 def configure_worker_logging(
-    queue: Optional[multiprocessing.Queue[logging.LogRecord]],
+    queue: multiprocessing.Queue[logging.LogRecord] | None,
     level: int = logging.INFO,
 ) -> None:
     """Point this worker's ``alchemy`` logger at the driver's queue.

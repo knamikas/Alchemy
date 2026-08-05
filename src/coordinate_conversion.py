@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING
 
 from structure_analysis import (
     OCCUPANCY_DEFAULT_REMARK_PREFIX,
@@ -47,7 +47,7 @@ _PolymerRecord = tuple[int, str, str, str, str]
 
 def _structure_atom_signatures(
     structure: gemmi.Structure,
-) -> Tuple[Tuple[object, ...], ...]:
+) -> tuple[tuple[object, ...], ...]:
     """Describe atom traversal without depending on source atom-site ids."""
     return tuple(
         (
@@ -74,7 +74,7 @@ def _structure_atom_signatures(
 def _cif_atom_data(
     cif_path: str,
 ) -> tuple[
-    tuple[str, ...], tuple[int, ...], tuple[int, ...], Tuple[Tuple[object, ...], ...]
+    tuple[str, ...], tuple[int, ...], tuple[int, ...], tuple[tuple[object, ...], ...]
 ]:
     """Return occupancies and generated PDB serials in Gemmi traversal order.
 
@@ -437,8 +437,8 @@ def _polymer_position_records(
 
 def _write_cif_conversion_provenance(
     dst: str,
-    missing_occupancies: List[bool],
-    residue_records: List[Tuple[int, str, str, str, str]],
+    missing_occupancies: list[bool],
+    residue_records: list[tuple[int, str, str, str, str]],
     identity_records: Sequence[_IdentityRecord] | None = None,
     polymer_records: Sequence[_PolymerRecord] | None = None,
     defaulted_occupancy_counts: Sequence[int] = (),

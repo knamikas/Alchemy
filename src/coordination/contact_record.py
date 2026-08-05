@@ -1,7 +1,7 @@
 """One donor-like atom image near one metal, at each coordination stage."""
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any
 
 from codes import CandidateSource, ContactScope, MultiDonorStatus
 from structure_analysis import AtomSite
@@ -26,45 +26,45 @@ class Candidate:
     declared_connections: list[dict[str, Any]] = field(default_factory=list)
     #: Set only on declaration-derived candidates; proximity discovery leaves
     #: it unset because the metal is already the search centre.
-    metal: Optional[AtomSite] = None
+    metal: AtomSite | None = None
     #: False for donor classes no bundled reference covers. Those stay
     #: candidate evidence and are never promoted to bond rows.
     donor_class_supported: bool = True
 
     inferred_donor_allowed: bool = True
-    inferred_donor_rule: Optional[str] = None
+    inferred_donor_rule: str | None = None
     #: ``declared_connection`` where a declaration overrides a donor the atom
     #: rule would have refused, blank otherwise.
-    donor_rule_override: Optional[str] = None
+    donor_rule_override: str | None = None
 
     #: Whether the distance rule alone accepts this candidate. Distinct from
     #: ``inferred_contact_eligible``, which also requires a typical donor atom.
     first_sphere_eligible: bool = False
-    inferred_contact_eligible: Optional[bool] = None
-    eligibility_status: Optional[str] = None
-    eligibility_reason: Optional[str] = None
-    assignment_target: Optional[float] = None
-    assignment_tolerance: Optional[float] = None
-    first_sphere_cutoff: Optional[float] = None
+    inferred_contact_eligible: bool | None = None
+    eligibility_status: str | None = None
+    eligibility_reason: str | None = None
+    assignment_target: float | None = None
+    assignment_tolerance: float | None = None
+    first_sphere_cutoff: float | None = None
     #: ``exact`` or ``element_fallback``, and the reference key it resolved to.
-    assignment_reference_kind: Optional[str] = None
-    assignment_reference: Optional[str] = None
+    assignment_reference_kind: str | None = None
+    assignment_reference: str | None = None
 
-    distance: Optional[float] = None
-    literature_distance: Optional[float] = None
-    literature_stdev: Optional[float] = None
-    zscore: Optional[float] = None
-    reference_covered: Optional[bool] = None
+    distance: float | None = None
+    literature_distance: float | None = None
+    literature_stdev: float | None = None
+    zscore: float | None = None
+    reference_covered: bool | None = None
     #: ``True``/``False`` where a z-score exists, blank where one does not: the
     #: outputs keep the two answers apart.
-    geometry_outlier: Union[bool, str, None] = None
-    geometry_consistent: Union[bool, str, None] = None
+    geometry_outlier: bool | str | None = None
+    geometry_consistent: bool | str | None = None
 
-    multi_donor_detected: Optional[bool] = None
-    multi_donor_contact_count: Optional[int] = None
+    multi_donor_detected: bool | None = None
+    multi_donor_contact_count: int | None = None
     #: ``MultiDonorStatus.SUSPECT`` is not the site-level
     #: ``GeometryStatus.SUSPECT``: same string, different question.
-    multi_donor_geometry_status: Optional[MultiDonorStatus] = None
+    multi_donor_geometry_status: MultiDonorStatus | None = None
     multi_donor_contains_suspect_bond: bool = False
-    score_eligible: Optional[bool] = None
-    score_exclusion_reason: Optional[str] = None
+    score_eligible: bool | None = None
+    score_exclusion_reason: str | None = None

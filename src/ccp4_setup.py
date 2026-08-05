@@ -13,7 +13,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 
 class Ccp4SetupError(Exception):
@@ -88,7 +89,7 @@ COMMON_CCP4_SETUP_CANDIDATES = (
 
 
 def load_ccp4_setup_config(
-    config_files: Optional[Sequence[str]] = None,
+    config_files: Sequence[str] | None = None,
 ) -> dict[str, str]:
     """Merge the CCP4 configuration files, earliest file winning.
 
@@ -116,7 +117,7 @@ def load_ccp4_setup_config(
 
 
 def save_ccp4_setup(
-    setup_path: str, config_files: Optional[Sequence[str]] = None
+    setup_path: str, config_files: Sequence[str] | None = None
 ) -> list[str]:
     config_files = config_files or DEFAULT_CONFIG_FILES
     target = config_files[0]
@@ -137,10 +138,10 @@ def save_ccp4_setup(
 
 
 def find_ccp4_setup(
-    env: Optional[Mapping[str, str]] = None,
-    config: Optional[Mapping[str, str]] = None,
-    config_files: Optional[Sequence[str]] = None,
-) -> Optional[str]:
+    env: Mapping[str, str] | None = None,
+    config: Mapping[str, str] | None = None,
+    config_files: Sequence[str] | None = None,
+) -> str | None:
     """Locate a CCP4 setup script, or return ``None``.
 
     ``None`` means two different things and the caller must distinguish them:
@@ -168,7 +169,7 @@ def find_ccp4_setup(
     return None
 
 
-def missing_ccp4_tools(env: Optional[Mapping[str, str]] = None) -> list[str]:
+def missing_ccp4_tools(env: Mapping[str, str] | None = None) -> list[str]:
     """Return the required CCP4 programs absent from ``env``'s PATH."""
     env = os.environ.copy() if env is None else env
     return [
@@ -178,7 +179,7 @@ def missing_ccp4_tools(env: Optional[Mapping[str, str]] = None) -> list[str]:
     ]
 
 
-def ccp4_tools_available(env: Optional[Mapping[str, str]] = None) -> bool:
+def ccp4_tools_available(env: Mapping[str, str] | None = None) -> bool:
     return not missing_ccp4_tools(env)
 
 
@@ -270,7 +271,7 @@ def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
     return _normalize_path_key(env)
 
 
-def resolve_env(ccp4_setup: Optional[str]) -> dict[str, str]:
+def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
     """Return the environment dict to run CCP4 under.
 
     Sourcing ``ccp4_setup`` in a subshell and capturing the result is the only

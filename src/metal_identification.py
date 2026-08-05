@@ -6,7 +6,8 @@ line is the column header.
 
 import math
 from collections import Counter
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any
+from collections.abc import Iterable, Mapping, Sequence
 
 from structure_analysis import (
     NAN,
@@ -373,8 +374,8 @@ def _density_row(
     *,
     category: str,
     resname: str,
-    site: Optional[AtomSite],
-    residue_key: Optional[tuple[int, int, int]],
+    site: AtomSite | None,
+    residue_key: tuple[int, int, int] | None,
     shared_site_count: int,
 ) -> dict[str, Any]:
     """Build one site-level row from an extracted EDSTATS residue row.
@@ -433,7 +434,7 @@ def extract_metal_statistics(
     metals_upper = {element.upper() for element in metals_set}
 
     rows: list[dict[str, Any]] = []
-    schema: Optional[tuple[list[str], dict[str, int]]] = None
+    schema: tuple[list[str], dict[str, int]] | None = None
     residue_row_count = 0
     observed_residues: Counter[tuple[str, str, str]] = Counter()
     observed_edstats_rows: set[tuple[int, str, int]] = set()
@@ -651,7 +652,7 @@ def _sigma_index(
 ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
 
 
-def _zd_indices(header: Optional[Sequence[str]]) -> Optional[tuple[int, ...]]:
+def _zd_indices(header: Sequence[str] | None) -> tuple[int, ...] | None:
     """Return column indices for ZDm/ZD-m/ZD+m, or ``None`` if any is absent."""
     if not header:
         return None
@@ -666,10 +667,10 @@ def _sigma_for(
     resname: str,
     chain: str,
     resnum: str,
-    zd_idx: Optional[Sequence[int]],
-    site_key: Optional[Sequence[Any]] = None,
+    zd_idx: Sequence[int] | None,
+    site_key: Sequence[Any] | None = None,
 ) -> tuple[float, float, float]:
-    fields: Optional[Sequence[str]] = None
+    fields: Sequence[str] | None = None
     if site_key is not None:
         fields = sig["by_site"].get(tuple(site_key))
     if fields is None:

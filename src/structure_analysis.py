@@ -13,16 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import math
 import os
-from typing import (
-    Dict,
-    FrozenSet,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-)
+from collections.abc import Iterable, Mapping, Sequence
 
 import gemmi
 
@@ -120,7 +111,7 @@ def _valid_occupancy(value: object) -> bool:
     return math.isfinite(number) and 0.0 <= number <= 1.0
 
 
-def _parse_pdb_element(value: str) -> Tuple[str, str]:
+def _parse_pdb_element(value: str) -> tuple[str, str]:
     deposited = value.strip()
     if not deposited:
         return "", ElementStatus.MISSING
@@ -134,7 +125,7 @@ def _parse_pdb_element(value: str) -> Tuple[str, str]:
     return canonical, ElementStatus.VALID
 
 
-def _format_number(value: Optional[float]) -> str:
+def _format_number(value: float | None) -> str:
     if value is None or not math.isfinite(value):
         return "NA"
     return f"{value:.6g}"
@@ -142,7 +133,7 @@ def _format_number(value: Optional[float]) -> str:
 
 @dataclass(frozen=True)
 class RawOccupancy:
-    value: Optional[float]
+    value: float | None
     status: str
     element: str = ""
     element_status: str = ElementStatus.MISSING
@@ -152,7 +143,7 @@ class RawOccupancy:
     residue_name: str = ""
     residue_number: str = ""
     insertion_code: str = ""
-    serial: Optional[int] = None
+    serial: int | None = None
     source_order: int = 0
 
     @property
@@ -160,7 +151,7 @@ class RawOccupancy:
         return self.status == OccupancyStatus.VALID
 
     @property
-    def stable_identity(self) -> Tuple[str, str, str, str, str, str]:
+    def stable_identity(self) -> tuple[str, str, str, str, str, str]:
         return (
             self.chain_id,
             self.residue_name,
@@ -195,7 +186,7 @@ class AtomSite:
     occupancy: float
     occupancy_valid: bool
     occupancy_status: str
-    serial: Optional[int]
+    serial: int | None
     x: float
     y: float
     z: float
@@ -206,19 +197,19 @@ class AtomSite:
     # very large mmCIF structure is a packed one-character namespace rather than
     # the source author identity that ``chain_id``/``resnum`` above report.
     coordinate_chain_id: str = ""
-    coordinate_residue_number: Optional[int] = None
+    coordinate_residue_number: int | None = None
     coordinate_insertion_code: str = ""
     coordinate_resnum: str = ""
     source_polymer_position: str = ""
-    source_chain_index: Optional[int] = None
-    source_residue_index: Optional[int] = None
+    source_chain_index: int | None = None
+    source_residue_index: int | None = None
 
     @property
     def pos(self) -> gemmi.Position:
         return self.gemmi_atom.pos
 
     @property
-    def xyz(self) -> Tuple[float, float, float]:
+    def xyz(self) -> tuple[float, float, float]:
         return self.x, self.y, self.z
 
     @property
@@ -227,7 +218,7 @@ class AtomSite:
         return all(math.isfinite(value) for value in self.xyz)
 
     @property
-    def residue_key(self) -> Tuple[int, int, int]:
+    def residue_key(self) -> tuple[int, int, int]:
         return self.model_index, self.chain_index, self.residue_index
 
     @property
@@ -247,15 +238,15 @@ class AtomSite:
         )
 
     @property
-    def source_key(self) -> Tuple[int, int, int, int]:
+    def source_key(self) -> tuple[int, int, int, int]:
         return (*self.residue_key, self.atom_index)
 
     @property
-    def exact_identity(self) -> Tuple[object, ...]:
+    def exact_identity(self) -> tuple[object, ...]:
         return (*self.residue_key, self.atom_name, self.altloc, self.element)
 
     @property
-    def chemical_site_identity(self) -> Tuple[object, ...]:
+    def chemical_site_identity(self) -> tuple[object, ...]:
         return (*self.residue_key, self.atom_name, self.element)
 
 
@@ -274,14 +265,14 @@ OVERFULL_OCCUPANCY_NI_FRACTION = 0.002
 
 def _overfull_occupancy_summary(
     atoms: Iterable[AtomSite],
-) -> Tuple[int, float, FrozenSet[Tuple[object, ...]]]:
+) -> tuple[int, float, frozenset[tuple[object, ...]]]:
     """Chemical atom sites whose alternates exceed one, by how much, and which.
 
     The identities are kept so a metal site can report whether the overfull
     occupancy is its own or a donor's. An entry-level count cannot answer that,
     and a residue hundreds of angstroms away is not evidence about a site.
     """
-    by_chemical_site: Dict[Tuple[object, ...], List[AtomSite]] = defaultdict(list)
+    by_chemical_site: dict[tuple[object, ...], list[AtomSite]] = defaultdict(list)
     for atom in atoms:
         by_chemical_site[atom.chemical_site_identity].append(atom)
 
@@ -330,10 +321,10 @@ class ResidueSelection:
     insertion_code: str
     resnum: str
     is_water: bool
-    source_atoms: Tuple[AtomSite, ...]
-    contact_atoms: Tuple[AtomSite, ...]
+    source_atoms: tuple[AtomSite, ...]
+    contact_atoms: tuple[AtomSite, ...]
     selected_altloc: str
-    selected_conformer_mean_occupancy: Optional[float]
+    selected_conformer_mean_occupancy: float | None
     altloc_options: str
     alternative_conformers_present: bool
     altloc_selection_fallback: bool
@@ -341,23 +332,23 @@ class ResidueSelection:
     malformed_duplicate_atom_name_count: int
     chemical_atom_site_count: int
     coordinate_chain_id: str = ""
-    coordinate_residue_number: Optional[int] = None
+    coordinate_residue_number: int | None = None
     coordinate_insertion_code: str = ""
     coordinate_resnum: str = ""
     source_polymer_position: str = ""
-    source_chain_index: Optional[int] = None
-    source_residue_index: Optional[int] = None
+    source_chain_index: int | None = None
+    source_residue_index: int | None = None
 
     @property
-    def key(self) -> Tuple[int, int, int]:
+    def key(self) -> tuple[int, int, int]:
         return self.model_index, self.chain_index, self.residue_index
 
     @property
-    def author_key(self) -> Tuple[str, str, str]:
+    def author_key(self) -> tuple[str, str, str]:
         return self.residue_name, self.chain_id, self.resnum
 
     @property
-    def coordinate_author_key(self) -> Tuple[str, str, str]:
+    def coordinate_author_key(self) -> tuple[str, str, str]:
         return (
             self.coordinate_residue_name,
             self.coordinate_chain_id or self.chain_id,
@@ -385,15 +376,15 @@ class StructureContext:
     model_analyzed: int
     analyzed_model_id: str
     multi_model_structure: bool
-    source_atoms: Tuple[AtomSite, ...]
-    contact_atoms: Tuple[AtomSite, ...]
-    residues: Tuple[ResidueSelection, ...]
+    source_atoms: tuple[AtomSite, ...]
+    contact_atoms: tuple[AtomSite, ...]
+    residues: tuple[ResidueSelection, ...]
     occupancy_validation_failed: bool
     missing_occupancy_count: int
     invalid_occupancy_count: int
     overfull_occupancy_site_count: int
     overfull_occupancy_excess: float
-    overfull_occupancy_site_keys: FrozenSet[Tuple[object, ...]]
+    overfull_occupancy_site_keys: frozenset[tuple[object, ...]]
     defaulted_occupancy_atom_count: int
     zero_occupancy_atom_count: int
     duplicate_atom_records_present: bool
@@ -408,24 +399,24 @@ class StructureContext:
     symmetry_search_available: bool
     symmetry_search_failure_reason: str
     crystallographic_operation_count: int
-    strict_ncs_operation_ids: Tuple[str, ...]
+    strict_ncs_operation_ids: tuple[str, ...]
     analysis_coordinate_format: str
-    warning_codes: Tuple[str, ...]
+    warning_codes: tuple[str, ...]
     _spatial_model: gemmi.Model = field(repr=False)
-    _atom_by_indices: Mapping[Tuple[int, int, int], AtomSite] = field(
+    _atom_by_indices: Mapping[tuple[int, int, int], AtomSite] = field(
         repr=False, default_factory=dict
     )
-    _residue_by_key: Mapping[Tuple[int, int, int], ResidueSelection] = field(
+    _residue_by_key: Mapping[tuple[int, int, int], ResidueSelection] = field(
         repr=False, default_factory=dict
     )
-    _residues_by_author: Mapping[Tuple[str, str, str], Tuple[ResidueSelection, ...]] = (
+    _residues_by_author: Mapping[tuple[str, str, str], tuple[ResidueSelection, ...]] = (
         field(repr=False, default_factory=dict)
     )
     _residues_by_source_author: Mapping[
-        Tuple[str, str, str], Tuple[ResidueSelection, ...]
+        tuple[str, str, str], tuple[ResidueSelection, ...]
     ] = field(repr=False, default_factory=dict)
     _residues_by_coordinate_author: Mapping[
-        Tuple[str, str, str], Tuple[ResidueSelection, ...]
+        tuple[str, str, str], tuple[ResidueSelection, ...]
     ] = field(repr=False, default_factory=dict)
 
     @property
@@ -440,8 +431,8 @@ class StructureContext:
     def image_provenance(
         self,
         image_index: int,
-        cell_translation: Tuple[int, int, int],
-    ) -> Tuple[bool, bool, str, str]:
+        cell_translation: tuple[int, int, int],
+    ) -> tuple[bool, bool, str, str]:
         """Classify a Gemmi cell image as crystallographic and/or strict NCS.
 
         ``setup_cell_images()`` orders the identity first, then the remaining
@@ -483,10 +474,10 @@ class StructureContext:
 
     def atom_for_indices(
         self, chain_index: int, residue_index: int, atom_index: int
-    ) -> Optional[AtomSite]:
+    ) -> AtomSite | None:
         return self._atom_by_indices.get((chain_index, residue_index, atom_index))
 
-    def atom_for_mark(self, mark: gemmi.NeighborSearch.Mark) -> Optional[AtomSite]:
+    def atom_for_mark(self, mark: gemmi.NeighborSearch.Mark) -> AtomSite | None:
         return self.atom_for_indices(mark.chain_idx, mark.residue_idx, mark.atom_idx)
 
     def residue_for_atom(self, atom: AtomSite) -> ResidueSelection:
@@ -494,21 +485,21 @@ class StructureContext:
 
     def residues_for_author(
         self, residue_name: str, chain_id: str, resnum: str
-    ) -> Tuple[ResidueSelection, ...]:
+    ) -> tuple[ResidueSelection, ...]:
         return self._residues_by_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
 
     def residues_for_source_author(
         self, residue_name: str, chain_id: str, resnum: str
-    ) -> Tuple[ResidueSelection, ...]:
+    ) -> tuple[ResidueSelection, ...]:
         return self._residues_by_source_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
 
     def residues_for_coordinate_author(
         self, residue_name: str, chain_id: str, resnum: str
-    ) -> Tuple[ResidueSelection, ...]:
+    ) -> tuple[ResidueSelection, ...]:
         return self._residues_by_coordinate_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
@@ -518,7 +509,7 @@ class StructureContext:
         elements: Iterable[str],
         canonical: bool = True,
         include_zero_occupancy: bool = False,
-    ) -> List[AtomSite]:
+    ) -> list[AtomSite]:
         """Return selected metal atoms, excluding modeled absence by default.
 
         A valid occupancy of zero remains part of the deposited atom inventory
@@ -573,9 +564,9 @@ class StructureContext:
         return search
 
 
-def _raw_pdb_occupancies(path: str) -> Tuple[List[List[RawOccupancy]], str]:
+def _raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
     """Read PDB occupancy and element fields without losing provenance."""
-    records: List[List[RawOccupancy]] = [[]]
+    records: list[list[RawOccupancy]] = [[]]
     model_index = 0
     saw_model = False
     try:
@@ -651,16 +642,16 @@ class SourceResidueIdentity:
 
     residue_name: str
     chain_id: str
-    residue_number: Optional[int] = None
+    residue_number: int | None = None
     insertion_code: str = ""
     polymer_position: str = ""
-    chain_index: Optional[int] = None
-    residue_index: Optional[int] = None
+    chain_index: int | None = None
+    residue_index: int | None = None
 
 
 def _raw_pdb_residue_mapping(
     path: str,
-) -> Dict[Tuple[int, str, str, str], SourceResidueIdentity]:
+) -> dict[tuple[int, str, str, str], SourceResidueIdentity]:
     """Read reversible mmCIF residue mappings embedded during conversion.
 
     ``RESNAME`` records carry the source component name alone; ``RESIDUE``
@@ -669,8 +660,8 @@ def _raw_pdb_residue_mapping(
     records independently preserve whether the deposited sequence identifies a
     residue as terminal, internal, non-polymer, or indeterminate.
     """
-    mapping: Dict[Tuple[int, str, str, str], SourceResidueIdentity] = {}
-    polymer_positions: Dict[Tuple[int, str, str, str], str] = {}
+    mapping: dict[tuple[int, str, str, str], SourceResidueIdentity] = {}
+    polymer_positions: dict[tuple[int, str, str, str], str] = {}
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
             fields = line.split()
@@ -790,9 +781,9 @@ def _raw_pdb_residue_mapping(
     return mapping
 
 
-def _raw_pdb_defaulted_occupancy_counts(path: str) -> Dict[int, int]:
+def _raw_pdb_defaulted_occupancy_counts(path: str) -> dict[int, int]:
     """Read per-model counts whose occupancies came from the mmCIF default."""
-    counts: Dict[int, int] = {}
+    counts: dict[int, int] = {}
     prefix_fields = OCCUPANCY_DEFAULT_REMARK_PREFIX.split()
     with open(path, encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -825,7 +816,7 @@ def _raw_pdb_defaulted_occupancy_counts(path: str) -> Dict[int, int]:
 
 def _gemmi_atom_identity(
     chain: gemmi.Chain, residue: gemmi.Residue, atom: gemmi.Atom
-) -> Tuple[str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str]:
     return (
         str(chain.name),
         str(residue.name),
@@ -839,19 +830,19 @@ def _gemmi_atom_identity(
 def _match_raw_occupancies(
     model: gemmi.Model,
     raw_records: Sequence[RawOccupancy],
-) -> Tuple[List[Optional[RawOccupancy]], int, int]:
+) -> tuple[list[RawOccupancy | None], int, int]:
     """Match PDB records to Gemmi atoms without relying on traversal order.
 
     Gemmi may merge repeated chain segments when reading a PDB file, so records
     are located by author identity and, for malformed duplicates, atom serial.
     """
-    raw_by_identity: Dict[Tuple[str, str, str, str, str, str], List[RawOccupancy]] = (
+    raw_by_identity: dict[tuple[str, str, str, str, str, str], list[RawOccupancy]] = (
         defaultdict(list)
     )
     for raw in raw_records:
         raw_by_identity[raw.stable_identity].append(raw)
 
-    matches: List[Optional[RawOccupancy]] = []
+    matches: list[RawOccupancy | None] = []
     unmatched_gemmi = 0
     for chain in model:
         for residue in chain:
@@ -878,8 +869,8 @@ def _match_raw_occupancies(
 
 
 def _occupancy_for_atom(
-    atom: gemmi.Atom, raw: Optional[RawOccupancy]
-) -> Tuple[float, bool, str]:
+    atom: gemmi.Atom, raw: RawOccupancy | None
+) -> tuple[float, bool, str]:
     value = float(atom.occ)
     if raw is not None:
         if raw.valid and raw.value is not None:
@@ -894,8 +885,8 @@ def _occupancy_for_atom(
 
 
 def _element_for_atom(
-    atom: gemmi.Atom, analysis_format: str, raw: Optional[RawOccupancy]
-) -> Tuple[str, bool]:
+    atom: gemmi.Atom, analysis_format: str, raw: RawOccupancy | None
+) -> tuple[str, bool]:
     """Trust the deposited element field; Gemmi guesses one from the atom name."""
     if analysis_format == "pdb":
         if raw is not None and raw.element_status == ElementStatus.VALID:
@@ -916,19 +907,19 @@ def _site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
 
 def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
     first = atoms[0]
-    named: Dict[str, List[AtomSite]] = defaultdict(list)
-    blank: List[AtomSite] = []
+    named: dict[str, list[AtomSite]] = defaultdict(list)
+    blank: list[AtomSite] = []
     for atom in atoms:
         (named[atom.altloc] if atom.altloc else blank).append(atom)
 
-    option_means: Dict[str, Optional[float]] = {}
+    option_means: dict[str, float | None] = {}
     for label in sorted(named):
         valid = [atom.occupancy for atom in named[label] if atom.occupancy_valid]
         option_means[label] = sum(valid) / len(valid) if valid else None
 
     fallback = False
     selected_altloc = ""
-    selected_mean: Optional[float]
+    selected_mean: float | None
     if option_means:
         valid_options = [
             (mean, label)
@@ -957,10 +948,10 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
 
     # A selected named atom supersedes a malformed blank record of the same
     # atom name; any remaining duplicate name is resolved by occupancy.
-    by_name: Dict[str, List[AtomSite]] = defaultdict(list)
+    by_name: dict[str, list[AtomSite]] = defaultdict(list)
     for atom in candidates:
         by_name[atom.atom_name].append(atom)
-    contact_atoms: List[AtomSite] = []
+    contact_atoms: list[AtomSite] = []
     selected_over_blank = 0
     malformed_duplicates = 0
     for atom_name in sorted(
@@ -1021,7 +1012,7 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
 
 def _symmetry_metadata(
     structure: gemmi.Structure,
-) -> Tuple[bool, str, int, Tuple[str, ...]]:
+) -> tuple[bool, str, int, tuple[str, ...]]:
     strict_ncs_ids = tuple(
         str(operation.id).strip() or f"strict_ncs_{index}"
         for index, operation in enumerate(
@@ -1060,7 +1051,7 @@ def _symmetry_metadata(
 def load_structure(
     pdb_id: str,
     path: str,
-    source_model_count: Optional[int] = None,
+    source_model_count: int | None = None,
 ) -> StructureContext:
     """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
     structure = gemmi.read_structure(path)
@@ -1079,12 +1070,12 @@ def load_structure(
         "mmcif" if os.path.splitext(path)[1].lower() in (".cif", ".mmcif") else "pdb"
     )
 
-    raw_models: List[List[RawOccupancy]] = []
+    raw_models: list[list[RawOccupancy]] = []
     raw_error = ""
-    source_residue_identities: Dict[
-        Tuple[int, str, str, str], SourceResidueIdentity
+    source_residue_identities: dict[
+        tuple[int, str, str, str], SourceResidueIdentity
     ] = {}
-    defaulted_occupancy_counts: Dict[int, int] = {}
+    defaulted_occupancy_counts: dict[int, int] = {}
     if analysis_format == "pdb":
         raw_models, raw_error = _raw_pdb_occupancies(path)
         source_residue_identities = _raw_pdb_residue_mapping(path)
@@ -1111,7 +1102,7 @@ def load_structure(
         raise ValueError(
             "defaulted occupancy count does not match the analyzed model atom count"
         )
-    raw_matches: List[Optional[RawOccupancy]]
+    raw_matches: list[RawOccupancy | None]
     unmatched_gemmi = 0
     unmatched_raw = 0
     if analysis_format == "pdb":
@@ -1137,7 +1128,7 @@ def load_structure(
                 f"{unmatched_gemmi};unmatched_raw={unmatched_raw}"
             )
 
-    all_sites: List[AtomSite] = []
+    all_sites: list[AtomSite] = []
     gemmi_order = 0
     for chain_index, chain in enumerate(model):
         for residue_index, residue in enumerate(chain):
@@ -1235,7 +1226,7 @@ def load_structure(
         atom.occupancy_valid and atom.occupancy == 0.0 for atom in all_sites
     )
 
-    dedup: Dict[Tuple[object, ...], AtomSite] = {}
+    dedup: dict[tuple[object, ...], AtomSite] = {}
     duplicate_count = 0
     coordinate_conflicts = 0
     for site in all_sites:
@@ -1255,7 +1246,7 @@ def load_structure(
         overfull_site_keys,
     ) = _overfull_occupancy_summary(source_atoms)
 
-    residue_groups: Dict[Tuple[int, int, int], List[AtomSite]] = defaultdict(list)
+    residue_groups: dict[tuple[int, int, int], list[AtomSite]] = defaultdict(list)
     for site in source_atoms:
         residue_groups[site.residue_key].append(site)
     residues = tuple(
@@ -1293,7 +1284,7 @@ def load_structure(
         strict_ncs_operation_ids,
     ) = _symmetry_metadata(structure)
 
-    warnings: List[str] = []
+    warnings: list[str] = []
     if input_model_count > 1:
         warnings.append(WarningCode.MULTI_MODEL_STRUCTURE)
     if duplicate_count:
@@ -1324,13 +1315,13 @@ def load_structure(
         for atom in contact_atoms
     }
     residue_by_key = {residue.key: residue for residue in residues}
-    by_author_lists: Dict[Tuple[str, str, str], List[ResidueSelection]] = defaultdict(
+    by_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = defaultdict(
         list
     )
-    by_source_author_lists: Dict[Tuple[str, str, str], List[ResidueSelection]] = (
+    by_source_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = (
         defaultdict(list)
     )
-    by_coordinate_author_lists: Dict[Tuple[str, str, str], List[ResidueSelection]] = (
+    by_coordinate_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = (
         defaultdict(list)
     )
     for selection in residues:

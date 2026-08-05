@@ -24,7 +24,8 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Sequence, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from collections.abc import Sequence
 
 import pytest
 

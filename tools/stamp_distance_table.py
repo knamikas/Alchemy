@@ -15,7 +15,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -109,7 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"sidecar matches: {actual}")
         return 0
 
-    generated = datetime.now(timezone.utc).isoformat()
+    generated = datetime.now(UTC).isoformat()
     metadata = build_metadata(TABLE_PATH, generated)
     with open(SIDECAR_PATH, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)

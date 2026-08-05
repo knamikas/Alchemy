@@ -15,15 +15,7 @@ import os
 import shutil
 import tempfile
 from collections import Counter
-from typing import (
-    AbstractSet,
-    Iterable,
-    Iterator,
-    Mapping,
-    Optional,
-    Sequence,
-    Union,
-)
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 
 from codes import ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
@@ -36,7 +28,7 @@ from worker import EntryResult
 # missing fields with ``None`` and collects a long row's surplus cells in a
 # list under the ``None`` key, which is exactly what the completeness checks
 # below look for.
-_CsvRow = dict[Optional[str], Union[str, list[str], None]]
+_CsvRow = dict[str | None, str | list[str] | None]
 
 
 def _complete_csv_row(row: _CsvRow) -> bool:
@@ -142,7 +134,7 @@ def _manifest_values_by_id(path: str, column: str) -> dict[str, str]:
     return values
 
 
-def _csv_header(path: str) -> Optional[list[str]]:
+def _csv_header(path: str) -> list[str] | None:
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
     with open(path, newline="") as handle:
@@ -203,9 +195,7 @@ def _manifest_count(
     return count
 
 
-def _rows_for_ids(
-    path: str, terminal_ids: AbstractSet[str]
-) -> Iterator[tuple[str, _CsvRow]]:
+def _rows_for_ids(path: str, terminal_ids: Set[str]) -> Iterator[tuple[str, _CsvRow]]:
     """Yield complete output rows owned by protected manifest entries.
 
     Rows for other IDs may be remnants of a write interrupted before its
@@ -232,7 +222,7 @@ def _validate_terminal_artifacts(
     candidates_path: str,
     *,
     bonds_enabled: bool,
-    confidence_path: Optional[str],
+    confidence_path: str | None,
 ) -> None:
     terminal_ids = set(terminal_rows)
 
@@ -306,8 +296,8 @@ def validate_resume_schemas(
     bonds_path: str,
     candidates_path: str,
     bonds_enabled: bool = True,
-    confidence_path: Optional[str] = None,
-    confidence_columns: Optional[Sequence[str]] = None,
+    confidence_path: str | None = None,
+    confidence_columns: Sequence[str] | None = None,
 ) -> None:
     """Refuse to resume into incompatible or internally inconsistent output.
 
@@ -418,7 +408,7 @@ def _merge_csv_replacements(
         except BaseException:
             os.close(fd)
             raise
-        destination_header: Optional[list[str]] = None
+        destination_header: list[str] | None = None
         with replacement as dst:
             writer = csv.writer(dst)
             if os.path.exists(path) and os.path.getsize(path) > 0:

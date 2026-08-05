@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Generator, Union
+from typing import Any
+from collections.abc import Callable, Generator
 
 import pluggy
 import pytest
@@ -197,7 +198,7 @@ def pytest_runtest_makereport(
 
 
 def pytest_sessionfinish(
-    session: pytest.Session, exitstatus: Union[int, pytest.ExitCode]
+    session: pytest.Session, exitstatus: int | pytest.ExitCode
 ) -> None:
     """Make an all-skipped strict capability lane fail at process level."""
     if exitstatus != pytest.ExitCode.OK or session.config.getoption("collectonly"):

@@ -26,15 +26,10 @@ from multiprocessing import (
 from typing import (
     TYPE_CHECKING,
     Any,
-    Collection,
-    Dict,
-    Mapping,
-    Optional,
-    Sequence,
     TextIO,
-    Tuple,
     cast,
 )
+from collections.abc import Collection, Mapping, Sequence
 
 from _version import __version__
 from reference_data import (
@@ -145,7 +140,7 @@ def _verify_resolved_ccp4(env: Mapping[str, str], setup_path: str) -> None:
 
 def _resolve_ccp4_environment(
     args: argparse.Namespace,
-) -> tuple[Optional[dict[str, str]], Optional[str]]:
+) -> tuple[dict[str, str] | None, str | None]:
     """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
     config = load_ccp4_setup_config()
     if args.configure_ccp4:
@@ -199,7 +194,7 @@ def _resolve_ccp4_environment(
 
 def resolve_ccp4_environment(
     args: argparse.Namespace,
-) -> tuple[Optional[dict[str, str]], Optional[str]]:
+) -> tuple[dict[str, str] | None, str | None]:
     """Return ``(env, setup_path)`` for this run, or raise ``DriverError``."""
     try:
         return _resolve_ccp4_environment(args)
@@ -379,10 +374,10 @@ def _shutdown_pool(pool: WorkerPool) -> bool:
 
 
 def resolve_confidence_reference_dir(
-    output_dir: str, configured_dir: Optional[str] = None
-) -> tuple[Optional[str], tuple[str, ...]]:
+    output_dir: str, configured_dir: str | None = None
+) -> tuple[str | None, tuple[str, ...]]:
     """Find a frozen confidence reference, honoring an explicit override."""
-    candidates: Tuple[str, ...]
+    candidates: tuple[str, ...]
     if configured_dir is not None:
         candidates = (configured_dir,)
     else:
@@ -437,7 +432,7 @@ class DriverError(Exception):
 
 def _select_entry_ids(
     args: argparse.Namespace, cache_root: str
-) -> tuple[list[str], str, Optional[dict[str, Optional[str]]]]:
+) -> tuple[list[str], str, dict[str, str | None] | None]:
     """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
     root = args.pdb_redo_root
     if args.pdb_file or args.mtz_file or args.cif_file:
@@ -517,7 +512,7 @@ class _OutputLayout:
         self.reference_dir = os.path.join(output_dir, "confidence_reference")
 
     @property
-    def core(self) -> Tuple[str, str, str, str]:
+    def core(self) -> tuple[str, str, str, str]:
         """The four always-written outputs, in resume-validation order."""
         return (self.manifest, self.stats, self.bonds, self.candidates)
 
@@ -531,10 +526,10 @@ class _ConfidencePlan:
     """
 
     def __init__(self) -> None:
-        self.mode: Optional[str] = None
-        self.reference: Optional[ConfidenceReference] = None
-        self.stream_path: Optional[str] = None
-        self.columns: Optional[Sequence[str]] = None
+        self.mode: str | None = None
+        self.reference: ConfidenceReference | None = None
+        self.stream_path: str | None = None
+        self.columns: Sequence[str] | None = None
         self.synchronize_inputs: bool = False
 
     @property
@@ -713,7 +708,7 @@ def _schedule_entries(
     layout: _OutputLayout,
     cache_root: str,
     run_log: _RunLog,
-) -> tuple[list[str], str, Optional[dict[str, Optional[str]]]]:
+) -> tuple[list[str], str, dict[str, str | None] | None]:
     """Return ``(ids, root, manual_inputs)`` for the entries this run will do.
 
     ``--resume`` removes finished entries before ``--max-pdbs`` caps what is
@@ -806,7 +801,7 @@ def _clear_stale_outputs(
         return
     # The reference metadata file is the reference's completion marker.
     reference_marker = os.path.join(layout.reference_dir, REFERENCE_METADATA_FILE)
-    stale: Tuple[str, ...]
+    stale: tuple[str, ...]
     if plan.mode == "database":
         stale = (layout.confidence_scores, reference_marker)
     elif plan.mode == "reference":
@@ -867,7 +862,7 @@ def _worker_config(
     root: str,
     cache_root: str,
     cofactors: Collection[str],
-    manual_inputs: Optional[dict[str, Optional[str]]],
+    manual_inputs: dict[str, str | None] | None,
     plan: _ConfidencePlan,
     run_log: _RunLog,
 ) -> WorkerConfig:
@@ -909,9 +904,7 @@ def _worker_config(
     return cfg
 
 
-def _output_targets(
-    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
-) -> tuple[str, ...]:
+def _output_targets(layout: _OutputLayout, plan: _ConfidencePlan) -> tuple[str, ...]:
     """The output files this run writes, in the order staging expects them."""
     paths = [*layout.core]
     if plan.enabled:
@@ -990,7 +983,7 @@ def _write_entry(
     args: argparse.Namespace,
     plan: _ConfidencePlan,
     writers: _OutputWriters,
-    staging: Optional[_ResumeStaging],
+    staging: _ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
 ) -> None:
     """Write one entry's rows, manifest row last.
@@ -1034,7 +1027,7 @@ class _WorkerDeathWatch:
         self._inflight = inflight
         self._ids = ids
         self._cfg = cfg
-        self._assignments: Dict[int, str] = {}
+        self._assignments: dict[int, str] = {}
         self._worker_pids: set[int] = set()
         self._lost_ids: set[str] = set()
         self._unattributed_deaths = 0
@@ -1060,7 +1053,7 @@ class _WorkerDeathWatch:
 
     def stalled_losses(
         self, completed_ids: set[str], stalled_for: float, remaining: int
-    ) -> Optional[list[EntryResult]]:
+    ) -> list[EntryResult] | None:
         """Results for the outstanding entries an unattributed death held.
 
         ``None`` until every unassigned outstanding entry can be accounted for
@@ -1113,7 +1106,7 @@ def _dispatch_entries(
     workers: int,
     writers: _OutputWriters,
     plan: _ConfidencePlan,
-    staging: Optional[_ResumeStaging],
+    staging: _ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
     prior_ids: set[str],
     run_log: _RunLog,
@@ -1279,11 +1272,11 @@ def _process_entries(
     prior_ids = (
         set(_manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
-    output_paths = _output_targets(args, layout, plan)
+    output_paths = _output_targets(layout, plan)
     staging = _ResumeStaging(args.output_dir, output_paths) if args.resume else None
     write_paths = staging.staged if staging is not None else output_paths
 
-    writers: Optional[_OutputWriters] = None
+    writers: _OutputWriters | None = None
     processing_completed = False
     try:
         with contextlib.ExitStack() as handles:

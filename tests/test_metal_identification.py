@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, Sequence, Union, cast
+from typing import Any
+from collections.abc import Callable, Iterable, Sequence
 
 import pytest
 
@@ -56,11 +57,11 @@ def _validate(fields: Sequence[str], line_number: int = 2) -> int:
 
 
 def _extract(
-    stats_path: Union[str, os.PathLike[str]],
+    stats_path: str | os.PathLike[str],
     context: StructureContext,
     *,
     pdb_id: str = "test",
-    metals: Optional[Iterable[str]] = None,
+    metals: Iterable[str] | None = None,
     cofactors: Iterable[str] = (),
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """``extract_metal_statistics`` with the usual metal set and no cofactors."""
@@ -82,48 +83,32 @@ def _write_rows(
     return helpers.write_edstats(tmp_path / name, rows, **kwargs)
 
 
-class _RemappedStructure:
-    """Read-only view of a real context with one author key resolving twice.
+def _remapped_structure(
+    context: StructureContext,
+    author_key: tuple[str, str, str],
+    residues: Iterable[ResidueSelection],
+    all_residues: Iterable[ResidueSelection] | None = None,
+) -> StructureContext:
+    """A real context with one coordinate-author key resolving twice.
 
     Gemmi merges coordinate residues that share an author name, chain and
     sequence number, so a genuine duplicate cannot be produced from a file.
+    The context's own author index can still hold one, so rebuilding it
+    directly keeps the parser under test looking at the production type.
+
+    ``residues`` is what the ambiguous key resolves to; ``all_residues``
+    defaults to it and is given separately only when the model has to carry
+    unrelated residues as well.
     """
-
-    def __init__(
-        self,
-        context: StructureContext,
-        author_key: Sequence[str],
-        residues: Iterable[ResidueSelection],
-        all_residues: Optional[Iterable[ResidueSelection]] = None,
-    ) -> None:
-        self._context = context
-        self._author_key = tuple(author_key)
-        self._residues = tuple(residues)
-        self._all_residues = (
-            self._residues if all_residues is None else tuple(all_residues)
-        )
-
-    @property
-    def model_analyzed(self) -> int:
-        return self._context.model_analyzed
-
-    @property
-    def residues(self) -> tuple[ResidueSelection, ...]:
-        """Every coordinate residue, which is the ambiguous pair unless the
-        caller needs unrelated residues in the model as well."""
-        return self._all_residues
-
-    def residues_for_coordinate_author(
-        self, residue_name: str, chain_id: str, resnum: str
-    ) -> tuple[ResidueSelection, ...]:
-        if (residue_name, chain_id, resnum) == self._author_key:
-            return self._residues
-        return self._context.residues_for_coordinate_author(
-            residue_name, chain_id, resnum
-        )
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._context, name)
+    ambiguous = tuple(residues)
+    return replace(
+        context,
+        residues=ambiguous if all_residues is None else tuple(all_residues),
+        _residues_by_coordinate_author={
+            **context._residues_by_coordinate_author,
+            author_key: ambiguous,
+        },
+    )
 
 
 def test_valid_header_maps_every_documented_column_to_its_position() -> None:
@@ -878,13 +863,7 @@ def _repeated_coordinate_identity(context: StructureContext) -> StructureContext
         coordinate_residue_number=1,
         coordinate_resnum="1",
     )
-    # The proxy is a stand-in for the context the parser is handed; the cast is
-    # the only way to say so, since no real StructureContext can carry the
-    # duplicated author key this exercises.
-    return cast(
-        StructureContext,
-        _RemappedStructure(context, ("ZN", "B", "1"), (first, second)),
-    )
+    return _remapped_structure(context, ("ZN", "B", "1"), (first, second))
 
 
 def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
@@ -1043,15 +1022,11 @@ def test_nr_is_resolved_within_its_own_chain(tmp_path: Path) -> None:
         coordinate_residue_number=1,
         coordinate_resnum="1",
     )
-    # See _repeated_coordinate_identity for why the proxy has to be cast.
-    duplicated = cast(
-        StructureContext,
-        _RemappedStructure(
-            context,
-            ("MG", "B", "1"),
-            (second, third),
-            all_residues=(first, second, third),
-        ),
+    duplicated = _remapped_structure(
+        context,
+        ("MG", "B", "1"),
+        (second, third),
+        all_residues=(first, second, third),
     )
 
     stats = _write_rows(

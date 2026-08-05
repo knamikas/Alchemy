@@ -16,7 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any
+from collections.abc import Callable, Iterable, Iterator
 
 import pytest
 

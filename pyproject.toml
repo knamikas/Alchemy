@@ -78,12 +78,12 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-# Deliberately narrow. E/W/F/B catch real defects -- undefined names, unused
-# bindings, exception-handling mistakes -- and the tree is clean under them.
-# Modernization rules (UP) are excluded on purpose: `ruff check --select UP
-# src tests tools` reports 347 findings, 334 of them annotation rewrites,
-# which belong with the typing work rather than a lint gate.
-select = ["E", "W", "F", "B"]
+# E/W/F/B catch real defects -- undefined names, unused bindings,
+# exception-handling mistakes. UP is a gate rather than a cleanup now that the
+# annotation pass has settled the tree on one convention: `X | None` over
+# `Optional[X]`, builtin generics over the `typing` aliases, and
+# `collections.abc` for the abstract base classes.
+select = ["E", "W", "F", "B", "UP"]
 ignore = [
     # zip(..., strict=) changes behaviour: length mismatches would begin
     # raising where they are currently truncated silently. Several zips here

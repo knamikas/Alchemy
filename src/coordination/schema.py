@@ -12,7 +12,8 @@ The builders are serialization only: every decision they report was made in
 ``coordination.analysis`` before the row is built.
 """
 
-from typing import Any, Iterable, Mapping, Optional, Union
+from typing import Any
+from collections.abc import Iterable, Mapping
 
 import gemmi
 
@@ -310,7 +311,7 @@ def _bonded_to(is_water: bool = False) -> str:
     return "HOH" if is_water else "P"
 
 
-def _connection_output_values(candidate: Candidate) -> dict[str, Union[str, bool]]:
+def _connection_output_values(candidate: Candidate) -> dict[str, str | bool]:
     records = candidate.declared_connections
     inferred = bool(candidate.inferred_contact_eligible)
 
@@ -338,7 +339,7 @@ def _connection_output_values(candidate: Candidate) -> dict[str, Union[str, bool
     }
 
 
-def _donor_output_values(candidate: Candidate) -> dict[str, Union[bool, str, None]]:
+def _donor_output_values(candidate: Candidate) -> dict[str, bool | str | None]:
     return {
         "inferred_donor_allowed": candidate.inferred_donor_allowed,
         "inferred_donor_rule": candidate.inferred_donor_rule,
@@ -381,8 +382,8 @@ def _context_warning_values(
 
 def stats_extra_values(
     structure: StructureContext,
-    metal: Optional[AtomSite] = None,
-    summary: Optional[Mapping[str, Any]] = None,
+    metal: AtomSite | None = None,
+    summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return fixed per-site values appended to an EDSTATS row."""
     summary = summary or {}

@@ -29,7 +29,8 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, NoReturn, Optional, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
+from collections.abc import Iterable
 
 import pytest
 
@@ -62,17 +63,17 @@ _POSIX_KILL = pytest.mark.skipif(
 class _FakeWorker:
     """Stand-in for a ``multiprocessing.Process`` in ``pool._pool``."""
 
-    def __init__(self, pid: Optional[int]) -> None:
+    def __init__(self, pid: int | None) -> None:
         self.pid = pid
 
 
 class _FakePool:
     """Minimal object exposing the ``_pool`` roster ``_dead_worker_pids`` reads."""
 
-    def __init__(self, pids: Iterable[Optional[int]] = ()) -> None:
+    def __init__(self, pids: Iterable[int | None] = ()) -> None:
         self.set_roster(pids)
 
-    def set_roster(self, pids: Iterable[Optional[int]]) -> None:
+    def set_roster(self, pids: Iterable[int | None]) -> None:
         self._pool = [_FakeWorker(pid) for pid in pids]
 
 
@@ -94,7 +95,7 @@ class _BrokenQueue:
 
 
 def _reference_cfg(
-    output_dir: str, manual_inputs: Optional[dict[str, Optional[str]]] = None
+    output_dir: str, manual_inputs: dict[str, str | None] | None = None
 ) -> worker.WorkerConfig:
     """Build the worker config exactly as ``driver_pool._run`` assembles it."""
     env = dict(os.environ)
@@ -349,7 +350,7 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path: Path) -> Non
 )
 def test_worker_death_result_reports_the_run_refinement_state(
     tmp_path: Path,
-    manual_inputs: Optional[dict[str, Optional[str]]],
+    manual_inputs: dict[str, str | None] | None,
     expected_state: str,
 ) -> None:
     """Even a synthesized failure records which refinement the run targeted."""
@@ -478,7 +479,7 @@ def _driver_child(
     argv: list[str],
     script: dict[str, dict[str, Any]],
     marker_dir: str,
-    stall_grace: Optional[float],
+    stall_grace: float | None,
     channel: multiprocessing.Queue[tuple[str, Any]],
     session_ready: MultiprocessingEvent,
 ) -> None:
@@ -539,8 +540,8 @@ def _terminate_driver_tree(
 def _run_driver(
     tmp_path: Path,
     script: dict[str, dict[str, Any]],
-    stall_grace: Optional[float] = None,
-    workers: Optional[int] = None,
+    stall_grace: float | None = None,
+    workers: int | None = None,
 ) -> tuple[int, Path, float]:
     """Drive ``driver_pool._run`` over ``script`` in a child process, with a timeout."""
     ids = list(script)
@@ -626,7 +627,7 @@ def _read_manifest(output_dir: Path) -> list[dict[str, str]]:
 def test_driver_recovers_from_a_sigkilled_worker(
     tmp_path: Path,
     script: dict[str, dict[str, Any]],
-    stall_grace: Optional[float],
+    stall_grace: float | None,
 ) -> None:
     """A worker killed mid-entry must not hang the batch.
 
@@ -687,7 +688,7 @@ def test_driver_recovers_when_first_worker_dies_before_first_result_poll(
 @_POSIX_KILL
 def test_worker_death_kills_its_external_process_group(tmp_path: Path) -> None:
     """A SIGKILLed worker cannot leave its active CCP4-like child orphaned."""
-    child_pid: Optional[int] = None
+    child_pid: int | None = None
     try:
         exit_code, output_dir, _ = _run_driver(
             tmp_path,
@@ -970,7 +971,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(
     ],
 )
 def test_worker_config_is_picklable(
-    tmp_path: Path, manual_inputs: Optional[dict[str, Optional[str]]]
+    tmp_path: Path, manual_inputs: dict[str, str | None] | None
 ) -> None:
     """The worker config must survive pickling, as spawn requires.
 

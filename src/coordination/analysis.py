@@ -21,13 +21,9 @@ from dataclasses import replace
 from typing import (
     TYPE_CHECKING,
     Any,
-    Iterable,
-    Mapping,
-    Optional,
-    Sequence,
-    Union,
     cast,
 )
+from collections.abc import Iterable, Mapping, Sequence
 
 from coordination.schema import (
     ZSCORE_OUTLIER_CUTOFF,
@@ -244,7 +240,7 @@ def _first_sphere_rule(
     """Return target, cutoff, and provenance for proximity eligibility."""
     exact_key = _bonding_key(neighbor, neighbor.residue_name, metal.element)
     literature = literature_distances().get(exact_key)
-    target: Optional[float]
+    target: float | None
     if literature is not None:
         target = literature[0]
         reference_kind = "exact"
@@ -755,7 +751,7 @@ def _scope_summary(
 
 def _site_context_values(
     contacts: Sequence[Candidate], candidates: Sequence[Candidate]
-) -> dict[str, Union[bool, int, str]]:
+) -> dict[str, bool | int | str]:
     """Aggregate coordination-relevant context without changing confidence."""
     reasons: list[str] = []
     for contact in contacts:
@@ -794,7 +790,7 @@ _GENERATED_SCOPES = {
 def _site_summary(
     metal: AtomSite,
     explicit_contacts: Sequence[Candidate],
-    image_contacts: Optional[Sequence[Candidate]],
+    image_contacts: Sequence[Candidate] | None,
     dpi: float,
     resolution: float,
     ni: float,
@@ -842,9 +838,9 @@ def _site_summary(
     # Blank where symmetry was never searched, boolean where it was: "not
     # assessed" and "assessed false" are different answers, and the columns
     # keep them apart.
-    changed: Union[str, bool]
-    depends_crystallographic: Union[str, bool]
-    depends_strict_ncs: Union[str, bool]
+    changed: str | bool
+    depends_crystallographic: str | bool
+    depends_strict_ncs: str | bool
     if not image_search_available:
         generated_scope = ""
         changed = ""
@@ -922,10 +918,10 @@ def run_bond_analysis(
     pdb_id: str,
     pdb_path: str,
     stats_rows: Sequence[Mapping[str, Any]],
-    header: Optional[Sequence[str]],
+    header: Sequence[str] | None,
     dpi_inputs: Mapping[str, Any],
-    structure: Optional[StructureContext] = None,
-    connection_path: Optional[str] = None,
+    structure: StructureContext | None = None,
+    connection_path: str | None = None,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -1052,8 +1048,8 @@ def run_bond_analysis(
         )
         _annotate_contacts(explicit, metal.element, dpi)
         _annotate_multi_donor_groups(explicit)
-        image_candidates: Optional[list[Candidate]] = None
-        image_contacts: Optional[list[Candidate]] = None
+        image_candidates: list[Candidate] | None = None
+        image_contacts: list[Candidate] | None = None
         if image_search is not None:
             image_candidates = _merge_candidates(
                 _collect_proximal_candidates(structure, image_search, metal, True),

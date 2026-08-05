@@ -7,7 +7,8 @@ back to decide what still needs running.
 """
 
 import csv
-from typing import Any, Mapping, Optional, Sequence, TextIO
+from typing import Any, TextIO
+from collections.abc import Mapping, Sequence
 
 from coordination.schema import (
     BOND_COLUMNS,
@@ -104,11 +105,11 @@ class _OutputWriters:
         self,
         manifest_fh: TextIO,
         stats_fh: TextIO,
-        bonds_fh: Optional[TextIO],
-        candidates_fh: Optional[TextIO],
-        confidence_fh: Optional[TextIO] = None,
-        confidence_columns: Optional[Sequence[str]] = None,
-        confidence_inputs_fh: Optional[TextIO] = None,
+        bonds_fh: TextIO | None,
+        candidates_fh: TextIO | None,
+        confidence_fh: TextIO | None = None,
+        confidence_columns: Sequence[str] | None = None,
+        confidence_inputs_fh: TextIO | None = None,
     ) -> None:
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
@@ -124,8 +125,8 @@ class _OutputWriters:
         )
         if confidence_fh is not None and confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
-        self._confidence: Optional[csv.DictWriter[str]] = None
-        self._confidence_inputs: Optional[csv.DictWriter[str]] = None
+        self._confidence: csv.DictWriter[str] | None = None
+        self._confidence_inputs: csv.DictWriter[str] | None = None
         if confidence_fh is not None and confidence_columns is not None:
             self._confidence = csv.DictWriter(
                 confidence_fh, fieldnames=confidence_columns

@@ -36,9 +36,9 @@ already on `PATH`, source the CCP4 setup script first:
 
 ## What CI runs, and what it does not
 
-CI runs the offline lane — `--no-ccp4 --no-network --skip-slow` — on Linux and
-Windows, with Linux additionally enforcing `ruff check`, `ruff format --check`,
-Mypy, and the coverage floor. Provisioning CCP4 and the pinned entry data in CI
+CI runs the offline lane — `--no-ccp4 --no-network --skip-slow` — on Linux,
+Windows and macOS, with Linux additionally enforcing `ruff check`,
+`ruff format --check`, Mypy, and the coverage floor. Provisioning CCP4 and the pinned entry data in CI
 is deliberately not done: the setup cost is not considered worth it.
 
 The consequence is worth stating plainly, because it is not visible from a green

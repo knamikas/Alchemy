@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
+from collections.abc import Mapping
 
 from codes import ReasonCode
 from structure_analysis import NAN, StructureContext, count_ni
@@ -41,8 +42,8 @@ def _asu_volume(mtz_path: str, pdb_path: str) -> float:
     """
     import gemmi
 
-    cell: Optional[gemmi.UnitCell]
-    sg: Optional[gemmi.SpaceGroup]
+    cell: gemmi.UnitCell | None
+    sg: gemmi.SpaceGroup | None
     cell = sg = None
     try:
         mtz = gemmi.read_mtz_file(mtz_path)

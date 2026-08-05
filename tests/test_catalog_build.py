@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Iterable, Mapping, Optional
+from collections.abc import Iterable, Mapping
 
 import gemmi
 import pytest
@@ -129,7 +129,7 @@ def porphyrin(
     ],
 )
 def test_element_counts_parses_a_ccd_formula(
-    formula: Optional[str], expected: dict[str, int]
+    formula: str | None, expected: dict[str, int]
 ) -> None:
     """The formula parse decides which components are even considered."""
     assert catalog.element_counts(formula) == expected

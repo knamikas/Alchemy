@@ -10,7 +10,7 @@ import json
 import math
 import os
 from collections.abc import Mapping
-from functools import lru_cache
+from functools import cache
 from types import MappingProxyType
 
 
@@ -118,7 +118,7 @@ def _parse_cofactor_catalog(
     return frozenset(ids), frozenset(cluster), frozenset(heme)
 
 
-@lru_cache(maxsize=None)
+@cache
 def reference_data_checksums() -> Mapping[str, str]:
     """``{filename: sha256}`` for both bundled files, verified as it goes."""
     return MappingProxyType(
@@ -126,7 +126,7 @@ def reference_data_checksums() -> Mapping[str, str]:
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def reference_data_id() -> str:
     """One short id for the reference data an entry was measured against.
 
@@ -148,7 +148,7 @@ def _verified_sha256(path: str) -> str:
     return _sha256(path)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _catalog(
     path: str = COFACTOR_CATALOG_PATH,
 ) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
@@ -239,7 +239,7 @@ def _load_literature(
     return lit
 
 
-@lru_cache(maxsize=None)
+@cache
 def literature_distances(
     path: str = DONOR_DISTANCE_PATH,
 ) -> Mapping[tuple[str, str, str], tuple[float, float]]:
@@ -248,7 +248,7 @@ def literature_distances(
     return MappingProxyType(_load_literature(path))
 
 
-@lru_cache(maxsize=None)
+@cache
 def first_sphere_targets(
     path: str = DONOR_DISTANCE_PATH,
 ) -> Mapping[tuple[str, str], float]:

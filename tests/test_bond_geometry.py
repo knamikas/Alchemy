@@ -6,7 +6,8 @@ import math
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence, cast
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 import gemmi
 import pytest
@@ -101,7 +102,7 @@ def _probe_structure(
     metal: str = "ZN",
     probe_index: int = 1,
     chain_length: int = 3,
-    metal_kwargs: Optional[Mapping[str, Any]] = None,
+    metal_kwargs: Mapping[str, Any] | None = None,
 ) -> str:
     """A metal at the origin that only residue ``probe_index`` of chain A reaches.
 
@@ -132,7 +133,7 @@ def _probe_structure(
 
 
 def _analyze(
-    path: str, *, data_json: Optional[str] = None, resolution: float = 1.50
+    path: str, *, data_json: str | None = None, resolution: float = 1.50
 ) -> _AnalysisResult:
     """Run the real bond analysis on ``path`` and return its four outputs."""
     context = load_structure("test", path)
@@ -233,20 +234,52 @@ def _only(rows: Sequence[dict[str, Any]], atom_name: str) -> dict[str, Any]:
     return matches[0]
 
 
-class _StubAtom:
-    """Minimal stand-in for an analysis atom, for pure-function tests."""
+def _atom_site(
+    element: str,
+    residue_name: str = "",
+    atom_name: str = "",
+    is_water: bool = False,
+) -> AtomSite:
+    """Build a real ``AtomSite`` for pure-function tests.
 
-    def __init__(
-        self,
-        element: str,
-        residue_name: str = "",
-        atom_name: str = "",
-        is_water: bool = False,
-    ) -> None:
-        self.element = element
-        self.residue_name = residue_name
-        self.atom_name = atom_name
-        self.is_water = is_water
+    Only the chemistry fields matter here; the identity and occupancy fields
+    are filled with a single neutral deposited record so the object under test
+    is the production dataclass rather than a stand-in.
+    """
+    gemmi_atom = gemmi.Atom()
+    gemmi_atom.name = atom_name
+    gemmi_atom.element = gemmi.Element(element)
+    gemmi_atom.pos = gemmi.Position(0.0, 0.0, 0.0)
+    gemmi_atom.occ = 1.0
+    return AtomSite(
+        pdb_id="test",
+        model_index=0,
+        model_id="1",
+        chain_index=0,
+        chain_id="A",
+        residue_index=0,
+        residue_name=residue_name,
+        coordinate_residue_name=residue_name,
+        residue_number=1,
+        insertion_code="",
+        resnum="1",
+        atom_index=0,
+        source_order=0,
+        atom_name=atom_name,
+        altloc="",
+        element=element,
+        element_known=True,
+        occupancy=1.0,
+        occupancy_valid=True,
+        occupancy_status="valid",
+        serial=1,
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        is_water=is_water,
+        is_hydrogen=element in ("H", "D"),
+        gemmi_atom=gemmi_atom,
+    )
 
 
 def _parse_reference_table(
@@ -692,15 +725,14 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
 ) -> None:
     """An exact reference sets target = mu and cutoff = mu + 0.75 A."""
     # ``_first_sphere_rule`` reads only element, residue name, atom name and
-    # water flag, so the stub stands in for the dataclass it is typed against.
-    stub_metal = cast(AtomSite, _StubAtom(metal))
-    neighbor = cast(
-        AtomSite,
-        _StubAtom(element, residue_name=residue, atom_name=atom, is_water=is_water),
+    # water flag, so the remaining fields carry neutral values.
+    metal_site = _atom_site(metal)
+    neighbor = _atom_site(
+        element, residue_name=residue, atom_name=atom, is_water=is_water
     )
     mu = reference_data.literature_distances()[expected_key][0]
 
-    target, cutoff, kind, key = ba._first_sphere_rule(stub_metal, neighbor)
+    target, cutoff, kind, key = ba._first_sphere_rule(metal_site, neighbor)
 
     assert kind == "exact"
     assert key == ":".join(expected_key)
@@ -718,15 +750,15 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     the table (water, 2.09 A). The kind is flagged because a fallback target
     may not be used for a z-score.
     """
-    stub_metal = cast(AtomSite, _StubAtom("ZN"))
-    neighbor = cast(AtomSite, _StubAtom("O", residue_name="ASN", atom_name="OD1"))
+    metal_site = _atom_site("ZN")
+    neighbor = _atom_site("O", residue_name="ASN", atom_name="OD1")
     widest_zn_o = max(
         mu
         for (_, atom, metal), (mu, _sd) in reference_data.literature_distances().items()
         if metal == "ZN" and atom == "O"
     )
 
-    target, cutoff, kind, key = ba._first_sphere_rule(stub_metal, neighbor)
+    target, cutoff, kind, key = ba._first_sphere_rule(metal_site, neighbor)
 
     assert kind == "element_fallback"
     assert key == "*:O:ZN"
@@ -1061,7 +1093,7 @@ def _atom_count_structure(
     cell_edge: float = 60.0,
     spacegroup: str = "P 1",
     occupancy: float = 1.0,
-    donor_distance: Optional[float] = None,
+    donor_distance: float | None = None,
 ) -> str:
     """A Zn plus waters totalling exactly ``atom_count`` non-hydrogen atoms.
 
@@ -1114,8 +1146,8 @@ def _dpi_details(
     spacegroup: str = "P 1",
     resolution: float = 1.50,
     occupancy: float = 1.0,
-    pdb_path: Optional[str] = None,
-    mtz_path: Optional[str] = None,
+    pdb_path: str | None = None,
+    mtz_path: str | None = None,
     name: str = "dpi",
 ) -> _DpiRun:
     """``_calculate_dpi_details`` over a structure with known ni and va.
@@ -1474,7 +1506,7 @@ def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path: Path) -> Non
     ],
 )
 def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(
-    tmp_path: Path, content: Optional[str]
+    tmp_path: Path, content: str | None
 ) -> None:
     """No cell or no space group means no volume -- and NaN, not a guess.
 
@@ -1559,7 +1591,7 @@ def test_rfree_takes_the_first_matching_line(tmp_path: Path) -> None:
     ],
 )
 def test_rfree_is_nan_when_absent_or_malformed(
-    tmp_path: Path, content: Optional[str]
+    tmp_path: Path, content: str | None
 ) -> None:
     """A header that does not state a usable R-free yields NaN, never 0.0.
 
@@ -1869,7 +1901,7 @@ def test_assessed_geometry_columns_are_complementary_booleans(tmp_path: Path) ->
 
 
 def _bidentate(
-    tmp_path: Path, name: str, d1: float, d2: float, *, data_json: Optional[str] = None
+    tmp_path: Path, name: str, d1: float, d2: float, *, data_json: str | None = None
 ) -> _AnalysisResult:
     """Asp chelating a Zn through both carboxylate oxygens."""
     path = _probe_structure(

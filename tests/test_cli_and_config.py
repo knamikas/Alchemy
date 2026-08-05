@@ -14,7 +14,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, Optional, Sequence
+from typing import Any, NoReturn
+from collections.abc import Sequence
 
 import pytest
 
@@ -426,7 +427,7 @@ def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(
     ``git`` only stamps the run log, so a stuck index lock must not take the
     analysis with it.
     """
-    calls: list[Optional[float]] = []
+    calls: list[float | None] = []
 
     def fake_run(cmd: Sequence[str], **kwargs: Any) -> NoReturn:
         timeout = kwargs.get("timeout")

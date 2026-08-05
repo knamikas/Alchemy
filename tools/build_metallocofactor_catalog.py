@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
@@ -415,7 +415,7 @@ def rebuild_catalog(output_dir: str, ccd_path: str | None = None) -> dict[str, o
         counts = build_metallocofactors_list(prepared_ccd, temporary_catalog)
         catalog_hash = _sha256(temporary_catalog)
         metadata: dict[str, object] = {
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": datetime.now(UTC).isoformat(),
             "ccd_source": ccd_provenance["source"],
             "ccd_sha256": _sha256(prepared_ccd),
             "ccd_compressed_sha256": ccd_provenance.get("compressed_sha256"),

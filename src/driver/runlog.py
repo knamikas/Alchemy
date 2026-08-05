@@ -12,8 +12,9 @@ import shutil
 import tempfile
 import time
 from collections import Counter
-from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from datetime import datetime, UTC
+from typing import Any
+from collections.abc import Mapping
 
 from driver.resources import available_cpu_count, available_memory_bytes
 
@@ -27,7 +28,7 @@ DEFAULT_LOG_DIRNAME = "logs"
 
 def log_dir_for(args: argparse.Namespace) -> str:
     """Return the directory this run writes its log to."""
-    log_dir: Optional[str] = args.log_dir
+    log_dir: str | None = args.log_dir
     output_dir: str = args.output_dir
     return log_dir or os.path.join(output_dir, DEFAULT_LOG_DIRNAME)
 
@@ -98,7 +99,7 @@ class _RunLog:
     def __init__(self, args: argparse.Namespace, command: str) -> None:
         self.args = args
         self.command = command
-        self.started_at = datetime.now(timezone.utc)
+        self.started_at = datetime.now(UTC)
         self.started_monotonic = time.monotonic()
         # The driver records whatever a stage learned about itself here, so the
         # values are as heterogeneous as the stages that supply them.
@@ -324,7 +325,7 @@ class _RunLog:
         """Write the final timestamped log without overwriting and return its path."""
         directory = log_dir_for(self.args)
         os.makedirs(directory, exist_ok=True)
-        finished_at = datetime.now(timezone.utc)
+        finished_at = datetime.now(UTC)
         elapsed_s = time.monotonic() - self.started_monotonic
         run_date = self.started_at.strftime("%Y%m%d")
         log_stem = f"alchemy_run_{run_date}"

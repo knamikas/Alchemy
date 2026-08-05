@@ -16,13 +16,10 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from typing import Callable
-from typing import List
-from typing import Mapping
+from collections.abc import Callable
+from collections.abc import Mapping
 from typing import NamedTuple
-from typing import Optional
-from typing import Sequence
-from typing import Union
+from collections.abc import Sequence
 from typing import cast
 
 import gemmi
@@ -109,8 +106,8 @@ def _manual_entry(
     monkeypatch: pytest.MonkeyPatch,
     density_stage: Callable[..., Any],
     *,
-    structure_builder: Optional[helpers.StructureBuilder] = None,
-    pdb_transform: Optional[Callable[[Path], None]] = None,
+    structure_builder: helpers.StructureBuilder | None = None,
+    pdb_transform: Callable[[Path], None] | None = None,
     bonds: bool = False,
     **cfg_overrides: Any,
 ) -> worker.EntryResult:
@@ -398,7 +395,7 @@ def test_an_unanticipated_failure_logs_its_traceback(
 def _write_manifest(
     path: Path,
     rows: Sequence[Mapping[str, str]],
-    columns: Optional[Sequence[str]] = None,
+    columns: Sequence[str] | None = None,
 ) -> str:
     """Write a manifest CSV with the real schema and the given partial rows."""
     columns = list(columns if columns is not None else MANIFEST_COLUMNS)
@@ -410,11 +407,11 @@ def _write_manifest(
     return str(path)
 
 
-def _manifest_ids(path: Union[str, Path], **kwargs: Any) -> set[str]:
+def _manifest_ids(path: str | Path, **kwargs: Any) -> set[str]:
     return resume.load_done(str(path), **kwargs)
 
 
-def _read_csv(path: Union[str, Path]) -> list[list[str]]:
+def _read_csv(path: str | Path) -> list[list[str]]:
     with open(path, newline="") as handle:
         return list(csv.reader(handle))
 
@@ -424,16 +421,20 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 ) -> None:
     """A crashed geometry stage is not legitimate density-only evidence."""
     result = _result()
-    inputs = cast(
-        worker._EntryInputs,
-        SimpleNamespace(
-            data_json=None,
-            pdb="/nonexistent/entry.pdb",
-            mtz="/nonexistent/entry.mtz",
-            data_reshi=2.0,
-            source_coordinate_path="/nonexistent/entry.cif",
-        ),
+    inputs = worker._EntryInputs(
+        work_dir="/nonexistent",
+        mtz="/nonexistent/entry.mtz",
+        pdb="/nonexistent/entry.pdb",
+        data_json=None,
+        data_reshi=2.0,
+        map_reslo=50.0,
+        map_reshi=2.0,
+        pdb_redo_is_twin=False,
+        source_coordinate_path="/nonexistent/entry.cif",
     )
+    # A real ``StructureContext`` only comes from parsing a file on disk, which
+    # this test has no use for: the bond stage fails before reading anything
+    # but the warning codes it carries forward.
     structure = cast(
         structure_analysis.StructureContext, SimpleNamespace(warning_codes=[])
     )
@@ -494,12 +495,7 @@ class TestNoRecognizedMetalOutcome:
         assert result.no_metals is False
         assert "unknown_elements" in result.warning_codes
         assert result.confidence_inputs_missing_reason == "metal_presence_indeterminate"
-        assert (
-            pool._confidence_rows_for(
-                result, cast(pool._ConfidencePlan, SimpleNamespace(reference=None))
-            )
-            == []
-        )
+        assert pool._confidence_rows_for(result, pool._ConfidencePlan()) == []
 
     def test_known_nonmetal_structure_remains_an_authoritative_negative(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -581,15 +577,15 @@ _CIF_HEADER_NO_OCCUPANCY = _CIF_HEADER.replace("_atom_site.occupancy\n", "")
 
 
 def _cif_atom(
-    serial: Union[int, str],
+    serial: int | str,
     element: str,
     atom_name: str,
     comp_id: str,
     label_asym: str,
     entity: int,
-    label_seq: Union[int, str],
+    label_seq: int | str,
     xyz: tuple[float, float, float],
-    occupancy: Optional[str],
+    occupancy: str | None,
     auth_seq: int,
     auth_asym: str,
     group: str = "ATOM",
@@ -626,7 +622,7 @@ def _write_cif(path: Path, atom_lines: Sequence[str], header: str = _CIF_HEADER)
     return str(path)
 
 
-def _pdb_atom_lines(path: Union[str, Path]) -> list[str]:
+def _pdb_atom_lines(path: str | Path) -> list[str]:
     with open(path) as handle:
         return [
             line for line in handle if line[:6].strip().upper() in ("ATOM", "HETATM")
@@ -1178,7 +1174,7 @@ class TestInitialResult:
         ],
     )
     def test_refinement_state_reflects_manual_inputs(
-        self, manual_inputs: Optional[dict[str, Optional[str]]], expected: str
+        self, manual_inputs: dict[str, str | None] | None, expected: str
     ) -> None:
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
         result = worker._initial_result("109m", CFG, manual_inputs)
@@ -1419,10 +1415,10 @@ class TestResumeStaging:
 
     def _outputs(self, output_dir: Path, confidence: bool = False) -> tuple[str, ...]:
         """Create the four (or five) output CSVs with two entries' rows."""
-        names: List[str] = list(self.TARGET_NAMES)
+        names: list[str] = list(self.TARGET_NAMES)
         if confidence:
             names.append("confidence_inputs_all.csv")
-        paths: List[str] = []
+        paths: list[str] = []
         for name in names:
             path = output_dir / name
             with open(path, "w", newline="") as handle:
@@ -1526,16 +1522,15 @@ class TestResumeStaging:
             raise KeyboardInterrupt
 
         monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
-        args = cast(
-            argparse.Namespace,
-            SimpleNamespace(resume=True, bonds=True, output_dir=str(output_dir)),
-        )
-        run_log = cast(_RunLog, SimpleNamespace(summary={}))
+        args = argparse.Namespace(resume=True, bonds=True, output_dir=str(output_dir))
+        run_log = _RunLog(args, "pytest")
 
         with pytest.raises(KeyboardInterrupt):
             driver_pool._process_entries(
                 args,
                 ["bbbb", "cccc"],
+                # ``None`` proves the halted-batch path never reaches the worker
+                # configuration: ``_dispatch_entries`` is replaced above.
                 cast(worker.WorkerConfig, None),
                 1,
                 layout,
@@ -1559,17 +1554,13 @@ class TestResumeStaging:
         confidence: bool = False,
     ) -> dict[str, Any]:
         """Run the halted-resume path and return the run-log summary."""
-        summary: dict[str, Any] = {}
-        driver_pool._keep_completed_staging(
-            staging,
-            cast(
-                argparse.Namespace,
-                SimpleNamespace(bonds=bonds, output_dir=str(tmp_path)),
-            ),
-            cast(driver_pool._ConfidencePlan, SimpleNamespace(enabled=confidence)),
-            cast(_RunLog, SimpleNamespace(summary=summary)),
-        )
-        return summary
+        args = argparse.Namespace(bonds=bonds, output_dir=str(tmp_path))
+        plan = driver_pool._ConfidencePlan()
+        # ``enabled`` is derived from the mode, which is what a scoring run sets.
+        plan.mode = "reference" if confidence else None
+        run_log = _RunLog(args, "pytest")
+        driver_pool._keep_completed_staging(staging, args, plan, run_log)
+        return run_log.summary
 
     def test_an_interrupted_resume_keeps_the_entries_it_completed(
         self, tmp_path: Path
@@ -1845,7 +1836,7 @@ class TestOutputWriters:
         tmp_path: Path,
         bonds: bool = True,
         candidates: bool = True,
-        confidence: Optional[bool] = None,
+        confidence: bool | None = None,
     ) -> _Handles:
         return _Handles(
             manifest=open(tmp_path / "manifest.csv", "w", newline=""),
@@ -2191,7 +2182,7 @@ class TestScheduleEntries:
             "max_pdbs": None,
         }
         fields.update(overrides)
-        return cast(argparse.Namespace, SimpleNamespace(**fields))
+        return argparse.Namespace(**fields)
 
     @staticmethod
     def _manifest(tmp_path: Path, done_ids: Sequence[str]) -> Path:
@@ -2208,7 +2199,7 @@ class TestScheduleEntries:
     def _schedule(
         self, tmp_path: Path, args: argparse.Namespace
     ) -> tuple[list[str], _RunLog]:
-        run_log = cast(_RunLog, SimpleNamespace(details={}))
+        run_log = _RunLog(args, "pytest")
         layout = pool._OutputLayout(str(tmp_path))
         ids, _root, _manual = pool._schedule_entries(
             args, layout, str(tmp_path), run_log
@@ -2247,6 +2238,12 @@ class TestWriteEntry:
     """
 
     class _RecordingWriters:
+        """Records the writer calls in order, which is what is under test.
+
+        The real ``_OutputWriters`` writes files and remembers nothing, so the
+        casts below carry this recorder into the precisely-typed parameter.
+        """
+
         def __init__(self) -> None:
             self.calls: list[str] = []
 
@@ -2260,7 +2257,7 @@ class TestWriteEntry:
     def _args(**overrides: Any) -> argparse.Namespace:
         fields: dict[str, Any] = {"resume": False, "bonds": True}
         fields.update(overrides)
-        return cast(argparse.Namespace, SimpleNamespace(**fields))
+        return argparse.Namespace(**fields)
 
     def test_the_manifest_row_is_written_after_every_data_row(self) -> None:
         writers = self._RecordingWriters()
@@ -2282,6 +2279,8 @@ class TestWriteEntry:
 
     def test_a_staged_entry_is_registered_for_replacement(self) -> None:
         """Staging replaces rows by id, so every written entry must be listed."""
+        # A real ``_ResumeStaging`` would create a scratch directory to hold
+        # rows nothing here writes; registration touches only the id set.
         staging = cast(resume._ResumeStaging, SimpleNamespace(replacement_ids=set()))
         pool._write_entry(
             _result(),
@@ -2313,7 +2312,7 @@ class TestProgressReporter:
 
     def _reporter(
         self, terminal: bool, clock: Callable[[], float]
-    ) -> tuple[_ProgressReporter, "TestProgressReporter._Stream"]:
+    ) -> tuple[_ProgressReporter, TestProgressReporter._Stream]:
         stream = self._Stream(terminal)
         return _ProgressReporter(total=10, stream=stream, clock=clock), stream
 
@@ -2350,10 +2349,7 @@ class TestRunLog:
         self, tmp_path: Path
     ) -> None:
         """One log per invocation accumulates; the four result CSVs do not."""
-        args = cast(
-            argparse.Namespace,
-            SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1),
-        )
+        args = argparse.Namespace(output_dir=str(tmp_path), log_dir=None, workers=1)
 
         path = _RunLog(args, "pytest").write(0)
 
@@ -2362,11 +2358,8 @@ class TestRunLog:
 
     def test_an_explicit_log_dir_is_used_as_given(self, tmp_path: Path) -> None:
         elsewhere = tmp_path / "shared-logs"
-        args = cast(
-            argparse.Namespace,
-            SimpleNamespace(
-                output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
-            ),
+        args = argparse.Namespace(
+            output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
         )
 
         path = _RunLog(args, "pytest").write(0)
@@ -2377,10 +2370,7 @@ class TestRunLog:
     @staticmethod
     def _log(tmp_path: Path, runtimes: Sequence[float]) -> _RunLog:
         run_log = _RunLog(
-            cast(
-                argparse.Namespace,
-                SimpleNamespace(output_dir=str(tmp_path), log_dir=None, workers=1),
-            ),
+            argparse.Namespace(output_dir=str(tmp_path), log_dir=None, workers=1),
             "pytest",
         )
         for index, runtime in enumerate(runtimes):
@@ -2695,15 +2685,7 @@ class TestCifToPdb:
         # Source struct_conn partners resolve through the same provenance,
         # without reproducing the packed numbering.
         source = gemmi.read_structure(cif)
-        source_chain = next(chain for chain in source[0] if chain.name == "A")
-        source_residue = source_chain[0]
-        source_atom = source_residue[0]
-        cra = cast(
-            gemmi.CRA,
-            SimpleNamespace(
-                chain=source_chain, residue=source_residue, atom=source_atom
-            ),
-        )
+        cra = next(item for item in source[0].all() if item.chain.name == "A")
         resolved = declared_connections._analysis_atom_for_partner(context, cra, {})
         assert resolved is not None
         assert resolved.chain_id == "A"
@@ -3189,12 +3171,12 @@ class TestLeakedWorkDirectorySweep:
         A per-entry directory is otherwise removed only on the normal
         completion path, and holds that entry's maps.
         """
-        entry: Union[str, Path] = output_lock.create_owned_scratch_directory(
+        entry: str | Path = output_lock.create_owned_scratch_directory(
             str(tmp_path), prefix=".alchemy-109m-", kind="entry"
         )
         entry = tmp_path / os.path.basename(entry)
         (entry / "2mFo-DFc.map").write_text("stale", encoding="utf-8")
-        staging: Union[str, Path] = output_lock.create_owned_scratch_directory(
+        staging: str | Path = output_lock.create_owned_scratch_directory(
             str(tmp_path), prefix=".alchemy-resume-", kind="resume"
         )
         staging = tmp_path / os.path.basename(staging)
@@ -3316,7 +3298,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
-    leaked: Union[str, Path] = output_lock.create_owned_scratch_directory(
+    leaked: str | Path = output_lock.create_owned_scratch_directory(
         str(output_dir), prefix=".alchemy-109m-", kind="entry"
     )
     leaked = output_dir / os.path.basename(leaked)

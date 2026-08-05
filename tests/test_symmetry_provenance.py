@@ -26,8 +26,8 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Sequence, Tuple, Union, cast
+from typing import Any
+from collections.abc import Callable, Sequence
 
 import pytest
 
@@ -46,19 +46,19 @@ from helpers import StructureBuilder, simple_metal_site
 # Every edge is short enough that a donor deposited on the far side of the box
 # has an image inside the metal's first coordination sphere, which is what makes
 # the symmetry branch fire at all.
-SMALL_CELL: Tuple[float, ...] = (20.0, 20.0, 20.0, 90.0, 90.0, 90.0)
+SMALL_CELL: tuple[float, ...] = (20.0, 20.0, 20.0, 90.0, 90.0, 90.0)
 
 # Roomy enough that no crystallographic image of a donor reaches a metal near
 # its centre, so any generated contact here comes from strict NCS.
-ROOMY_CELL: Tuple[float, ...] = helpers.DEFAULT_CELL
+ROOMY_CELL: tuple[float, ...] = helpers.DEFAULT_CELL
 
-NCS_SHIFT: Tuple[float, float, float] = (-6.0, 0.0, 0.0)
+NCS_SHIFT: tuple[float, float, float] = (-6.0, 0.0, 0.0)
 
 
 def _write_structure(
     builder: StructureBuilder,
-    path: Union[str, Path],
-    ncs: Sequence[Tuple[str, Tuple[float, float, float]]] = (),
+    path: str | Path,
+    ncs: Sequence[tuple[str, tuple[float, float, float]]] = (),
 ) -> str:
     """Write ``builder`` as PDB, optionally with MTRIX strict-NCS operators.
 
@@ -82,10 +82,10 @@ class _Analysis:
     def __init__(
         self,
         context: sa.StructureContext,
-        rows: List[Dict[str, Any]],
-        candidates: List[Dict[str, Any]],
-        summaries: Dict[Tuple[int, int, int, int], Dict[str, Any]],
-        metadata: Dict[str, Any],
+        rows: list[dict[str, Any]],
+        candidates: list[dict[str, Any]],
+        summaries: dict[tuple[int, int, int, int], dict[str, Any]],
+        metadata: dict[str, Any],
     ) -> None:
         self.context = context
         self.rows = rows
@@ -94,12 +94,12 @@ class _Analysis:
         self.metadata = metadata
 
     @property
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         assert len(self.summaries) == 1, "expected a one-metal structure"
         return next(iter(self.summaries.values()))
 
     @property
-    def metal_xyz(self) -> Tuple[float, float, float]:
+    def metal_xyz(self) -> tuple[float, float, float]:
         metals = self.context.metal_atoms(METAL_ELEMENTS, canonical=True)
         assert len(metals) == 1, "expected a one-metal structure"
         return metals[0].xyz
@@ -110,7 +110,7 @@ def _analyze(
     tmp_path: Path,
     name: str = "site",
     *,
-    ncs: Sequence[Tuple[str, Tuple[float, float, float]]] = (),
+    ncs: Sequence[tuple[str, tuple[float, float, float]]] = (),
     with_dpi: bool = False,
 ) -> _Analysis:
     """Write ``builder`` and run the real bond analysis over it.
@@ -136,7 +136,7 @@ def _analyze(
     return _Analysis(context, rows, candidates, summaries, metadata)
 
 
-def _transformed_position(row: Dict[str, Any]) -> Tuple[float, float, float]:
+def _transformed_position(row: dict[str, Any]) -> tuple[float, float, float]:
     return (
         row["transformed_neighbor_x"],
         row["transformed_neighbor_y"],
@@ -144,7 +144,50 @@ def _transformed_position(row: Dict[str, Any]) -> Tuple[float, float, float]:
     )
 
 
-def _cell_translation(row: Dict[str, Any]) -> Tuple[int, int, int]:
+def _deposited_neighbor() -> sa.AtomSite:
+    """One real deposited water record, for candidates built without a file.
+
+    The collapse groups by ``source_key`` and orders by the chain, residue and
+    atom indices, so a single neutral record is enough; the rest of the fields
+    are the values ``load_structure`` would produce for it.
+    """
+    gemmi_atom = gemmi.Atom()
+    gemmi_atom.name = "O"
+    gemmi_atom.element = gemmi.Element("O")
+    gemmi_atom.pos = gemmi.Position(0.0, 0.0, 0.0)
+    gemmi_atom.occ = 1.0
+    return sa.AtomSite(
+        pdb_id="test",
+        model_index=0,
+        model_id="1",
+        chain_index=0,
+        chain_id="A",
+        residue_index=0,
+        residue_name="HOH",
+        coordinate_residue_name="HOH",
+        residue_number=1,
+        insertion_code="",
+        resnum="1",
+        atom_index=0,
+        source_order=0,
+        atom_name="O",
+        altloc="",
+        element="O",
+        element_known=True,
+        occupancy=1.0,
+        occupancy_valid=True,
+        occupancy_status="valid",
+        serial=1,
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        is_water=True,
+        is_hydrogen=False,
+        gemmi_atom=gemmi_atom,
+    )
+
+
+def _cell_translation(row: dict[str, Any]) -> tuple[int, int, int]:
     return (
         row["cell_translation_x"],
         row["cell_translation_y"],
@@ -152,7 +195,7 @@ def _cell_translation(row: Dict[str, Any]) -> Tuple[int, int, int]:
     )
 
 
-def _decode_symmetry_code(code: str) -> Tuple[int, Tuple[int, int, int]]:
+def _decode_symmetry_code(code: str) -> tuple[int, tuple[int, int, int]]:
     """Split a ``N_klm`` symmetry code into its 1-based op number and shift.
 
     The three trailing digits are unit-cell translations offset by 5, the
@@ -167,9 +210,9 @@ def _decode_symmetry_code(code: str) -> Tuple[int, Tuple[int, int, int]]:
 def _apply_spacegroup_operation(
     context: sa.StructureContext,
     op_number: int,
-    translation: Tuple[int, int, int],
+    translation: tuple[int, int, int],
     deposited_xyz: Sequence[float],
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Independently rebuild an image position from the published provenance.
 
     Fractionalize the deposited coordinate, apply the ``op_number``-th
@@ -188,10 +231,10 @@ def _apply_spacegroup_operation(
 
 
 # ``(builder, MTRIX operators, deposited donor position)``
-_Case = Tuple[
+_Case = tuple[
     StructureBuilder,
-    Sequence[Tuple[str, Tuple[float, float, float]]],
-    Tuple[float, float, float],
+    Sequence[tuple[str, tuple[float, float, float]]],
+    tuple[float, float, float],
 ]
 
 
@@ -237,7 +280,7 @@ def _case_strict_ncs() -> _Case:
 
 
 # ``(factory, expected symmetry code, expected scope, crystallographic?)``
-SYMMETRY_CASES: List[Tuple[Callable[[], _Case], str, str, bool]] = [
+SYMMETRY_CASES: list[tuple[Callable[[], _Case], str, str, bool]] = [
     (_case_explicit, "1_555", "explicit", True),
     (_case_cell_edge, "1_455", "crystallographic", True),
     (_case_screw_axis, "2_555", "crystallographic", True),
@@ -261,7 +304,7 @@ CRYSTALLOGRAPHIC_CASES = [
 ]
 
 
-_CaseFixture = Tuple[_Analysis, Tuple[float, float, float], str, str, bool]
+_CaseFixture = tuple[_Analysis, tuple[float, float, float], str, str, bool]
 
 
 @pytest.fixture(params=SYMMETRY_CASES, ids=_CASE_IDS)
@@ -477,7 +520,7 @@ def _axis_site(offset: float, *, donor: str = "water") -> StructureBuilder:
 
 def _raw_and_deduplicated(
     context: sa.StructureContext,
-) -> Tuple[List[Candidate], List[Candidate]]:
+) -> tuple[list[Candidate], list[Candidate]]:
     """Return the pre- and post-collapse candidate lists for the one metal.
 
     ``_collect_proximal_candidates`` is the last stage that still holds one
@@ -583,15 +626,9 @@ def test_images_collapse_only_within_the_special_position_cutoff(
 
 def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse() -> None:
     """The published 0.8 A boundary is inclusive, not merely approximately so."""
-    # The collapse reads only these four attributes off the neighbor, so the
-    # stand-in stays a namespace rather than a full AtomSite, which would need a
-    # live gemmi.Atom; the cast records that the substitution is deliberate.
-    neighbor = cast(
-        sa.AtomSite,
-        SimpleNamespace(
-            source_key=(0, 0, 0, 0), chain_index=0, residue_index=0, atom_index=0
-        ),
-    )
+    # Both candidates below are images of the same deposited atom, which is
+    # what puts them in one collapse group.
+    neighbor = _deposited_neighbor()
 
     def candidate(x: float, *, symmetry: bool) -> Candidate:
         return Candidate(

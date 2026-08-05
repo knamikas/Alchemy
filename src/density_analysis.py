@@ -14,7 +14,7 @@ import time
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import IO, Any, Optional
+from typing import IO, Any
 
 import gemmi
 import numpy as np
@@ -61,7 +61,7 @@ class DensityResult:
     mtzfix_applied: bool
     timings: dict[str, Any]
     twin_coefficient_normalization_applied: bool
-    twin_coefficient_normalization: Optional[dict[str, Any]]
+    twin_coefficient_normalization: dict[str, Any] | None
     density_map_scope_requested: str
     density_map_scope_used: str
     full_map_bytes: int
@@ -72,7 +72,7 @@ class MtzfixValidationError(RuntimeError):
     """MTZFIX could not make map coefficients pass its consistency checks."""
 
     def __init__(
-        self, message: str, timings: Optional[Mapping[str, float]] = None
+        self, message: str, timings: Mapping[str, float] | None = None
     ) -> None:
         super().__init__(message)
         self.timings = dict(timings or {})
@@ -87,7 +87,7 @@ class Ccp4ToolTimeoutError(RuntimeError):
         timeout_s: float,
         elapsed_s: float,
         log_path: str,
-        timings: Optional[Mapping[str, float]] = None,
+        timings: Mapping[str, float] | None = None,
     ) -> None:
         super().__init__(
             f"{tool} exceeded its {timeout_s:g}s time budget "
@@ -306,7 +306,7 @@ def run_density_analysis(
     out_dir: str,
     reslo: float,
     reshi: float,
-    env: Optional[Mapping[str, str]] = None,
+    env: Mapping[str, str] | None = None,
     map_scope: str = "model-envelope",
     keep_full_maps: bool = False,
     pdb_redo_is_twin: bool = False,
@@ -337,7 +337,7 @@ def run_density_analysis(
 
     def _run(
         cmd: Sequence[str],
-        stdin: Optional[str],
+        stdin: str | None,
         logname: str,
         timing_name: str,
         timeout_s: float = tool_timeout_s,

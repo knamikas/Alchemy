@@ -21,7 +21,6 @@ import sys
 import tomllib
 import zipfile
 from pathlib import Path
-from typing import Set
 
 import pytest
 
@@ -91,7 +90,7 @@ def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
     )
 
 
-def _declared_dependencies() -> Set[str]:
+def _declared_dependencies() -> set[str]:
     """Distribution names in ``[project.dependencies]``, lowercased."""
     with open(PYPROJECT_PATH, "rb") as handle:
         project = tomllib.load(handle)["project"]
@@ -101,14 +100,14 @@ def _declared_dependencies() -> Set[str]:
     }
 
 
-def _documented_dependencies() -> Set[str]:
+def _documented_dependencies() -> set[str]:
     """Distribution names the README tells a reader to install.
 
     ``pip install .`` delegates to ``pyproject.toml`` and so covers every
     declared dependency by construction.
     """
     readme = _read(README_PATH)
-    documented: Set[str] = set()
+    documented: set[str] = set()
     for command in re.findall(r"python -m pip install ([^\n]+)", readme):
         if re.match(r"^\.\s*$", command):
             return _declared_dependencies()
@@ -120,14 +119,14 @@ def _documented_dependencies() -> Set[str]:
     return documented
 
 
-def _local_module_names() -> Set[str]:
+def _local_module_names() -> set[str]:
     """Every name ``src/`` itself provides: flat modules and sub-packages.
 
     ``src`` is on ``sys.path`` rather than being a package, so a sub-package is
     a top-level import name too, and omitting it here would report Alchemy's
     own modules as undeclared distributions.
     """
-    local: Set[str] = set()
+    local: set[str] = set()
     for name in os.listdir(SRC_DIR):
         path = os.path.join(SRC_DIR, name)
         if name.endswith(".py"):
@@ -147,9 +146,9 @@ def _source_files() -> list[str]:
     return sorted(found)
 
 
-def _third_party_imports() -> Set[str]:
+def _third_party_imports() -> set[str]:
     """Distributions imported by ``src/``, whether at module or function scope."""
-    found: Set[str] = set()
+    found: set[str] = set()
     local = _local_module_names()
     for path in _source_files():
         tree = ast.parse(_read(path))
@@ -446,14 +445,14 @@ def _output_prose() -> str:
     return "".join(_read(path) for path in DOC_PATHS if "tests" not in path)
 
 
-def _declared_cli_flags() -> Set[str]:
+def _declared_cli_flags() -> set[str]:
     """Every ``--flag`` ``src/cli.py`` accepts, read from the source.
 
     The parser is built inside ``parse_args`` and not returned, so it is read
     statically rather than constructed.
     """
     tree = ast.parse(_read(os.path.join(SRC_DIR, "cli.py")))
-    flags: Set[str] = set()
+    flags: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == (
             "add_argument"
@@ -505,7 +504,7 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
 
-    known: Set[str] = set()
+    known: set[str] = set()
     for columns in (
         MANIFEST_COLUMNS,
         STATS_COLUMNS,

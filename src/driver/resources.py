@@ -7,7 +7,8 @@ environment exists.
 import os
 import sys
 from multiprocessing import cpu_count
-from typing import Callable, Optional, cast
+from typing import cast
+from collections.abc import Callable
 
 
 # Peak resident memory to budget for one worker, measured against the largest
@@ -26,7 +27,7 @@ def available_cpu_count() -> int:
     # ``getattr`` is the only way to reach a 3.13+ probe from a 3.11 floor, and
     # it erases the signature the standard library documents.
     process_cpu_count = cast(
-        Optional[Callable[[], Optional[int]]],
+        Callable[[], int | None] | None,
         getattr(os, "process_cpu_count", None),  # Python 3.13+
     )
     if process_cpu_count is not None:
@@ -46,7 +47,7 @@ def available_cpu_count() -> int:
         return 1
 
 
-def _read_linux_available_memory() -> Optional[int]:
+def _read_linux_available_memory() -> int | None:
     try:
         with open(PROC_MEMINFO_PATH, encoding="ascii") as handle:
             for line in handle:
@@ -57,7 +58,7 @@ def _read_linux_available_memory() -> Optional[int]:
     return None
 
 
-def available_memory_bytes() -> Optional[int]:
+def available_memory_bytes() -> int | None:
     """Return memory currently available to this process, or ``None``.
 
     This reports what the *machine* has free. A cgroup memory limit -- which is
@@ -112,11 +113,11 @@ def available_memory_bytes() -> Optional[int]:
     return None
 
 
-def automatic_worker_limits() -> tuple[int, Optional[int]]:
+def automatic_worker_limits() -> tuple[int, int | None]:
     """Return the CPU and optional memory limits for automatic parallelism."""
     cpu_limit = max(1, available_cpu_count() - 2)
     available_memory = available_memory_bytes()
-    memory_limit: Optional[int] = None
+    memory_limit: int | None = None
     if available_memory is not None:
         memory_limit = max(1, available_memory // AUTO_WORKER_MEMORY_BYTES)
     return cpu_limit, memory_limit

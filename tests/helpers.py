@@ -17,15 +17,8 @@ from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
 )
+from collections.abc import Iterable, Mapping, Sequence
 
 import gemmi
 
@@ -39,15 +32,15 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(REPO_ROOT, "src")
 
-Vec3 = Tuple[float, float, float]
+Vec3 = tuple[float, float, float]
 
 # Callers pass ``tmp_path / "name"`` as readily as a plain string; every writer
 # below stringifies its argument.
-_StrPath = Union[str, os.PathLike[str]]
+_StrPath = str | os.PathLike[str]
 
 # ``P 21 21 21`` gives four symmetry operations, so symmetry search is available
 # and image contacts are exercised.
-DEFAULT_CELL: Tuple[float, float, float, float, float, float] = (
+DEFAULT_CELL: tuple[float, float, float, float, float, float] = (
     60.0,
     70.0,
     80.0,
@@ -62,7 +55,7 @@ DEFAULT_SPACEGROUP = "P 21 21 21"
 DEFAULT_RESIDUE_ORIGIN: Vec3 = (20.0, 20.0, 20.0)
 
 # Unit directions spreading donors around a metal, ordered octahedrally.
-DONOR_DIRECTIONS: Tuple[Vec3, ...] = (
+DONOR_DIRECTIONS: tuple[Vec3, ...] = (
     (1.0, 0.0, 0.0),
     (-1.0, 0.0, 0.0),
     (0.0, 1.0, 0.0),
@@ -98,9 +91,9 @@ STANDARD_AMINO_ACIDS = frozenset(
 
 WATER_NAMES = frozenset(("HOH", "WAT", "DOD", "H2O"))
 
-_BACKBONE_ATOMS: Tuple[str, ...] = ("N", "CA", "C", "O")
+_BACKBONE_ATOMS: tuple[str, ...] = ("N", "CA", "C", "O")
 
-_SIDE_CHAIN_ATOMS: Dict[str, Tuple[str, ...]] = {
+_SIDE_CHAIN_ATOMS: dict[str, tuple[str, ...]] = {
     "ALA": ("CB",),
     "ARG": ("CB", "CG", "CD", "NE", "CZ", "NH1", "NH2"),
     "ASN": ("CB", "CG", "OD1", "ND2"),
@@ -123,7 +116,7 @@ _SIDE_CHAIN_ATOMS: Dict[str, Tuple[str, ...]] = {
     "VAL": ("CB", "CG1", "CG2"),
 }
 
-_BACKBONE_OFFSETS: Dict[str, Vec3] = {
+_BACKBONE_OFFSETS: dict[str, Vec3] = {
     "N": (0.000, 0.000, 0.000),
     "CA": (1.458, 0.000, 0.000),
     "C": (2.009, 1.420, 0.000),
@@ -175,7 +168,7 @@ class AtomSpec:
     b_iso: float = 20.0
     charge: int = 0
 
-    def moved(self, pos: Vec3) -> "AtomSpec":
+    def moved(self, pos: Vec3) -> AtomSpec:
         return replace(self, pos=(float(pos[0]), float(pos[1]), float(pos[2])))
 
 
@@ -197,7 +190,7 @@ class ResidueSpec:
 
     name: str
     seqid: int
-    atoms: List[AtomSpec]
+    atoms: list[AtomSpec]
     het: bool = False
     icode: str = ""
     chain: str = ""
@@ -275,8 +268,8 @@ class StructureBuilder:
     def __init__(
         self,
         name: str = "TEST",
-        cell: Optional[Sequence[float]] = DEFAULT_CELL,
-        spacegroup: Optional[str] = DEFAULT_SPACEGROUP,
+        cell: Sequence[float] | None = DEFAULT_CELL,
+        spacegroup: str | None = DEFAULT_SPACEGROUP,
         resolution: float = 1.50,
         group_het: bool = True,
         setup_entities: bool = True,
@@ -287,9 +280,9 @@ class StructureBuilder:
         self.resolution = resolution
         self.group_het = group_het
         self.setup_entities = setup_entities
-        self._chain_order: List[str] = []
-        self._residues: List[ResidueSpec] = []
-        self.connections: List[ConnectionSpec] = []
+        self._chain_order: list[str] = []
+        self._residues: list[ResidueSpec] = []
+        self.connections: list[ConnectionSpec] = []
 
     def add_residue(self, residue: ResidueSpec, chain: str = "A") -> ResidueSpec:
         """Append an already-built :class:`ResidueSpec` to ``chain``."""
@@ -300,7 +293,7 @@ class StructureBuilder:
         return residue
 
     @property
-    def residues(self) -> Tuple[ResidueSpec, ...]:
+    def residues(self) -> tuple[ResidueSpec, ...]:
         return tuple(self._residues)
 
     def add_amino_acid(
@@ -309,13 +302,13 @@ class StructureBuilder:
         seqid: int,
         *,
         chain: str = "A",
-        positions: Optional[Mapping[str, Sequence[float]]] = None,
+        positions: Mapping[str, Sequence[float]] | None = None,
         origin: Sequence[float] = DEFAULT_RESIDUE_ORIGIN,
         occupancy: float = 1.0,
         altloc: str = "",
         icode: str = "",
         b_iso: float = 20.0,
-        atoms: Optional[Sequence[AtomSpec]] = None,
+        atoms: Sequence[AtomSpec] | None = None,
     ) -> ResidueSpec:
         """Add a standard amino-acid residue.
 
@@ -350,8 +343,8 @@ class StructureBuilder:
         chain: str = "B",
         pos: Sequence[float] = (0.0, 0.0, 0.0),
         occupancy: float = 1.0,
-        resname: Optional[str] = None,
-        atom_name: Optional[str] = None,
+        resname: str | None = None,
+        atom_name: str | None = None,
         altloc: str = "",
         icode: str = "",
         b_iso: float = 20.0,
@@ -436,9 +429,9 @@ class StructureBuilder:
     def add_conformers(
         self,
         residue: ResidueSpec,
-        conformers: Sequence[Tuple[str, float, Mapping[str, Sequence[float]]]],
+        conformers: Sequence[tuple[str, float, Mapping[str, Sequence[float]]]],
         *,
-        atom_names: Optional[Iterable[str]] = None,
+        atom_names: Iterable[str] | None = None,
     ) -> ResidueSpec:
         """Split atoms of ``residue`` into alternate conformers.
 
@@ -457,7 +450,7 @@ class StructureBuilder:
         )
         kept = [atom for atom in residue.atoms if atom.name not in selected]
         originals = [atom for atom in residue.atoms if atom.name in selected]
-        expanded: List[AtomSpec] = []
+        expanded: list[AtomSpec] = []
         for altloc, occupancy, positions in conformers:
             for atom in originals:
                 pos = (positions or {}).get(atom.name, atom.pos)
@@ -504,7 +497,7 @@ class StructureBuilder:
         self.connections.append(spec)
         return spec
 
-    def _ordered_residues(self, chain: str) -> List[ResidueSpec]:
+    def _ordered_residues(self, chain: str) -> list[ResidueSpec]:
         residues = [r for r in self._residues if r.chain == chain]
         if not self.group_het:
             return residues
@@ -546,7 +539,7 @@ class StructureBuilder:
         structure.make_mmcif_document().write_file(path)
         return path
 
-    def write(self, path: _StrPath, fmt: Optional[str] = None) -> str:
+    def write(self, path: _StrPath, fmt: str | None = None) -> str:
         """Write PDB or mmCIF, choosing the format from ``path``'s suffix."""
         path = str(path)
         if fmt is None:
@@ -568,7 +561,7 @@ class StructureBuilder:
         occupancy: float,
         altloc: str,
         b_iso: float,
-    ) -> List[AtomSpec]:
+    ) -> list[AtomSpec]:
         if resname not in _SIDE_CHAIN_ATOMS:
             raise ValueError(
                 f"{resname!r} has no bundled skeleton; pass atoms= explicitly"
@@ -600,11 +593,11 @@ class StructureBuilder:
 
 def _apply_positions(
     atoms: Sequence[AtomSpec],
-    positions: Optional[Mapping[str, Sequence[float]]],
+    positions: Mapping[str, Sequence[float]] | None,
     occupancy: float,
     altloc: str,
     b_iso: float,
-) -> List[AtomSpec]:
+) -> list[AtomSpec]:
     result = list(atoms)
     for name, pos in (positions or {}).items():
         pos = (float(pos[0]), float(pos[1]), float(pos[2]))
@@ -669,7 +662,7 @@ def _gemmi_address(ref: AtomRef) -> gemmi.AtomAddress:
 
 def simple_metal_site(
     metal: str = "ZN",
-    donors: Sequence[Tuple[str, str, float]] = (
+    donors: Sequence[tuple[str, str, float]] = (
         ("HIS", "NE2", 2.03),
         ("ASP", "OD1", 1.99),
         ("HOH", "O", 2.09),
@@ -728,7 +721,7 @@ def write_data_json(
     *,
     nrefcnt: object = 50000,
     rffin: object = 0.20,
-    properties: Optional[Mapping[str, object]] = None,
+    properties: Mapping[str, object] | None = None,
 ) -> str:
     """Write a PDB-REDO-style ``data.json`` for the DPI calculation.
 
@@ -738,7 +731,7 @@ def write_data_json(
     """
     import json
 
-    props: Dict[str, object] = {}
+    props: dict[str, object] = {}
     if nrefcnt is not None:
         props["NREFCNT"] = nrefcnt
     if rffin is not None:
@@ -751,11 +744,11 @@ def write_data_json(
 
 
 def dpi_inputs(
-    pdb_path: Optional[_StrPath] = None,
-    mtz_path: Optional[_StrPath] = None,
-    data_json: Optional[_StrPath] = None,
+    pdb_path: _StrPath | None = None,
+    mtz_path: _StrPath | None = None,
+    data_json: _StrPath | None = None,
     resolution: float = 1.50,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Build the ``dpi_inputs`` mapping ``run_bond_analysis`` expects.
 
     With no ``data_json`` the DPI is unavailable by construction and
@@ -772,7 +765,7 @@ def dpi_inputs(
 # Literal EDSTATS 1.0.9 ``stats.out`` residue-table header, transcribed rather
 # than imported from ``metal_identification`` so that a production reorder
 # cannot update both the generated input and its own oracle at once.
-EDSTATS_HEADER: Tuple[str, ...] = (
+EDSTATS_HEADER: tuple[str, ...] = (
     "RT",
     "CI",
     "RN",
@@ -816,11 +809,11 @@ EDSTATS_HEADER: Tuple[str, ...] = (
     "CP",
     "NR",
 )
-EDSTATS_METRICS: Tuple[str, ...] = EDSTATS_HEADER[3:39]
+EDSTATS_METRICS: tuple[str, ...] = EDSTATS_HEADER[3:39]
 EDSTATS_NULL = "n/a"
 
 
-def edstats_separator_row(model: int = 1, row_number: int = 1) -> List[str]:
+def edstats_separator_row(model: int = 1, row_number: int = 1) -> list[str]:
     """The row EDSTATS emits between MODEL/ENDMDL blocks: 39 fields, not 42."""
     return [
         "_",
@@ -836,12 +829,12 @@ def edstats_row(
     rn: object,
     *,
     mn: int = 1,
-    cp: Optional[str] = None,
+    cp: str | None = None,
     nr: int = 1,
-    metrics: Optional[Mapping[str, object]] = None,
+    metrics: Mapping[str, object] | None = None,
     default: object = 0.0,
     omit_cp: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Build one 42-field EDSTATS residue row as a list of strings.
 
     ``rt``/``ci``/``rn`` are the residue name, EDSTATS chain group and residue
@@ -890,12 +883,12 @@ def write_edstats(path: _StrPath, rows: Sequence[Sequence[str]], **kwargs: Any) 
 def edstats_rows_for_structure(
     context: StructureContext,
     *,
-    metrics: Optional[Mapping[str, object]] = None,
-    per_residue: Optional[Mapping[Tuple[str, str, str], Mapping[str, object]]] = None,
+    metrics: Mapping[str, object] | None = None,
+    per_residue: Mapping[tuple[str, str, str], Mapping[str, object]] | None = None,
     default: object = 0.0,
     model: int = 1,
     blank_chain_form: bool = False,
-) -> List[List[str]]:
+) -> list[list[str]]:
     """One EDSTATS row per residue of a loaded :class:`StructureContext`.
 
     Rows use each residue's coordinate name, chain and author residue number,
@@ -907,8 +900,8 @@ def edstats_rows_for_structure(
     it. Numbering it across the whole model instead would make every row of a
     multi-chain structure unrepresentative of real output.
     """
-    rows: List[List[str]] = []
-    chain_ordinals: Dict[str, int] = {}
+    rows: list[list[str]] = []
+    chain_ordinals: dict[str, int] = {}
     for residue in context.residues:
         rt, chain, resnum = residue.coordinate_author_key
         chain_ordinals[chain] = chain_ordinals.get(chain, 0) + 1
@@ -945,11 +938,11 @@ def stats_rows_for_structure(
     context: StructureContext,
     path: _StrPath,
     *,
-    pdb_id: Optional[str] = None,
-    metals: Optional[Iterable[str]] = None,
-    cofactors: Optional[Iterable[str]] = None,
+    pdb_id: str | None = None,
+    metals: Iterable[str] | None = None,
+    cofactors: Iterable[str] | None = None,
     **kwargs: Any,
-) -> Tuple[List[Dict[str, Any]], List[str], str]:
+) -> tuple[list[dict[str, Any]], list[str], str]:
     """Write a synthetic ``stats.out``, then parse it back with the real code.
 
     Returns ``(rows, header, stats_path)``, ready to hand to
@@ -970,10 +963,10 @@ def stats_rows_for_structure(
 
 
 CCP4_TOOLS = ("mtzfix", "fft", "mapmask", "edstats")
-_NETWORK_CACHE: Dict[Tuple[str, int], bool] = {}
+_NETWORK_CACHE: dict[tuple[str, int], bool] = {}
 
 
-def ccp4_env() -> Optional[Dict[str, str]]:
+def ccp4_env() -> dict[str, str] | None:
     """An environment with the CCP4 tools on PATH, or ``None``."""
     from ccp4_setup import ccp4_tools_available, find_ccp4_setup, resolve_env
 
@@ -1019,7 +1012,7 @@ def network_available(
     return _NETWORK_CACHE[key]
 
 
-def which(program: str, env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+def which(program: str, env: Mapping[str, str] | None = None) -> str | None:
     """``shutil.which`` against an explicit environment's PATH."""
     return shutil.which(program, path=(env or os.environ).get("PATH"))
 
@@ -1028,7 +1021,7 @@ def which(program: str, env: Optional[Mapping[str, str]] = None) -> Optional[str
 CACHE_ENV_VARS = ("ALCHEMY_TESTS_CACHE", "ALCHEMY_TEST_CACHE")
 
 
-def cache_dir_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+def cache_dir_from_env(env: Mapping[str, str] | None = None) -> str | None:
     """The configured PDB-REDO cache directory, or ``None`` if unset.
 
     Blank and whitespace-only values count as unset: ``ALCHEMY_TESTS_CACHE=``

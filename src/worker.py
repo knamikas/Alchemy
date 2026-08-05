@@ -18,7 +18,8 @@ import signal
 import time
 from dataclasses import dataclass, field
 from multiprocessing.queues import Queue, SimpleQueue
-from typing import Any, Collection, Dict, Mapping, Optional
+from typing import Any
+from collections.abc import Collection, Mapping
 
 from _version import __version__
 from coordination.analysis import run_bond_analysis
@@ -112,7 +113,7 @@ class WorkerConfig:
     mirror_root: str
     cache_root: str
     # Carries CCP4 on PATH, and is passed to every subprocess.
-    env: Dict[str, str]
+    env: dict[str, str]
     output_dir: str
     # CCD component ids treated as metal cofactors.
     cofactors: Collection[str]
@@ -126,7 +127,7 @@ class WorkerConfig:
     log_level: int
     allow_download: bool
     # The four explicit input paths of a manual run, or ``None`` for a batch.
-    manual_inputs: Optional[Dict[str, Optional[str]]]
+    manual_inputs: dict[str, str | None] | None
     # Run provenance stamped into every manifest row.
     alchemy_commit: str
     gemmi_version: str
@@ -134,14 +135,14 @@ class WorkerConfig:
     reference_data_id: str
 
 
-_CFG: Optional[WorkerConfig] = None
-_INFLIGHT: Optional[SimpleQueue[tuple[str, int, str]]] = None
+_CFG: WorkerConfig | None = None
+_INFLIGHT: SimpleQueue[tuple[str, int, str]] | None = None
 
 
 def _init_worker(
     cfg: WorkerConfig,
-    inflight: Optional[SimpleQueue[tuple[str, int, str]]] = None,
-    log_queue: Optional[Queue[logging.LogRecord]] = None,
+    inflight: SimpleQueue[tuple[str, int, str]] | None = None,
+    log_queue: Queue[logging.LogRecord] | None = None,
 ) -> None:
     global _CFG, _INFLIGHT
     _CFG = cfg
@@ -244,8 +245,8 @@ class EntryResult:
     bond_rows: list[dict[str, Any]] = field(default_factory=list)
     candidate_rows: list[dict[str, Any]] = field(default_factory=list)
     # ``None`` until the bond stage runs -- see the class docstring.
-    n_bonds: Optional[int] = None
-    n_candidates: Optional[int] = None
+    n_bonds: int | None = None
+    n_candidates: int | None = None
 
     reason_codes: list[str] = field(default_factory=list)
     warning_codes: list[str] = field(default_factory=list)
@@ -269,15 +270,15 @@ class EntryResult:
     altloc_policy: str = ALTLOC_POLICY
     symmetry_contact_policy: str = SYMMETRY_POLICY
     # ``None`` until the coordinates load.
-    input_model_count: Optional[int] = None
-    model_analyzed: Optional[int] = None
-    multi_model_structure: Optional[bool] = None
+    input_model_count: int | None = None
+    model_analyzed: int | None = None
+    multi_model_structure: bool | None = None
 
 
 def _initial_result(
     pdb_id: str,
     cfg: WorkerConfig,
-    manual_inputs: Optional[Dict[str, Optional[str]]],
+    manual_inputs: dict[str, str | None] | None,
 ) -> EntryResult:
     """Return the per-entry result skeleton, pre-filled with run provenance."""
     return EntryResult(
@@ -356,7 +357,7 @@ class _EntryInputs:
     pdb: str
     # PDB-REDO's per-entry metadata, or a manual run's ``--data-json``, and
     # ``None`` when a manual run supplied none.
-    data_json: Optional[str]
+    data_json: str | None
     # The diffraction data's own high-resolution limit, as distinct from the
     # map columns' range below.
     data_reshi: float
@@ -656,9 +657,9 @@ def process(pdb_id: str) -> EntryResult:
     t0 = time.monotonic()
     # Only a directory created by this invocation may be removed in ``finally``:
     # a predictable <output-dir>/<pdbID> path could already hold user data.
-    work_dir: Optional[str] = None
+    work_dir: str | None = None
     manual_inputs = cfg.manual_inputs
-    data_json: Optional[str] = None
+    data_json: str | None = None
     result = _initial_result(pdb_id, cfg, manual_inputs)
     _announce_inflight("start", pdb_id)
     try:

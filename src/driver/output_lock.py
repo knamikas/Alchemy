@@ -10,9 +10,9 @@ import shutil
 import socket
 import stat
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from types import TracebackType
-from typing import IO, Any, Optional
+from typing import IO, Any
 
 
 _IS_WINDOWS = os.name == "nt"
@@ -32,8 +32,8 @@ class OutputDirectoryLockError(RuntimeError):
     """The output-directory lease could not be created or recorded."""
 
 
-_active_lock_handle: Optional[IO[str]] = None
-_active_lock_pid: Optional[int] = None
+_active_lock_handle: IO[str] | None = None
+_active_lock_pid: int | None = None
 _WINDOWS_LOCK_OFFSET = 0x7FFFFFFF
 
 
@@ -166,7 +166,7 @@ class OutputDirectoryLock:
         self.output_dir = os.path.abspath(output_dir)
         self.path = os.path.join(self.output_dir, LOCK_FILENAME)
         self.command = str(command)
-        self._handle: Optional[IO[str]] = None
+        self._handle: IO[str] | None = None
 
     def __enter__(self) -> OutputDirectoryLock:
         global _active_lock_handle, _active_lock_pid
@@ -198,7 +198,7 @@ class OutputDirectoryLock:
                 "schema": 1,
                 "pid": os.getpid(),
                 "hostname": socket.gethostname(),
-                "started_utc": datetime.now(timezone.utc).isoformat(),
+                "started_utc": datetime.now(UTC).isoformat(),
                 "command": self.command,
             }
             handle.seek(0)
@@ -223,9 +223,9 @@ class OutputDirectoryLock:
 
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None:
         global _active_lock_handle, _active_lock_pid
         handle = self._handle
@@ -255,7 +255,7 @@ def create_owned_scratch_directory(
         "owner": "alchemy",
         "kind": str(kind),
         "preserve": bool(preserve),
-        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "created_utc": datetime.now(UTC).isoformat(),
         "pid": os.getpid(),
     }
     try:

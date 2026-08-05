@@ -8,7 +8,8 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO, Any, Callable, Optional
+from typing import IO, Any
+from collections.abc import Callable
 
 import gemmi
 import numpy as np
@@ -115,7 +116,7 @@ def test_twin_routing_requires_explicit_boolean_metadata(
 
 @pytest.mark.parametrize("payload", [None, "{not valid json", "[]", "{}"])
 def test_explicit_twin_metadata_read_failures_are_not_non_twin(
-    tmp_path: Path, payload: Optional[str]
+    tmp_path: Path, payload: str | None
 ) -> None:
     """Unreadable explicit metadata cannot be collapsed into ``ISTWIN=false``."""
     path = tmp_path / "data.json"
@@ -131,12 +132,12 @@ def _fake_ccp4_run_factory(mtzfix_log_text: str) -> Callable[..., SimpleNamespac
 
     def fake_run(
         cmd: Sequence[str],
-        input: Optional[str] = None,
-        text: Optional[bool] = None,
-        stdout: Optional[IO[str]] = None,
-        stderr: Optional[IO[bytes]] = None,
-        env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = None,
+        input: str | None = None,
+        text: bool | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[bytes] | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "mtzfix":
@@ -177,7 +178,7 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     """
 
     def non_utf8_failure(
-        *args: object, stderr: Optional[IO[bytes]] = None, **kwargs: object
+        *args: object, stderr: IO[bytes] | None = None, **kwargs: object
     ) -> SimpleNamespace:
         assert stderr is not None
         stderr.write(b"bad \xff\xfe byte")
@@ -358,12 +359,12 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
 
     def fake_run(
         cmd: Sequence[str],
-        input: Optional[str] = None,
-        text: Optional[bool] = None,
-        stdout: Optional[IO[str]] = None,
-        stderr: Optional[IO[bytes]] = None,
-        env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = None,
+        input: str | None = None,
+        text: bool | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[bytes] | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> SimpleNamespace:
         if cmd[0].rsplit("/", 1)[-1] == "mtzfix":
             assert stdout is not None, "the runner must redirect stdout to a log"
@@ -413,16 +414,16 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
         "density_analysis.shutil.which", lambda command, path=None: command
     )
 
-    seen: list[tuple[str, Optional[float], Optional[str]]] = []
+    seen: list[tuple[str, float | None, str | None]] = []
 
     def fake_run(
         cmd: Sequence[str],
-        input: Optional[str] = None,
-        text: Optional[bool] = None,
-        stdout: Optional[IO[str]] = None,
-        stderr: Optional[IO[bytes]] = None,
-        env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = None,
+        input: str | None = None,
+        text: bool | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[bytes] | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         seen.append((program, timeout, input))
@@ -492,12 +493,12 @@ def _envelope_run_factory(
 
     def fake_run(
         cmd: Sequence[str],
-        input: Optional[str] = None,
-        text: Optional[bool] = None,
-        stdout: Optional[IO[str]] = None,
-        stderr: Optional[IO[bytes]] = None,
-        env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = None,
+        input: str | None = None,
+        text: bool | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[bytes] | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "fft":
@@ -646,12 +647,12 @@ def test_an_unreadable_map_header_is_reported_rather_than_guessed(
 
     def fake_run(
         cmd: Sequence[str],
-        input: Optional[str] = None,
-        text: Optional[bool] = None,
-        stdout: Optional[IO[str]] = None,
-        stderr: Optional[IO[bytes]] = None,
-        env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[float] = None,
+        input: str | None = None,
+        text: bool | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[bytes] | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> SimpleNamespace:
         program = cmd[0].rsplit("/", 1)[-1]
         if program == "fft":

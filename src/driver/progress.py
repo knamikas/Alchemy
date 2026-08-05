@@ -7,7 +7,8 @@ moves, a redirected log wants a file that does not grow by a megabyte an hour.
 
 import sys
 import time
-from typing import Callable, Mapping, Optional, TextIO
+from typing import TextIO
+from collections.abc import Callable, Mapping
 
 
 class _ProgressReporter:
@@ -19,8 +20,8 @@ class _ProgressReporter:
     def __init__(
         self,
         total: int,
-        stream: Optional[TextIO] = None,
-        clock: Optional[Callable[[], float]] = None,
+        stream: TextIO | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.total = total
         self.stream = stream if stream is not None else sys.stdout

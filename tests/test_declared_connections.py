@@ -12,14 +12,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import (
     Any,
-    Mapping,
     NamedTuple,
     NoReturn,
-    Optional,
-    Sequence,
-    Union,
     cast,
 )
+from collections.abc import Mapping, Sequence
 
 import pytest
 import gemmi
@@ -49,7 +46,7 @@ class Analysis(NamedTuple):
     metadata: dict[str, Any]
 
     def rows_for(
-        self, atom_name: str, resnum: Optional[str] = None
+        self, atom_name: str, resnum: str | None = None
     ) -> list[dict[str, Any]]:
         return [
             row
@@ -64,7 +61,7 @@ class Analysis(NamedTuple):
 
 
 def write_source_and_analysis(
-    builder: StructureBuilder, directory: Union[str, Path], fmt: str
+    builder: StructureBuilder, directory: str | Path, fmt: str
 ) -> tuple[str, str]:
     """Write ``builder`` as the source file and return ``(source, analysis)``.
 
@@ -98,8 +95,8 @@ def blank_struct_conn_atom_names(path: str, *partners: int) -> None:
 
 def analyze(
     analysis_pdb: str,
-    connection_path: Optional[str] = None,
-    dpi_inputs: Optional[Mapping[str, object]] = None,
+    connection_path: str | None = None,
+    dpi_inputs: Mapping[str, object] | None = None,
     pdb_id: str = "test",
 ) -> Analysis:
     """Run the real bond analysis over an already-written analysis PDB."""
@@ -164,13 +161,23 @@ def partner_address(
 
 
 def declared_address(resname: str, atom_name: str) -> gemmi.AtomAddress:
-    """A stand-in for the ``AtomAddress`` a declaration names its partner by."""
-    return cast(
-        gemmi.AtomAddress,
-        SimpleNamespace(
-            res_id=SimpleNamespace(name=resname), atom_name=atom_name, altloc=""
-        ),
-    )
+    """The ``AtomAddress`` a declaration names its partner by.
+
+    Chain and sequence id are immaterial here: every caller either reads the
+    component and atom names alone, or hands the address to a model that never
+    resolves it.
+    """
+    return gemmi.AtomAddress("A", gemmi.SeqId(1, " "), resname, atom_name)
+
+
+def declared_connection(
+    partner1: gemmi.AtomAddress, partner2: gemmi.AtomAddress
+) -> gemmi.Connection:
+    """A declaration naming ``partner1`` and ``partner2``."""
+    connection = gemmi.Connection()
+    connection.partner1 = partner1
+    connection.partner2 = partner2
+    return connection
 
 
 class UnresolvableModel:
@@ -219,7 +226,7 @@ SOURCE_FORMATS: tuple[str, ...] = ("pdb", "cif")
     ],
 )
 def test_connection_source_dispatches_on_coordinate_format(
-    path: Optional[str], expected: str
+    path: str | None, expected: str
 ) -> None:
     """Only mmCIF names select the ``_struct_conn`` reader; everything else is LINK.
 
@@ -890,9 +897,9 @@ def test_partner_absent_from_the_analyzed_model_is_reported(tmp_path: Path) -> N
 
     def build(
         with_glutamate: bool,
-    ) -> tuple[StructureBuilder, ResidueSpec, Optional[ResidueSpec]]:
+    ) -> tuple[StructureBuilder, ResidueSpec, ResidueSpec | None]:
         builder, his, zinc = zinc_histidine_site()
-        glutamate: Optional[ResidueSpec] = None
+        glutamate: ResidueSpec | None = None
         if with_glutamate:
             glutamate = builder.add_amino_acid(
                 "GLU",
@@ -964,17 +971,13 @@ def test_declaration_naming_a_metal_survives_a_failed_resolution() -> None:
     Nothing is resolved here, so the declaration's own identifiers are the only
     evidence left that the failure concerns a metal.
     """
-    connection = cast(
-        gemmi.Connection,
-        SimpleNamespace(
-            partner1=declared_address("ZN", "ZN"),
-            partner2=declared_address("HIS", "NE2"),
-        ),
+    connection = declared_connection(
+        declared_address("ZN", "ZN"), declared_address("HIS", "NE2")
     )
 
     resolved = declared_connections._resolve_declared_partners(
         cast(StructureContext, None),
-        cast(gemmi.Model, UnresolvableModel()),
+        UnresolvableModel(),
         connection,
         {},
     )
@@ -988,7 +991,7 @@ def test_declaration_naming_a_metal_survives_a_failed_resolution() -> None:
             cast(StructureContext, None),
             connection,
             "c1",
-            cast(CandidateSource, "struct_conn"),
+            CandidateSource.STRUCT_CONN,
             resolved,
             set(),
         )
@@ -1005,17 +1008,13 @@ def test_failed_resolution_of_a_non_metal_declaration_is_silent() -> None:
     Reporting every unresolvable link in a deposition would bury the metal
     sites the message exists to surface.
     """
-    connection = cast(
-        gemmi.Connection,
-        SimpleNamespace(
-            partner1=declared_address("ASN", "ND2"),
-            partner2=declared_address("SER", "OG"),
-        ),
+    connection = declared_connection(
+        declared_address("ASN", "ND2"), declared_address("SER", "OG")
     )
 
     resolved = declared_connections._resolve_declared_partners(
         cast(StructureContext, None),
-        cast(gemmi.Model, UnresolvableModel()),
+        UnresolvableModel(),
         connection,
         {},
     )
@@ -1026,7 +1025,7 @@ def test_failed_resolution_of_a_non_metal_declaration_is_silent() -> None:
         cast(StructureContext, None),
         connection,
         "c1",
-        cast(CandidateSource, "struct_conn"),
+        CandidateSource.STRUCT_CONN,
         resolved,
         set(),
     ) == (None, [], [])
@@ -1036,16 +1035,12 @@ def test_failed_resolution_of_a_non_metal_declaration_is_silent() -> None:
 def test_unresolved_common_atom_names_are_not_mistaken_for_metals(
     atom_name: str,
 ) -> None:
-    connection = cast(
-        gemmi.Connection,
-        SimpleNamespace(
-            partner1=declared_address("ALA", atom_name),
-            partner2=declared_address("SER", "OG"),
-        ),
+    connection = declared_connection(
+        declared_address("ALA", atom_name), declared_address("SER", "OG")
     )
     resolved = declared_connections._resolve_declared_partners(
         cast(StructureContext, None),
-        cast(gemmi.Model, UnresolvableModel()),
+        UnresolvableModel(),
         connection,
         {},
     )
@@ -1055,7 +1050,7 @@ def test_unresolved_common_atom_names_are_not_mistaken_for_metals(
         cast(StructureContext, None),
         connection,
         "c1",
-        cast(CandidateSource, "struct_conn"),
+        CandidateSource.STRUCT_CONN,
         resolved,
         set(),
     ) == (None, [], [])
@@ -1439,7 +1434,8 @@ def test_declared_geometry_honors_each_asu_constraint(
     neighbor = next(
         atom for atom in context.contact_atoms if atom.residue_name == "HOH"
     )
-    connection = cast(gemmi.Connection, SimpleNamespace(asu=asu))
+    connection = gemmi.Connection()
+    connection.asu = asu
 
     geometry = declared_connections._declared_candidate_geometry(
         context, metal, neighbor, connection
@@ -1647,7 +1643,8 @@ def test_declared_contact_through_an_ncs_image_is_labelled_strict_ncs(
 
     metal = context.metal_atoms(["ZN"])[0]
     neighbor = next(atom for atom in context.contact_atoms if atom.atom_name == "O")
-    connection = cast(gemmi.Connection, SimpleNamespace(asu=gemmi.Asu.Any))
+    connection = gemmi.Connection()
+    connection.asu = gemmi.Asu.Any
 
     geometry = declared_connections._declared_candidate_geometry(
         context, metal, neighbor, connection

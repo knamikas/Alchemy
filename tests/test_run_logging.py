@@ -16,7 +16,7 @@ import logging.handlers  # importing logging alone does not bind it
 import multiprocessing
 import re
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 

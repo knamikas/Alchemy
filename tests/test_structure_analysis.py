@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from collections.abc import Sequence
 
 import gemmi
 import pytest
@@ -24,7 +24,7 @@ _ELEMENT_COLUMN = 76  # PDB element, columns 77-78
 
 # Every writer below stringifies its argument, so callers pass ``tmp_path / ...``
 # as readily as a plain string.
-_StrPath = Union[str, os.PathLike[str]]
+_StrPath = str | os.PathLike[str]
 
 
 def _rewrite_atom_field(
@@ -36,7 +36,7 @@ def _rewrite_atom_field(
     deposited records have to be injected at the text level.
     """
     destination = str(destination)
-    lines: List[str] = []
+    lines: list[str] = []
     with open(source, encoding="utf-8") as handle:
         for line in handle:
             if (
@@ -57,8 +57,8 @@ def _site(
     occupancy: float = 1.0,
     source_order: int = 0,
     element: str = "C",
-    occupancy_valid: Optional[bool] = None,
-    occupancy_status: Optional[str] = None,
+    occupancy_valid: bool | None = None,
+    occupancy_status: str | None = None,
     residue_index: int = 0,
     pos: Sequence[float] = (0.0, 0.0, 0.0),
 ) -> sa.AtomSite:
@@ -105,7 +105,7 @@ def _site(
     )
 
 
-def _altloc_option_map(selection: sa.ResidueSelection) -> Dict[str, str]:
+def _altloc_option_map(selection: sa.ResidueSelection) -> dict[str, str]:
     """Parse ``ResidueSelection.altloc_options`` into ``{label: text}``."""
     if not selection.altloc_options:
         return {}
@@ -128,7 +128,7 @@ def _residue(context: sa.StructureContext, name: str) -> sa.ResidueSelection:
 
 
 def _write_pdb_with_ncs(
-    builder: StructureBuilder, path: _StrPath, operations: Sequence[Tuple[str, bool]]
+    builder: StructureBuilder, path: _StrPath, operations: Sequence[tuple[str, bool]]
 ) -> str:
     """Write ``builder`` as PDB with MTRIX records for ``(id, given)`` ops."""
     structure = builder.to_gemmi()
@@ -163,9 +163,9 @@ def test_decode_pdb_resseq_matches_gemmi(
     assert sa._decode_pdb_resseq(field) == expected
 
     line = (
-        "HETATM    1 ZN    ZN B{field}       1.000   2.000   3.000"
+        f"HETATM    1 ZN    ZN B{field}       1.000   2.000   3.000"
         "  1.00 20.00          ZN  \n"
-    ).format(field=field)
+    )
     path = tmp_path / "resseq.pdb"
     path.write_text(line + "END\n", encoding="utf-8")
     structure = gemmi.read_structure(str(path))
@@ -481,7 +481,7 @@ def test_select_residue_records_every_available_alternative() -> None:
 def test_select_residue_keeps_one_coherent_conformer_across_all_atoms() -> None:
     """Mixing conformers would hand the contact search an invented residue."""
     names = ("CB", "CG", "ND1", "CD2", "CE1", "NE2")
-    atoms: List[sa.AtomSite] = []
+    atoms: list[sa.AtomSite] = []
     for index, name in enumerate(names):
         atoms.append(_site(name, altloc="A", occupancy=0.45, source_order=2 * index))
         atoms.append(
@@ -1024,8 +1024,8 @@ def test_duplicate_atom_records_at_different_positions_are_flagged(
     ],
 )
 def test_position_distance_is_euclidean(
-    a: Tuple[float, float, float],
-    b: Tuple[float, float, float],
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
     expected: float,
 ) -> None:
     assert sa.position_distance(a, b) == pytest.approx(expected, abs=1e-12)
@@ -1070,8 +1070,8 @@ def ncs_context(tmp_path: Path) -> sa.StructureContext:
 def test_image_provenance_classifies_symmetry_and_ncs(
     ncs_context: sa.StructureContext,
     image_index: int,
-    translation: Tuple[int, int, int],
-    expected: Tuple[bool, bool, str, str],
+    translation: tuple[int, int, int],
+    expected: tuple[bool, bool, str, str],
 ) -> None:
     """Gemmi's ``setup_cell_images()`` lists the identity, then the remaining
     space-group operations, then one full block per strict-NCS transform. A
@@ -1240,7 +1240,7 @@ def test_metal_atoms_uses_selected_conformers_by_default(tmp_path: Path) -> None
     assert context.metal_atoms(["zn"]) == canonical  # element case-insensitive
 
 
-def _oxygen_neighbors_of_the_metal(context: sa.StructureContext) -> List[str]:
+def _oxygen_neighbors_of_the_metal(context: sa.StructureContext) -> list[str]:
     search = context.make_neighbor_search(5.0, include_symmetry=False)
     metal = context.metal_atoms(["ZN"])[0]
     found = [
