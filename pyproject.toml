@@ -91,3 +91,22 @@ ignore = [
     # wants a deliberate audit rather than a sweep.
     "B905",
 ]
+
+# There is deliberately no [tool.mypy] section. CI runs `mypy src tools` with
+# mypy's own defaults -- no strictness flags -- and the tree is clean under
+# them.
+#
+# Read that result for what it is. Mypy's default is to allow functions
+# without annotations and to skip their bodies entirely, reporting only an
+# `annotation-unchecked` note. 84 of 333 functions in src/ are fully
+# annotated, so roughly three quarters of the bodies are never read, and
+# `mypy --check-untyped-defs src tools` finds 5 real errors inside them today.
+# A green type-check here therefore means "nothing broken in the annotated
+# parts", not "type-safe".
+#
+# Tightening was considered and declined. `--check-untyped-defs` would cost
+# those 5 fixes; `--disallow-untyped-defs` reports 272 missing signatures, and
+# roughly a third of them take result-row dictionaries whose honest annotation
+# is `list[dict[str, Any]]` -- a signature that satisfies a gate without
+# checking anything. Following the defaults keeps the signal honest instead of
+# manufacturing one.

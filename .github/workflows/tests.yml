@@ -31,6 +31,16 @@ jobs:
           python -m pip install 'ruff==0.16.1'
           ruff check src tests tools
           ruff format --check src tests tools
+      - name: Type-check
+        run: |
+          # Pinned for the same reason as Ruff above: a new mypy release adds
+          # checks, and an unpinned one turns an upstream update into a CI
+          # failure on unrelated pull requests.
+          python -m pip install 'mypy==1.19.1'
+          # Mypy's own defaults, deliberately: no strictness flags, no
+          # [tool.mypy] section. See the note in pyproject.toml for what that
+          # does and does not cover.
+          mypy src tools
       - name: Run the fast offline suite
         run: |
           python -m pytest --no-ccp4 --no-network --skip-slow \
