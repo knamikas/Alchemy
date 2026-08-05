@@ -21,6 +21,8 @@ import gzip
 import json
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -1206,3 +1208,57 @@ def test_concurrent_run_logs_claim_distinct_names(tmp_path):
         "alchemy_run_20260805_3.log",
     ]
     assert [open(p).read() for p in claimed] == ["run 0\n", "run 1\n", "run 2\n"]
+
+
+def test_run_log_fallback_never_overwrites_same_day_logs(tmp_path, monkeypatch):
+    def hard_links_unavailable(*args):
+        raise OSError("hard links unavailable")
+
+    monkeypatch.setattr(runlog.os, "link", hard_links_unavailable)
+    claimed = []
+    for index in range(3):
+        source = tmp_path / f"fallback-source-{index}"
+        source.write_text(f"fallback run {index}\n", encoding="utf-8")
+        claimed.append(
+            runlog._claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
+        )
+
+    assert [os.path.basename(path) for path in claimed] == [
+        "alchemy_run_20260805.log",
+        "alchemy_run_20260805_2.log",
+        "alchemy_run_20260805_3.log",
+    ]
+    assert [open(path).read() for path in claimed] == [
+        "fallback run 0\n",
+        "fallback run 1\n",
+        "fallback run 2\n",
+    ]
+
+
+def test_concurrent_run_log_fallback_claims_are_distinct(tmp_path, monkeypatch):
+    def hard_links_unavailable(*args):
+        raise OSError("hard links unavailable")
+
+    monkeypatch.setattr(runlog.os, "link", hard_links_unavailable)
+    sources = []
+    for index in range(8):
+        source = tmp_path / f"concurrent-source-{index}"
+        source.write_text(f"concurrent run {index}\n", encoding="utf-8")
+        sources.append(source)
+    ready = threading.Barrier(len(sources))
+
+    def claim(index):
+        ready.wait()
+        path = runlog._claim_log_path(
+            str(tmp_path), "alchemy_run_20260805", str(sources[index])
+        )
+        return index, path
+
+    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+        claimed = list(executor.map(claim, range(len(sources))))
+
+    paths = [path for _index, path in claimed]
+    assert len(set(paths)) == len(sources)
+    for index, path in claimed:
+        with open(path, encoding="utf-8") as handle:
+            assert handle.read() == f"concurrent run {index}\n"

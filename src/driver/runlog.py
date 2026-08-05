@@ -1,11 +1,13 @@
 """The detailed run log written once, at the end of every run.
 
 ``_RunLog`` accumulates compact per-entry diagnostics during the batch and
-renders them into one human-readable file, written whole and atomically.
+renders them into one complete temporary file before publishing it under a
+name that cannot overwrite an earlier run.
 """
 
 import os
 import platform
+import shutil
 import tempfile
 import time
 from collections import Counter
@@ -26,8 +28,34 @@ def log_dir_for(args):
     return args.log_dir or os.path.join(args.output_dir, DEFAULT_LOG_DIRNAME)
 
 
+def _copy_log_exclusively(source_path, destination_path):
+    """Copy a complete log into a newly claimed path without overwriting."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(destination_path, flags, 0o600)
+    try:
+        destination = os.fdopen(descriptor, "wb")
+    except BaseException:
+        os.close(descriptor)
+        try:
+            os.unlink(destination_path)
+        except OSError:
+            pass
+        raise
+    try:
+        with open(source_path, "rb") as source, destination:
+            shutil.copyfileobj(source, destination)
+    except BaseException:
+        try:
+            os.unlink(destination_path)
+        except OSError:
+            pass
+        raise
+    os.unlink(source_path)
+
+
 def _claim_log_path(directory, stem, source_path):
-    """Move a finished log onto the first free numbered name, atomically.
+    """Publish a finished log under the first free numbered name.
 
     ``os.link`` fails rather than overwrites when the name is taken, so two
     runs cannot select the same suffix and have one silently replace the
@@ -47,9 +75,14 @@ def _claim_log_path(directory, stem, source_path):
             suffix += 1
             continue
         except OSError:
-            # A filesystem without hard links keeps the previous behaviour: a
-            # log file is not worth failing an otherwise complete run over.
-            os.replace(source_path, path)
+            # Some filesystems do not support hard links. Claiming the name
+            # with exclusive creation preserves the no-overwrite guarantee;
+            # os.replace would silently destroy an earlier same-day log.
+            try:
+                _copy_log_exclusively(source_path, path)
+            except FileExistsError:
+                suffix += 1
+                continue
             return path
         os.unlink(source_path)
         return path
@@ -282,7 +315,7 @@ class _RunLog:
         return "\n".join(lines)
 
     def write(self, exit_code):
-        """Atomically write the final timestamped log and return its path."""
+        """Write the final timestamped log without overwriting and return its path."""
         directory = log_dir_for(self.args)
         os.makedirs(directory, exist_ok=True)
         finished_at = datetime.now(timezone.utc)
