@@ -309,6 +309,12 @@ def _declared_candidate_for_connection(
         return None, issues, warnings
 
     metal, neighbor = (first, second) if first_is_metal else (second, first)
+    if not (metal.coordinates_valid and neighbor.coordinates_valid):
+        issues.append(
+            f"{source} {connection_id} geometry unavailable: "
+            "partner has non-finite coordinates"
+        )
+        return None, issues, warnings
     if neighbor.occupancy_valid and neighbor.occupancy == 0.0:
         warnings.append(WarningCode.DECLARED_CONNECTION_ZERO_OCCUPANCY_PARTNER)
     residue = structure.residue_for_atom(neighbor)

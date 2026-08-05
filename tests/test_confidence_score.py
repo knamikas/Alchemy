@@ -161,6 +161,17 @@ def _read_csv_rows(path):
         return list(fieldnames), list(reader)
 
 
+def test_non_finite_metal_coordinates_make_confidence_unscorable():
+    stats = _stats_row(metal_coordinates_valid="False")
+
+    (prepared,) = cs.prepare_confidence_inputs([stats], [_bond_row()])
+
+    assert prepared["confidence_inputs_status"] == "unscorable"
+    assert "non_finite_metal_coordinates" in prepared[
+        "confidence_inputs_missing_reasons"
+    ].split("|")
+
+
 # Hand-derived severities, straight off the anchor tables.
 #   density  anchors: (2,0.00) (3,0.25) (6,0.65) (12,1.00)
 #   geometry anchors: (2,0.00) (3,0.35) (6,0.70) (12,1.00)

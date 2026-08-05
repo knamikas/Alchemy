@@ -322,6 +322,38 @@ def test_a_catalogued_cofactor_metal_raises_no_such_code(tmp_path, monkeypatch):
     assert result.n_metals == 1
 
 
+def test_non_finite_selected_metal_is_partial_without_bond_analysis(
+    tmp_path, monkeypatch
+):
+    """Coordinate validation is not disabled together with bond output."""
+    builder = helpers.StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+
+    def make_metal_x_nan(path):
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        rewritten = []
+        for line in lines:
+            if line[:6].strip() == "HETATM" and line[76:78].strip() == "ZN":
+                line = line[:30] + "     nan" + line[38:]
+            rewritten.append(line)
+        path.write_text("".join(rewritten), encoding="utf-8")
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        structure_builder=builder,
+        pdb_transform=make_metal_x_nan,
+        bonds=False,
+    )
+
+    assert result.status == "partial"
+    assert result.retryable is False
+    assert result.n_metals == 1
+    assert "non_finite_coordinates" in result.warning_codes
+    assert "non_finite_metal_coordinates" in result.reason_codes
+
+
 def test_an_unanticipated_failure_logs_its_traceback(tmp_path, monkeypatch, caplog):
     """The manifest keeps one line; the debug log must keep the stack.
 

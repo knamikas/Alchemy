@@ -168,6 +168,7 @@ so a code cannot be added or renamed without this list following it.
 | `declared_connection_resolution_incomplete` | A source `_struct_conn` or `LINK` record named an atom that could not be resolved in the coordinate model. |
 | `symmetry_search_unavailable` | The structure has no usable cell or space group, so only explicit contacts could be found. |
 | `missing_first_sphere_reference` | No bundled reference distance covers a donor class present at the site, so those contacts cannot be z-scored. |
+| `non_finite_metal_coordinates` | A selected metal has a NaN or infinite Cartesian coordinate, so its geometry and confidence are unscorable. Other valid sites in the entry are still analyzed. |
 | `missing_dpi_metadata_source` | Manual input without `--data-json`: the reflection count has no source, which differs from a calculation that ran and failed. |
 | `invalid_dpi_metadata` | The reflection count, R-free, or asymmetric-unit volume was present but not numeric. |
 | `invalid_occupancy` | Deposited occupancies could not be read, or overfull alternates exceeded the tolerance, leaving `Ni` unusable. |

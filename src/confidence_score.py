@@ -258,6 +258,8 @@ def prepare_confidence_inputs(
         positive = _finite_float(stats.get("ZD+m", ""))
         summary = _bond_summary(bonds_by_site.pop(key, ()))
         missing_reasons = []
+        if str(stats.get("metal_coordinates_valid", "")).strip().lower() == "false":
+            missing_reasons.append("non_finite_metal_coordinates")
         if not math.isfinite(rszd):
             missing_reasons.append("rszd_unavailable")
         if summary["assigned_contact_count"] == 0:
@@ -276,7 +278,10 @@ def prepare_confidence_inputs(
             ):
                 missing_reasons.append("partial_geometry_coverage")
 
-        if "rszd_unavailable" in missing_reasons:
+        if (
+            "non_finite_metal_coordinates" in missing_reasons
+            or "rszd_unavailable" in missing_reasons
+        ):
             status = "unscorable"
         elif summary["reference_covered_contact_count"] == 0:
             status = "density_only"

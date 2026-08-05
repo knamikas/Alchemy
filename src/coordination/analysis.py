@@ -395,6 +395,8 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
     Discovery only: no literature target, no first-sphere tolerance, no
     assignment. That happens in ``_identify_first_sphere_candidates``.
     """
+    if not metal.coordinates_valid:
+        return []
     candidates = []
     marks = search.find_atoms(
         metal.pos, "\x00", min_dist=0.0, radius=CUTOFF + SEARCH_EPSILON
@@ -402,6 +404,8 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
     for mark in marks:
         neighbor = structure.atom_for_mark(mark)
         if neighbor is None:
+            continue
+        if not neighbor.coordinates_valid:
             continue
         # Cheapest test first: the residue lookup below only runs for the few
         # marks that can still qualify.
@@ -872,6 +876,10 @@ def run_bond_analysis(
         structure = load_structure(pdb_id, pdb_path)
 
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
+    spatial_metals = [metal for metal in metals_in_model if metal.coordinates_valid]
+    non_finite_metals = [
+        metal for metal in metals_in_model if not metal.coordinates_valid
+    ]
     metadata: dict[str, Any] = {
         "partial_reason_codes": [],
         "warning_codes": list(structure.warning_codes),
@@ -883,7 +891,7 @@ def run_bond_analysis(
 
     (declared_candidates, declared_issues, declared_warnings) = (
         _collect_declared_candidates(
-            structure, connection_path or pdb_path, metals_in_model
+            structure, connection_path or pdb_path, spatial_metals
         )
     )
     if declared_issues:
@@ -892,6 +900,17 @@ def run_bond_analysis(
         )
         metadata["messages"].extend(declared_issues)
     metadata["warning_codes"].extend(declared_warnings)
+    if non_finite_metals:
+        metadata["partial_reason_codes"].append(ReasonCode.NON_FINITE_METAL_COORDINATES)
+        metadata["messages"].append(
+            "geometry unavailable for selected metal site(s) with non-finite "
+            "coordinates: "
+            + ", ".join(
+                f"{metal.residue_name}/{metal.chain_id or '_'}/{metal.resnum}/"
+                f"{metal.atom_name}"
+                for metal in non_finite_metals
+            )
+        )
     declared_by_metal: dict[Any, list[Candidate]] = {}
     for candidate in declared_candidates:
         declared_by_metal.setdefault(candidate.metal.source_key, []).append(candidate)
@@ -924,6 +943,24 @@ def run_bond_analysis(
     candidate_rows: list[dict[str, Any]] = []
     summaries = {}
     for metal in metals_in_model:
+        if not metal.coordinates_valid:
+            summary = _site_summary(
+                metal,
+                [],
+                [] if structure.symmetry_search_available else None,
+                dpi,
+                resolution,
+                ni,
+                deposited_ni,
+                dpi_reason,
+                structure,
+            )
+            summary["geometry_not_assessed_reason"] = (
+                ReasonCode.NON_FINITE_METAL_COORDINATES
+            )
+            summary.update(_site_context_values([], []))
+            summaries[metal.source_key] = summary
+            continue
         metal_declarations = declared_by_metal.get(metal.source_key, ())
         explicit_declarations = [
             candidate

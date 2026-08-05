@@ -211,6 +211,7 @@ STATS_EXTRA_COLUMNS = [
     "metal_occupancy",
     "metal_occupancy_valid",
     "metal_occupancy_status",
+    "metal_coordinates_valid",
     "metal_conformer_mean_occupancy",
     "metal_altloc_options",
     "alternative_conformers_present",
@@ -280,6 +281,7 @@ STATS_EXTRA_COLUMNS = [
     "raw_occupancy_mapping_failure_reason",
     "unknown_element_atom_count",
     "element_validation_warning",
+    "non_finite_coordinate_atom_count",
     "zscore_outlier_cutoff",
 ]
 
@@ -401,6 +403,7 @@ def stats_extra_values(
         "metal_occupancy": metal.occupancy if metal else NAN,
         "metal_occupancy_valid": metal.occupancy_valid if metal else "",
         "metal_occupancy_status": metal.occupancy_status if metal else "",
+        "metal_coordinates_valid": metal.coordinates_valid if metal else "",
         "metal_conformer_mean_occupancy": (
             residue.selected_conformer_mean_occupancy if residue else NAN
         ),
@@ -439,6 +442,9 @@ def stats_extra_values(
         ),
         "unknown_element_atom_count": structure.unknown_element_atom_count,
         "element_validation_warning": structure.element_validation_warning,
+        "non_finite_coordinate_atom_count": (
+            structure.non_finite_coordinate_atom_count
+        ),
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
     }
     for column in STATS_EXTRA_COLUMNS:

@@ -140,6 +140,47 @@ def _analyze(path, *, data_json=None, resolution=1.50):
     )
 
 
+def test_non_finite_metal_is_partial_and_geometry_is_unscorable(tmp_path, monkeypatch):
+    """A malformed selected site is reported without aborting spatial analysis."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    builder.add_water(101, (0.0, 2.09, 0.0), chain="B")
+    path = builder.write_cif(tmp_path / "non_finite_metal.cif")
+    parsed = gemmi.read_structure(path)
+    metal_atom = next(
+        atom
+        for chain in parsed[0]
+        for residue in chain
+        for atom in residue
+        if str(atom.element.name).upper() == "ZN"
+    )
+    metal_atom.pos = gemmi.Position(float("nan"), 0.0, 0.0)
+    monkeypatch.setattr(gemmi, "read_structure", lambda _path: parsed)
+    context = load_structure("test", path)
+    metal = context.metal_atoms(["ZN"])[0]
+
+    rows, candidates, summaries, metadata = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(resolution=1.5),
+        structure=context,
+        connection_path="",
+    )
+
+    assert rows == []
+    assert candidates == []
+    assert summaries[metal.source_key]["explicit_geometry_status"] == (
+        "insufficient data"
+    )
+    assert summaries[metal.source_key]["geometry_not_assessed_reason"] == (
+        "non_finite_metal_coordinates"
+    )
+    assert "non_finite_metal_coordinates" in metadata["partial_reason_codes"]
+    assert metadata["retryable"] is False
+
+
 def _dpi_metadata(tmp_path, *, nrefcnt=50000, rffin=0.20, name="data.json"):
     """A PDB-REDO-style ``data.json`` giving a finite DPI."""
     return helpers.write_data_json(tmp_path / name, nrefcnt=nrefcnt, rffin=rffin)

@@ -126,6 +126,9 @@ class ReasonCode(StrEnum):
     )
     SYMMETRY_SEARCH_UNAVAILABLE = "symmetry_search_unavailable"
     MISSING_FIRST_SPHERE_REFERENCE = "missing_first_sphere_reference"
+    #: A selected metal has a NaN or infinite Cartesian coordinate, so no
+    #: distance-based evidence can be collected for that site.
+    NON_FINITE_METAL_COORDINATES = "non_finite_metal_coordinates"
     #: The remaining members are the DPI's own reasons for being unavailable,
     #: each recorded as the entry's partial reason.
     MISSING_DPI_METADATA_SOURCE = "missing_dpi_metadata_source"
@@ -147,6 +150,10 @@ class WarningCode(StrEnum):
     MALFORMED_DUPLICATE_ATOM_NAMES = "malformed_duplicate_atom_names"
     ALTLOC_SELECTION_FALLBACK = "altloc_selection_fallback"
     UNKNOWN_ELEMENTS = "unknown_elements"
+    #: One or more atoms have NaN or infinite Cartesian coordinates. They stay
+    #: in the deposited inventory for provenance but are excluded from every
+    #: spatial search.
+    NON_FINITE_COORDINATES = "non_finite_coordinates"
     ZERO_OCCUPANCY_ATOMS = "zero_occupancy_atoms"
     #: A metal record was excluded from site selection because its occupancy is
     #: a valid zero. Zero occupancy is not evidence for a site, but without this

@@ -1220,6 +1220,39 @@ def test_neighbor_search_skips_zero_occupancy_atoms(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_neighbor_search_excludes_non_finite_coordinates(
+    tmp_path, monkeypatch, non_finite
+):
+    """Malformed coordinates remain auditable but never reach Gemmi's bins."""
+    builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
+    path = builder.write_cif(tmp_path / "non_finite_donor.cif")
+    parsed = gemmi.read_structure(path)
+    donor = next(
+        atom
+        for chain in parsed[0]
+        for residue in chain
+        for atom in residue
+        if atom.name == "NE2"
+    )
+    donor.pos = gemmi.Position(non_finite, donor.pos.y, donor.pos.z)
+    monkeypatch.setattr(sa.gemmi, "read_structure", lambda _path: parsed)
+
+    context = sa.load_structure("test", path)
+    invalid = next(atom for atom in context.source_atoms if atom.atom_name == "NE2")
+    metal = context.metal_atoms(["ZN"])[0]
+
+    assert invalid.coordinates_valid is False
+    assert context.non_finite_coordinate_atom_count == 1
+    assert "non_finite_coordinates" in context.warning_codes
+
+    search = context.make_neighbor_search(5.0, include_symmetry=False)
+    found = [
+        context.atom_for_mark(mark) for mark in search.find_atoms(metal.pos, radius=5.0)
+    ]
+    assert invalid not in found
+
+
 def test_neighbor_search_requires_symmetry_metadata_when_asked(tmp_path):
     """An image-inclusive search must fail loudly without a usable space group.
 

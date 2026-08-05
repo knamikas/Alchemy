@@ -222,6 +222,11 @@ class AtomSite:
         return self.x, self.y, self.z
 
     @property
+    def coordinates_valid(self) -> bool:
+        """Whether this atom can safely participate in spatial analysis."""
+        return all(math.isfinite(value) for value in self.xyz)
+
+    @property
     def residue_key(self) -> Tuple[int, int, int]:
         return self.model_index, self.chain_index, self.residue_index
 
@@ -397,6 +402,7 @@ class StructureContext:
     malformed_duplicate_atom_name_count: int
     unknown_element_atom_count: int
     element_validation_warning: str
+    non_finite_coordinate_atom_count: int
     raw_occupancy_mapping_failed: bool
     raw_occupancy_mapping_failure_reason: str
     symmetry_search_available: bool
@@ -405,6 +411,7 @@ class StructureContext:
     strict_ncs_operation_ids: Tuple[str, ...]
     analysis_coordinate_format: str
     warning_codes: Tuple[str, ...]
+    _spatial_model: gemmi.Model = field(repr=False)
     _atom_by_indices: Mapping[Tuple[int, int, int], AtomSite] = field(
         repr=False, default_factory=dict
     )
@@ -547,8 +554,15 @@ class StructureContext:
             cell = self.structure.cell
         else:
             cell = gemmi.UnitCell()
-        search = gemmi.NeighborSearch(self.model, cell, radius)
+        # With an empty UnitCell Gemmi derives search bounds from the complete
+        # model during construction. Supplying the original model would expose
+        # even atoms we never add explicitly to NaN/Inf handling inside Gemmi.
+        search = gemmi.NeighborSearch(self._spatial_model, cell, radius)
         for atom in self.contact_atoms:
+            # Gemmi raises while binning a NaN position. Keep malformed atoms
+            # in the source inventory, but never hand them to spatial code.
+            if not atom.coordinates_valid:
+                continue
             if positive_occupancy_only and not (
                 atom.occupancy_valid and atom.occupancy > 0
             ):
@@ -1249,6 +1263,22 @@ def load_structure(
         for residue in residues
     )
     unknown_count = sum(not atom.element_known for atom in source_atoms)
+    non_finite_coordinate_count = sum(
+        not atom.coordinates_valid for atom in source_atoms
+    )
+    spatial_model = model.clone()
+    for chain_index, chain in enumerate(model):
+        for residue_index, residue in enumerate(chain):
+            invalid_indices = [
+                atom_index
+                for atom_index, atom in enumerate(residue)
+                if not all(
+                    math.isfinite(value)
+                    for value in (atom.pos.x, atom.pos.y, atom.pos.z)
+                )
+            ]
+            for atom_index in reversed(invalid_indices):
+                del spatial_model[chain_index][residue_index][atom_index]
     (
         symmetry_available,
         symmetry_reason,
@@ -1269,6 +1299,8 @@ def load_structure(
         warnings.append(WarningCode.ALTLOC_SELECTION_FALLBACK)
     if unknown_count:
         warnings.append(WarningCode.UNKNOWN_ELEMENTS)
+    if non_finite_coordinate_count:
+        warnings.append(WarningCode.NON_FINITE_COORDINATES)
     if zero_count:
         warnings.append(WarningCode.ZERO_OCCUPANCY_ATOMS)
     if overfull_site_count:
@@ -1351,6 +1383,7 @@ def load_structure(
         malformed_duplicate_atom_name_count=malformed_names,
         unknown_element_atom_count=unknown_count,
         element_validation_warning=("unknown_element_atoms" if unknown_count else ""),
+        non_finite_coordinate_atom_count=non_finite_coordinate_count,
         raw_occupancy_mapping_failed=mapping_failed,
         raw_occupancy_mapping_failure_reason=mapping_reason,
         symmetry_search_available=symmetry_available,
@@ -1359,6 +1392,7 @@ def load_structure(
         strict_ncs_operation_ids=strict_ncs_operation_ids,
         analysis_coordinate_format=analysis_format,
         warning_codes=tuple(warnings),
+        _spatial_model=spatial_model,
         _atom_by_indices=atom_by_indices,
         _residue_by_key=residue_by_key,
         _residues_by_author=residues_by_author,

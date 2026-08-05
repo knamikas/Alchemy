@@ -515,6 +515,19 @@ def _run_bond_stage(result, cfg, inputs, structure, rows, header):
         "retryable": False,
     }
     if not cfg.bonds:
+        non_finite_metals = [
+            metal
+            for metal in structure.metal_atoms(METALS_SET, canonical=True)
+            if not metal.coordinates_valid
+        ]
+        if non_finite_metals:
+            bond_meta["partial_reason_codes"].append(
+                ReasonCode.NON_FINITE_METAL_COORDINATES
+            )
+            bond_meta["messages"].append(
+                "geometry unavailable for selected metal site(s) with "
+                "non-finite coordinates"
+            )
         return bond_rows, candidate_rows, site_summaries, bond_meta
 
     bond_started = time.monotonic()
