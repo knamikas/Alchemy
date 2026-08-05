@@ -350,6 +350,8 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
 #   die        "announced": name the entry, then SIGKILL mid-entry (an OOM kill)
 #              "announced_early": name the entry, then SIGKILL immediately
 #              "silent":    SIGKILL mid-entry without ever naming the entry
+#   external_child
+#              start a long-lived native child before the scripted death
 #   claim      after finishing cleanly, announce a start for THIS other entry,
 #              leaving the driver with a stale attribution for it
 #   die_after  seconds after finishing cleanly to SIGKILL this now-idle worker
@@ -407,6 +409,13 @@ def _stub_process(pdb_id):
 
     die = step.get("die")
     if die and _first_visit(pdb_id):
+        if step.get("external_child"):
+            external = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"]
+            )
+            marker = os.path.join(_STUB_MARKER_DIR, f"external-{pdb_id}.pid")
+            with open(marker, "w", encoding="utf-8") as handle:
+                handle.write(f"{external.pid}\n")
         if die in ("announced", "announced_early"):
             _announce("start", pdb_id)
         if die != "announced_early":
@@ -618,6 +627,36 @@ def test_driver_recovers_when_first_worker_dies_before_first_result_poll(tmp_pat
     assert rows[0]["status"] == "error"
     assert rows[0]["reason_codes"] == "worker_process_died"
     assert exit_code == 1
+
+
+@_POSIX_KILL
+def test_worker_death_kills_its_external_process_group(tmp_path):
+    """A SIGKILLed worker cannot leave its active CCP4-like child orphaned."""
+    child_pid = None
+    try:
+        exit_code, output_dir, _ = _run_driver(
+            tmp_path,
+            {
+                "aaaa": {
+                    "die": "announced",
+                    "runtime": 0.2,
+                    "external_child": True,
+                }
+            },
+            workers=1,
+        )
+        marker = tmp_path / "markers" / "external-aaaa.pid"
+        child_pid = int(marker.read_text(encoding="utf-8"))
+
+        rows = _read_manifest(output_dir)
+        assert rows[0]["reason_codes"] == "worker_process_died"
+        assert exit_code == 1
+        assert _wait_for_process_exit(child_pid), (
+            f"external process {child_pid} survived its worker"
+        )
+    finally:
+        if child_pid is not None and _process_exists(child_pid):
+            os.kill(child_pid, signal.SIGKILL)
 
 
 @_POSIX_KILL
@@ -987,14 +1026,20 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path):
 
 
 def _never_finishing_process(pdb_id):
-    """A per-entry stub that outlives the signal, so workers are busy.
+    """Run a CCP4-like child that outlives the signal unless its group is killed.
 
     Module level, not a closure: ``Pool`` pickles the task callable even under
     ``fork``, and a locally defined function fails with "Can't pickle local
     object" before any worker starts.
     """
-    time.sleep(30)
-    return worker._initial_result(pdb_id, worker._CFG, None)
+    cfg = worker._CFG
+    assert cfg is not None
+    external = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    marker = os.path.join(cfg.output_dir, f"external-{pdb_id}.pid")
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write(f"{external.pid}\n")
+    external.wait()
+    raise AssertionError("external test process unexpectedly exited normally")
 
 
 def _sigterm_driver_child(argv, ready, channel):
@@ -1040,6 +1085,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
     ctx = multiprocessing.get_context("fork")
     ready, channel = ctx.Event(), ctx.Queue()
     child = ctx.Process(target=_sigterm_driver_child, args=(argv, ready, channel))
+    external_pids: list[int] = []
     child.start()
     try:
         assert ready.wait(30), "the driver process never started"
@@ -1052,6 +1098,15 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
             workers = _child_pids(driver_pid)
         assert workers, "no pool workers appeared to be signalled"
 
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not external_pids:
+            time.sleep(0.2)
+            external_pids = [
+                int(path.read_text(encoding="utf-8"))
+                for path in output_dir.glob("external-*.pid")
+            ]
+        assert external_pids, "no external worker child was started"
+
         os.kill(driver_pid, signal.SIGTERM)
         child.join(60)
         assert not child.is_alive(), "the driver did not exit within 60s of SIGTERM"
@@ -1063,11 +1118,20 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(tmp_path):
         time.sleep(1.0)
         alive = [pid for pid in workers if _process_exists(pid)]
         assert alive == [], f"workers outlived the driver: {alive}"
+        external_alive = [
+            pid for pid in external_pids if not _wait_for_process_exit(pid)
+        ]
+        assert external_alive == [], (
+            f"external worker children outlived the driver: {external_alive}"
+        )
         log_dir = os.path.join(output_dir, runlog.DEFAULT_LOG_DIRNAME)
         logs = [name for name in os.listdir(log_dir) if name.endswith(".log")]
         assert logs, "no run log was written for the interrupted run"
     finally:
         _terminate_driver_tree(child, ready)
+        for pid in external_pids:
+            if _process_exists(pid):
+                os.kill(pid, signal.SIGKILL)
         channel.close()
 
 
@@ -1079,3 +1143,12 @@ def _child_pids(pid):
 
 def _process_exists(pid):
     return os.path.exists(f"/proc/{pid}")
+
+
+def _wait_for_process_exit(pid, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_exists(pid):
+            return True
+        time.sleep(0.05)
+    return not _process_exists(pid)

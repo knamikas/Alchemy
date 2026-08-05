@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -246,6 +247,16 @@ def _dead_worker_pids(pool, known_pids):
     return dead
 
 
+def _signal_worker_process_group(pid, sig):
+    """Signal one isolated worker group, ignoring an already-empty group."""
+    if os.name != "posix" or not hasattr(os, "killpg") or not pid:
+        return
+    try:
+        os.killpg(pid, sig)
+    except (OSError, ValueError):
+        pass
+
+
 def _sweep_leaked_work_dirs(output_dir):
     """Remove marked disposable scratch after output ownership is acquired."""
     return sweep_owned_scratch_directories(output_dir)
@@ -267,6 +278,18 @@ def _shutdown_pool(pool):
     closer = threading.Thread(target=pool.terminate, daemon=True)
     closer.start()
     closer.join(WORKER_SHUTDOWN_GRACE_S)
+    # Workers isolate themselves as process-group leaders. Let Pool terminate
+    # them first, avoiding a task-queue lock race, then kill any CCP4 program
+    # left in an original or newly replacement worker's surviving group.
+    current_children = [
+        child
+        for child in getattr(pool, "_pool", ()) or ()
+        if getattr(child, "pid", None)
+    ]
+    children_by_pid = {child.pid: child for child in [*children, *current_children]}
+    if os.name == "posix":
+        for child in children_by_pid.values():
+            _signal_worker_process_group(child.pid, signal.SIGKILL)
     if not closer.is_alive():
         return False
 
@@ -277,7 +300,7 @@ def _shutdown_pool(pool):
             finalizer.cancel()
         except Exception:  # noqa: BLE001 - best effort, shutdown must proceed
             pass
-    for child in children:
+    for child in children_by_pid.values():
         try:
             # Process.kill is SIGKILL on POSIX and TerminateProcess on Windows,
             # where signal.SIGKILL does not exist.
@@ -846,6 +869,8 @@ class _WorkerDeathWatch:
         _drain_inflight(self._inflight, self._assignments)
         losses = []
         for dead_pid in _dead_worker_pids(self._pool, self._worker_pids):
+            if os.name == "posix":
+                _signal_worker_process_group(dead_pid, signal.SIGKILL)
             dead_id = self._assignments.pop(dead_pid, None)
             if dead_id is None:
                 self._unattributed_deaths += 1

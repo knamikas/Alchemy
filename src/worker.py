@@ -111,6 +111,12 @@ def _init_worker(cfg: WorkerConfig, inflight=None, log_queue=None) -> None:
     global _CFG, _INFLIGHT
     _CFG = cfg
     _INFLIGHT = inflight
+    # Give this worker and every CCP4 descendant a group the driver can kill as
+    # one unit. If the worker itself is SIGKILLed, its active external program
+    # otherwise survives as an orphan and keeps consuming resources/writing
+    # scratch. Windows has no ``setpgrp``; Process.kill remains the fallback.
+    with contextlib.suppress(AttributeError, OSError):
+        os.setpgrp()
     # A forked worker inherits the driver's SIGTERM-to-KeyboardInterrupt
     # handler, and raising there during ``pool.terminate`` interrupts whatever
     # the worker is doing, including the log queue's feeder-thread finalizer.
