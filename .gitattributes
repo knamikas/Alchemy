@@ -1,0 +1,4 @@
+# These bundled reference files have byte-level SHA-256 sidecars. Keep their
+# checked-out representation identical on every supported platform.
+/src/data/metallocofactors_id.txt text eol=lf
+/src/data/metal_distances_info.txt text eol=lf

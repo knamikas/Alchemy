@@ -805,7 +805,7 @@ def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
         resources, "PROC_MEMINFO_PATH", str(tmp_path / "definitely-absent")
     )
     monkeypatch.setattr(resources.sys, "platform", "linux")
-    monkeypatch.setattr(resources.os, "sysconf", lambda name: 0)
+    monkeypatch.setattr(resources.os, "sysconf", lambda name: 0, raising=False)
 
     assert resources.available_memory_bytes() is None
     assert resources.automatic_worker_limits()[1] is None

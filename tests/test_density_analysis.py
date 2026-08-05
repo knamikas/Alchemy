@@ -152,12 +152,14 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     nothing, and every later ``--resume`` reprocessed the entry and failed
     identically.
     """
-    program = _stub_ccp4_program(
-        tmp_path, "mtzfix", "printf 'bad \\377\\376 byte' >&2\nexit 1"
-    )
-    monkeypatch.setattr(
-        density.shutil, "which", lambda command, path=None: str(program)
-    )
+
+    def non_utf8_failure(*args, stderr=None, **kwargs):
+        assert stderr is not None
+        stderr.write(b"bad \xff\xfe byte")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(density.shutil, "which", lambda command, path=None: command)
+    monkeypatch.setattr(density.subprocess, "run", non_utf8_failure)
     source = tmp_path / "source.mtz"
     source.write_bytes(b"source")
     pdb = tmp_path / "model.pdb"
@@ -175,6 +177,9 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     assert not isinstance(excinfo.value, UnicodeDecodeError)
 
 
+@pytest.mark.skipif(
+    os.name != "posix", reason="requires POSIX shell background-process semantics"
+)
 def test_a_helper_holding_stderr_does_not_fake_a_timeout(tmp_path, monkeypatch):
     """The budget bounds the program, not the lifetime of an inherited pipe.
 
