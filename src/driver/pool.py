@@ -835,6 +835,11 @@ class _WorkerDeathWatch:
         self._worker_pids: set = set()
         self._lost_ids: set = set()
         self._unattributed_deaths = 0
+        # ``Pool`` has started its workers before its constructor returns, and
+        # no tasks are submitted until after this watch is created. Snapshot
+        # that original roster now: if the first task kills its worker before
+        # the result loop's first poll, its vanished pid must still be known.
+        _dead_worker_pids(self._pool, self._worker_pids)
 
     def poll(self):
         """Results for the entries whose worker has died since the last call."""

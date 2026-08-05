@@ -348,6 +348,7 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(tmp_path):
 #
 #   runtime    seconds the entry "takes" before its result is returned
 #   die        "announced": name the entry, then SIGKILL mid-entry (an OOM kill)
+#              "announced_early": name the entry, then SIGKILL immediately
 #              "silent":    SIGKILL mid-entry without ever naming the entry
 #   claim      after finishing cleanly, announce a start for THIS other entry,
 #              leaving the driver with a stale attribution for it
@@ -406,11 +407,10 @@ def _stub_process(pdb_id):
 
     die = step.get("die")
     if die and _first_visit(pdb_id):
-        if die == "announced":
+        if die in ("announced", "announced_early"):
             _announce("start", pdb_id)
-        # The pause has to outlast the driver's first roster snapshot, so that
-        # the snapshot still contains this pid when the kill lands.
-        time.sleep(runtime)
+        if die != "announced_early":
+            time.sleep(runtime)
         os.kill(os.getpid(), signal.SIGKILL)
 
     _announce("start", pdb_id)
@@ -594,6 +594,29 @@ def test_driver_recovers_from_a_sigkilled_worker(tmp_path, script, stall_grace):
     for pdb_id in ids[1:]:
         assert by_id[pdb_id]["status"] == "ok"
 
+    assert exit_code == 1
+
+
+@_POSIX_KILL
+def test_driver_recovers_when_first_worker_dies_before_first_result_poll(tmp_path):
+    """The initial roster exists before the first entry can kill its worker.
+
+    The result loop waits up to a second before its first death poll. Without
+    the pre-dispatch roster snapshot, a worker that dies in that interval is
+    replaced before it was ever known and its entry is then awaited forever.
+    """
+    exit_code, output_dir, elapsed = _run_driver(
+        tmp_path,
+        {"aaaa": {"die": "announced_early"}},
+        workers=1,
+    )
+
+    assert elapsed < _DRIVER_HARD_TIMEOUT_S
+    rows = _read_manifest(output_dir)
+    assert len(rows) == 1
+    assert rows[0]["pdbID"] == "aaaa"
+    assert rows[0]["status"] == "error"
+    assert rows[0]["reason_codes"] == "worker_process_died"
     assert exit_code == 1
 
 
