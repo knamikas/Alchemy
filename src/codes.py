@@ -86,6 +86,52 @@ class ElementStatus(StrEnum):
     INVALID = "invalid"
 
 
+class ReasonCode(StrEnum):
+    """Why an entry did not finish as a plain ``ok``, carried to the manifest.
+
+    These are the most user-visible words Alchemy writes, and
+    ``docs/operations.md`` documents them, so they belong here rather than as
+    literals at the point of use. One of them is also read back:
+    ``driver.resume`` decides whether a bond stage was applicable by testing for
+    ``METAL_PRESENCE_INDETERMINATE``, and with the string spelled out at both
+    ends a rename would silently reprocess those entries on every resume.
+    """
+
+    #: The pool never received a result: the worker holding the entry died.
+    WORKER_PROCESS_DIED = "worker_process_died"
+    #: An input file named on the command line or in the mirror is absent.
+    MISSING_INPUT = "missing_input"
+    #: A CCP4 program was killed at ``--ccp4-timeout``. It reported nothing
+    #: about the entry, so unlike a failure exit this is worth retrying.
+    CCP4_TOOL_TIMEOUT = "ccp4_tool_timeout"
+    MTZFIX_VALIDATION_FAILURE = "mtzfix_validation_failure"
+    #: An unanticipated exception whose type leaves a retry meaningful.
+    UNEXPECTED_PROCESSING_ERROR = "unexpected_processing_error"
+    #: An unanticipated exception that will recur identically on the same
+    #: inputs, so the entry is terminal rather than retried forever.
+    DETERMINISTIC_PROCESSING_ERROR = "deterministic_processing_error"
+    #: An atom's element could not be trusted, so metal absence cannot be
+    #: established under the no-inference policy and no site is analysable.
+    METAL_PRESENCE_INDETERMINATE = "metal_presence_indeterminate"
+    BOND_STAGE_FAILURE = "bond_stage_failure"
+    DECLARED_CONNECTION_RESOLUTION_INCOMPLETE = (
+        "declared_connection_resolution_incomplete"
+    )
+    SYMMETRY_SEARCH_UNAVAILABLE = "symmetry_search_unavailable"
+    MISSING_FIRST_SPHERE_REFERENCE = "missing_first_sphere_reference"
+    METAL_ZERO_OCCUPANCY = "metal_zero_occupancy"
+    #: The remaining members are the DPI's own reasons for being unavailable,
+    #: each recorded as the entry's partial reason.
+    MISSING_DPI_METADATA_SOURCE = "missing_dpi_metadata_source"
+    INVALID_DPI_METADATA = "invalid_dpi_metadata"
+    INVALID_OCCUPANCY = "invalid_occupancy"
+    MISSING_OR_INVALID_REFLECTION_COUNT = "missing_or_invalid_reflection_count"
+    MISSING_OR_INVALID_RFREE = "missing_or_invalid_rfree"
+    MISSING_OR_INVALID_ASU_VOLUME = "missing_or_invalid_asu_volume"
+    INVALID_DPI_ATOM_COUNT = "invalid_dpi_atom_count"
+    DPI_CALCULATION_FAILED = "dpi_calculation_failed"
+
+
 class WarningCode(StrEnum):
     """Non-fatal observations about an entry, carried to the manifest."""
 

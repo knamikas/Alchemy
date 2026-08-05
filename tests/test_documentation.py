@@ -25,7 +25,9 @@ from typing import Set
 import pytest
 
 from helpers import REPO_ROOT, SRC_DIR
+from codes import ReasonCode
 from driver import pool
+from driver.writers import STATS_COLUMNS
 
 
 README_PATH = os.path.join(REPO_ROOT, "README.md")
@@ -47,6 +49,45 @@ _IMPORT_TO_DISTRIBUTION = {"gemmi": "gemmi", "numpy": "numpy"}
 def _read(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
         return handle.read()
+
+
+def test_every_reason_code_is_documented():
+    """The manifest vocabulary is the most user-visible text Alchemy writes.
+
+    ``docs/operations.md`` is where an operator looks a code up, so a code that
+    reaches the manifest without an entry there is undocumented in the only
+    place it matters. Checking the enum rather than the source also means a
+    renamed code cannot quietly leave the documentation describing the old one.
+    """
+    documented = _read(os.path.join(DOCS_DIR, "operations.md"))
+    missing = sorted(
+        code.value for code in ReasonCode if f"`{code.value}`" not in documented
+    )
+    assert not missing, f"reason codes absent from docs/operations.md: {missing}"
+
+
+def test_no_reason_code_is_emitted_outside_the_shared_vocabulary():
+    """Reason codes are assigned from ``ReasonCode``, not spelled out again.
+
+    ``driver.resume`` reads one of these back to decide whether a bond stage was
+    applicable, so a literal at one end and a constant at the other would let a
+    rename reprocess those entries on every resume with nothing to catch it.
+    """
+    # Two words are both a reason code and an output column, and the column is
+    # legitimately written as a literal dict key. Excluding them costs coverage
+    # of those two codes rather than reporting correct code as a defect.
+    also_column_names = {code.value for code in ReasonCode} & set(STATS_COLUMNS)
+    known = {code.value for code in ReasonCode} - also_column_names
+    offenders = []
+    for module in ("worker.py", "coordination/analysis.py", "coordination/dpi.py"):
+        source = _read(os.path.join(SRC_DIR, module))
+        for literal in re.findall(r'"([a-z][a-z0-9_]{6,})"', source):
+            if literal in known:
+                offenders.append(f"{module}: {literal!r}")
+    assert not offenders, (
+        "reason codes written as string literals rather than ReasonCode members: "
+        f"{sorted(offenders)}"
+    )
 
 
 def _declared_dependencies() -> Set[str]:

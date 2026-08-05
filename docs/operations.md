@@ -130,3 +130,33 @@ Running batches, resuming them, and reading what a run wrote. See
   for the first run. All four headers are compared in full,
   including the EDSTATS block of `metal_stats_all.csv`, so appended rows cannot
   be silently misaligned by output from a different EDSTATS build.
+
+## Manifest reason codes
+
+`reason_codes` is a `|`-separated list explaining why an entry is not a plain
+`ok`. The vocabulary is defined once as `ReasonCode` in `src/codes.py`, and
+`tests/test_documentation.py` fails if a member is missing from the table below,
+so a code cannot be added or renamed without this list following it.
+
+| Code | Meaning |
+| --- | --- |
+| `worker_process_died` | The worker holding the entry died before returning a result; the driver recorded the loss on its behalf. |
+| `missing_input` | A coordinate or reflection file named on the command line, or expected in the mirror, was absent. |
+| `ccp4_tool_timeout` | A CCP4 program was killed at `--ccp4-timeout`. It reported nothing about the entry, so this is retryable. |
+| `mtzfix_validation_failure` | `mtzfix` failed its consistency re-test, and the entry is not a PDB-REDO-declared twin. |
+| `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError`. |
+| `deterministic_processing_error` | An unanticipated exception that will recur identically on the same inputs, such as a parse or lookup error. Terminal. |
+| `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analysable. |
+| `bond_stage_failure` | The geometry stage raised, so its rows are not legitimate density-only evidence. |
+| `declared_connection_resolution_incomplete` | A source `_struct_conn` or `LINK` record named an atom that could not be resolved in the coordinate model. |
+| `symmetry_search_unavailable` | The structure has no usable cell or space group, so only explicit contacts could be found. |
+| `missing_first_sphere_reference` | No bundled reference distance covers a donor class present at the site, so those contacts cannot be z-scored. |
+| `metal_zero_occupancy` | The metal atom itself is modeled at zero occupancy, so its coordination is not assessed. |
+| `missing_dpi_metadata_source` | Manual input without `--data-json`: the reflection count has no source, which differs from a calculation that ran and failed. |
+| `invalid_dpi_metadata` | The reflection count, R-free, or asymmetric-unit volume was present but not numeric. |
+| `invalid_occupancy` | Deposited occupancies could not be read, or overfull alternates exceeded the tolerance, leaving `Ni` unusable. |
+| `missing_or_invalid_reflection_count` | `NREFCNT` was absent or non-positive. |
+| `missing_or_invalid_rfree` | `RFFIN` was absent or non-positive, and no R-free could be read from the coordinate file. |
+| `missing_or_invalid_asu_volume` | The asymmetric-unit volume could not be derived from the cell and space group. |
+| `invalid_dpi_atom_count` | `Ni` came out non-positive with every other DPI input valid. |
+| `dpi_calculation_failed` | The DPI calculation raised; the entry keeps its contact distances, which do not require a DPI. |

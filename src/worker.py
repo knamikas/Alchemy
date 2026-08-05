@@ -18,7 +18,7 @@ from typing import Any, Collection, Dict, Optional
 
 from _version import __version__
 from coordination.analysis import NAN, load_structure, run_bond_analysis
-from codes import WarningCode
+from codes import ReasonCode, WarningCode
 from coordination.schema import (
     STATS_EXTRA_COLUMNS,
     _check_row_schema,
@@ -279,7 +279,7 @@ def _worker_death_result(pdb_id, cfg, pid):
     result = _initial_result(pdb_id, cfg, cfg.manual_inputs)
     result.status = "error"
     result.retryable = True
-    result.reason_codes = ["worker_process_died"]
+    result.reason_codes = [ReasonCode.WORKER_PROCESS_DIED]
     result.error = (
         f"worker process {pid} terminated without returning a result "
         f"(out-of-memory kill or crash); {pdb_id} was not analyzed"
@@ -377,9 +377,9 @@ def _run_density_stage(result, cfg, inputs, structure):
         rows, header = [], []
         kept_log = _preserve_timeout_log(exc, result.pdb_id, cfg.output_dir)
         result.retryable = True
-        result.reason_codes = ["ccp4_tool_timeout"]
+        result.reason_codes = [ReasonCode.CCP4_TOOL_TIMEOUT]
         result.error = truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS)
-        result.confidence_inputs_missing_reason = "ccp4_tool_timeout"
+        result.confidence_inputs_missing_reason = ReasonCode.CCP4_TOOL_TIMEOUT
         result.ccp4_timeout_log_path = kept_log
         result.timings.update(exc.timings)
     except MtzfixValidationError as exc:
@@ -388,9 +388,9 @@ def _run_density_stage(result, cfg, inputs, structure):
         # independently assessable.
         rows, header = [], []
         result.retryable = False
-        result.reason_codes = ["mtzfix_validation_failure"]
+        result.reason_codes = [ReasonCode.MTZFIX_VALIDATION_FAILURE]
         result.error = truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS)
-        result.confidence_inputs_missing_reason = "mtzfix_validation_failure"
+        result.confidence_inputs_missing_reason = ReasonCode.MTZFIX_VALIDATION_FAILURE
         result.timings.update(exc.timings)
     else:
         result.timings.update(res.timings)
@@ -505,9 +505,9 @@ def _run_bond_stage(result, cfg, inputs, structure, rows, header):
             f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS
         )
         result.reason_codes = list(
-            dict.fromkeys(result.reason_codes + ["bond_stage_failure"])
+            dict.fromkeys(result.reason_codes + [ReasonCode.BOND_STAGE_FAILURE])
         )
-        result.confidence_inputs_missing_reason = "bond_stage_failure"
+        result.confidence_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
         result.retryable = True
     finally:
         result.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)
@@ -647,14 +647,16 @@ def process(pdb_id):
                 unknown_count = structure.unknown_element_atom_count
                 result.status = "partial"
                 result.retryable = False
-                result.reason_codes = ["metal_presence_indeterminate"]
+                result.reason_codes = [ReasonCode.METAL_PRESENCE_INDETERMINATE]
                 result.error = truncate(
                     "cannot establish metal absence: "
                     f"{unknown_count} atom(s) have missing or invalid element symbols",
                     MAX_MANIFEST_ERROR_CHARS,
                 )
                 result.n_metals = 0
-                result.confidence_inputs_missing_reason = "metal_presence_indeterminate"
+                result.confidence_inputs_missing_reason = (
+                    ReasonCode.METAL_PRESENCE_INDETERMINATE
+                )
                 return result
             # Skip two FFT maps and EDSTATS: with no canonical metal site,
             # neither density nor contact analysis can produce output.
@@ -681,16 +683,16 @@ def process(pdb_id):
     except FileNotFoundError as e:
         result.status = "skip"
         result.retryable = True
-        result.reason_codes = ["missing_input"]
+        result.reason_codes = [ReasonCode.MISSING_INPUT]
         result.error = truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS)
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = "error"
         result.retryable = not deterministic
         result.reason_codes = [
-            "deterministic_processing_error"
+            ReasonCode.DETERMINISTIC_PROCESSING_ERROR
             if deterministic
-            else "unexpected_processing_error"
+            else ReasonCode.UNEXPECTED_PROCESSING_ERROR
         ]
         result.error = truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS)
         # The manifest keeps one truncated line, which names the exception but

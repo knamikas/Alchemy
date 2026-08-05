@@ -16,6 +16,7 @@ import shutil
 import tempfile
 from typing import Optional, Sequence
 
+from codes import ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
@@ -79,7 +80,9 @@ def load_done(
                         for code in _csv_text(row, "reason_codes").split("|")
                         if code
                     }
-                    bonds_inapplicable = "metal_presence_indeterminate" in reason_codes
+                    bonds_inapplicable = (
+                        ReasonCode.METAL_PRESENCE_INDETERMINATE in reason_codes
+                    )
                     bonds_complete = not bonds_required or (
                         bond_output_present
                         and candidate_output_present

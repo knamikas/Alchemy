@@ -24,7 +24,13 @@ from coordination.schema import (
     _candidate_row,
     _context_warning_values,
 )
-from codes import CandidateSource, ContactScope, GeometryStatus, MultiDonorStatus
+from codes import (
+    CandidateSource,
+    ContactScope,
+    GeometryStatus,
+    MultiDonorStatus,
+    ReasonCode,
+)
 from coordination.contact_record import Candidate
 from coordination.declared_connections import _collect_declared_candidates
 from coordination.donor_chemistry import (
@@ -793,11 +799,11 @@ def _site_summary(
 
     reasons = []
     if metal_zero:
-        reasons.append("metal_zero_occupancy")
+        reasons.append(ReasonCode.METAL_ZERO_OCCUPANCY)
     if dpi_reason:
         reasons.append(dpi_reason)
     if not image_search_available:
-        reasons.append("symmetry_search_unavailable")
+        reasons.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
     if primary["scored_consistent"] + primary["scored_outlier"] == 0:
         reasons.append("no_assessable_reference_contacts")
     return {
@@ -887,7 +893,7 @@ def run_bond_analysis(
     )
     if declared_issues:
         metadata["partial_reason_codes"].append(
-            "declared_connection_resolution_incomplete"
+            ReasonCode.DECLARED_CONNECTION_RESOLUTION_INCOMPLETE
         )
         metadata["messages"].extend(declared_issues)
     metadata["warning_codes"].extend(declared_warnings)
@@ -902,7 +908,7 @@ def run_bond_analysis(
         metadata["partial_reason_codes"].append(dpi_reason)
         metadata["messages"].append(f"DPI unavailable: {dpi_reason}")
     if not structure.symmetry_search_available:
-        metadata["partial_reason_codes"].append("symmetry_search_unavailable")
+        metadata["partial_reason_codes"].append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
         metadata["messages"].append(
             "symmetry search unavailable: "
             + (structure.symmetry_search_failure_reason or "unknown reason")
@@ -954,7 +960,9 @@ def run_bond_analysis(
             _annotate_contacts(image_contacts, metal.element, dpi)
             _annotate_multi_donor_groups(image_contacts)
         if unsupported_pairs:
-            metadata["partial_reason_codes"].append("missing_first_sphere_reference")
+            metadata["partial_reason_codes"].append(
+                ReasonCode.MISSING_FIRST_SPHERE_REFERENCE
+            )
             pairs = ", ".join(
                 f"{metal_element}-{donor_element}"
                 for metal_element, donor_element in sorted(unsupported_pairs)
@@ -980,7 +988,7 @@ def run_bond_analysis(
         summary.update(_site_context_values(primary_contacts, primary_candidates))
         summaries[metal.source_key] = summary
         if summary["metal_zero_occupancy"]:
-            metadata["partial_reason_codes"].append("metal_zero_occupancy")
+            metadata["partial_reason_codes"].append(ReasonCode.METAL_ZERO_OCCUPANCY)
             metadata["messages"].append(
                 f"zero-occupancy metal: {metal.chain_id}/{metal.resnum}/"
                 f"{metal.atom_name}"

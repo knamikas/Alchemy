@@ -13,6 +13,7 @@ import json
 import math
 import re
 
+from codes import ReasonCode
 from structure_analysis import NAN, count_ni
 
 
@@ -89,7 +90,7 @@ def _calculate_dpi_details(structure, dpi_inputs):
         # Manual input mode without --data-json: the reflection count has no
         # source at all, which is a different answer from a calculation that
         # ran and failed.
-        return NAN, resolution, "missing_dpi_metadata_source"
+        return NAN, resolution, ReasonCode.MISSING_DPI_METADATA_SOURCE
 
     try:
         props = {}
@@ -111,7 +112,7 @@ def _calculate_dpi_details(structure, dpi_inputs):
         ni = count_ni(structure)
 
         if not all(isinstance(x, (float, int)) for x in (nobs, rfree, va)):
-            return NAN, resolution, "invalid_dpi_metadata"
+            return NAN, resolution, ReasonCode.INVALID_DPI_METADATA
         if not (
             math.isfinite(nobs)
             and math.isfinite(rfree)
@@ -122,17 +123,17 @@ def _calculate_dpi_details(structure, dpi_inputs):
             and ni > 0
         ):
             if structure.occupancy_validation_failed:
-                reason = "invalid_occupancy"
+                reason = ReasonCode.INVALID_OCCUPANCY
             elif not math.isfinite(nobs) or nobs <= 0:
-                reason = "missing_or_invalid_reflection_count"
+                reason = ReasonCode.MISSING_OR_INVALID_REFLECTION_COUNT
             elif not math.isfinite(rfree) or rfree <= 0:
-                reason = "missing_or_invalid_rfree"
+                reason = ReasonCode.MISSING_OR_INVALID_RFREE
             elif not math.isfinite(va) or va <= 0:
-                reason = "missing_or_invalid_asu_volume"
+                reason = ReasonCode.MISSING_OR_INVALID_ASU_VOLUME
             else:
-                reason = "invalid_dpi_atom_count"
+                reason = ReasonCode.INVALID_DPI_ATOM_COUNT
             return NAN, resolution, reason
         dpi = 1.28 * (ni**0.5) * (va ** (1 / 3)) * (nobs ** (-5 / 6)) * rfree
         return round(dpi, 4), resolution, ""
     except Exception:
-        return NAN, resolution, "dpi_calculation_failed"
+        return NAN, resolution, ReasonCode.DPI_CALCULATION_FAILED
