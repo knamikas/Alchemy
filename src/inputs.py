@@ -254,6 +254,28 @@ def _remove_partial_download(tmp):
         pass
 
 
+def _response_content_length(response, url):
+    """Return a validated HTTP Content-Length, or ``None`` when absent."""
+    getheader = getattr(response, "getheader", None)
+    if callable(getheader):
+        value = getheader("Content-Length")
+    else:
+        headers = getattr(response, "headers", None)
+        value = headers.get("Content-Length") if headers is not None else None
+    if value in (None, ""):
+        return None
+    text = value.decode("ascii") if isinstance(value, bytes) else str(value)
+    try:
+        length = int(text)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise FileNotFoundError(
+            f"{url}: invalid Content-Length header {value!r}"
+        ) from exc
+    if length < 0:
+        raise FileNotFoundError(f"{url}: invalid Content-Length header {value!r}")
+    return length
+
+
 def _download_stream(url, dst, timeout=30):
     """Download URL to dst. Raise FileNotFoundError if no usable file results.
 
@@ -277,9 +299,17 @@ def _download_stream(url, dst, timeout=30):
             status = response.getcode()
             if status != 200:
                 raise FileNotFoundError(f"{url}: status {status}")
+            expected_bytes = _response_content_length(response, url)
+            received_bytes = 0
             with open(tmp, "wb") as fh:
                 while chunk := response.read(8192):
                     fh.write(chunk)
+                    received_bytes += len(chunk)
+            if expected_bytes is not None and received_bytes != expected_bytes:
+                raise FileNotFoundError(
+                    f"{url}: incomplete response body: expected "
+                    f"{expected_bytes} bytes, received {received_bytes}"
+                )
         os.replace(tmp, dst)
     except FileNotFoundError:
         _remove_partial_download(tmp)

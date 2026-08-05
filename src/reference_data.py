@@ -182,6 +182,7 @@ def _load_literature(path):
     from a pair genuinely absent from the literature.
     """
     lit = {}
+    first_line_by_key = {}
     with open(path) as f:
         for number, line in enumerate(f, start=1):
             parts = line.split()
@@ -204,7 +205,26 @@ def _load_literature(path):
                     f"{os.path.basename(path)} line {number} has non-numeric "
                     f"distance columns: {line.strip()!r}"
                 ) from exc
-            lit[(parts[0], parts[1], parts[2])] = (mu, stdev)
+            if not (math.isfinite(mu) and math.isfinite(stdev)):
+                raise ValueError(
+                    f"{os.path.basename(path)} line {number} has non-finite "
+                    f"distance columns: {line.strip()!r}"
+                )
+            if mu <= 0.0 or stdev <= 0.0:
+                raise ValueError(
+                    f"{os.path.basename(path)} line {number} has non-positive "
+                    f"distance columns: {line.strip()!r}"
+                )
+            key = (parts[0], parts[1], parts[2])
+            if key in lit:
+                first_line = first_line_by_key[key]
+                raise ValueError(
+                    f"{os.path.basename(path)} line {number} duplicates "
+                    f"reference key {' '.join(key)!r} first defined on line "
+                    f"{first_line}"
+                )
+            lit[key] = (mu, stdev)
+            first_line_by_key[key] = number
     if not lit:
         raise ValueError(f"{os.path.basename(path)} carries no reference distances")
     return lit

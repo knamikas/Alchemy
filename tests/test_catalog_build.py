@@ -391,3 +391,19 @@ def test_the_recorded_row_count_comes_from_the_loader(tmp_path):
     assert metadata["reference_distance_count"] == 2
     assert metadata["distance_table_sha256"] == stamper.sha256(str(table))
     assert metadata["sources"], "citations are the point of the sidecar"
+
+
+@pytest.mark.parametrize(
+    "text,message",
+    [
+        ("HOH O ZN nan 0.11\n", "non-finite"),
+        ("HOH O ZN 2.09 0.11\nHOH O ZN 2.10 0.12\n", "duplicates"),
+    ],
+)
+def test_stamping_refuses_invalid_reference_rows(tmp_path, text, message):
+    """A fresh checksum cannot legitimize invalid scientific inputs."""
+    table = tmp_path / "distances.txt"
+    table.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        stamper.build_metadata(str(table), "2026-08-05T00:00:00+00:00")

@@ -293,6 +293,33 @@ def test_a_damaged_distance_row_fails_the_parse(tmp_path, row, message):
         reference_data._load_literature(str(table))
 
 
+@pytest.mark.parametrize(
+    "mu,stdev,message",
+    [
+        ("nan", "0.11", "non-finite"),
+        ("2.09", "inf", "non-finite"),
+        ("-2.09", "0.11", "non-positive"),
+        ("2.09", "-0.11", "non-positive"),
+        ("0", "0.11", "non-positive"),
+        ("2.09", "0", "non-positive"),
+    ],
+)
+def test_distance_values_must_be_finite_and_positive(tmp_path, mu, stdev, message):
+    table = tmp_path / "distances.txt"
+    table.write_text(f"HOH O ZN {mu} {stdev}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        reference_data._load_literature(str(table))
+
+
+def test_duplicate_reference_keys_are_rejected(tmp_path):
+    table = tmp_path / "distances.txt"
+    table.write_text("HOH O ZN 2.09 0.11\nHOH O ZN 2.10 0.12\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"line 2 duplicates.*first defined on line 1"):
+        reference_data._load_literature(str(table))
+
+
 def test_the_table_header_is_skipped_by_name():
     """It is skipped by name, which is what allows every other unparseable line
     to be an error rather than a shrug."""

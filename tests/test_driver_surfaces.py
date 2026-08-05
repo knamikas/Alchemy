@@ -652,6 +652,33 @@ class _FailingResponse:
         return False
 
 
+class _LengthResponse:
+    """A cleanly ending response with an independently declared byte count."""
+
+    def __init__(self, body, content_length):
+        self._body = body
+        self._content_length = content_length
+        self._served = False
+
+    def getcode(self):
+        return 200
+
+    def getheader(self, name):
+        return self._content_length if name.lower() == "content-length" else None
+
+    def read(self, _size):
+        if self._served:
+            return b""
+        self._served = True
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -683,6 +710,40 @@ def test_a_transfer_that_fails_midway_reports_no_usable_file(
     assert type(error).__name__ in str(excinfo.value)
     assert not destination.exists()
     assert list(tmp_path.glob("*.part")) == [], "a partial download was left behind"
+
+
+def test_a_clean_early_eof_is_not_promoted_into_the_cache(tmp_path, monkeypatch):
+    """HTTPResponse can return EOF without raising for a short response body."""
+    body = b"nonempty but truncated"
+    monkeypatch.setattr(
+        inputs,
+        "urlopen",
+        lambda url, timeout=None: _LengthResponse(body, len(body) + 4096),
+    )
+    destination = tmp_path / "9myr_final.mtz"
+
+    with pytest.raises(FileNotFoundError, match=r"expected .* received"):
+        inputs._download_stream(
+            "https://example.invalid/9myr_final.mtz", str(destination)
+        )
+
+    assert not destination.exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_a_body_matching_content_length_is_promoted(tmp_path, monkeypatch):
+    body = b"complete response"
+    monkeypatch.setattr(
+        inputs,
+        "urlopen",
+        lambda url, timeout=None: _LengthResponse(body, len(body)),
+    )
+    destination = tmp_path / "data.json"
+
+    assert inputs._download_stream(
+        "https://example.invalid/data.json", str(destination)
+    ) == str(destination)
+    assert destination.read_bytes() == body
 
 
 def test_an_unwritable_cache_is_reported_as_a_driver_error(tmp_path, monkeypatch):

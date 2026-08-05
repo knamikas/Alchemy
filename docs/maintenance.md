@@ -52,7 +52,12 @@ list or classification rules change.
 
 Both bundled files are verified against their sidecars when they are first
 read, and a run stops rather than analyze against data that has drifted from
-what the tools recorded. After editing the distance table by hand, re-stamp it:
+what the tools recorded. The distance-table loader and stamping tool reject
+duplicate `(residue, atom, metal)` keys and require both the mean distance and
+standard deviation to be finite and positive. Invalid rows cannot be hidden by
+a new checksum.
+
+After editing the distance table by hand, re-stamp it:
 
 ```console
 python tools/stamp_distance_table.py            # rewrite the sidecar
