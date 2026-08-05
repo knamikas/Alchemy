@@ -25,6 +25,7 @@ DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
 RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
 RESIDUE_REMARK_PREFIX = "REMARK 950 ALCHEMY RESIDUE"
 POLYMER_REMARK_PREFIX = "REMARK 950 ALCHEMY POLYMER"
+OCCUPANCY_DEFAULT_REMARK_PREFIX = "REMARK 950 ALCHEMY OCCUPANCY DEFAULTED"
 
 
 # Blank PDB columns, Gemmi's NUL altloc, and the two mmCIF null tokens all mean
@@ -335,6 +336,7 @@ class StructureContext:
     missing_occupancy_count: int
     invalid_occupancy_count: int
     overfull_occupancy_site_count: int
+    defaulted_occupancy_atom_count: int
     zero_occupancy_atom_count: int
     duplicate_atom_records_present: bool
     duplicate_atom_record_count: int
@@ -721,6 +723,39 @@ def _raw_pdb_residue_mapping(
     return mapping
 
 
+def _raw_pdb_defaulted_occupancy_counts(path: str) -> Dict[int, int]:
+    """Read per-model counts whose occupancies came from the mmCIF default."""
+    counts: Dict[int, int] = {}
+    prefix_fields = OCCUPANCY_DEFAULT_REMARK_PREFIX.split()
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            fields = line.split()
+            if fields[: len(prefix_fields)] != prefix_fields:
+                continue
+            if len(fields) != len(prefix_fields) + 2:
+                raise ValueError(
+                    f"malformed Alchemy occupancy provenance: {line.rstrip()}"
+                )
+            try:
+                model_index = int(fields[-2]) - 1
+                count = int(fields[-1])
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    f"invalid Alchemy occupancy provenance: {line.rstrip()}"
+                ) from exc
+            if model_index < 0 or count <= 0:
+                raise ValueError(
+                    "Alchemy occupancy provenance requires a positive model and count"
+                )
+            if model_index in counts:
+                raise ValueError(
+                    "duplicate Alchemy occupancy provenance for model "
+                    f"{model_index + 1}"
+                )
+            counts[model_index] = count
+    return counts
+
+
 def _gemmi_atom_identity(
     chain: gemmi.Chain, residue: gemmi.Residue, atom: gemmi.Atom
 ) -> Tuple[str, str, str, str, str, str]:
@@ -975,9 +1010,11 @@ def load_structure(
     source_residue_identities: Dict[
         Tuple[int, str, str, str], SourceResidueIdentity
     ] = {}
+    defaulted_occupancy_counts: Dict[int, int] = {}
     if analysis_format == "pdb":
         raw_models, raw_error = _raw_pdb_occupancies(path)
         source_residue_identities = _raw_pdb_residue_mapping(path)
+        defaulted_occupancy_counts = _raw_pdb_defaulted_occupancy_counts(path)
     legacy_identifiers_packed = any(
         identity.residue_number is not None
         and (
@@ -995,6 +1032,11 @@ def load_structure(
     raw_first = raw_models[0] if raw_models else []
     gemmi_atoms = [atom for chain in model for residue in chain for atom in residue]
     gemmi_atom_count = len(gemmi_atoms)
+    defaulted_occupancy_count = defaulted_occupancy_counts.get(0, 0)
+    if defaulted_occupancy_count not in (0, gemmi_atom_count):
+        raise ValueError(
+            "defaulted occupancy count does not match the analyzed model atom count"
+        )
     raw_matches: List[Optional[RawOccupancy]]
     unmatched_gemmi = 0
     unmatched_raw = 0
@@ -1174,6 +1216,8 @@ def load_structure(
         warnings.append(WarningCode.ZERO_OCCUPANCY_ATOMS)
     if overfull_site_count:
         warnings.append(WarningCode.OVERFULL_ALTERNATE_OCCUPANCY)
+    if defaulted_occupancy_count:
+        warnings.append(WarningCode.OCCUPANCY_DICTIONARY_DEFAULT_APPLIED)
     if mapping_failed:
         warnings.append(WarningCode.RAW_OCCUPANCY_MAPPING_FAILED)
     if legacy_identifiers_packed:
@@ -1228,6 +1272,7 @@ def load_structure(
         missing_occupancy_count=missing_count,
         invalid_occupancy_count=invalid_count,
         overfull_occupancy_site_count=overfull_site_count,
+        defaulted_occupancy_atom_count=defaulted_occupancy_count,
         zero_occupancy_atom_count=zero_count,
         duplicate_atom_records_present=duplicate_count > 0,
         duplicate_atom_record_count=duplicate_count,

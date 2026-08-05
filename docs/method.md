@@ -17,10 +17,15 @@ Alternative coordinate/MTZ pairs can still be supplied through the manual-file
 options; when both coordinate formats are supplied, mmCIF takes precedence.
 
 During mmCIF conversion, `.` and `?` occupancy values are written as blank PDB
-occupancies rather than being replaced by `1.00`. Alchemy also embeds a
-reversible mapping for component identifiers that exceed the three-character
-legacy PDB residue-name field. The original CCD identifier is restored after
-EDSTATS so cofactor catalog matching and output retain the mmCIF identity.
+occupancies rather than being replaced by `1.00`. If the occupancy item itself
+is absent, Alchemy applies its dictionary default of `1.0` and records the
+number of affected atoms as provenance; this does not claim the depositor
+explicitly supplied those values. `_atom_site.id` is treated as an opaque code,
+with independent numeric serials generated for the legacy PDB. Alchemy also
+embeds a reversible mapping for component identifiers that exceed the
+three-character legacy PDB residue-name field. The original CCD identifier is
+restored after EDSTATS so cofactor catalog matching and output retain the mmCIF
+identity.
 
 If a model has more chains than the one-character PDB namespace can represent,
 Alchemy packs its residues into synthetic one-character chains with unique

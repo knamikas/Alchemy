@@ -1943,7 +1943,9 @@ class TestCifToPdb:
         assert blanked[17:20].strip() == "GLY"
         assert len(blanked.rstrip("\n")) >= 78
 
-    def test_absent_occupancy_column_blanks_every_atom(self, tmp_path):
+    def test_absent_occupancy_column_uses_dictionary_default_with_provenance(
+        self, tmp_path
+    ):
         cif = _write_cif(
             tmp_path / "noocc.cif",
             [
@@ -1981,7 +1983,13 @@ class TestCifToPdb:
         )
         out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         for line in _pdb_atom_lines(out):
-            assert _occupancy_field(line).strip() == ""
+            assert _occupancy_field(line).strip() == "1.00"
+
+        context = structure_analysis.load_structure("test", out)
+        assert context.occupancy_validation_failed is False
+        assert context.defaulted_occupancy_atom_count == 2
+        assert "occupancy_dictionary_default_applied" in context.warning_codes
+        assert structure_analysis.count_deposited_ni(context) == pytest.approx(2.0)
 
     def test_type_symbol_is_written_into_the_pdb_element_field(self, tmp_path):
         """Alchemy reads the element column, never guesses from atom names."""
@@ -2053,6 +2061,8 @@ class TestCifToPdb:
         assert by_atom["C"].occupancy_valid is False
         assert by_atom["N"].occupancy == pytest.approx(1.0)
         assert by_atom["ZN"].occupancy == pytest.approx(0.75)
+        assert context.defaulted_occupancy_atom_count == 0
+        assert "occupancy_dictionary_default_applied" not in context.warning_codes
 
     def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(self, tmp_path):
         """Every source site survives when one-character chain ids run out."""
@@ -2170,18 +2180,53 @@ class TestCifToPdb:
         with pytest.raises(ValueError, match="duplicate mmCIF atom_site id"):
             conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
-    def test_non_integer_atom_site_id_is_rejected(self, tmp_path):
-        """gemmi exposes an integer serial; a non-integer id cannot be joined."""
+    def test_code_atom_site_ids_are_mapped_to_generated_pdb_serials(self, tmp_path):
         cif = _write_cif(
-            tmp_path / "bad.cif",
+            tmp_path / "code-ids.cif",
             [
                 _cif_atom(
-                    "A1", "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "1.00", 1, "A"
+                    "A1", "N", "N", "GLY", "A", 1, 1, (20.0, 20.0, 20.0), "0.25", 1, "A"
+                ),
+                _cif_atom(
+                    "metal-B",
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    "B",
+                    2,
+                    ".",
+                    (0.0, 0.0, 0.0),
+                    "0.75",
+                    1,
+                    "B",
+                    group="HETATM",
+                ),
+                _cif_atom(
+                    "atom-two",
+                    "C",
+                    "C",
+                    "ALA",
+                    "A",
+                    1,
+                    2,
+                    (21.5, 20.0, 20.0),
+                    "?",
+                    2,
+                    "A",
                 ),
             ],
         )
-        with pytest.raises(ValueError, match="not an integer"):
-            conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        lines = _pdb_atom_lines(out)
+
+        # Gemmi groups the two A-chain rows even though the B-chain row was
+        # interleaved in atom_site. Generated serials preserve the source row
+        # association through that reorder.
+        assert [line[12:16].strip() for line in lines] == ["N", "C", "ZN"]
+        assert [int(line[6:11]) for line in lines] == [1, 2, 4]
+        assert float(_occupancy_field(lines[0])) == pytest.approx(0.25)
+        assert _occupancy_field(lines[1]).strip() == ""
+        assert float(_occupancy_field(lines[2])) == pytest.approx(0.75)
 
     def test_multiple_atom_site_blocks_are_rejected(self, tmp_path):
         atoms = [

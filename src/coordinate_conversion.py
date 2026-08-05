@@ -7,13 +7,15 @@ residue's source identity is recorded as a REMARK in the PDB that Alchemy then
 analyses, and every step that could silently change a residue's identity,
 ordering, or atom membership raises instead. mmCIF ``.``/``?`` occupancy
 becomes a blank PDB column rather than Gemmi's default 1.0, so missingness
-survives the round trip.
+survives the round trip. If the entire occupancy item is absent, the dictionary
+default of 1.0 is retained and recorded as conversion provenance.
 """
 
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple
 
 from structure_analysis import (
+    OCCUPANCY_DEFAULT_REMARK_PREFIX,
     POLYMER_REMARK_PREFIX,
     RESIDUE_REMARK_PREFIX,
     RESNAME_REMARK_PREFIX,
@@ -26,11 +28,37 @@ LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123
 LEGACY_PDB_MAX_RESIDUE_NUMBER = 9999
 
 
-def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
-    """Return raw mmCIF occupancy tokens keyed by ``_atom_site.id``.
+def _structure_atom_signatures(structure) -> Tuple[Tuple[object, ...], ...]:
+    """Describe atom traversal without depending on source atom-site ids."""
+    return tuple(
+        (
+            model_index,
+            str(model.num),
+            str(chain.name),
+            str(residue.name),
+            residue.seqid.num,
+            blank_if_missing(str(residue.seqid.icode)),
+            str(atom.name),
+            blank_if_missing(str(atom.altloc)),
+            str(atom.element.name),
+            float(atom.pos.x),
+            float(atom.pos.y),
+            float(atom.pos.z),
+        )
+        for model_index, model in enumerate(structure)
+        for chain in model
+        for residue in chain
+        for atom in residue
+    )
+
+
+def _cif_atom_data(cif_path):
+    """Return occupancies and generated PDB serials in Gemmi traversal order.
 
     Gemmi represents ``.`` and ``?`` occupancy as 1.0 in a Structure, so the
-    raw CIF loop must be read before conversion.
+    raw CIF loop must be read before conversion. ``_atom_site.id`` is an opaque
+    code, not necessarily an integer; a temporary in-memory parse with generated
+    numeric ids carries each source row number through any Gemmi reordering.
     """
     import gemmi
 
@@ -46,24 +74,58 @@ def _cif_occupancy_by_serial(cif_path) -> Dict[int, str]:
         )
 
     block, atom_ids = atom_blocks[0]
+    seen_ids = set()
+    for atom_id in atom_ids:
+        atom_id = str(atom_id)
+        if not blank_if_missing(atom_id):
+            raise ValueError("mmCIF atom_site id is missing")
+        if atom_id in seen_ids:
+            raise ValueError(f"duplicate mmCIF atom_site id: {atom_id}")
+        seen_ids.add(atom_id)
+
     occupancies = list(block.find_values("_atom_site.occupancy"))
-    if not occupancies:
-        occupancies = ["?"] * len(atom_ids)
+    occupancy_defaulted = not occupancies
+    if occupancy_defaulted:
+        occupancies = ["1.0"] * len(atom_ids)
     elif len(occupancies) != len(atom_ids):
         raise ValueError("mmCIF atom_site occupancy count does not match atom count")
 
-    by_serial: Dict[int, str] = {}
-    for atom_id, occupancy in zip(atom_ids, occupancies):
-        try:
-            serial = int(atom_id)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                f"mmCIF atom_site id is not an integer: {atom_id!r}"
-            ) from exc
-        if serial in by_serial:
-            raise ValueError(f"duplicate mmCIF atom_site id: {serial}")
-        by_serial[serial] = occupancy
-    return by_serial
+    atom_id_column = block.find_values("_atom_site.id")
+    for row_index in range(len(atom_ids)):
+        atom_id_column[row_index] = str(row_index + 1)
+    indexed_structure = gemmi.make_structure_from_block(block)
+    # ``gemmi.read_structure`` performs this merge for mmCIF input. Mirror it
+    # here so generated row serials follow the exact traversal later converted
+    # to PDB, including files whose atom_site loop interleaves chain segments.
+    indexed_structure.merge_chain_parts()
+    indexed_atoms = [
+        atom
+        for model in indexed_structure
+        for chain in model
+        for residue in chain
+        for atom in residue
+    ]
+    if len(indexed_atoms) != len(atom_ids):
+        raise ValueError(
+            "Gemmi structure atom count does not match mmCIF atom_site records"
+        )
+
+    pdb_serials = tuple(int(atom.serial) for atom in indexed_atoms)
+    if set(pdb_serials) != set(range(1, len(atom_ids) + 1)):
+        raise ValueError("generated atom_site row ids did not survive Gemmi parsing")
+    ordered_occupancies = tuple(occupancies[serial - 1] for serial in pdb_serials)
+    defaulted_counts = tuple(
+        sum(1 for chain in model for residue in chain for atom in residue)
+        if occupancy_defaulted
+        else 0
+        for model in indexed_structure
+    )
+    return (
+        ordered_occupancies,
+        pdb_serials,
+        defaulted_counts,
+        _structure_atom_signatures(indexed_structure),
+    )
 
 
 def _residue_index_by_author(structure, label):
@@ -348,6 +410,7 @@ def _write_cif_conversion_provenance(
     residue_records: List[Tuple[int, str, str, str, str]],
     identity_records=None,
     polymer_records=None,
+    defaulted_occupancy_counts=(),
 ) -> None:
     """Blank unknown occupancies and embed reversible residue mappings."""
     with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
@@ -376,6 +439,11 @@ def _write_cif_conversion_provenance(
         )
         for (model_index, chain, resnum, converted_name, source_name) in residue_records
     ]
+    remarks.extend(
+        f"{OCCUPANCY_DEFAULT_REMARK_PREFIX} {model_index} {count}\n"
+        for model_index, count in enumerate(defaulted_occupancy_counts, start=1)
+        if count
+    )
     remarks.extend(
         (
             f"{RESIDUE_REMARK_PREFIX} {model_index} "
@@ -424,7 +492,12 @@ def _cif_to_pdb(cif_path, dst):
 
     if not os.path.exists(cif_path):
         raise FileNotFoundError(cif_path)
-    occupancy_by_serial = _cif_occupancy_by_serial(cif_path)
+    (
+        occupancies,
+        pdb_serials,
+        defaulted_occupancy_counts,
+        indexed_signatures,
+    ) = _cif_atom_data(cif_path)
     structure = gemmi.read_structure(cif_path)
     structure_atoms = [
         atom
@@ -433,18 +506,15 @@ def _cif_to_pdb(cif_path, dst):
         for residue in chain
         for atom in residue
     ]
-    if len(structure_atoms) != len(occupancy_by_serial):
+    if len(structure_atoms) != len(occupancies):
         raise ValueError(
             "Gemmi structure atom count does not match mmCIF atom_site records"
         )
-    missing_occupancies = []
-    for atom in structure_atoms:
-        serial = atom.serial
-        if serial is None or int(serial) not in occupancy_by_serial:
-            raise ValueError(
-                "Gemmi atom serial could not be matched to mmCIF atom_site id"
-            )
-        missing_occupancies.append(occupancy_by_serial[int(serial)] in (".", "?"))
+    if _structure_atom_signatures(structure) != indexed_signatures:
+        raise ValueError("generated atom_site ids changed Gemmi atom traversal")
+    for atom, serial in zip(structure_atoms, pdb_serials):
+        atom.serial = serial
+    missing_occupancies = [occupancy in (".", "?") for occupancy in occupancies]
 
     structure.setup_entities()
     source_residues = _source_residue_records(structure)
@@ -474,6 +544,7 @@ def _cif_to_pdb(cif_path, dst):
         residue_records,
         identity_records,
         polymer_records,
+        defaulted_occupancy_counts,
     )
     return dst
 
