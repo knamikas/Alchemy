@@ -52,8 +52,8 @@ addopts = "-ra --strict-markers --strict-config"
 # .github/workflows/tests.yml, which is where the number takes effect. The gap
 # is concentrated in driver/resources (62%), inputs.py (65%), ccp4_setup (67%)
 # and driver/pool (76%): mostly error and interrupt paths that need a real
-# subprocess or a killed worker to reach, plus the Windows and sysconf memory
-# fallbacks, which no Linux run can execute.
+# subprocess or a killed worker to reach, plus platform fallbacks outside the
+# Linux coverage lane. Windows behavior is exercised by a separate CI job.
 markers = [
     "ccp4: requires the CCP4 binaries (mtzfix, fft, mapmask, edstats) on PATH",
     "entry_data: requires the checksum-pinned PDB-REDO integration entries",

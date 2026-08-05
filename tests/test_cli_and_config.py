@@ -297,6 +297,36 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
+def test_posix_ccp4_setup_can_remove_an_inherited_variable(monkeypatch, tmp_path):
+    setup = tmp_path / "ccp4.setup-sh"
+    setup.write_text("unset ALCHEMY_TEST_INHERITED\n", encoding="utf-8")
+    monkeypatch.setenv("ALCHEMY_TEST_INHERITED", "must disappear")
+
+    env = ccp4_setup.resolve_env(str(setup))
+
+    assert "ALCHEMY_TEST_INHERITED" not in env
+
+
+def test_windows_ccp4_setup_output_is_authoritative(monkeypatch, tmp_path):
+    setup = tmp_path / "ccp4.setup.cmd"
+    setup.write_text("@set ALCHEMY_TEST_INHERITED=\r\n", encoding="utf-8")
+    monkeypatch.setenv("ALCHEMY_TEST_INHERITED", "must disappear")
+
+    completed = subprocess.CompletedProcess(
+        args=["cmd"],
+        returncode=0,
+        stdout=f"launcher banner\n{ccp4_setup.ENV_SENTINEL}\nPath=C:\\CCP4\\bin\n",
+        stderr="",
+    )
+    monkeypatch.setattr(ccp4_setup.subprocess, "run", lambda *a, **k: completed)
+
+    env = ccp4_setup.resolve_env(str(setup))
+
+    assert "ALCHEMY_TEST_INHERITED" not in env
+    assert env["PATH"] == r"C:\CCP4\bin"
+
+
 def test_the_three_timeout_budgets_are_distinct_and_ordered():
     """Each class of subprocess gets a budget matched to its own work."""
     assert (

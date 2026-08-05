@@ -2808,18 +2808,51 @@ class TestFirstModelPdb:
         assert len(gemmi.read_structure(str(source))) == count
 
 
-@pytest.mark.skipif(os.name != "posix", reason="uses POSIX advisory locks")
 class TestOutputDirectoryLock:
+    def test_windows_backend_uses_a_nonblocking_lock_outside_metadata(
+        self, tmp_path, monkeypatch
+    ):
+        calls = []
+
+        class FakeMsvcrt:
+            LK_UNLCK = 0
+            LK_NBLCK = 2
+
+            @staticmethod
+            def locking(descriptor, mode, size):
+                position = os.lseek(descriptor, 0, os.SEEK_CUR)
+                calls.append((mode, position, size))
+
+        path = tmp_path / "lock"
+        path.write_text("metadata", encoding="utf-8")
+        monkeypatch.setattr(output_lock, "_IS_WINDOWS", True)
+        monkeypatch.setattr(output_lock, "_platform_lock", FakeMsvcrt)
+
+        with open(path, "r+", encoding="utf-8") as handle:
+            output_lock._acquire_file_lock(handle)
+            assert handle.tell() == 0
+            output_lock._release_file_lock(handle)
+            assert handle.tell() == 0
+
+        assert calls == [
+            (FakeMsvcrt.LK_NBLCK, output_lock._WINDOWS_LOCK_OFFSET, 1),
+            (FakeMsvcrt.LK_UNLCK, output_lock._WINDOWS_LOCK_OFFSET, 1),
+        ]
+
     def test_lock_path_symlink_is_refused_without_touching_its_target(self, tmp_path):
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         target = tmp_path / "important.txt"
         target.write_text("important data\n", encoding="utf-8")
         lock_path = output_dir / output_lock.LOCK_FILENAME
-        lock_path.symlink_to(target)
+        try:
+            lock_path.symlink_to(target)
+        except OSError as exc:
+            pytest.skip(f"this Windows account cannot create symlinks: {exc}")
 
         with pytest.raises(
-            output_lock.OutputDirectoryLockError, match="unsafe lock paths are refused"
+            output_lock.OutputDirectoryLockError,
+            match="symbolic link|unsafe lock paths are refused",
         ):
             with output_lock.OutputDirectoryLock(str(output_dir), "unsafe link"):
                 pass

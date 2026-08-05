@@ -85,7 +85,8 @@ Results are written to (the column lists and row builders live in
 
 - **CCP4** with `mtzfix`, `fft`, `mapmask`, and `edstats` on `PATH`. Pass
   `--ccp4-setup <path/to/ccp4.setup-sh>` or configure the path once with
-  `--configure-ccp4`.
+  `--configure-ccp4`. On Windows, pass the CCP4 `ccp4.setup.bat` or
+  `ccp4.setup.cmd` launcher instead.
 - **Python:** 3.11 or newer.
 - **Python packages:** `gemmi>=0.7.0` and `numpy>=1.17`. Both are required:
   `gemmi` does not install `numpy`. The authoritative dependency list and

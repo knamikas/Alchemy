@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import importlib
 import json
 import os
 import shutil
@@ -9,9 +11,11 @@ import socket
 import stat
 import tempfile
 from datetime import datetime, timezone
-from typing import IO, Optional
+from typing import IO, Any, Optional
 
-import fcntl
+
+_IS_WINDOWS = os.name == "nt"
+_platform_lock: Any = importlib.import_module("msvcrt" if _IS_WINDOWS else "fcntl")
 
 
 LOCK_FILENAME = ".alchemy.lock"
@@ -29,17 +33,23 @@ class OutputDirectoryLockError(RuntimeError):
 
 _active_lock_handle: Optional[IO[str]] = None
 _active_lock_pid: Optional[int] = None
+_WINDOWS_LOCK_OFFSET = 0x7FFFFFFF
 
 
 def _open_lock_handle(path: str) -> IO[str]:
     """Open one safe lock inode without following the final path component."""
-    nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise OutputDirectoryLockError(
-            "Cannot safely open the output lock: this platform does not support "
-            "O_NOFOLLOW."
-        )
-    flags = os.O_RDWR | os.O_CREAT | nofollow
+    flags = os.O_RDWR | os.O_CREAT
+    if _IS_WINDOWS:
+        flags |= getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOINHERIT", 0)
+    else:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise OutputDirectoryLockError(
+                "Cannot safely open the output lock: this platform does not "
+                "support O_NOFOLLOW."
+            )
+        flags |= nofollow
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     try:
@@ -52,9 +62,17 @@ def _open_lock_handle(path: str) -> IO[str]:
 
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
+        path_metadata = os.lstat(path)
+        file_attributes = getattr(path_metadata, "st_file_attributes", 0)
+        reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        current_uid = getattr(os, "geteuid", None)
+        if reparse_attribute and file_attributes & reparse_attribute:
+            problem = "it is a symbolic link or other reparse point"
+        elif not os.path.samestat(metadata, path_metadata):
+            problem = "the path changed while it was being opened"
+        elif not stat.S_ISREG(metadata.st_mode):
             problem = "it is not a regular file"
-        elif metadata.st_uid != os.geteuid():
+        elif current_uid is not None and metadata.st_uid != current_uid():
             problem = "it is not owned by the current user"
         elif metadata.st_nlink != 1:
             problem = "it has multiple hard links"
@@ -67,6 +85,39 @@ def _open_lock_handle(path: str) -> IO[str]:
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def _acquire_file_lock(handle: IO[str]) -> None:
+    """Acquire the platform's non-blocking exclusive lease."""
+    if not _IS_WINDOWS:
+        _platform_lock.flock(
+            handle.fileno(), _platform_lock.LOCK_EX | _platform_lock.LOCK_NB
+        )
+        return
+    try:
+        # Keep the locked byte outside the JSON metadata so a contending
+        # process can still report the current owner's details. Windows permits
+        # byte-range locks beyond end-of-file.
+        handle.seek(_WINDOWS_LOCK_OFFSET)
+        _platform_lock.locking(handle.fileno(), _platform_lock.LK_NBLCK, 1)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            raise BlockingIOError(exc.errno, str(exc)) from None
+        raise
+    finally:
+        handle.seek(0)
+
+
+def _release_file_lock(handle: IO[str]) -> None:
+    """Release the platform lease held by ``handle``."""
+    if not _IS_WINDOWS:
+        _platform_lock.flock(handle.fileno(), _platform_lock.LOCK_UN)
+        return
+    try:
+        handle.seek(_WINDOWS_LOCK_OFFSET)
+        _platform_lock.locking(handle.fileno(), _platform_lock.LK_UNLCK, 1)
+    finally:
+        handle.seek(0)
 
 
 def _close_inherited_lock_after_fork() -> None:
@@ -88,8 +139,9 @@ def _close_inherited_lock_after_fork() -> None:
     _active_lock_pid = None
 
 
-if hasattr(os, "register_at_fork"):
-    os.register_at_fork(after_in_child=_close_inherited_lock_after_fork)
+_register_at_fork = getattr(os, "register_at_fork", None)
+if _register_at_fork is not None:
+    _register_at_fork(after_in_child=_close_inherited_lock_after_fork)
 
 
 def _owner_description(handle) -> str:
@@ -126,7 +178,7 @@ class OutputDirectoryLock:
                 f"Cannot lock output directory {self.output_dir}: {exc.strerror or exc}"
             ) from None
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _acquire_file_lock(handle)
         except BlockingIOError:
             owner = _owner_description(handle)
             handle.close()
@@ -155,7 +207,7 @@ class OutputDirectoryLock:
             handle.flush()
             os.fsync(handle.fileno())
         except BaseException as exc:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _release_file_lock(handle)
             handle.close()
             if isinstance(exc, OSError):
                 raise OutputDirectoryLockError(
@@ -177,7 +229,7 @@ class OutputDirectoryLock:
         _active_lock_handle = None
         _active_lock_pid = None
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _release_file_lock(handle)
         finally:
             handle.close()
 

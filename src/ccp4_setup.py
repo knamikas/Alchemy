@@ -264,7 +264,10 @@ def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
             f"CCP4 setup {ccp4_setup} did not report its environment; "
             f"expected `set` output after the marker.\n{out.stderr}"
         )
-    return _normalize_path_key({**os.environ.copy(), **env})
+    # ``cmd`` inherited the parent environment before calling the setup file,
+    # so this listing is authoritative: merging the parent back would restore
+    # variables the setup intentionally removed.
+    return _normalize_path_key(env)
 
 
 def resolve_env(ccp4_setup: Optional[str]) -> dict[str, str]:
@@ -305,4 +308,6 @@ def resolve_env(ccp4_setup: Optional[str]) -> dict[str, str]:
         if "=" in chunk:
             k, v = chunk.split("=", 1)
             env[k] = v
-    return _normalize_path_key({**os.environ.copy(), **env})
+    # The shell inherited the parent before sourcing the setup file. Its final
+    # ``env`` output is therefore authoritative, including deliberate unsets.
+    return _normalize_path_key(env)

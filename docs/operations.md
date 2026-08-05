@@ -92,10 +92,10 @@ Running batches, resuming them, and reading what a run wrote. See
   retryable `partial`. Completed `ok` and terminal `partial` results exit
   successfully.
 - One Alchemy process on one machine owns an output directory at a time. The
-  lease is an advisory `flock`, which the kernel enforces between processes on
-  the same host. Across a network filesystem it is only as reliable as that
-  filesystem's lock support, so two cluster nodes pointed at one `--output-dir`
-  may both believe they own it and both truncate the result CSVs. Give
+  lease uses `flock` on POSIX and a non-blocking byte-range lock on Windows.
+  Across a network filesystem it is only as reliable as that filesystem's lock
+  support, so two cluster nodes pointed at one `--output-dir` may both believe
+  they own it and both truncate the result CSVs. Give
   concurrent runs separate output directories rather than relying on the lease
   to arbitrate between hosts. A run takes a
   non-blocking advisory lease on `<output-dir>/.alchemy.lock` before it reads,
@@ -104,9 +104,10 @@ Running batches, resuming them, and reading what a run wrote. See
   touching those results. The lock file intentionally remains after exit; the
   operating-system lease, not the file's presence, determines whether the
   directory is busy, and the lease is released automatically if the process
-  exits or crashes. Alchemy refuses a lock path that is a symbolic link,
-  non-regular file, foreign-owned file, or an inode with multiple hard links,
-  so recording lease metadata cannot overwrite another file through that path.
+  exits or crashes. Alchemy refuses a lock path that is a symbolic link or
+  Windows reparse point, a non-regular file, or an inode with multiple hard
+  links; POSIX additionally requires current-user ownership. Recording lease
+  metadata therefore cannot overwrite another file through that path.
 - Startup cleanup removes only Alchemy scratch directories carrying a valid
   disposable ownership marker. Unmarked directories, symlinks, malformed
   markers, and intermediates retained by `--keep-intermediates` are left alone.
