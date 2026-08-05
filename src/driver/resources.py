@@ -68,7 +68,7 @@ def available_memory_bytes():
         if available is not None:
             return available
 
-    if os.name == "nt":
+    elif os.name == "nt":
         try:
             import ctypes
 
