@@ -152,6 +152,57 @@ def _manual_entry(
     return worker.process("1abc")
 
 
+@pytest.mark.parametrize(
+    "exception,expected_code,expected_retryable",
+    [
+        (ValueError("no FWT column"), "deterministic_processing_error", False),
+        (KeyError("NR"), "deterministic_processing_error", False),
+        (TypeError("bad shape"), "deterministic_processing_error", False),
+        (OSError("disk full"), "unexpected_processing_error", True),
+        (MemoryError(), "unexpected_processing_error", True),
+        (RuntimeError("fft failed"), "unexpected_processing_error", True),
+    ],
+)
+def test_an_unanticipated_failure_is_retryable_only_if_a_retry_could_differ(
+    tmp_path, monkeypatch, exception, expected_code, expected_retryable
+):
+    """The exception type decides whether resuming the entry is worth anything.
+
+    A parse, lookup or type error describes the data or Alchemy's code and will
+    recur identically, so it is terminal. An OSError or a CCP4 RuntimeError may
+    describe the machine, so it stays retryable.
+    """
+
+    def failing_stage(*args, **kwargs):
+        raise exception
+
+    result = _manual_entry(tmp_path, monkeypatch, failing_stage)
+
+    assert result.status == "error"
+    assert result.reason_codes == [expected_code]
+    assert result.retryable is expected_retryable
+    assert type(exception).__name__ in result.error
+
+
+def test_an_unanticipated_failure_logs_its_traceback(tmp_path, monkeypatch, caplog):
+    """The manifest keeps one line; the debug log must keep the stack.
+
+    Without this the only way to locate an unanticipated failure was to rerun
+    the entry by hand under ``--keep-intermediates``.
+    """
+
+    def failing_stage(*args, **kwargs):
+        raise ValueError("no FWT column")
+
+    with caplog.at_level(logging.DEBUG, logger="alchemy.worker"):
+        result = _manual_entry(tmp_path, monkeypatch, failing_stage)
+
+    assert result.status == "error"
+    records = [r for r in caplog.records if r.exc_info and "1abc" in r.getMessage()]
+    assert records, "the failing entry logged no traceback"
+    assert records[0].exc_info[0] is ValueError
+
+
 def _write_manifest(path, rows, columns=None):
     """Write a manifest CSV with the real schema and the given partial rows."""
     columns = list(columns if columns is not None else MANIFEST_COLUMNS)
@@ -485,7 +536,10 @@ class TestLoadDone:
             ("partial", "True", False),
             ("partial", "", False),
             ("error", "True", False),
-            ("error", "False", False),  # even a terminal error is not "done"
+            # A deterministic failure cannot come out differently on the same
+            # inputs, so retrying it only spends the CCP4 cost again.
+            ("error", "False", True),
+            ("error", "0", True),
             ("skip", "False", False),
             ("skip", "True", False),
             ("", "", False),
@@ -494,7 +548,7 @@ class TestLoadDone:
     def test_terminality_by_status_and_retryable(
         self, tmp_path, status, retryable, expected_done
     ):
-        """Only ok and non-retryable partial rows are skippable."""
+        """Only ok and non-retryable partial or error rows are skippable."""
         path = _write_manifest(
             tmp_path / "manifest.csv",
             [
@@ -508,6 +562,41 @@ class TestLoadDone:
             ],
         )
         assert ("109m" in _manifest_ids(path)) is expected_done
+
+    def test_a_terminal_error_is_done_despite_having_no_bond_counts(self, tmp_path):
+        """The bond-completeness rule cannot apply to an entry that never ran.
+
+        A terminal error leaves ``n_bonds`` blank and always will, so requiring
+        bond output would reprocess it on every resume -- exactly the cost that
+        marking it terminal exists to avoid.
+        """
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "109m",
+                    "status": "error",
+                    "retryable": "False",
+                    "n_bonds": "",
+                    "n_candidates": "",
+                },
+            ],
+        )
+        assert _manifest_ids(path, bonds_required=True) == {"109m"}
+
+    def test_retry_partials_releases_a_terminal_error(self, tmp_path):
+        """A fix is picked up through the same selector that releases partials."""
+        path = _write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {"pdbID": "109m", "status": "error", "retryable": "False"},
+                {"pdbID": "1cll", "status": "ok", "retryable": "False"},
+            ],
+        )
+
+        assert _manifest_ids(path) == {"109m", "1cll"}
+        # The ok row stays protected; only the terminal error is released.
+        assert _manifest_ids(path, retry_partial_ids={"109m", "1cll"}) == {"1cll"}
 
     def test_ids_are_normalized_to_lowercase(self, tmp_path):
         """Manifest IDs join against the driver's lowercased selection list."""

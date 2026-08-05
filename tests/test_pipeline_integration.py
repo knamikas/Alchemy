@@ -1258,7 +1258,8 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 
     README: "The MTZ input must contain FWT, PHWT, DELFWT, and PHDELWT
     columns". The failure names them and must not read as a bond stage that ran
-    and found nothing.
+    and found nothing. An MTZ will not grow those columns on a retry, so the
+    entry is terminal and a resumed run must not pay the CCP4 cost again.
     """
     output_dir = tmp_path / "output"
     broken = _mtz_without_map_coefficients(
@@ -1285,8 +1286,8 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 
     row = manifest_by_id(output_dir)["9myr"]
     assert row["status"] == "error"
-    assert row["retryable"] == "True"
-    assert row["reason_codes"] == "unexpected_processing_error"
+    assert row["retryable"] == "False"
+    assert row["reason_codes"] == "deterministic_processing_error"
     for column in inputs.MAP_COEFFICIENT_COLUMNS:
         assert column in row["error"], row["error"]
     assert row["n_bonds"] == "" and row["n_candidates"] == ""

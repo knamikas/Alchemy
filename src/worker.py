@@ -43,7 +43,7 @@ from inputs import (
 )
 from metal_elements import METAL_ELEMENTS
 from metal_identification import extract_metal_statistics
-from run_logging import configure_worker_logging, truncate
+from run_logging import configure_worker_logging, logger_for, truncate
 
 
 METALS_SET = set(METAL_ELEMENTS)
@@ -71,6 +71,27 @@ IDENTIFICATION_REASON_MESSAGES = {
 MAX_MANIFEST_ERROR_CHARS = 300
 
 TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
+
+logger = logger_for(__name__)
+
+# Unanticipated exceptions that cannot come out differently on a retry of the
+# same inputs: a parse, lookup, or type error is a property of the entry's data
+# or of Alchemy's code, not of the machine. Recording those terminally stops a
+# resumed run from paying the whole CCP4 cost again for an entry that will fail
+# identically every time -- an EDSTATS parsing regression once cost exactly
+# that, silently, on every resume. Everything else stays retryable: an OSError,
+# a MemoryError, or a RuntimeError raised by a CCP4 program may well describe
+# the machine rather than the entry, and a wrongly terminal entry is worse than
+# a wasted retry.
+DETERMINISTIC_PROCESSING_ERRORS = (
+    ArithmeticError,
+    AssertionError,
+    AttributeError,
+    LookupError,
+    NotImplementedError,
+    TypeError,
+    ValueError,
+)
 
 
 @dataclass(frozen=True)
@@ -663,10 +684,27 @@ def process(pdb_id):
         result.reason_codes = ["missing_input"]
         result.error = truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS)
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
+        deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = "error"
-        result.retryable = True
-        result.reason_codes = ["unexpected_processing_error"]
+        result.retryable = not deterministic
+        result.reason_codes = [
+            "deterministic_processing_error"
+            if deterministic
+            else "unexpected_processing_error"
+        ]
         result.error = truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS)
+        # The manifest keeps one truncated line, which names the exception but
+        # not where it came from. Without this the only way to locate an
+        # unanticipated failure is to rerun the entry by hand with
+        # --keep-intermediates, so the traceback goes to the debug log that
+        # --log-file and -v already collect.
+        logger.debug(
+            "%s: %s ended the entry (%s)",
+            pdb_id,
+            type(e).__name__,
+            "terminal" if deterministic else "retryable",
+            exc_info=True,
+        )
     finally:
         if not cfg.keep and work_dir is not None and os.path.isdir(work_dir):
             cleanup_started = time.monotonic()

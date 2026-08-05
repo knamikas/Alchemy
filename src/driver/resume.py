@@ -45,8 +45,12 @@ def load_done(
     under ``bonds_required`` such a row is not done unless the manifest says
     metal presence was indeterminate and therefore supplied no analyzable site.
     A missing bond or candidate CSV otherwise has the same effect.
-    ``retry_partial_ids`` releases only non-retryable ``partial`` rows, never
-    ``ok`` ones.
+
+    A non-retryable ``error`` is terminal for the same reason a non-retryable
+    ``partial`` is: the entry cannot come out differently until Alchemy changes,
+    so retrying it spends the full CCP4 cost to reach the same failure.
+    ``retry_partial_ids`` releases both, never ``ok`` ones, which is how a run
+    picks them up again after a fix.
     """
     retry_partial_ids = {
         str(pdb_id).strip().lower()
@@ -66,11 +70,9 @@ def load_done(
                         continue
                     status = _csv_text(row, "status").strip().lower()
                     retryable = _csv_text(row, "retryable").strip().lower()
-                    terminal_partial = status == "partial" and retryable in (
-                        "false",
-                        "0",
-                        "no",
-                    )
+                    not_retryable = retryable in ("false", "0", "no")
+                    terminal_partial = status == "partial" and not_retryable
+                    terminal_error = status == "error" and not_retryable
                     pdb_id = _csv_text(row, "pdbID").strip().lower()
                     reason_codes = {
                         code
@@ -90,10 +92,16 @@ def load_done(
                         )
                     )
                     protected_terminal = status == "ok" or (
-                        terminal_partial and pdb_id not in retry_partial_ids
+                        (terminal_partial or terminal_error)
+                        and pdb_id not in retry_partial_ids
                     )
-                    if protected_terminal and bonds_complete and pdb_id:
-                        done.add(pdb_id)
+                    # A terminal error produced no bond output and never will,
+                    # so the bond-stage completeness rule cannot apply to it;
+                    # requiring it would reprocess the entry on every resume,
+                    # which is the cost the terminal marking exists to avoid.
+                    if protected_terminal and (bonds_complete or terminal_error):
+                        if pdb_id:
+                            done.add(pdb_id)
     return done
 
 

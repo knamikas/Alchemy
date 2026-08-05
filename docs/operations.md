@@ -45,10 +45,11 @@ Running batches, resuming them, and reading what a run wrote. See
   preserves existing bond and candidate rows and their manifest counts. Entries
   originating from a bond-disabled run retain blank `n_bonds` and
   `n_candidates`, so a later bond-enabled resume will process them.
-- `--resume --retry-partials` reprocesses non-retryable `partial` entries from
-  the manifest after a processing improvement while continuing to protect
-  `ok` entries. Optional `--id` or `--id-file` selectors restrict that set. Errors,
-  skips, and retryable partials already follow ordinary resume behavior. The
+- `--resume --retry-partials` reprocesses non-retryable `partial` and `error`
+  entries from the manifest after a processing improvement while continuing to
+  protect `ok` entries. Optional `--id` or `--id-file` selectors restrict that
+  set. Skips, retryable errors, and retryable partials already follow ordinary
+  resume behavior. The
   same staged replacement rules apply, so an interrupted or retryably failed
   attempt does not discard the previous terminal result. When a frozen
   reference scores a targeted resume inside an existing database output,
@@ -107,6 +108,23 @@ Running batches, resuming them, and reading what a run wrote. See
   recorded as `partial` with `retryable=false`. Transient processing failures
   are recorded with `retryable=true`. `--resume` uses that field so terminal
   entries do not run forever.
+- An unanticipated exception ends the entry as `error`, and its type decides
+  whether a retry is worth anything. A parse, lookup, arithmetic, or type error
+  describes the entry's data or Alchemy's own code, so it cannot come out
+  differently on the same inputs: it is recorded as `deterministic_processing_error`
+  with `retryable=false` and `--resume` skips it, rather than spending the whole
+  CCP4 cost again to reach the identical failure. Anything else — an `OSError`,
+  a `MemoryError`, a `RuntimeError` from a CCP4 program — may describe the
+  machine rather than the entry, so it stays `unexpected_processing_error` with
+  `retryable=true`. The classification is by exception type, not by inspection
+  of the failure, so it is deliberately conservative: an entry wrongly marked
+  terminal is worse than a wasted retry. `--resume --retry-partials` releases
+  terminal errors along with terminal partials, which is how a run picks them up
+  after a fix.
+- The manifest's `error` column holds one truncated line naming the exception.
+  The traceback is written to the debug log, so `--log-file`, or `-v` on the
+  console, is what locates an unanticipated failure without rerunning the entry
+  by hand under `--keep-intermediates`.
 - The candidate-output migration expands all four CSV schemas. `--resume`
   refuses to mix new rows with incompatible pre-migration headers; use a new `--output-dir`
   for the first run. All four headers are compared in full,
