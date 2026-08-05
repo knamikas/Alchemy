@@ -5,8 +5,9 @@ manifest row says so, and that row is written after its data rows, so an
 interruption between the two costs a repeated entry, never a lost one. A blank
 ``n_bonds`` means the bond stage never ran while ``0`` means it ran and found
 nothing, so reading blank as zero would mark an unanalysed entry permanently
-done. And a retry batch is staged to a temporary directory and merged into the
-real files only once it completes.
+done. And a retry batch is staged to a temporary directory so a re-run replaces
+an entry's rows instead of appending beside them; the merge keeps every entry
+that reached its manifest row, whether or not the batch as a whole finished.
 """
 
 import csv
@@ -256,7 +257,12 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
 
 
 class _ResumeStaging:
-    """Hold retried entries' rows until the whole retry batch has succeeded."""
+    """Hold a resumed run's rows so completed entries replace their old ones.
+
+    Only ids in ``replacement_ids`` are merged, and an id is added there after
+    the entry's manifest row is written, so a commit promotes finished entries
+    and silently leaves behind any entry that was still being written.
+    """
 
     def __init__(self, output_dir, targets):
         self.targets = targets

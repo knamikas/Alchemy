@@ -1007,11 +1007,49 @@ def _dispatch_entries(
     return tally
 
 
+def _keep_completed_staging(staging, args, plan, run_log):
+    """Promote the entries a halted resume finished, rather than dropping them.
+
+    An id reaches ``replacement_ids`` only after its manifest row, which is the
+    entry's completion marker, so committing here keeps exactly the entries that
+    finished and leaves any half-written rows in staging. Discarding instead
+    destroyed every entry the run had completed -- including entries with no
+    previous manifest row, which staging exists to replace and was never meant
+    to protect -- while the interrupt message promised they were kept.
+    """
+    kept = len(staging.replacement_ids)
+    if not kept:
+        staging.discard()
+        return
+    try:
+        staging.commit(args.bonds, confidence_enabled=plan.enabled)
+    except Exception as exc:
+        # These rows are now the only copy of that work, so leave them on disk
+        # to be recovered by hand rather than deleting them behind a failure.
+        run_log.summary["resume_staging_recovery_dir"] = staging.dir
+        run_log.summary["resume_staging_commit_error"] = f"{type(exc).__name__}: {exc}"
+        logger.error(
+            "could not merge %d completed entries into the output after an "
+            "interrupted resume; their rows are left in %s",
+            kept,
+            staging.dir,
+        )
+        return
+    staging.discard()
+    run_log.summary["resume_entries_committed_after_interrupt"] = kept
+    logger.warning(
+        "interrupted after %d completed entries; their rows were merged and "
+        "--resume will skip them",
+        kept,
+    )
+
+
 def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
     """Open the outputs, run the batch, and commit any staged retry rows.
 
-    Staging is committed only once the batch has run to completion, so an
-    interrupted retry leaves the previous run's rows exactly as they were.
+    An interrupted batch still commits the entries that completed, so the work
+    already done survives; a retried entry that did not finish leaves the
+    previous run's rows exactly as they were.
     """
     prior_counts = (
         _manifest_values_by_id(layout.manifest, "n_bonds")
@@ -1046,7 +1084,7 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
             opened_writers = writers
     finally:
         if staging is not None and not processing_completed:
-            staging.discard()
+            _keep_completed_staging(staging, args, plan, run_log)
 
     run_log.summary.update(
         metal_rows_written=opened_writers.n_rows,

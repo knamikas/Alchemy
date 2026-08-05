@@ -42,6 +42,7 @@ from driver.writers import (
 )
 from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 import cli
+from driver import pool as driver_pool
 from driver import resume
 from driver import pool
 from driver import output_lock
@@ -1158,6 +1159,139 @@ class TestResumeStaging:
         finally:
             staging.discard()
         assert {p: open(p, "rb").read() for p in targets} == before
+
+    def test_an_interrupted_batch_commits_the_entries_it_finished(
+        self, tmp_path, monkeypatch
+    ):
+        """The halted-run path is reached from ``_process_entries`` itself.
+
+        The loss lived in the wiring: staging was discarded whenever the batch
+        failed to run to completion. A test that calls the commit helper
+        directly still passes with that defect in place, so this one drives the
+        real function and interrupts it mid-batch.
+        """
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        layout = driver_pool._OutputLayout(str(output_dir))
+        headers = (
+            (layout.manifest, MANIFEST_COLUMNS),
+            (layout.stats, STATS_COLUMNS),
+            (layout.bonds, coordination_schema.BOND_COLUMNS),
+            (layout.candidates, coordination_schema.CANDIDATE_COLUMNS),
+        )
+        for path, columns in headers:
+            with open(path, "w", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(columns)
+        prior = {name: "" for name in MANIFEST_COLUMNS}
+        prior.update(pdbID="aaaa", status="ok", retryable="False")
+        with open(layout.manifest, "a", newline="") as handle:
+            csv.writer(handle).writerow([prior[name] for name in MANIFEST_COLUMNS])
+
+        def _dispatch(args, ids, cfg, workers, writers, plan, staging, counts, run_log):
+            for pdb_id in ids:
+                row = {name: "" for name in MANIFEST_COLUMNS}
+                row.update(pdbID=pdb_id, status="ok", retryable="False")
+                writers.write_manifest_row(row)
+                staging.replacement_ids.add(pdb_id)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
+        args = SimpleNamespace(resume=True, bonds=True, output_dir=str(output_dir))
+        run_log = SimpleNamespace(summary={})
+
+        with pytest.raises(KeyboardInterrupt):
+            driver_pool._process_entries(
+                args,
+                ["bbbb", "cccc"],
+                None,
+                1,
+                layout,
+                driver_pool._ConfidencePlan(),
+                run_log,
+            )
+
+        assert [row[0] for row in _read_csv(layout.manifest)[1:]] == [
+            "aaaa",
+            "bbbb",
+            "cccc",
+        ]
+        assert run_log.summary["resume_entries_committed_after_interrupt"] == 2
+
+    def _interrupt(self, staging, tmp_path, *, bonds=True, confidence=False):
+        """Run the halted-resume path and return the run-log summary."""
+        summary: dict = {}
+        driver_pool._keep_completed_staging(
+            staging,
+            SimpleNamespace(bonds=bonds, output_dir=str(tmp_path)),
+            SimpleNamespace(enabled=confidence),
+            SimpleNamespace(summary=summary),
+        )
+        return summary
+
+    def test_an_interrupted_resume_keeps_the_entries_it_completed(self, tmp_path):
+        """A halted batch commits finished entries instead of destroying them.
+
+        Discarding lost every entry the run had completed, including entries
+        with no previous manifest row that staging never existed to protect,
+        while the interrupt message promised they had been kept.
+        """
+        targets = self._outputs(tmp_path)
+        staging = resume._ResumeStaging(str(tmp_path), targets)
+        self._stage(
+            staging,
+            {
+                index: [["8new", f"new-8new-{name}"]]
+                for index, name in enumerate(self.TARGET_NAMES)
+            },
+        )
+        staging.replacement_ids.add("8new")
+
+        summary = self._interrupt(staging, tmp_path)
+
+        for target in targets:
+            ids = [row[0] for row in _read_csv(target)[1:]]
+            assert ids == ["109m", "1cll", "8new"], target
+        assert summary["resume_entries_committed_after_interrupt"] == 1
+        assert not os.path.isdir(staging.dir)
+
+    def test_an_interrupted_resume_drops_an_entry_that_never_completed(self, tmp_path):
+        """Rows without a manifest row are not promoted, so the entry retries.
+
+        ``_write_entry`` adds the id only after the manifest row, so an entry
+        interrupted mid-write is absent from ``replacement_ids``.
+        """
+        targets = self._outputs(tmp_path)
+        before = {path: open(path, "rb").read() for path in targets}
+        staging = resume._ResumeStaging(str(tmp_path), targets)
+        self._stage(staging, {1: [["8new", "half-written"]]})
+
+        summary = self._interrupt(staging, tmp_path)
+
+        assert {path: open(path, "rb").read() for path in targets} == before
+        assert "resume_entries_committed_after_interrupt" not in summary
+        assert not os.path.isdir(staging.dir)
+
+    def test_a_failed_interrupt_merge_leaves_the_staged_rows_on_disk(self, tmp_path):
+        """A merge failure must not delete the only copy of the work."""
+        targets = self._outputs(tmp_path)
+        staging = resume._ResumeStaging(str(tmp_path), targets)
+        self._stage(staging, {0: [["8new", "new"]]})
+        staging.replacement_ids.add("8new")
+        # A staged file whose header disagrees makes ``commit`` raise.
+        with open(staging.staged[1], "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["different", "header"])
+            writer.writerow(["8new", "new"])
+
+        try:
+            summary = self._interrupt(staging, tmp_path)
+
+            assert os.path.isdir(staging.dir)
+            assert summary["resume_staging_recovery_dir"] == staging.dir
+            assert "staged CSV schema" in summary["resume_staging_commit_error"]
+        finally:
+            staging.discard()
 
     def test_commit_replaces_only_the_retried_ids(self, tmp_path):
         targets = self._outputs(tmp_path)
