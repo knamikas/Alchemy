@@ -58,8 +58,7 @@ from structure_analysis import (
 )
 
 
-# Candidate-search radius, not a bond cutoff.
-CUTOFF = 4.0
+CANDIDATE_SEARCH_RADIUS = 4.0
 SEARCH_EPSILON = 1e-6
 
 # First-sphere definition: donor distance <= target distance + 0.75 A.
@@ -218,7 +217,7 @@ def _first_sphere_rule(metal, neighbor):
             return NAN, NAN, "missing", ""
         reference_kind = "element_fallback"
         reference_key = ("*", neighbor.element, metal.element)
-    cutoff = min(CUTOFF, target + FIRST_SPHERE_TOLERANCE)
+    cutoff = min(CANDIDATE_SEARCH_RADIUS, target + FIRST_SPHERE_TOLERANCE)
     return target, cutoff, reference_kind, ":".join(reference_key)
 
 
@@ -399,7 +398,7 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
         return []
     candidates = []
     marks = search.find_atoms(
-        metal.pos, "\x00", min_dist=0.0, radius=CUTOFF + SEARCH_EPSILON
+        metal.pos, "\x00", min_dist=0.0, radius=CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON
     )
     for mark in marks:
         neighbor = structure.atom_for_mark(mark)
@@ -452,7 +451,7 @@ def _collect_proximal_candidates(structure, search, metal, include_symmetry):
         # residue in the explicit asymmetric unit is excluded.
         if neighbor.residue_key == metal.residue_key and not symmetry_contact:
             continue
-        if not (0.0 < distance <= CUTOFF + 1e-9):
+        if not (0.0 < distance <= CANDIDATE_SEARCH_RADIUS + 1e-9):
             continue
 
         position = (float(transformed.x), float(transformed.y), float(transformed.z))
@@ -929,12 +928,16 @@ def run_bond_analysis(
         )
 
     explicit_search = structure.make_neighbor_search(
-        CUTOFF + SEARCH_EPSILON, include_symmetry=False, positive_occupancy_only=True
+        CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
+        include_symmetry=False,
+        positive_occupancy_only=True,
     )
     image_search = None
     if structure.symmetry_search_available:
         image_search = structure.make_neighbor_search(
-            CUTOFF + SEARCH_EPSILON, include_symmetry=True, positive_occupancy_only=True
+            CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
+            include_symmetry=True,
+            positive_occupancy_only=True,
         )
     sig = _sigma_index(stats_rows)
     zd_idx = _zd_indices(header)

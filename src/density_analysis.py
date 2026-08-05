@@ -625,9 +625,8 @@ if __name__ == "__main__":
     p.add_argument("pdb_id", metavar="pdbID")
     p.add_argument("mtz", help="MTZ with FWT/PHWT/DELFWT/PHDELWT columns")
     p.add_argument("pdb", help="coordinate file (edstats XYZIN)")
-    # Defaults to the working directory. It once defaulted to this file's own
-    # directory, so a run without --out-dir wrote its maps, mapmask output and
-    # EDSTATS logs into src/, which .gitignore does not cover.
+    # Must not default to this file's own directory: maps, mapmask output and
+    # EDSTATS logs would land in src/, which .gitignore does not cover.
     p.add_argument(
         "--out-dir",
         default=".",

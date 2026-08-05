@@ -541,7 +541,7 @@ def test_documented_thresholds_match_the_constants():
     confidently wrong about what a run did.
     """
     from coordination.analysis import (
-        CUTOFF,
+        CANDIDATE_SEARCH_RADIUS,
         FIRST_SPHERE_TOLERANCE,
         ZSCORE_OUTLIER_CUTOFF,
     )
@@ -551,7 +551,7 @@ def test_documented_thresholds_match_the_constants():
 
     prose = _all_prose()
     documented = [
-        ("broad candidate search radius", CUTOFF, "4 Å"),
+        ("broad candidate search radius", CANDIDATE_SEARCH_RADIUS, "4 Å"),
         ("z-score outlier cutoff", ZSCORE_OUTLIER_CUTOFF, ">= 6"),
         ("first-sphere tolerance", FIRST_SPHERE_TOLERANCE, "0.75"),
         ("model-envelope border", MODEL_ENVELOPE_BORDER_ANGSTROM, "10 Angstrom"),
@@ -569,7 +569,11 @@ def test_documented_thresholds_match_the_constants():
 
     # The constants themselves, so a change to one is visible here as well as
     # in the prose that quotes it.
-    assert (CUTOFF, ZSCORE_OUTLIER_CUTOFF, FIRST_SPHERE_TOLERANCE) == (4.0, 6.0, 0.75)
+    assert (CANDIDATE_SEARCH_RADIUS, ZSCORE_OUTLIER_CUTOFF, FIRST_SPHERE_TOLERANCE) == (
+        4.0,
+        6.0,
+        0.75,
+    )
     assert (MODEL_ENVELOPE_BORDER_ANGSTROM, CCP4_TOOL_TIMEOUT_S) == (10, 15 * 60)
     assert AUTO_WORKER_MEMORY_BYTES == 1280 * 1024 * 1024
     assert OVERFULL_OCCUPANCY_NI_FRACTION == 0.002

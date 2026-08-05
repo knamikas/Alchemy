@@ -390,12 +390,12 @@ def _merge_csv_replacements(path, staged_path, pdb_ids):
         # only if the wrapping itself failed: a second close could land on a
         # descriptor the runtime has since reused.
         try:
-            staged = os.fdopen(fd, "w", newline="")
+            replacement = os.fdopen(fd, "w", newline="")
         except BaseException:
             os.close(fd)
             raise
         destination_header = None
-        with staged as dst:
+        with replacement as dst:
             writer = csv.writer(dst)
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 with open(path, newline="") as src:

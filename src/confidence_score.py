@@ -132,7 +132,7 @@ def _format_significant(value, digits=6):
 
     Distinct from ``structure_analysis._format_number``, which renders a fixed
     number of decimals and blanks ``None`` rather than non-finite values: the
-    two obey different contracts and shared a name only by coincidence.
+    two obey different contracts and must not be merged.
     """
     if not math.isfinite(value):
         return ""

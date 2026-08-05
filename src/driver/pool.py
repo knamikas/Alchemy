@@ -294,8 +294,7 @@ def _stop_log_listener(listener, queue):
     return abandoned
 
 
-def _sweep_leaked_work_dirs(output_dir):
-    """Remove marked disposable scratch after output ownership is acquired."""
+def _sweep_owned_scratch_dirs(output_dir):
     return sweep_owned_scratch_directories(output_dir)
 
 
@@ -584,8 +583,8 @@ def _plan_confidence(args, layout, database_run, run_log):
         # scored against, so it cannot also be scored against an existing one.
         # Said rather than raised: passing the flag uniformly across a mix of
         # capped and uncapped runs is reasonable, and failing the multi-day run
-        # over an argument that changes nothing would be the worse outcome. The
-        # defect was that it was ignored in silence.
+        # over an argument that changes nothing would be the worse outcome. It
+        # must not be ignored in silence either.
         if args.confidence_reference_dir:
             logger.warning(
                 "--confidence-reference-dir is ignored on an uncapped "
@@ -693,10 +692,11 @@ def _schedule_entries(args, layout, cache_root, run_log):
         else:
             done = normally_done
         # ``done`` holds lowercased manifest ids, while a mirror enumeration
-        # returns directory names as they are spelled on disk. Comparing them
-        # unnormalized meant a non-lowercase directory never matched its own
-        # completed row and was reprocessed on every resume. The id itself is
-        # kept as found, because it is also the path the entry is read from.
+        # returns directory names as they are spelled on disk, so the
+        # comparison must normalize: otherwise a non-lowercase directory never
+        # matches its own completed row and is reprocessed on every resume. The
+        # id itself is kept as found, because it is also the path the entry is
+        # read from.
         ids = [i for i in ids if i.lower() not in done]
     if args.max_pdbs is not None:
         ids = ids[: args.max_pdbs]
@@ -1163,11 +1163,8 @@ def _process_entries(args, ids, cfg, workers, layout, plan, run_log):
         if args.resume and not args.bonds
         else {},
     )
-    # Which ids the manifest already describes. A resumed run suppresses the
-    # write for a retry that did not improve on its previous row, but an entry
-    # with no previous row has nothing to protect: suppressing it left the
-    # entry absent from the manifest entirely, so the artifact --resume and
-    # downstream analysis read under-reported the scheduled set.
+    # Which ids the manifest already describes; see ``_should_write_entry``,
+    # which uses it to decide whether a retry may overwrite an existing row.
     prior_ids = (
         set(_manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
@@ -1298,7 +1295,7 @@ def _run(args, run_log):
 
 def _execute_with_output_lock(args, run_log, cofactors, env):
     """Run every output-reading and output-writing phase under one lease."""
-    _sweep_leaked_work_dirs(args.output_dir)
+    _sweep_owned_scratch_dirs(args.output_dir)
     layout = _OutputLayout(args.output_dir)
     run_mode, database_run = _classify_run(args)
     run_log.details["run_mode"] = run_mode

@@ -1640,9 +1640,9 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(tmp_pa
 def test_the_name_fallback_refuses_ambiguous_component_ids(resname, expected, why):
     """With no atom to read an element from, only unambiguous names count.
 
-    ``metal_identification`` already avoids this collision by matching on the
-    element; the declaration path matched the bare CCD id and so reported an
-    unresolvable RNA ``U`` or nitric oxide ``NO`` as having named a metal.
+    ``metal_identification`` avoids this collision by matching on the element;
+    the declaration path once matched the bare CCD id instead, and so reported
+    an unresolvable RNA ``U`` or nitric oxide ``NO`` as having named a metal.
     """
     address = declared_address(resname, resname)
     cra = SimpleNamespace(atom=None)

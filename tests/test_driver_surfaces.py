@@ -814,11 +814,10 @@ def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
 def test_a_cgroup_memory_limit_is_not_detected(tmp_path, monkeypatch):
     """Alchemy sizes from host memory, so a scheduler job needs --workers.
 
-    Detecting a cgroup allowance was removed rather than repaired: it was
-    roughly half of this module, was reached by nobody running Alchemy from a
-    clone, and could not affect a single-structure run at all because workers
-    are capped at the entry count. ``docs/usage.md`` states the consequence, so
-    this test holds the code to what the documentation promises.
+    A cgroup allowance is deliberately not consulted: it cannot affect a
+    single-structure run at all, because workers are capped at the entry count.
+    ``docs/usage.md`` states the consequence, so this test holds the code to
+    what the documentation promises.
     """
     budget = resources.AUTO_WORKER_MEMORY_BYTES
     _host_meminfo(tmp_path, monkeypatch, host_bytes=64 * budget)

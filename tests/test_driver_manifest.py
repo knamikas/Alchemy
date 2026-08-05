@@ -3008,7 +3008,7 @@ class TestLeakedWorkDirectorySweep:
         staging = tmp_path / os.path.basename(staging)
         (staging / "manifest.csv").write_text("stale", encoding="utf-8")
 
-        removed = pool._sweep_leaked_work_dirs(str(tmp_path))
+        removed = pool._sweep_owned_scratch_dirs(str(tmp_path))
 
         assert removed == 2
         assert sorted(os.listdir(tmp_path)) == []
@@ -3025,7 +3025,7 @@ class TestLeakedWorkDirectorySweep:
         (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
         (tmp_path / ".alchemy-109m-unmarked").mkdir()
 
-        assert pool._sweep_leaked_work_dirs(str(tmp_path)) == 0
+        assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert sorted(os.listdir(tmp_path)) == [
             ".alchemy-109m-unmarked",
             ".alchemyrc",
@@ -3042,7 +3042,7 @@ class TestLeakedWorkDirectorySweep:
             preserve=True,
         )
 
-        assert pool._sweep_leaked_work_dirs(str(tmp_path)) == 0
+        assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert os.path.isdir(kept)
 
     def test_symlink_is_not_followed_even_if_its_target_is_marked(self, tmp_path):
@@ -3054,12 +3054,12 @@ class TestLeakedWorkDirectorySweep:
         link = tmp_path / ".alchemy-109m-link"
         link.symlink_to(target, target_is_directory=True)
 
-        assert pool._sweep_leaked_work_dirs(str(tmp_path)) == 0
+        assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert link.is_symlink()
         assert os.path.isdir(target)
 
     def test_missing_directory_is_not_an_error(self, tmp_path):
-        assert pool._sweep_leaked_work_dirs(str(tmp_path / "absent")) == 0
+        assert pool._sweep_owned_scratch_dirs(str(tmp_path / "absent")) == 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")

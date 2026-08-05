@@ -336,7 +336,7 @@ def test_transformed_neighbor_is_the_image_not_the_deposited_atom(symmetry_case)
         return
 
     assert sa.position_distance(transformed, deposited) > 1.0
-    assert deposited_distance > ba.CUTOFF
+    assert deposited_distance > ba.CANDIDATE_SEARCH_RADIUS
     assert row["distance"] < deposited_distance
     assert row["symmetry_contact"] is True
 
@@ -450,7 +450,7 @@ def _raw_and_deduplicated(context):
     metals = context.metal_atoms(METAL_ELEMENTS, canonical=True)
     assert len(metals) == 1
     search = context.make_neighbor_search(
-        ba.CUTOFF + ba.SEARCH_EPSILON,
+        ba.CANDIDATE_SEARCH_RADIUS + ba.SEARCH_EPSILON,
         include_symmetry=True,
         positive_occupancy_only=True,
     )

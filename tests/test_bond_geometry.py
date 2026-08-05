@@ -799,7 +799,7 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
     path = builder.write_pdb(tmp_path / "second_shell.pdb")
     rows, candidates, summaries, _ = _analyze(path)
 
-    assert ba.CUTOFF == 4.0
+    assert ba.CANDIDATE_SEARCH_RADIUS == 4.0
     distances = sorted(round(c["candidate_distance"], 3) for c in candidates)
     assert distances == [2.09, 3.5]
     assert [round(row["distance"], 3) for row in rows] == [2.09]
@@ -2089,7 +2089,7 @@ def test_reference_table_values_are_physically_plausible():
         # A spread that large relative to the mean would make |Z| meaningless.
         assert stdev < mu / 4.0, where
         # The 4 A discovery radius must never clip a first sphere.
-        assert mu + ba.FIRST_SPHERE_TOLERANCE <= ba.CUTOFF, where
+        assert mu + ba.FIRST_SPHERE_TOLERANCE <= ba.CANDIDATE_SEARCH_RADIUS, where
 
     parsed = {
         (residue, atom, metal): (mu, stdev)

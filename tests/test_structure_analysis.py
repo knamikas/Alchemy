@@ -832,7 +832,7 @@ def test_unknown_element_makes_the_atom_count_indeterminate(tmp_path):
     assert context.unknown_element_atom_count == 1
     assert context.element_validation_warning == "unknown_element_atoms"
     assert "unknown_elements" in context.warning_codes
-    assert context.occupancy_validation_failed is False  # occupancies are fine
+    assert context.occupancy_validation_failed is False
     assert math.isnan(sa.count_deposited_ni(context))
     assert math.isnan(sa.count_ni(context))
 

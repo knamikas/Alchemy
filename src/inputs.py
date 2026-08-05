@@ -92,10 +92,10 @@ def _looks_like_a_web_page(path):
 def _is_usable_entry_file(path):
     """Whether a cached path is worth reading rather than re-fetching.
 
-    Existence alone was the test, so a truncated or wrong-status body written
-    under the right name was cached permanently: every later run read the same
-    unusable file, failed identically, and no ``--resume`` could recover it
-    without deleting the cache by hand.
+    Existence alone is not enough. A truncated or wrong-status body written
+    under the right name would be cached permanently: every later run reads the
+    same unusable file, fails identically, and no ``--resume`` recovers it short
+    of deleting the cache by hand.
     """
     if path is None:
         return False
@@ -281,9 +281,9 @@ def _download_stream(url, dst, timeout=30):
 
     A transfer that begins and then fails -- a reset connection, a read
     timeout, a body shorter than its Content-Length -- leaves the caller in the
-    same position as a 404: no file. Only the opening request was guarded, so
-    those raised out of the driver's pre-flight as a bare traceback, while
-    ``http.client.IncompleteRead`` is not even an ``OSError`` and so escaped
+    same position as a 404: no file. Guarding the opening request alone leaves
+    them raising out of the driver's pre-flight as a bare traceback, and
+    ``http.client.IncompleteRead`` is not even an ``OSError``, so it escapes
     handlers written for one.
     """
     try:
@@ -339,8 +339,8 @@ def download_entry_to_cache(pdb_id, cache_root):
             return False
 
     def fetch_variant(name):
-        # A cached file is reused only if it is worth reading. Short-circuiting
-        # on existence alone made an empty or served-document body permanent.
+        # Reuse a cached file only if it is worth reading: short-circuiting on
+        # existence alone makes an empty or served-document body permanent.
         cached = _first_existing(
             os.path.join(entry, name), os.path.join(entry, name + ".gz")
         )

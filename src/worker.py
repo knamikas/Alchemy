@@ -442,9 +442,10 @@ def _excluded_zero_occupancy_metals(structure):
     """Metal records dropped from site selection for a valid zero occupancy.
 
     Site selection excludes them deliberately -- a metal modeled as absent is
-    not evidence for a site -- but the exclusion was silent, so a structure
-    whose only metal is at zero occupancy reported ``no_metals``, an
-    authoritative negative about a file that plainly contains a metal record.
+    not evidence for a site -- but the exclusion must not be silent: a
+    structure whose only metal is at zero occupancy would otherwise report
+    ``no_metals``, an authoritative negative about a file that plainly contains
+    a metal record.
     """
     selected = structure.metal_atoms(METALS_SET, canonical=True)
     with_absent = structure.metal_atoms(
@@ -730,8 +731,10 @@ def process(pdb_id):
         # An empty header means density production itself failed and already
         # supplied the precise reason code. This comparison diagnoses a
         # successful statistics table whose site selection is incomplete.
-        undensitied = _sites_without_density_rows(rows, structure) if header else []
-        if undensitied:
+        sites_without_density = (
+            _sites_without_density_rows(rows, structure) if header else []
+        )
+        if sites_without_density:
             identification_reason_codes = list(
                 dict.fromkeys(
                     identification_reason_codes
@@ -742,8 +745,8 @@ def process(pdb_id):
                 "%s: %d selected coordinate metal site(s) are absent from the "
                 "statistics table: %s",
                 pdb_id,
-                len(undensitied),
-                undensitied,
+                len(sites_without_density),
+                sites_without_density,
             )
         _append_site_fields(rows, site_summaries, structure)
         result.rows = rows

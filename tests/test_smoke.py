@@ -50,7 +50,7 @@ def test_src_modules_import():
     from driver import pool, progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
-    assert analysis.CUTOFF == 4.0
+    assert analysis.CANDIDATE_SEARCH_RADIUS == 4.0
     assert callable(structure_analysis.load_structure)
     assert callable(main.main), "src/main.py must keep working as the entry point"
     assert main.main is cli.main, "the entry point must delegate, not reimplement"

@@ -98,8 +98,8 @@ def main(argv=None):
             return 1
         except ValueError as exc:
             # ``json.JSONDecodeError`` is a ValueError. A sidecar truncated by
-            # an interrupted write is exactly what --check exists to report,
-            # and it reported it as a traceback.
+            # an interrupted write is exactly what --check exists to report, so
+            # it must not escape as a traceback.
             print(f"unreadable sidecar at {SIDECAR_PATH}: {exc}")
             return 1
         if recorded != actual:

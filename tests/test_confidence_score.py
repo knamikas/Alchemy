@@ -427,9 +427,8 @@ def test_rejected_broad_search_candidates_stay_out_of_the_qg_denominator(tmp_pat
     """Only assigned bond rows count in QG; a rejected 4 A candidate must not.
 
     Built from real coordination-analysis output: HIS NE2 at 2.03 A is assigned,
-    MET SD
-    at 3.60 A is found by the broad search and rejected as outside the first
-    sphere.
+    MET SD at 3.60 A is found by the broad search and rejected as outside the
+    first sphere.
     """
     from structure_analysis import load_structure
     from coordination.analysis import run_bond_analysis

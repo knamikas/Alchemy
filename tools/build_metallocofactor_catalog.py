@@ -217,8 +217,7 @@ def _sha256(path: str) -> str:
     return digest.hexdigest()
 
 
-def find_metal_match(formula):
-    """Return whether a CCD formula contains a configured metal element."""
+def formula_has_metal(formula):
     return any(element in METAL_ELEMENTS for element in element_counts(formula))
 
 
@@ -348,7 +347,7 @@ def build_metallocofactors_list(cif_path, output_path):
             if any(symbol_is_metal(symbol) for symbol in atom_symbols):
                 has_metal = True
                 counts["missing_formula_with_metal"] += 1
-        elif find_metal_match(formula):
+        elif formula_has_metal(formula):
             has_metal = True
             counts["with_metal"] += 1
 

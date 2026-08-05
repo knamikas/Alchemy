@@ -355,7 +355,6 @@ def _neighbor_class(neighbor):
 
 
 def _context_warning_values(candidate, include_proximal=False):
-    """Return the context flag and the reason codes behind it."""
     reasons = []
     if candidate.neighbor.occupancy_valid and candidate.neighbor.occupancy == 0.0:
         reasons.append("zero_occupancy_neighbor")
