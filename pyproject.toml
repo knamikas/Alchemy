@@ -50,9 +50,10 @@ addopts = "-ra --strict-markers --strict-config"
 #   pytest --no-ccp4 --no-network --skip-slow --cov=src
 # Re-run that before moving the floor, and keep it in step with
 # .github/workflows/tests.yml, which is where the number takes effect. The gap
-# is concentrated in inputs.py (54%), ccp4_setup (67%), driver/resources (68%)
+# is concentrated in driver/resources (62%), inputs.py (65%), ccp4_setup (67%)
 # and driver/pool (76%): mostly error and interrupt paths that need a real
-# subprocess, a killed worker, or a cgroup limit to reach.
+# subprocess or a killed worker to reach, plus the Windows and sysconf memory
+# fallbacks, which no Linux run can execute.
 markers = [
     "ccp4: requires the CCP4 binaries (mtzfix, fft, mapmask, edstats) on PATH",
     "entry_data: requires the checksum-pinned PDB-REDO integration entries",

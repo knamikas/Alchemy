@@ -457,96 +457,56 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
     assert memory_limit is None
 
 
-def _resource_probe_paths(tmp_path, monkeypatch, cgroup_text, host_bytes):
+def _host_meminfo(tmp_path, monkeypatch, host_bytes):
+    """Point the memory probe at a synthetic ``/proc/meminfo``."""
     meminfo = tmp_path / "meminfo"
-    meminfo.write_text(
-        f"MemAvailable: {host_bytes // 1024} kB\n",
-        encoding="ascii",
-    )
-    membership = tmp_path / "self-cgroup"
-    membership.write_text(cgroup_text, encoding="ascii")
-    cgroup_root = tmp_path / "cgroup"
-    cgroup_root.mkdir()
+    meminfo.write_text(f"MemAvailable: {host_bytes // 1024} kB\n", encoding="ascii")
     monkeypatch.setattr(resources, "PROC_MEMINFO_PATH", str(meminfo))
-    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(membership))
-    monkeypatch.setattr(resources, "CGROUP_ROOT", str(cgroup_root))
     monkeypatch.setattr(resources.sys, "platform", "linux")
-    return cgroup_root
+    return meminfo
 
 
-def _write_cgroup_memory(directory, limit_name, usage_name, limit, usage):
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / limit_name).write_text(str(limit), encoding="ascii")
-    (directory / usage_name).write_text(str(usage), encoding="ascii")
-
-
-def test_available_memory_respects_nested_cgroup_v2_headroom(tmp_path, monkeypatch):
-    """The tightest current or parent allowance wins over host memory."""
+def test_available_memory_is_read_from_meminfo(tmp_path, monkeypatch):
+    """Worker sizing follows what the machine reports as free."""
     budget = resources.AUTO_WORKER_MEMORY_BYTES
-    root = _resource_probe_paths(
-        tmp_path,
-        monkeypatch,
-        "0::/batch/job-1\n",
-        host_bytes=64 * budget,
-    )
-    _write_cgroup_memory(
-        root / "batch" / "job-1",
-        "memory.max",
-        "memory.current",
-        10 * budget,
-        3 * budget,
-    )
-    _write_cgroup_memory(
-        root / "batch",
-        "memory.max",
-        "memory.current",
-        8 * budget,
-        4 * budget,
-    )
-    _write_cgroup_memory(root, "memory.max", "memory.current", "max", 5 * budget)
-
-    assert resources.available_memory_bytes() == 4 * budget
-    assert resources.automatic_worker_limits()[1] == 4
-
-
-def test_available_memory_respects_cgroup_v1_headroom(tmp_path, monkeypatch):
-    """Legacy memory controllers receive the same limit-minus-usage handling."""
-    budget = resources.AUTO_WORKER_MEMORY_BYTES
-    root = _resource_probe_paths(
-        tmp_path,
-        monkeypatch,
-        "4:cpu:/batch/job-1\n7:memory:/batch/job-1\n",
-        host_bytes=64 * budget,
-    )
-    _write_cgroup_memory(
-        root / "memory" / "batch" / "job-1",
-        "memory.limit_in_bytes",
-        "memory.usage_in_bytes",
-        6 * budget,
-        2 * budget,
-    )
-
-    assert resources.available_memory_bytes() == 4 * budget
-
-
-def test_unlimited_cgroup_keeps_host_available_memory(tmp_path, monkeypatch):
-    """An unrestricted cgroup must not invent a memory ceiling."""
-    budget = resources.AUTO_WORKER_MEMORY_BYTES
-    root = _resource_probe_paths(
-        tmp_path,
-        monkeypatch,
-        "0::/job-1\n",
-        host_bytes=7 * budget,
-    )
-    _write_cgroup_memory(
-        root / "job-1",
-        "memory.max",
-        "memory.current",
-        "max",
-        2 * budget,
-    )
+    _host_meminfo(tmp_path, monkeypatch, host_bytes=7 * budget)
 
     assert resources.available_memory_bytes() == 7 * budget
+    assert resources.automatic_worker_limits()[1] == 7
+
+
+def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
+    tmp_path, monkeypatch
+):
+    """A memory probe that fails must not be read as zero available memory."""
+    monkeypatch.setattr(
+        resources, "PROC_MEMINFO_PATH", str(tmp_path / "definitely-absent")
+    )
+    monkeypatch.setattr(resources.sys, "platform", "linux")
+    monkeypatch.setattr(resources.os, "sysconf", lambda name: 0)
+
+    assert resources.available_memory_bytes() is None
+    assert resources.automatic_worker_limits()[1] is None
+
+
+def test_a_cgroup_memory_limit_is_not_detected(tmp_path, monkeypatch):
+    """Alchemy sizes from host memory, so a scheduler job needs --workers.
+
+    Detecting a cgroup allowance was removed rather than repaired: it was
+    roughly half of this module, was reached by nobody running Alchemy from a
+    clone, and could not affect a single-structure run at all because workers
+    are capped at the entry count. ``docs/usage.md`` states the consequence, so
+    this test holds the code to what the documentation promises.
+    """
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    _host_meminfo(tmp_path, monkeypatch, host_bytes=64 * budget)
+    # A limit far below host memory, of the kind SLURM or a container imposes.
+    cgroup_root = tmp_path / "cgroup"
+    (cgroup_root / "batch").mkdir(parents=True)
+    (cgroup_root / "batch" / "memory.max").write_text(str(2 * budget), encoding="ascii")
+
+    assert resources.available_memory_bytes() == 64 * budget
+    assert not hasattr(resources, "CGROUP_ROOT")
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
