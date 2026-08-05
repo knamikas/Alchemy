@@ -13,7 +13,16 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import math
 import os
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import gemmi
 
@@ -245,17 +254,59 @@ class AtomSite:
         return (*self.residue_key, self.atom_name, self.element)
 
 
-def _count_overfull_occupancy_sites(atoms: Iterable[AtomSite]) -> int:
-    """Count chemical atom sites whose alternate occupancies exceed one."""
+# An overfull alternate-occupancy site inflates Ni by its excess. Because
+# DPI is proportional to Ni**0.5, a relative error in Ni produces half that
+# relative error in the DPI, so the excess only matters in proportion to the
+# structure's own atom count -- a fixed per-site tolerance cannot express that.
+# At this fraction the DPI is wrong by 0.1%, which for values near 0.16 is
+# about one unit in the last digit it is reported to (round(dpi, 4)), so the
+# threshold sits where the excess first becomes visible at all. Deposited
+# occupancies are written to two decimals, so independently rounded conformers
+# routinely sum to 1.01; real structures sit orders of magnitude inside this
+# bound, while a refinement genuinely corrupt enough to move the DPI exceeds it.
+OVERFULL_OCCUPANCY_NI_FRACTION = 0.002
+
+
+def _overfull_occupancy_summary(
+    atoms: Iterable[AtomSite],
+) -> Tuple[int, float, FrozenSet[Tuple[object, ...]]]:
+    """Chemical atom sites whose alternates exceed one, by how much, and which.
+
+    The identities are kept so a metal site can report whether the overfull
+    occupancy is its own or a donor's. An entry-level count cannot answer that,
+    and a residue hundreds of angstroms away is not evidence about a site.
+    """
     by_chemical_site: Dict[Tuple[object, ...], List[AtomSite]] = defaultdict(list)
     for atom in atoms:
         by_chemical_site[atom.chemical_site_identity].append(atom)
 
-    return sum(
-        len(alternates) > 1
-        and all(atom.occupancy_valid for atom in alternates)
-        and math.fsum(atom.occupancy for atom in alternates) > 1.0
-        for alternates in by_chemical_site.values()
+    count = 0
+    excess = 0.0
+    identities = []
+    for identity, alternates in by_chemical_site.items():
+        if len(alternates) <= 1:
+            continue
+        if not all(atom.occupancy_valid for atom in alternates):
+            continue
+        total = math.fsum(atom.occupancy for atom in alternates)
+        if total > 1.0:
+            count += 1
+            excess += total - 1.0
+            identities.append(identity)
+    return count, excess, frozenset(identities)
+
+
+def _occupancy_weighted_atom_count(atoms: Iterable[AtomSite]) -> float:
+    """Ni as counted for the DPI, ignoring the validation flags that gate it.
+
+    ``count_deposited_ni`` refuses to return a number once occupancy validation
+    has failed, but deciding whether an overfull site is large enough to matter
+    needs the count itself, so it is measured here from the atoms directly.
+    """
+    return math.fsum(
+        atom.occupancy
+        for atom in atoms
+        if not atom.is_hydrogen and atom.occupancy_valid
     )
 
 
@@ -336,6 +387,8 @@ class StructureContext:
     missing_occupancy_count: int
     invalid_occupancy_count: int
     overfull_occupancy_site_count: int
+    overfull_occupancy_excess: float
+    overfull_occupancy_site_keys: FrozenSet[Tuple[object, ...]]
     defaulted_occupancy_atom_count: int
     zero_occupancy_atom_count: int
     duplicate_atom_records_present: bool
@@ -1175,7 +1228,11 @@ def load_structure(
         if _site_is_better(site, current):
             dedup[site.exact_identity] = site
     source_atoms = tuple(sorted(dedup.values(), key=lambda site: site.source_order))
-    overfull_site_count = _count_overfull_occupancy_sites(source_atoms)
+    (
+        overfull_site_count,
+        overfull_excess,
+        overfull_site_keys,
+    ) = _overfull_occupancy_summary(source_atoms)
 
     residue_groups: Dict[Tuple[int, int, int], List[AtomSite]] = defaultdict(list)
     for site in source_atoms:
@@ -1251,8 +1308,20 @@ def load_structure(
         key: tuple(value) for key, value in by_coordinate_author_lists.items()
     }
 
+    # An occupancy that cannot be read at all leaves Ni unknowable, so it still
+    # voids the DPI. An overfull site is different in kind: the count is known,
+    # and only its size relative to Ni decides whether the DPI is affected.
+    countable_ni = _occupancy_weighted_atom_count(source_atoms)
+    if overfull_excess <= 0.0:
+        overfull_invalidates_dpi = False
+    elif countable_ni > 0.0:
+        overfull_invalidates_dpi = (
+            overfull_excess / countable_ni > OVERFULL_OCCUPANCY_NI_FRACTION
+        )
+    else:
+        overfull_invalidates_dpi = True
     occupancy_failed = bool(
-        missing_count or invalid_count or overfull_site_count or mapping_failed
+        missing_count or invalid_count or overfull_invalidates_dpi or mapping_failed
     )
     return StructureContext(
         pdb_id=pdb_id,
@@ -1272,6 +1341,8 @@ def load_structure(
         missing_occupancy_count=missing_count,
         invalid_occupancy_count=invalid_count,
         overfull_occupancy_site_count=overfull_site_count,
+        overfull_occupancy_excess=round(overfull_excess, 6),
+        overfull_occupancy_site_keys=overfull_site_keys,
         defaulted_occupancy_atom_count=defaulted_occupancy_count,
         zero_occupancy_atom_count=zero_count,
         duplicate_atom_records_present=duplicate_count > 0,

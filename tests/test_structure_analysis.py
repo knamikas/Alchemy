@@ -559,7 +559,60 @@ def test_load_structure_selects_conformer_and_keeps_both_for_counting(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(9 + 0.35 + 0.55 + 1.0)
 
 
+def test_rounded_alternate_occupancy_is_reported_but_keeps_the_dpi(tmp_path):
+    """0.46 + 0.55 is a two-decimal rounding artifact, not unusable occupancy.
+
+    Deposited occupancies carry two decimals, so independently rounded
+    conformers legitimately sum to 1.01. Voiding on that discarded every
+    z-score in the entry over 0.01 of an atom.
+    """
+    builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
+    his = builder.residues[1]
+    builder.add_conformers(
+        his,
+        [
+            ("A", 0.46, {"NE2": (2.03, 0.0, 0.0)}),
+            ("B", 0.55, {"NE2": (2.80, 0.0, 0.0)}),
+        ],
+        atom_names=["NE2"],
+    )
+
+    context = sa.load_structure(
+        "test", builder.write_pdb(tmp_path / "rounded_conformers.pdb")
+    )
+
+    assert context.overfull_occupancy_site_count == 1
+    assert context.overfull_occupancy_excess == pytest.approx(0.01)
+    # The measurement is still reported, so the deposition oddity stays visible.
+    assert "overfull_alternate_occupancy" in context.warning_codes
+    assert context.occupancy_validation_failed is False
+    assert math.isfinite(sa.count_deposited_ni(context))
+    assert math.isfinite(sa.count_ni(context))
+
+
+def test_overfull_excess_accumulated_across_sites_still_voids_the_dpi(tmp_path):
+    """The threshold is on total excess against Ni, so many small sites add up."""
+    builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
+    his = builder.residues[1]
+    names = [atom.name for atom in his.atoms if not atom.altloc]
+    builder.add_conformers(
+        his,
+        [("A", 0.46, {}), ("B", 0.55, {})],
+        atom_names=names,
+    )
+
+    context = sa.load_structure(
+        "test", builder.write_pdb(tmp_path / "many_overfull.pdb")
+    )
+
+    assert context.overfull_occupancy_site_count == len(names)
+    assert context.overfull_occupancy_excess == pytest.approx(0.01 * len(names))
+    assert context.occupancy_validation_failed is True
+    assert math.isnan(sa.count_ni(context))
+
+
 def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path):
+    """A grossly overfull site still voids DPI: 0.6 excess against ~11 atoms."""
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
     builder.add_conformers(

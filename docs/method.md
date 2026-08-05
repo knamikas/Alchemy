@@ -333,10 +333,38 @@ positions contribute separately to this global sum. If non-given strict-NCS
 operations generate copies that are not explicitly deposited, each copy is
 included in `Ni`; NCS operations marked as already given are not counted again.
 The deposited count, strict-NCS multiplier, and resulting complete count are all
-reported. A missing, non-finite, negative, or greater-than-one occupancy, or a
-sum greater than one across alternate conformers of the same atom site, makes
-DPI unavailable rather than being silently repaired; contact distances that do
-not require DPI are retained. Zero occupancy is valid for `Ni` but is not
+reported. A missing, non-finite, negative, or greater-than-one occupancy makes
+DPI unavailable rather than being silently repaired, because an occupancy that
+cannot be read leaves `Ni` unknowable; contact distances that do not require DPI
+are retained.
+
+A sum greater than one across alternate conformers of the same atom site is
+treated differently, because `Ni` is still known — only inflated by the excess.
+DPI is proportional to `Ni`<sup>0.5</sup>, so a relative error in `Ni` produces
+half that relative error in the DPI, and the excess therefore matters only in
+proportion to the structure's own atom count. Alchemy sums the excess across all
+overfull sites and makes DPI unavailable only when it exceeds 0.2% of `Ni`, at
+which point the DPI is wrong by 0.1% — about one unit in the fourth decimal it
+is reported to, so the threshold sits where the excess first becomes visible in
+the reported value at all. Below that the DPI is reported normally. Deposited
+occupancies are written to two decimals, so independently rounded conformers
+routinely sum to 1.01; a fixed per-site tolerance would not scale with structure
+size, and one such residue would otherwise void every z-score in the entry.
+`overfull_occupancy_site_count` and `overfull_occupancy_excess` report the
+measurement whether or not it crossed the threshold, and the
+`overfull_alternate_occupancy` warning is raised whenever any overfull site is
+present anywhere in the model.
+
+Because that warning covers the whole entry, it cannot say whether a given metal
+site is implicated: a disordered side chain far from every metal raises it
+identically. Each site therefore also reports `metal_overfull_occupancy` for the
+metal atom itself, which the selected conformer's occupancy alone does not
+reveal. Donor atoms are not tracked this way: whether a donor is really present
+is answered empirically by its real-space density statistics, which is a
+stronger instrument than occupancy bookkeeping. Overfull occupancy does not
+change which conformer is measured — selection takes the highest mean valid
+occupancy either way — so this field is reported rather than acted on, and an
+overfull donor is never discarded as contact evidence. Zero occupancy is valid for `Ni` but is not
 accepted as evidence for a metal site or assigned contact. A source-declared
 contact to a zero-occupancy donor remains in `metal_candidates_all.csv` for
 audit, with `eligibility_status=zero_occupancy`, but cannot become a bond.

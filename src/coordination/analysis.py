@@ -739,6 +739,13 @@ def _site_summary(
         unavailable=not image_search_available,
     )
     primary = image_inclusive if image_search_available else explicit
+    # Whether the metal itself carries overfull alternate occupancy, rather than
+    # a residue elsewhere that the entry-level warning reports identically. Only
+    # the metal is tracked: it is the object of study, and a donor's presence is
+    # already answered empirically by its real-space density statistics.
+    metal_overfull = (
+        metal.chemical_site_identity in structure.overfull_occupancy_site_keys
+    )
     symmetry_count = (
         sum(contact.symmetry_contact for contact in image_contacts)
         if image_search_available
@@ -839,6 +846,7 @@ def _site_summary(
         "coordination_depends_on_crystallographic_symmetry": (depends_crystallographic),
         "coordination_depends_on_strict_ncs": depends_strict_ncs,
         "metal_zero_occupancy": metal_zero,
+        "metal_overfull_occupancy": metal_overfull,
         "geometry_not_assessed_reason": "|".join(dict.fromkeys(reasons)),
     }
 

@@ -566,8 +566,15 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch):
             assert float(bond["literature_stdev"]) == pytest.approx(sigma)
             dpi = float(bond["dpi"])
             assert math.isfinite(dpi) and dpi > 0.0
-            expected_z = (distance - mu) / math.sqrt(dpi**2 + sigma**2)
-            assert float(bond["zscore"]) == pytest.approx(expected_z, abs=5e-4)
+            denominator = math.sqrt(dpi**2 + sigma**2)
+            expected_z = (distance - mu) / denominator
+            # The z-score is computed from the full-precision distance, while
+            # the CSV reports it rounded to three decimals, so recomputing here
+            # inherits up to half a unit in that last place. Divided by the
+            # denominator that is worth far more than the z-score's own
+            # rounding, and a fixed tolerance would be tuned to one entry.
+            tolerance = 0.0005 / denominator + 5e-5
+            assert float(bond["zscore"]) == pytest.approx(expected_z, abs=tolerance)
             assert abs(expected_z) < float(bond["zscore_outlier_cutoff"])
             assert bond["geometry_outlier"] == "False"
             assert bond["geometry_consistent"] == "True"

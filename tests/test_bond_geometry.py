@@ -766,6 +766,50 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path):
     assert summary["candidate_contact_count"] == 1
 
 
+def test_overfull_occupancy_far_from_the_metal_is_not_charged_to_the_site(tmp_path):
+    """A distant overfull residue leaves the metal's own flag clear.
+
+    The entry-level warning fires for any overfull site anywhere in the model,
+    so it cannot tell a caller whether the metal itself is implicated.
+    """
+    builder = helpers.simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
+    distant = builder.add_amino_acid("ARG", 60, chain="C", origin=(20.0, 0.0, 0.0))
+    builder.add_conformers(
+        distant,
+        [("A", 0.46, {}), ("B", 0.55, {})],
+        atom_names=[atom.name for atom in distant.atoms if not atom.altloc],
+    )
+    path = builder.write_pdb(tmp_path / "distant_overfull.pdb")
+    context = load_structure("test", path)
+    _rows, _candidates, summaries, _meta = _analyze(path)
+    summary = next(iter(summaries.values()))
+
+    assert context.overfull_occupancy_site_count > 0
+    assert "overfull_alternate_occupancy" in context.warning_codes
+    assert summary["metal_overfull_occupancy"] is False
+
+
+def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path):
+    """Alternates of the metal itself summing over one are the site's own.
+
+    This is the case the flag exists for: the deposition asserts more than one
+    metal's worth of presence, which is a statement about the object of study
+    and is not recoverable from the selected conformer's occupancy alone.
+    """
+    builder = helpers.simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
+    metal = builder.residues[0]
+    builder.add_conformers(
+        metal,
+        [("A", 0.46, {}), ("B", 0.55, {})],
+        atom_names=["ZN"],
+    )
+    path = builder.write_pdb(tmp_path / "metal_overfull.pdb")
+    _rows, _candidates, summaries, _meta = _analyze(path)
+    summary = next(iter(summaries.values()))
+
+    assert summary["metal_overfull_occupancy"] is True
+
+
 def test_zscore_matches_the_documented_formula():
     """z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
     assert ba._zscore(2.30, 2.09, 0.05, 0.12) == pytest.approx(
