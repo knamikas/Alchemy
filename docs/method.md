@@ -367,7 +367,11 @@ occupancy either way — so this field is reported rather than acted on, and an
 overfull donor is never discarded as contact evidence. Zero occupancy is valid for `Ni` but is not
 accepted as evidence for a metal site or assigned contact. A source-declared
 contact to a zero-occupancy donor remains in `metal_candidates_all.csv` for
-audit, with `eligibility_status=zero_occupancy`, but cannot become a bond.
+audit, with `eligibility_status=zero_occupancy`, but cannot become a bond. A
+metal record excluded the same way leaves no site to annotate, so the entry
+instead carries the `zero_occupancy_metal_excluded` warning: without it a
+structure whose only metal is modeled absent would report `no_metals`, which
+reads as an authoritative negative about a file that contains a metal record.
 For PDB input, raw occupancy records are matched to Gemmi atoms by chain,
 residue number and insertion code, residue and atom names, alternate location,
 and atom serial rather than parser traversal order.

@@ -438,6 +438,21 @@ def _identification_reason_codes(rows):
     return list(dict.fromkeys(codes))
 
 
+def _excluded_zero_occupancy_metals(structure):
+    """Metal records dropped from site selection for a valid zero occupancy.
+
+    Site selection excludes them deliberately -- a metal modeled as absent is
+    not evidence for a site -- but the exclusion was silent, so a structure
+    whose only metal is at zero occupancy reported ``no_metals``, an
+    authoritative negative about a file that plainly contains a metal record.
+    """
+    selected = structure.metal_atoms(METALS_SET, canonical=True)
+    with_absent = structure.metal_atoms(
+        METALS_SET, canonical=True, include_zero_occupancy=True
+    )
+    return len(with_absent) - len(selected)
+
+
 def _sites_without_density_rows(rows, site_summaries):
     """Metal sites bond analysis measured that the statistics table omits.
 
@@ -658,6 +673,12 @@ def process(pdb_id):
         result.model_analyzed = structure.model_analyzed
         result.multi_model_structure = structure.multi_model_structure
         result.warning_codes = list(structure.warning_codes)
+        if _excluded_zero_occupancy_metals(structure):
+            result.warning_codes = list(
+                dict.fromkeys(
+                    result.warning_codes + [WarningCode.ZERO_OCCUPANCY_METAL_EXCLUDED]
+                )
+            )
         if not structure.metal_atoms(METALS_SET, canonical=True):
             if structure.unknown_element_atom_count:
                 # A missing or invalid deposited element could belong to a

@@ -254,6 +254,53 @@ def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
     assert result.rows == []
 
 
+def test_a_zero_occupancy_metal_is_excluded_but_not_silently(tmp_path, monkeypatch):
+    """``no_metals`` must not read as an authoritative negative about this file.
+
+    A metal modeled at zero occupancy is not evidence for a site, so it is
+    rightly excluded from selection. The exclusion used to be silent, leaving
+    an entry whose only metal is modeled absent reporting no metals at all --
+    and the generic ``zero_occupancy_atoms`` warning cannot say which atom.
+    """
+    builder = helpers.StructureBuilder()
+    builder.add_hetero_residue(
+        "ZN",
+        1,
+        [helpers.AtomSpec(name="ZN", element="ZN", pos=(0.0, 0.0, 0.0), occupancy=0.0)],
+        chain="B",
+    )
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        structure_builder=builder,
+        bonds=True,
+    )
+
+    assert result.n_metals == 0
+    assert result.no_metals is True
+    assert "zero_occupancy_metal_excluded" in result.warning_codes
+
+
+def test_a_positive_occupancy_metal_raises_no_exclusion_warning(tmp_path, monkeypatch):
+    """The warning marks a real exclusion, not merely the presence of a metal."""
+    builder = helpers.StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.03, 0.0, 0.0)})
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        structure_builder=builder,
+        bonds=True,
+    )
+
+    assert result.n_metals == 1
+    assert "zero_occupancy_metal_excluded" not in result.warning_codes
+
+
 def test_a_catalogued_cofactor_metal_raises_no_such_code(tmp_path, monkeypatch):
     """A single-atom ion is reported by both stages, so nothing is flagged."""
     builder = helpers.StructureBuilder()

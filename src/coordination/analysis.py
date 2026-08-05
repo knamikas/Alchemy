@@ -613,7 +613,7 @@ def _annotate_multi_donor_groups(contacts):
             contact.score_exclusion_reason = "" if assessable else "zscore_unavailable"
 
 
-def _scope_summary(contacts, metal_zero_occupancy, unavailable=False):
+def _scope_summary(contacts, unavailable=False):
     if unavailable:
         return {
             "candidate": NAN,
@@ -664,7 +664,7 @@ def _scope_summary(contacts, metal_zero_occupancy, unavailable=False):
         contact.multi_donor_detected is True for contact in contacts
     )
     scored_assessable = scored_outlier + scored_consistent
-    if metal_zero_occupancy or scored_assessable == 0:
+    if scored_assessable == 0:
         status = GeometryStatus.INSUFFICIENT_DATA
     elif scored_outlier:
         status = GeometryStatus.SUSPECT
@@ -736,12 +736,10 @@ def _site_summary(
     dpi_reason,
     structure,
 ):
-    metal_zero = metal.occupancy_valid and metal.occupancy == 0.0
-    explicit = _scope_summary(explicit_contacts, metal_zero)
+    explicit = _scope_summary(explicit_contacts)
     image_search_available = image_contacts is not None
     image_inclusive = _scope_summary(
         image_contacts or [],
-        metal_zero,
         unavailable=not image_search_available,
     )
     primary = image_inclusive if image_search_available else explicit
@@ -798,8 +796,6 @@ def _site_summary(
         )
 
     reasons = []
-    if metal_zero:
-        reasons.append(ReasonCode.METAL_ZERO_OCCUPANCY)
     if dpi_reason:
         reasons.append(dpi_reason)
     if not image_search_available:
@@ -851,7 +847,6 @@ def _site_summary(
         "geometry_classification_changes_with_generated_images": changed,
         "coordination_depends_on_crystallographic_symmetry": (depends_crystallographic),
         "coordination_depends_on_strict_ncs": depends_strict_ncs,
-        "metal_zero_occupancy": metal_zero,
         "metal_overfull_occupancy": metal_overfull,
         "geometry_not_assessed_reason": "|".join(dict.fromkeys(reasons)),
     }
@@ -987,12 +982,6 @@ def run_bond_analysis(
         )
         summary.update(_site_context_values(primary_contacts, primary_candidates))
         summaries[metal.source_key] = summary
-        if summary["metal_zero_occupancy"]:
-            metadata["partial_reason_codes"].append(ReasonCode.METAL_ZERO_OCCUPANCY)
-            metadata["messages"].append(
-                f"zero-occupancy metal: {metal.chain_id}/{metal.resnum}/"
-                f"{metal.atom_name}"
-            )
 
         sigma = _sigma_for(
             sig,

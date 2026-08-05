@@ -126,7 +126,6 @@ class ReasonCode(StrEnum):
     )
     SYMMETRY_SEARCH_UNAVAILABLE = "symmetry_search_unavailable"
     MISSING_FIRST_SPHERE_REFERENCE = "missing_first_sphere_reference"
-    METAL_ZERO_OCCUPANCY = "metal_zero_occupancy"
     #: The remaining members are the DPI's own reasons for being unavailable,
     #: each recorded as the entry's partial reason.
     MISSING_DPI_METADATA_SOURCE = "missing_dpi_metadata_source"
@@ -149,6 +148,12 @@ class WarningCode(StrEnum):
     ALTLOC_SELECTION_FALLBACK = "altloc_selection_fallback"
     UNKNOWN_ELEMENTS = "unknown_elements"
     ZERO_OCCUPANCY_ATOMS = "zero_occupancy_atoms"
+    #: A metal record was excluded from site selection because its occupancy is
+    #: a valid zero. Zero occupancy is not evidence for a site, but without this
+    #: an entry whose only metal is modeled absent reports ``no_metals`` -- an
+    #: authoritative negative about a file that does contain a metal record.
+    #: ``zero_occupancy_atoms`` alone cannot say the metal was the atom dropped.
+    ZERO_OCCUPANCY_METAL_EXCLUDED = "zero_occupancy_metal_excluded"
     OVERFULL_ALTERNATE_OCCUPANCY = "overfull_alternate_occupancy"
     OCCUPANCY_DICTIONARY_DEFAULT_APPLIED = "occupancy_dictionary_default_applied"
     RAW_OCCUPANCY_MAPPING_FAILED = "raw_occupancy_mapping_failed"

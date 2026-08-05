@@ -270,7 +270,6 @@ STATS_EXTRA_COLUMNS = [
     "overfull_occupancy_excess",
     "defaulted_occupancy_atom_count",
     "zero_occupancy_atom_count",
-    "metal_zero_occupancy",
     "metal_overfull_occupancy",
     "geometry_not_assessed_reason",
     "duplicate_atom_records_present",
