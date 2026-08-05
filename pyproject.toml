@@ -42,11 +42,17 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
 # Coverage is measured but not enforced by default, so a plain
 # `pytest` run stays fast. CI adds:
-#   --cov=src --cov-report=term-missing --cov-fail-under=75
-# 75 sits just below the current offline figure of 77%, making it a
-# ratchet rather than a tripwire. The gap is concentrated in
-# density_analysis (60%), main.py (60%) and ccp4_setup (55%) --
-# see findings 4.1 and 4.2.
+#   --cov=src --cov-report=term-missing --cov-fail-under=86
+# The floor is set just under the measured figure so it ratchets rather than
+# trips; left far below it, a change could delete hundreds of covered
+# statements unnoticed. Last measured at 88% (4905 statements, 608 missed) on
+# the lane CI runs:
+#   pytest --no-ccp4 --no-network --skip-slow --cov=src
+# Re-run that before moving the floor, and keep it in step with
+# .github/workflows/tests.yml, which is where the number takes effect. The gap
+# is concentrated in inputs.py (54%), ccp4_setup (67%), driver/resources (68%)
+# and driver/pool (76%): mostly error and interrupt paths that need a real
+# subprocess, a killed worker, or a cgroup limit to reach.
 markers = [
     "ccp4: requires the CCP4 binaries (mtzfix, fft, mapmask, edstats) on PATH",
     "entry_data: requires the checksum-pinned PDB-REDO integration entries",
@@ -73,8 +79,9 @@ target-version = "py311"
 [tool.ruff.lint]
 # Deliberately narrow. E/W/F/B catch real defects -- undefined names, unused
 # bindings, exception-handling mistakes -- and the tree is clean under them.
-# Modernization rules (UP) are excluded on purpose: they would rewrite 221
-# annotations, which belongs with the typing work, not a lint gate.
+# Modernization rules (UP) are excluded on purpose: `ruff check --select UP
+# src tests tools` reports 347 findings, 334 of them annotation rewrites,
+# which belong with the typing work rather than a lint gate.
 select = ["E", "W", "F", "B"]
 ignore = [
     # zip(..., strict=) changes behaviour: length mismatches would begin
