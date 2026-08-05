@@ -191,7 +191,7 @@ def _expected_edstats_residues(structure, metals_upper, cofactor_set):
 
 
 def _validated_edstats_row_number(fields, indices, line_number):
-    """Return EDSTATS' one-based coordinate-residue ordinal."""
+    """Return EDSTATS' one-based residue ordinal within the row's chain part."""
     value = fields[indices["NR"]]
     try:
         row_number = int(value)
@@ -206,18 +206,36 @@ def _validated_edstats_row_number(fields, indices, line_number):
     return row_number
 
 
+def _coordinate_residues_by_chain_part(structure):
+    """Group coordinate residues by deposited chain, keeping coordinate order.
+
+    EDSTATS restarts NR at 1 for each chain part it reports, so the ordinal
+    locates a residue only within its own chain. CP carries the deposited chain
+    and is the field that matches ``coordinate_author_key``; CI cannot be used
+    here because EDSTATS reports it as ``0`` for ordered waters.
+    """
+    grouped: dict[str, list] = {}
+    for residue in structure.residues:
+        grouped.setdefault(residue.coordinate_author_key[1], []).append(residue)
+    return {chain: tuple(residues) for chain, residues in grouped.items()}
+
+
 def _resolve_coordinate_residues(
-    structure, matched_residues, row_number, line_number, coordinate_key
+    chain_residues, matched_residues, row_number, line_number, coordinate_key
 ):
-    """Use NR to reduce a repeated author identity to one coordinate residue."""
+    """Use NR to reduce a repeated author identity to one coordinate residue.
+
+    ``chain_residues`` are the coordinate residues of the row's own chain part,
+    in coordinate order, because NR is numbered within a chain rather than
+    across the model.
+    """
     matched_residues = tuple(matched_residues)
     if len(matched_residues) <= 1:
         return matched_residues
 
-    coordinate_residues = tuple(structure.residues)
     index = row_number - 1
-    if index < len(coordinate_residues):
-        row_residue_key = coordinate_residues[index].key
+    if index < len(chain_residues):
+        row_residue_key = chain_residues[index].key
         for residue in matched_residues:
             if residue.key == row_residue_key:
                 return (residue,)
@@ -236,7 +254,8 @@ def _density_observation_id(pdb_id, fields, indices):
     EDSTATS reports one observation per coordinate residue, which Alchemy can
     expand into several metal-site rows, so the identifier derives from the
     EDSTATS row rather than from an individual metal atom. ``NR`` disambiguates
-    repeated author residue identifiers within the selected model.
+    repeated author residue identifiers within one chain, which is the scope it
+    is numbered over; the chain itself keeps rows from different chains apart.
     """
     chain = fields[indices["CI"]] or "_"
     return "/".join(
@@ -322,8 +341,9 @@ def extract_metal_statistics(
     schema: Optional[tuple[list[str], dict[str, int]]] = None
     residue_row_count = 0
     observed_residues: Counter[tuple[str, str, str]] = Counter()
-    observed_edstats_rows: set[tuple[int, int]] = set()
-    residue_observations: dict[tuple[int, int, int], int] = {}
+    observed_edstats_rows: set[tuple[int, str, int]] = set()
+    residue_observations: dict[tuple[int, int, int], tuple[str, int]] = {}
+    residues_by_chain_part = _coordinate_residues_by_chain_part(structure)
     with open(stats_out, encoding="utf-8", errors="strict") as f:
         for line_number, line in enumerate(f, 1):
             stripped = line.strip()
@@ -347,10 +367,12 @@ def extract_metal_statistics(
                     f"EDSTATS returned model {row_model}, but Alchemy's "
                     f"model policy selected model {structure.model_analyzed}"
                 )
-            observation_key = (row_model, row_number)
+            chain_part = fields[indices["CP"]]
+            observation_key = (row_model, chain_part, row_number)
             if observation_key in observed_edstats_rows:
                 raise ValueError(
-                    f"duplicate EDSTATS NR {row_number} for model {row_model}"
+                    f"duplicate EDSTATS NR {row_number} for chain "
+                    f"{chain_part or '_'} of model {row_model}"
                 )
             observed_edstats_rows.add(observation_key)
             try:
@@ -371,7 +393,7 @@ def extract_metal_statistics(
                 coordinate_resname, chain, resnum
             )
             matched_residues = _resolve_coordinate_residues(
-                structure,
+                residues_by_chain_part.get(chain_part, ()),
                 matched_residues,
                 row_number,
                 line_number,
@@ -384,12 +406,14 @@ def extract_metal_statistics(
                 residue_key = matched_residues[0].key
                 previous = residue_observations.get(residue_key)
                 if previous is not None:
+                    previous_chain, previous_number = previous
                     raise ValueError(
-                        f"EDSTATS NR {previous} and {row_number} both map to "
-                        f"coordinate residue {coordinate_resname}/"
-                        f"{chain or '_'}/{resnum}"
+                        f"EDSTATS NR {previous_number} of chain "
+                        f"{previous_chain or '_'} and NR {row_number} of chain "
+                        f"{chain_part or '_'} both map to coordinate residue "
+                        f"{coordinate_resname}/{chain or '_'}/{resnum}"
                     )
-                residue_observations[residue_key] = row_number
+                residue_observations[residue_key] = (chain_part, row_number)
 
             coordinate_name_is_cofactor = coordinate_resname in cofactor_set
             matched_cofactor_names = []

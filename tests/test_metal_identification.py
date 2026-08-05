@@ -75,10 +75,13 @@ class _RemappedStructure:
     sequence number, so a genuine duplicate cannot be produced from a file.
     """
 
-    def __init__(self, context, author_key, residues):
+    def __init__(self, context, author_key, residues, all_residues=None):
         self._context = context
         self._author_key = tuple(author_key)
         self._residues = tuple(residues)
+        self._all_residues = (
+            self._residues if all_residues is None else tuple(all_residues)
+        )
 
     @property
     def model_analyzed(self):
@@ -86,7 +89,9 @@ class _RemappedStructure:
 
     @property
     def residues(self):
-        return self._residues
+        """Every coordinate residue, which is the ambiguous pair unless the
+        caller needs unrelated residues in the model as well."""
+        return self._all_residues
 
     def residues_for_coordinate_author(self, residue_name, chain_id, resnum):
         if (residue_name, chain_id, resnum) == self._author_key:
@@ -864,7 +869,80 @@ def test_nr_must_be_a_positive_integer(tmp_path, nr):
         _extract(stats, context)
 
 
+def test_nr_restarting_per_chain_is_the_normal_case_not_a_duplicate(tmp_path):
+    """EDSTATS numbers NR within each chain, so every chain begins again at 1.
+
+    Reading NR as an ordinal over the whole model made the first row of the
+    second chain collide with the first row of the first chain, which failed
+    every multi-chain entry outright.
+    """
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
+    builder.add_metal("MG", 1, chain="B", pos=(12.0, 0.0, 0.0))
+    path = builder.write_pdb(tmp_path / "twochain.pdb")
+    context = load_structure("test", path)
+    stats = _write_rows(
+        tmp_path,
+        [
+            helpers.edstats_row("ZN", "A", "1", nr=1),
+            helpers.edstats_row("MG", "B", "1", nr=1),
+        ],
+    )
+
+    rows, _ = _extract(stats, context)
+
+    assert [(row["resname"], row["chain"]) for row in rows] == [
+        ("ZN", "A"),
+        ("MG", "B"),
+    ]
+    assert len({row["density_observation_id"] for row in rows}) == 2
+
+
+def test_nr_is_resolved_within_its_own_chain(tmp_path):
+    """A repeated author identity resolves by position in its chain.
+
+    Chain B's rows restart at NR 1, so indexing a model-wide residue list would
+    land on chain A's residue and resolve nothing.
+    """
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
+    builder.add_metal("MG", 1, chain="B", pos=(12.0, 0.0, 0.0))
+    builder.add_metal("MG", 2, chain="B", pos=(24.0, 0.0, 0.0))
+    path = builder.write_pdb(tmp_path / "twochain.pdb")
+    context = load_structure("test", path)
+
+    first, second, third = context.residues
+    third = replace(
+        third,
+        coordinate_residue_name="MG",
+        coordinate_chain_id="B",
+        coordinate_residue_number=1,
+        coordinate_resnum="1",
+    )
+    duplicated = _RemappedStructure(
+        context,
+        ("MG", "B", "1"),
+        (second, third),
+        all_residues=(first, second, third),
+    )
+
+    stats = _write_rows(
+        tmp_path,
+        [
+            helpers.edstats_row("ZN", "A", "1", nr=1),
+            helpers.edstats_row("MG", "B", "1", nr=1, metrics={"ZDm": 2.0}),
+            helpers.edstats_row("MG", "B", "1", nr=2, metrics={"ZDm": 8.0}),
+        ],
+    )
+    rows, _ = _extract(stats, duplicated)
+
+    assert [row["fields"][INDICES["ZDm"]] for row in rows] == ["0.0", "2.0", "8.0"]
+    assert [row["resnum"] for row in rows] == ["1", "1", "2"]
+    assert len({row["density_observation_id"] for row in rows}) == 3
+
+
 def test_duplicate_nr_fails_instead_of_reusing_a_coordinate_residue(tmp_path):
+    """Within one chain NR must still be unique; both rows here are chain B."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
     builder.add_metal("MG", 2, chain="B")

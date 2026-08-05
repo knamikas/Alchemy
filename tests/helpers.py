@@ -879,10 +879,16 @@ def edstats_rows_for_structure(
     so the completeness check in ``extract_metal_statistics`` always passes.
     ``metrics`` applies to every row; ``per_residue`` is keyed by
     ``(coordinate_residue_name, chain_id, resnum)`` and overrides on top.
+
+    ``NR`` restarts at 1 for each deposited chain, which is how EDSTATS numbers
+    it. Numbering it across the whole model instead would make every row of a
+    multi-chain structure unrepresentative of real output.
     """
     rows: List[List[str]] = []
-    for index, residue in enumerate(context.residues, start=1):
+    chain_ordinals: Dict[str, int] = {}
+    for residue in context.residues:
         rt, chain, resnum = residue.coordinate_author_key
+        chain_ordinals[chain] = chain_ordinals.get(chain, 0) + 1
         row_metrics = dict(metrics or {})
         row_metrics.update((per_residue or {}).get((rt, chain, resnum), {}))
         blank = blank_chain_form and not chain
@@ -896,7 +902,7 @@ def edstats_rows_for_structure(
                 resnum,
                 mn=model,
                 cp=chain,
-                nr=index,
+                nr=chain_ordinals[chain],
                 metrics=row_metrics,
                 default=default,
                 omit_cp=blank,

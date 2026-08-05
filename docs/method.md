@@ -89,9 +89,12 @@ restores that field before validating the standard 42-column schema. Other row
 width mismatches still fail. Decimal and hybrid-36 PDB residue numbers are
 decoded to the same canonical integer representation used by Gemmi before raw
 PDB atoms and EDSTATS rows are joined. If coordinate residues repeat the same
-author identity, the one-based EDSTATS `NR` coordinate-residue ordinal resolves
-them one-to-one; a duplicate, out-of-range, or inconsistent `NR` fails the entry
-rather than expanding an ambiguous row across multiple sites. Completeness is
+author identity, the one-based EDSTATS `NR` residue ordinal resolves them
+one-to-one. `NR` is numbered within a chain rather than across the model —
+EDSTATS restarts it at 1 for each chain part `CP` — so it is read against the
+residues of its own chain, and uniqueness is required per chain rather than per
+model. A `NR` that repeats within one chain, or is out of range or inconsistent,
+fails the entry rather than expanding an ambiguous row across multiple sites. Completeness is
 checked with residue multiplicity intact. The table must contain finite numeric
 statistics or the documented `n/a` marker and a row for every selected metal or
 cofactor residue. Empty, malformed, incomplete, or wrong-model output fails the
