@@ -25,6 +25,35 @@ MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 logger = logger_for(__name__)
 
 
+def read_data_json_properties(data_json_path):
+    """Return a validated PDB-REDO ``properties`` object.
+
+    Callers use this strict reader when a user explicitly supplied the file.
+    Automatically discovered metadata may catch ``ValueError`` and retain its
+    documented fallback behavior.
+    """
+    try:
+        with open(data_json_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        raise ValueError(f"data.json file not found: {data_json_path}") from None
+    except OSError as exc:
+        raise ValueError(f"could not read data.json {data_json_path}: {exc}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"invalid JSON in data.json {data_json_path}: {exc.msg}"
+        ) from None
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"data.json must contain a JSON object: {data_json_path}")
+    properties = payload.get("properties")
+    if not isinstance(properties, dict):
+        raise ValueError(
+            f"data.json must contain a properties object: {data_json_path}"
+        )
+    return properties
+
+
 def entry_dir_for(root, pdb_id):
     """PDB-REDO layout: <root>/<middle two chars of id>/<id>/."""
     return os.path.join(root, pdb_id[1:3], pdb_id)
@@ -84,35 +113,40 @@ def read_resolution(entry_dir, mtz_path, data_json_path=None):
     metadata records; EDSTATS is given the map columns' own range by
     ``read_map_column_resolution`` instead.
     """
-    dj = data_json_path or os.path.join(entry_dir, "data.json")
-    if os.path.exists(dj):
+    explicit = data_json_path is not None
+    dj = data_json_path if explicit else os.path.join(entry_dir, "data.json")
+    if explicit or os.path.exists(dj):
         try:
-            with open(dj) as handle:
-                props = json.load(handle).get("properties", {})
+            props = read_data_json_properties(dj)
             lo, hi = props.get("DATARESL"), props.get("DATARESH")
             # A half-populated record is not trusted; fall back to the MTZ.
             if lo and hi:
                 return float(hi)
-        except (ValueError, KeyError, OSError):
-            pass
+        except (TypeError, ValueError):
+            if explicit:
+                raise
     import gemmi
 
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
-def read_pdb_redo_is_twin(data_json_path):
+def read_pdb_redo_is_twin(data_json_path, *, required=False):
     """Return only an explicit boolean PDB-REDO ``properties.ISTWIN`` value.
 
-    Missing, malformed and string-valued metadata are false: the twin
-    coefficient fallback must not be inferred from a filename or from an
-    MTZFIX failure.
+    Automatically discovered missing or malformed metadata, and string-valued
+    flags, are false: the twin coefficient fallback must not be inferred from
+    a filename or from an MTZFIX failure. When ``required`` is true, the path
+    came from ``--data-json`` and read or structural errors are fatal instead.
     """
     if not data_json_path:
+        if required:
+            raise ValueError("an explicit data.json path is required")
         return False
     try:
-        with open(data_json_path) as handle:
-            value = json.load(handle).get("properties", {}).get("ISTWIN")
-    except (AttributeError, OSError, ValueError):
+        value = read_data_json_properties(data_json_path).get("ISTWIN")
+    except ValueError:
+        if required:
+            raise
         return False
     return value is True
 

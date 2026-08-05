@@ -97,6 +97,17 @@ def test_twin_routing_requires_explicit_boolean_metadata(tmp_path, value, expect
     assert inputs.read_pdb_redo_is_twin(path) is expected
 
 
+@pytest.mark.parametrize("payload", [None, "{not valid json", "[]", "{}"])
+def test_explicit_twin_metadata_read_failures_are_not_non_twin(tmp_path, payload):
+    """Unreadable explicit metadata cannot be collapsed into ``ISTWIN=false``."""
+    path = tmp_path / "data.json"
+    if payload is not None:
+        path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        inputs.read_pdb_redo_is_twin(path, required=True)
+
+
 def _fake_ccp4_run_factory(mtzfix_log_text):
     """Return a subprocess stub sufficient for the full-map density path."""
 

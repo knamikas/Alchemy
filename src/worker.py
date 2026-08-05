@@ -577,7 +577,10 @@ def process(pdb_id):
         density_data_json = (
             data_json if manual_inputs else os.path.join(entry, "data.json")
         )
-        pdb_redo_is_twin = read_pdb_redo_is_twin(density_data_json)
+        pdb_redo_is_twin = read_pdb_redo_is_twin(
+            density_data_json,
+            required=bool(manual_inputs and data_json),
+        )
         map_reslo, map_reshi = read_map_column_resolution(mtz)
         source_pdb = pdb
         source_coordinate_path = _source_coordinate_path(cfg, pdb_id, entry, source_pdb)

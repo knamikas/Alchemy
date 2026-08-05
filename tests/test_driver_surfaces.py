@@ -586,6 +586,52 @@ def test_an_explicit_data_json_path_overrides_the_entry_directory(tmp_path):
     ) == pytest.approx(1.72)
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (None, "file not found"),
+        ("{not valid json", "invalid JSON"),
+        ("[]", "must contain a JSON object"),
+        ("{}", "must contain a properties object"),
+    ],
+)
+def test_explicit_invalid_data_json_does_not_fall_back_to_mtz(
+    tmp_path, payload, message
+):
+    """A requested metadata file is an input contract, not an optional probe."""
+    data_json = tmp_path / "explicit.json"
+    if payload is not None:
+        data_json.write_text(payload, encoding="utf-8")
+    mtz = _minimal_mtz(tmp_path / "fallback.mtz")
+
+    with pytest.raises(ValueError, match=message):
+        inputs.read_resolution(
+            tmp_path,
+            mtz,
+            data_json_path=str(data_json),
+        )
+
+
+def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(tmp_path):
+    """A CLI typo fails as a driver input error instead of reaching a worker."""
+    missing = tmp_path / "missing.json"
+    args = cli.parse_args(
+        [
+            "--id",
+            "9myr",
+            "--pdb-file",
+            "9myr.pdb",
+            "--mtz-file",
+            "9myr.mtz",
+            "--data-json",
+            str(missing),
+        ]
+    )
+
+    with pytest.raises(pool.DriverError, match=r"Invalid --data-json:.*not found"):
+        pool._select_entry_ids(args, str(tmp_path / "cache"))
+
+
 def test_intermediates_are_discarded_unless_asked_for():
     """Per-entry maps are large, so retention is opt-in: ``process`` keys its
     scratch cleanup off this flag."""

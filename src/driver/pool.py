@@ -50,6 +50,7 @@ from inputs import (
     ensure_entry_available,
     enumerate_entries,
     infer_pdb_id_from_path,
+    read_data_json_properties,
 )
 from worker import (
     WorkerConfig,
@@ -376,6 +377,11 @@ def _select_entry_ids(args, cache_root):
                 "Manual input mode requires --id or a file name that contains "
                 "a 4-character PDB id."
             )
+        if args.data_json:
+            try:
+                read_data_json_properties(args.data_json)
+            except ValueError as exc:
+                raise DriverError(f"Invalid --data-json: {exc}") from None
         return (
             [pdb_id],
             root,

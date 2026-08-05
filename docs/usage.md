@@ -32,6 +32,10 @@ derived from it are unavailable. Bond geometry is still measured and emitted,
 and the omission is reported as `missing_dpi_metadata_source` rather than as a
 calculation failure.
 
+When `--data-json` is supplied explicitly, it must name a readable, valid JSON
+file containing a top-level `properties` object. Invalid explicit metadata is
+an input error rather than a request to use the no-metadata fallbacks.
+
 ## Important options
 
 | Option | Purpose |
