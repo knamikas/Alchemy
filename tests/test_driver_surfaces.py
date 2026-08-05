@@ -615,6 +615,97 @@ def _minimal_mtz(path, high=1.5):
     return str(path)
 
 
+def _map_coefficient_mtz(path, rows, *, columns=inputs.MAP_COEFFICIENT_COLUMNS):
+    """An MTZ carrying the four EDSTATS map-coefficient columns.
+
+    ``rows`` are ``(h, k, l, *values)`` with one value per column, so a caller
+    can make an individual coefficient non-finite without touching the others.
+    """
+    import gemmi
+    import numpy as np
+
+    mtz = gemmi.Mtz(with_base=True)
+    mtz.spacegroup = gemmi.find_spacegroup_by_name("P 1")
+    mtz.cell = gemmi.UnitCell(40, 40, 40, 90, 90, 90)
+    dataset = mtz.add_dataset("test")
+    for label in columns:
+        mtz.add_column(
+            label,
+            "F" if label.startswith(("FWT", "DELFWT")) else "P",
+            dataset.id,
+        )
+    mtz.set_data(np.asarray(rows, dtype=np.float32))
+    mtz.write_to_file(str(path))
+    return str(path)
+
+
+def _d_spacing(mtz_path):
+    import gemmi
+
+    return gemmi.read_mtz_file(mtz_path).make_d_array()
+
+
+def test_map_column_resolution_spans_only_wholly_finite_reflections(tmp_path):
+    """EDSTATS is given the range where all four coefficients exist.
+
+    ``docs/method.md`` states this deliberately: limits taken from the overall
+    MTZ would describe reflections the maps were not calculated from. A bug in
+    the whole-row mask would silently move the limits behind every RSZD in the
+    database, so the mask is checked against a row that is finite in three
+    columns and not the fourth.
+    """
+    nan = float("nan")
+    path = _map_coefficient_mtz(
+        tmp_path / "coefficients.mtz",
+        [
+            [1, 0, 0, 10.0, 20.0, 1.0, 30.0],
+            [3, 0, 0, 10.0, 20.0, 1.0, 30.0],
+            # Finite everywhere but DELFWT, and the highest-resolution row, so
+            # a mask that did not span whole rows would extend reshi onto it.
+            [4, 0, 0, 10.0, 20.0, nan, 30.0],
+        ],
+    )
+    spacings = _d_spacing(path)
+
+    reslo, reshi = inputs.read_map_column_resolution(path)
+
+    assert (reslo, reshi) == pytest.approx(
+        (float(max(spacings[0], spacings[1])), float(min(spacings[0], spacings[1])))
+    )
+    assert reshi > float(spacings[2])
+
+
+def test_map_column_resolution_names_every_missing_column(tmp_path):
+    """The error says which coefficients are absent, not merely that one is."""
+    path = _map_coefficient_mtz(
+        tmp_path / "partial.mtz",
+        [[1, 0, 0, 10.0, 20.0]],
+        columns=("FWT", "PHWT"),
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        inputs.read_map_column_resolution(path)
+
+    message = str(excinfo.value)
+    assert "DELFWT" in message and "PHDELWT" in message
+    assert "FWT" in message
+
+
+def test_map_column_resolution_rejects_a_wholly_unusable_set(tmp_path):
+    """No reflection finite in all four columns is an error, not an empty range."""
+    nan = float("nan")
+    path = _map_coefficient_mtz(
+        tmp_path / "unusable.mtz",
+        [
+            [1, 0, 0, 10.0, 20.0, nan, 30.0],
+            [2, 0, 0, nan, 20.0, 1.0, 30.0],
+        ],
+    )
+
+    with pytest.raises(ValueError, match="no common finite reflections"):
+        inputs.read_map_column_resolution(path)
+
+
 def test_resolution_is_read_from_data_json_when_complete(tmp_path):
     """data.json is authoritative because DPI metadata is derived from it."""
     entry_dir = _make_entry(

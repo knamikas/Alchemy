@@ -23,7 +23,6 @@ from run_logging import logger_for, truncate
 logger = logger_for(__name__)
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 
 # Roughly five times the worst step observed across the July 2026 database runs
@@ -622,7 +621,14 @@ if __name__ == "__main__":
     p.add_argument("pdb_id", metavar="pdbID")
     p.add_argument("mtz", help="MTZ with FWT/PHWT/DELFWT/PHDELWT columns")
     p.add_argument("pdb", help="coordinate file (edstats XYZIN)")
-    p.add_argument("--out-dir", default=BASE_DIR)
+    # Defaults to the working directory. It once defaulted to this file's own
+    # directory, so a run without --out-dir wrote its maps, mapmask output and
+    # EDSTATS logs into src/, which .gitignore does not cover.
+    p.add_argument(
+        "--out-dir",
+        default=".",
+        help="directory for maps, logs and stats output (default: %(default)s)",
+    )
     p.add_argument(
         "--reslo",
         type=float,
