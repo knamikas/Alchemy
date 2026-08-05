@@ -856,9 +856,10 @@ class _WorkerDeathWatch:
     def stalled_losses(self, completed_ids, stalled_for, remaining):
         """Results for the outstanding entries an unattributed death held.
 
-        ``None`` until every outstanding entry can be accounted for by a death
-        that named no entry and the run has been quiet for the grace period,
-        which leaves the caller waiting rather than failing live work.
+        ``None`` until every unassigned outstanding entry can be accounted for
+        by a death that named no entry and the run has been quiet for the grace
+        period. Entries assigned to pids still in the pool are known to be
+        alive and cannot be blamed on an older, unrelated death.
         """
         if not (
             self._unattributed_deaths
@@ -866,17 +867,27 @@ class _WorkerDeathWatch:
             and remaining <= self._unattributed_deaths
         ):
             return None
-        # Only entries that never returned a result can still be held by a
-        # process that died before naming its entry; blaming a completed one
-        # would write a second, failed row for an entry that succeeded.
+        live_ids = {
+            pdb_id
+            for pid, pdb_id in self._assignments.items()
+            if pid in self._worker_pids
+        }
+        # Only unassigned entries that never returned a result can still be
+        # held by a process that died before naming its entry. A live assigned
+        # entry may legitimately spend longer than the fallback grace period
+        # inside CCP4, while a completed one already has its real output row.
         losses = []
         for stuck_id in self._ids:
-            if stuck_id in self._lost_ids or stuck_id in completed_ids:
+            if (
+                stuck_id in self._lost_ids
+                or stuck_id in completed_ids
+                or stuck_id in live_ids
+            ):
                 continue
             losses.append(self._lose(stuck_id, 0))
             if len(losses) >= remaining:
                 break
-        return losses
+        return losses or None
 
     def superseded(self, result):
         """True when a synthesized loss row already stands for this entry."""

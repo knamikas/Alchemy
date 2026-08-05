@@ -621,8 +621,8 @@ def test_driver_recovers_when_first_worker_dies_before_first_result_poll(tmp_pat
 
 
 @_POSIX_KILL
-def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
-    """The driver still exits when a worker is killed while awaiting a task.
+def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(tmp_path):
+    """An idle death cannot be transferred to a healthy long-running entry.
 
     A worker waiting for its next task blocks inside the pool task queue's
     ``get()`` holding that queue's lock, so a process killed there never
@@ -632,13 +632,17 @@ def test_idle_worker_death_does_not_wedge_pool_shutdown(tmp_path):
 
     ``aaaa`` finishes quickly and is killed 0.3 s later, by which time it is
     idle and holding the lock; ``bbbb`` is still working, so the driver has not
-    reached teardown yet. Reaching the assertions at all is the signal.
+    reached teardown yet. The deliberately short fallback grace expires while
+    ``bbbb`` is active; its live pid assignment must protect it from the older,
+    unattributed death. Reaching the assertions also proves shutdown completed.
     """
     script = {
         "aaaa": {"runtime": 0.05, "die_after": 0.3},
         "bbbb": {"runtime": 1.5},
     }
-    exit_code, output_dir, elapsed = _run_driver(tmp_path, script, workers=2)
+    exit_code, output_dir, elapsed = _run_driver(
+        tmp_path, script, stall_grace=0.1, workers=2
+    )
 
     assert elapsed < _DRIVER_HARD_TIMEOUT_S
     by_id = {row["pdbID"]: row for row in _read_manifest(output_dir)}
