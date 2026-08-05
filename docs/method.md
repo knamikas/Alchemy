@@ -318,7 +318,8 @@ positions contribute separately to this global sum. If non-given strict-NCS
 operations generate copies that are not explicitly deposited, each copy is
 included in `Ni`; NCS operations marked as already given are not counted again.
 The deposited count, strict-NCS multiplier, and resulting complete count are all
-reported. A missing, non-finite, negative, or greater-than-one occupancy makes
+reported. A missing, non-finite, negative, or greater-than-one occupancy, or a
+sum greater than one across alternate conformers of the same atom site, makes
 DPI unavailable rather than being silently repaired; contact distances that do
 not require DPI are retained. Zero occupancy is valid for `Ni` but is not
 accepted as evidence for a metal site or assigned contact. A source-declared

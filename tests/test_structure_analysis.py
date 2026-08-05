@@ -559,6 +559,37 @@ def test_load_structure_selects_conformer_and_keeps_both_for_counting(tmp_path):
     assert sa.count_deposited_ni(context) == pytest.approx(9 + 0.35 + 0.55 + 1.0)
 
 
+def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path):
+    builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
+    his = builder.residues[1]
+    builder.add_conformers(
+        his,
+        [
+            ("A", 0.8, {"NE2": (2.03, 0.0, 0.0)}),
+            ("B", 0.8, {"NE2": (2.80, 0.0, 0.0)}),
+        ],
+        atom_names=["NE2"],
+    )
+
+    context = sa.load_structure(
+        "test", builder.write_pdb(tmp_path / "overfull_conformers.pdb")
+    )
+    alternates = [
+        atom
+        for atom in context.source_atoms
+        if atom.residue_name == "HIS" and atom.atom_name == "NE2"
+    ]
+
+    assert [atom.occupancy for atom in alternates] == pytest.approx([0.8, 0.8])
+    assert all(atom.occupancy_valid for atom in alternates)
+    assert context.invalid_occupancy_count == 0
+    assert context.overfull_occupancy_site_count == 1
+    assert context.occupancy_validation_failed is True
+    assert "overfull_alternate_occupancy" in context.warning_codes
+    assert math.isnan(sa.count_deposited_ni(context))
+    assert math.isnan(sa.count_ni(context))
+
+
 def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path):
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]

@@ -96,6 +96,7 @@ class WarningCode(StrEnum):
     ALTLOC_SELECTION_FALLBACK = "altloc_selection_fallback"
     UNKNOWN_ELEMENTS = "unknown_elements"
     ZERO_OCCUPANCY_ATOMS = "zero_occupancy_atoms"
+    OVERFULL_ALTERNATE_OCCUPANCY = "overfull_alternate_occupancy"
     RAW_OCCUPANCY_MAPPING_FAILED = "raw_occupancy_mapping_failed"
     LEGACY_PDB_IDENTIFIERS_PACKED = "legacy_pdb_identifiers_packed"
     #: Refmac's twinned map coefficients were rewritten for EDSTATS.

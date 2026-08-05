@@ -244,6 +244,20 @@ class AtomSite:
         return (*self.residue_key, self.atom_name, self.element)
 
 
+def _count_overfull_occupancy_sites(atoms: Iterable[AtomSite]) -> int:
+    """Count chemical atom sites whose alternate occupancies exceed one."""
+    by_chemical_site: Dict[Tuple[object, ...], List[AtomSite]] = defaultdict(list)
+    for atom in atoms:
+        by_chemical_site[atom.chemical_site_identity].append(atom)
+
+    return sum(
+        len(alternates) > 1
+        and all(atom.occupancy_valid for atom in alternates)
+        and math.fsum(atom.occupancy for atom in alternates) > 1.0
+        for alternates in by_chemical_site.values()
+    )
+
+
 @dataclass
 class ResidueSelection:
     """All source sites and the selected canonical sites for one residue."""
@@ -320,6 +334,7 @@ class StructureContext:
     occupancy_validation_failed: bool
     missing_occupancy_count: int
     invalid_occupancy_count: int
+    overfull_occupancy_site_count: int
     zero_occupancy_atom_count: int
     duplicate_atom_records_present: bool
     duplicate_atom_record_count: int
@@ -1118,6 +1133,7 @@ def load_structure(
         if _site_is_better(site, current):
             dedup[site.exact_identity] = site
     source_atoms = tuple(sorted(dedup.values(), key=lambda site: site.source_order))
+    overfull_site_count = _count_overfull_occupancy_sites(source_atoms)
 
     residue_groups: Dict[Tuple[int, int, int], List[AtomSite]] = defaultdict(list)
     for site in source_atoms:
@@ -1156,6 +1172,8 @@ def load_structure(
         warnings.append(WarningCode.UNKNOWN_ELEMENTS)
     if zero_count:
         warnings.append(WarningCode.ZERO_OCCUPANCY_ATOMS)
+    if overfull_site_count:
+        warnings.append(WarningCode.OVERFULL_ALTERNATE_OCCUPANCY)
     if mapping_failed:
         warnings.append(WarningCode.RAW_OCCUPANCY_MAPPING_FAILED)
     if legacy_identifiers_packed:
@@ -1189,7 +1207,9 @@ def load_structure(
         key: tuple(value) for key, value in by_coordinate_author_lists.items()
     }
 
-    occupancy_failed = bool(missing_count or invalid_count or mapping_failed)
+    occupancy_failed = bool(
+        missing_count or invalid_count or overfull_site_count or mapping_failed
+    )
     return StructureContext(
         pdb_id=pdb_id,
         path=path,
@@ -1207,6 +1227,7 @@ def load_structure(
         occupancy_validation_failed=occupancy_failed,
         missing_occupancy_count=missing_count,
         invalid_occupancy_count=invalid_count,
+        overfull_occupancy_site_count=overfull_site_count,
         zero_occupancy_atom_count=zero_count,
         duplicate_atom_records_present=duplicate_count > 0,
         duplicate_atom_record_count=duplicate_count,
