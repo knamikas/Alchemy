@@ -114,6 +114,13 @@ class ReasonCode(StrEnum):
     #: established under the no-inference policy and no site is analysable.
     METAL_PRESENCE_INDETERMINATE = "metal_presence_indeterminate"
     BOND_STAGE_FAILURE = "bond_stage_failure"
+    #: An EDSTATS row for a catalog cofactor matched no coordinate residue.
+    COFACTOR_COORDINATE_JOIN_FAILED = "cofactor_coordinate_join_failed"
+    AMBIGUOUS_COORDINATE_RESIDUE_JOIN = "ambiguous_coordinate_residue_join"
+    COFACTOR_WITHOUT_SELECTED_METAL = "cofactor_without_selected_metal"
+    #: Bond analysis measured a metal site that statistics did not report, so
+    #: its contacts carry no density evidence and it is not counted as a site.
+    METAL_SITE_WITHOUT_DENSITY = "metal_site_without_density"
     DECLARED_CONNECTION_RESOLUTION_INCOMPLETE = (
         "declared_connection_resolution_incomplete"
     )

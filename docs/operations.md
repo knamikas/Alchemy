@@ -146,6 +146,10 @@ so a code cannot be added or renamed without this list following it.
 | `deterministic_processing_error` | An unanticipated exception that will recur identically on the same inputs, such as a parse or lookup error. Terminal. |
 | `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analysable. |
 | `bond_stage_failure` | The geometry stage raised, so its rows are not legitimate density-only evidence. |
+| `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |
+| `ambiguous_coordinate_residue_join` | An EDSTATS row matched more than one coordinate residue. |
+| `cofactor_without_selected_metal` | A matched cofactor contains no configured metal site to select. |
+| `metal_site_without_density` | Geometry measured a metal site the statistics table does not report, so its contacts carry no density evidence and it is not counted in `n_metals`. This happens when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot: see [maintenance.md](maintenance.md) for rebuilding it. |
 | `declared_connection_resolution_incomplete` | A source `_struct_conn` or `LINK` record named an atom that could not be resolved in the coordinate model. |
 | `symmetry_search_unavailable` | The structure has no usable cell or space group, so only explicit contacts could be found. |
 | `missing_first_sphere_reference` | No bundled reference distance covers a donor class present at the site, so those contacts cannot be z-scored. |

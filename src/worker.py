@@ -56,14 +56,17 @@ SYMMETRY_POLICY = (
 
 # Reported alongside the machine-readable code in the manifest's error column.
 IDENTIFICATION_REASON_MESSAGES = {
-    "cofactor_coordinate_join_failed": (
+    ReasonCode.COFACTOR_COORDINATE_JOIN_FAILED: (
         "cofactor EDSTATS row did not match a coordinate residue"
     ),
-    "ambiguous_coordinate_residue_join": (
+    ReasonCode.AMBIGUOUS_COORDINATE_RESIDUE_JOIN: (
         "EDSTATS row matched multiple coordinate residues"
     ),
-    "cofactor_without_selected_metal": (
+    ReasonCode.COFACTOR_WITHOUT_SELECTED_METAL: (
         "matched cofactor has no selected configured metal site"
+    ),
+    ReasonCode.METAL_SITE_WITHOUT_DENSITY: (
+        "metal site measured for geometry but absent from the statistics table"
     ),
 }
 
@@ -427,12 +430,30 @@ def _identification_reason_codes(rows):
         mapping_status = row.get("coordinate_mapping_status", "")
         site_status = row.get("selected_metal_site_status", "")
         if mapping_status == "coordinate_residue_not_found":
-            codes.append("cofactor_coordinate_join_failed")
+            codes.append(ReasonCode.COFACTOR_COORDINATE_JOIN_FAILED)
         elif mapping_status == "multiple_coordinate_residues":
-            codes.append("ambiguous_coordinate_residue_join")
+            codes.append(ReasonCode.AMBIGUOUS_COORDINATE_RESIDUE_JOIN)
         elif site_status == "no_selected_metal":
-            codes.append("cofactor_without_selected_metal")
+            codes.append(ReasonCode.COFACTOR_WITHOUT_SELECTED_METAL)
     return list(dict.fromkeys(codes))
+
+
+def _sites_without_density_rows(rows, site_summaries):
+    """Metal sites bond analysis measured that the statistics table omits.
+
+    The two stages select metals by different rules: geometry takes every metal
+    atom by element, while statistics reports a residue only when it is a
+    catalog cofactor or a single-atom ion. A metal inside a multi-atom residue
+    outside the bundled catalog therefore produced contacts with no density
+    evidence, a site summary that was then discarded for want of a row to carry
+    it, and no reason code -- the entry looked complete. Detecting the mismatch
+    here rather than the catalog rule that causes it also covers any later
+    divergence between the two selections.
+    """
+    reported = {
+        tuple(row["site_key"]) for row in rows if row.get("site_key") is not None
+    }
+    return [key for key in site_summaries if tuple(key) not in reported]
 
 
 def _append_site_fields(rows, site_summaries, structure):
@@ -673,6 +694,21 @@ def process(pdb_id):
         bond_rows, candidate_rows, site_summaries, bond_meta = _run_bond_stage(
             result, cfg, inputs, structure, rows, header
         )
+        undensitied = _sites_without_density_rows(rows, site_summaries)
+        if undensitied:
+            identification_reason_codes = list(
+                dict.fromkeys(
+                    identification_reason_codes
+                    + [ReasonCode.METAL_SITE_WITHOUT_DENSITY]
+                )
+            )
+            logger.debug(
+                "%s: %d metal site(s) measured for geometry are absent from the "
+                "statistics table: %s",
+                pdb_id,
+                len(undensitied),
+                undensitied,
+            )
         _append_site_fields(rows, site_summaries, structure)
         result.rows = rows
         result.bond_rows = bond_rows

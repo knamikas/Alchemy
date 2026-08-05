@@ -104,6 +104,7 @@ def _manual_entry(
     *,
     structure_builder=None,
     pdb_transform=None,
+    bonds=False,
     **cfg_overrides,
 ):
     """Run one manual-input entry through ``worker.process``.
@@ -133,7 +134,7 @@ def _manual_entry(
         mirror_root=str(tmp_path),
         cache_root=str(tmp_path),
         output_dir=str(tmp_path),
-        bonds=False,
+        bonds=bonds,
         density_map_scope="full",
         ccp4_timeout_s=900,
         manual_inputs={
@@ -184,6 +185,91 @@ def test_an_unanticipated_failure_reports_whether_it_will_recur(
     assert result.reason_codes == [expected_code]
     assert result.retryable is True
     assert type(exception).__name__ in result.error
+
+
+def _real_stats_density_stage(pdb_id, mtz, pdb, work_dir, *args, **kwargs):
+    """Write a synthetic ``stats.out`` covering every residue of the model."""
+    context = structure_analysis.load_structure(pdb_id, pdb)
+    stats_out = helpers.write_edstats_for_structure(
+        os.path.join(work_dir, "stats.out"), context
+    )
+    return density.DensityResult(
+        stats_out=stats_out,
+        rszd="/nonexistent/rszd.pdb",
+        fo_map="/nonexistent/fo.map",
+        df_map="/nonexistent/df.map",
+        mtz_for_maps="/nonexistent/entry.mtz",
+        mtzfix_log="/nonexistent/mtzfix.log",
+        mtzfix_applied=False,
+        timings={"edstats_s": 1.0},
+        twin_coefficient_normalization_applied=False,
+        twin_coefficient_normalization=None,
+        density_map_scope_requested="model-envelope",
+        density_map_scope_used="model-envelope",
+        full_map_bytes=8192,
+        edstats_map_bytes=2048,
+    )
+
+
+def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
+    tmp_path, monkeypatch
+):
+    """The two stages select metals by different rules, and must say when they differ.
+
+    Geometry takes every metal atom by element; statistics reports a residue
+    only when it is a catalog cofactor or a single-atom ion. A metal inside a
+    multi-atom residue absent from the bundled catalog therefore yielded
+    contacts with no density evidence and a site summary that was silently
+    discarded, while the entry still finished ``ok``.
+    """
+    builder = helpers.StructureBuilder()
+    builder.add_hetero_residue(
+        "ZZZ",
+        1,
+        [
+            helpers.AtomSpec(name="ZN", element="ZN", pos=(0.0, 0.0, 0.0)),
+            helpers.AtomSpec(name="C1", element="C", pos=(1.5, 0.0, 0.0)),
+        ],
+        chain="B",
+    )
+    builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.03, 0.0, 0.0)})
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        structure_builder=builder,
+        bonds=True,
+    )
+
+    assert "metal_site_without_density" in result.reason_codes
+    assert result.status == "partial"
+    assert result.retryable is False
+    # The shape of the inconsistency the code exists to announce: the manifest
+    # counts a coordinate-model site and geometry writes its contact, while
+    # metal_stats_all.csv carries no row for it at all, so a join on the
+    # statistics output silently loses the site.
+    assert result.n_metals == 1
+    assert result.n_bonds, "the contact that prompted the code should still be written"
+    assert result.rows == []
+
+
+def test_a_catalogued_cofactor_metal_raises_no_such_code(tmp_path, monkeypatch):
+    """A single-atom ion is reported by both stages, so nothing is flagged."""
+    builder = helpers.StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_amino_acid("HIS", 2, chain="A", positions={"NE2": (2.03, 0.0, 0.0)})
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        structure_builder=builder,
+        bonds=True,
+    )
+
+    assert "metal_site_without_density" not in result.reason_codes
+    assert result.n_metals == 1
 
 
 def test_an_unanticipated_failure_logs_its_traceback(tmp_path, monkeypatch, caplog):
