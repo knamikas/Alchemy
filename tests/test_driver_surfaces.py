@@ -455,6 +455,98 @@ def test_unknown_memory_leaves_the_limit_unset(monkeypatch):
     assert memory_limit is None
 
 
+def _resource_probe_paths(tmp_path, monkeypatch, cgroup_text, host_bytes):
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        f"MemAvailable: {host_bytes // 1024} kB\n",
+        encoding="ascii",
+    )
+    membership = tmp_path / "self-cgroup"
+    membership.write_text(cgroup_text, encoding="ascii")
+    cgroup_root = tmp_path / "cgroup"
+    cgroup_root.mkdir()
+    monkeypatch.setattr(resources, "PROC_MEMINFO_PATH", str(meminfo))
+    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(membership))
+    monkeypatch.setattr(resources, "CGROUP_ROOT", str(cgroup_root))
+    monkeypatch.setattr(resources.sys, "platform", "linux")
+    return cgroup_root
+
+
+def _write_cgroup_memory(directory, limit_name, usage_name, limit, usage):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / limit_name).write_text(str(limit), encoding="ascii")
+    (directory / usage_name).write_text(str(usage), encoding="ascii")
+
+
+def test_available_memory_respects_nested_cgroup_v2_headroom(tmp_path, monkeypatch):
+    """The tightest current or parent allowance wins over host memory."""
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    root = _resource_probe_paths(
+        tmp_path,
+        monkeypatch,
+        "0::/batch/job-1\n",
+        host_bytes=64 * budget,
+    )
+    _write_cgroup_memory(
+        root / "batch" / "job-1",
+        "memory.max",
+        "memory.current",
+        10 * budget,
+        3 * budget,
+    )
+    _write_cgroup_memory(
+        root / "batch",
+        "memory.max",
+        "memory.current",
+        8 * budget,
+        4 * budget,
+    )
+    _write_cgroup_memory(root, "memory.max", "memory.current", "max", 5 * budget)
+
+    assert resources.available_memory_bytes() == 4 * budget
+    assert resources.automatic_worker_limits()[1] == 4
+
+
+def test_available_memory_respects_cgroup_v1_headroom(tmp_path, monkeypatch):
+    """Legacy memory controllers receive the same limit-minus-usage handling."""
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    root = _resource_probe_paths(
+        tmp_path,
+        monkeypatch,
+        "4:cpu:/batch/job-1\n7:memory:/batch/job-1\n",
+        host_bytes=64 * budget,
+    )
+    _write_cgroup_memory(
+        root / "memory" / "batch" / "job-1",
+        "memory.limit_in_bytes",
+        "memory.usage_in_bytes",
+        6 * budget,
+        2 * budget,
+    )
+
+    assert resources.available_memory_bytes() == 4 * budget
+
+
+def test_unlimited_cgroup_keeps_host_available_memory(tmp_path, monkeypatch):
+    """An unrestricted cgroup must not invent a memory ceiling."""
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    root = _resource_probe_paths(
+        tmp_path,
+        monkeypatch,
+        "0::/job-1\n",
+        host_bytes=7 * budget,
+    )
+    _write_cgroup_memory(
+        root / "job-1",
+        "memory.max",
+        "memory.current",
+        "max",
+        2 * budget,
+    )
+
+    assert resources.available_memory_bytes() == 7 * budget
+
+
 def test_missing_ccp4_tools_are_named_with_a_remedy(monkeypatch):
     """The message must say which tools are absent and how to fix it."""
     monkeypatch.setattr(
