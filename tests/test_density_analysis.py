@@ -3,6 +3,7 @@
 import json
 import os
 import struct
+import time
 from types import SimpleNamespace
 
 import gemmi
@@ -130,6 +131,84 @@ def _fake_ccp4_run_factory(mtzfix_log_text):
         return SimpleNamespace(returncode=0, stderr="")
 
     return fake_run
+
+
+def _stub_ccp4_program(tmp_path, name, script):
+    """Install a real executable standing in for one CCP4 program."""
+    path = tmp_path / name
+    path.write_text(f"#!/bin/sh\n{script}\n", encoding="ascii")
+    path.chmod(0o755)
+    return path
+
+
+def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
+    tmp_path, monkeypatch
+):
+    """A CCP4 program may write any byte to stderr; that must not raise.
+
+    Decoding a pipe under ``text=True`` is strict, so one such byte used to
+    raise ``UnicodeDecodeError`` before the exit status was read. The worker's
+    catch-all then recorded a retryable ``unexpected_processing_error`` naming
+    nothing, and every later ``--resume`` reprocessed the entry and failed
+    identically.
+    """
+    program = _stub_ccp4_program(
+        tmp_path, "mtzfix", "printf 'bad \\377\\376 byte' >&2\nexit 1"
+    )
+    monkeypatch.setattr(
+        density.shutil, "which", lambda command, path=None: str(program)
+    )
+    source = tmp_path / "source.mtz"
+    source.write_bytes(b"source")
+    pdb = tmp_path / "model.pdb"
+    pdb.write_text("END\n", encoding="ascii")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        density.run_density_analysis(
+            "test", source, pdb, tmp_path / "out", 20, 2, map_scope="full"
+        )
+
+    message = str(excinfo.value)
+    assert "rc=1" in message
+    # The undecodable bytes cost characters, not the entry.
+    assert "bad" in message and "byte" in message
+    assert not isinstance(excinfo.value, UnicodeDecodeError)
+
+
+def test_a_helper_holding_stderr_does_not_fake_a_timeout(tmp_path, monkeypatch):
+    """The budget bounds the program, not the lifetime of an inherited pipe.
+
+    With stderr on a pipe, ``communicate`` waits for EOF, so a program that
+    forks a helper and exits at once still raised ``TimeoutExpired`` at the
+    full budget and recorded a timeout that could never be reproduced.
+    """
+    program = _stub_ccp4_program(
+        tmp_path, "mtzfix", "echo note >&2\n(sleep 30) &\nexit 1"
+    )
+    monkeypatch.setattr(
+        density.shutil, "which", lambda command, path=None: str(program)
+    )
+    source = tmp_path / "source.mtz"
+    source.write_bytes(b"source")
+    pdb = tmp_path / "model.pdb"
+    pdb.write_text("END\n", encoding="ascii")
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError) as excinfo:
+        density.run_density_analysis(
+            "test",
+            source,
+            pdb,
+            tmp_path / "out",
+            20,
+            2,
+            map_scope="full",
+            tool_timeout_s=10,
+        )
+    elapsed = time.monotonic() - started
+
+    assert not isinstance(excinfo.value, density.Ccp4ToolTimeoutError)
+    assert elapsed < 5, f"waited {elapsed:.1f}s on a program that exited at once"
 
 
 def test_mtzfix_retest_failure_normalizes_only_explicit_twins(tmp_path, monkeypatch):

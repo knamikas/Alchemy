@@ -9,6 +9,7 @@ import os
 import subprocess
 import shutil
 import struct
+import tempfile
 import time
 
 from dataclasses import dataclass
@@ -87,6 +88,20 @@ class Ccp4ToolTimeoutError(RuntimeError):
         self.elapsed_s = elapsed_s
         self.log_path = log_path
         self.timings = dict(timings or {})
+
+
+def _decoded_stderr(error_file):
+    """Read a CCP4 program's captured stderr, tolerating any byte it wrote.
+
+    Replacement decoding is deliberate: this text only ever reaches a log line
+    or a manifest error string, so an undecodable byte should cost a character
+    rather than the entry.
+    """
+    try:
+        error_file.seek(0)
+        return error_file.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _complex_coefficients(amplitudes, degree_phases):
@@ -310,16 +325,32 @@ def run_density_analysis(
         logger.debug("%s: running %s (budget %gs)", pdb_id, program, timeout_s)
         started = time.monotonic()
         try:
-            with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+            # stderr is captured to a file rather than a pipe. Decoding a pipe
+            # under ``text=True`` is strict, so a single non-UTF-8 byte in a
+            # Fortran runtime notice would raise before the exit status was read
+            # and lose the entry to a retryable error that always recurs. And
+            # with no output pipe to drain, the timeout bounds the process
+            # rather than EOF, so a program that leaves a helper holding stderr
+            # cannot report a false timeout at the full budget.
+            #
+            # The program is deliberately left in the worker's process group: a
+            # group of its own would make a timeout kill its descendants too,
+            # but would also let them escape the group-wide signal the driver
+            # uses to stop a worker's CCP4 children at shutdown.
+            with (
+                open(log_path, "w", encoding="utf-8", errors="replace") as log,
+                tempfile.TemporaryFile(dir=out_dir) as error_file,
+            ):
                 proc = subprocess.run(
                     cmd,
                     input=stdin,
                     text=True,
                     stdout=log,
-                    stderr=subprocess.PIPE,
+                    stderr=error_file,
                     env=env,
                     timeout=timeout_s,
                 )
+                stderr_text = _decoded_stderr(error_file)
         except subprocess.TimeoutExpired as exc:
             logger.error(
                 "%s: %s exceeded its %gs budget; partial log kept at %s",
@@ -345,7 +376,7 @@ def run_density_analysis(
                 "%s: %s ended after %.3fs", pdb_id, program, timings[timing_name]
             )
         if proc.returncode != 0:
-            detail = truncate(proc.stderr or "")
+            detail = truncate(stderr_text)
             detail_suffix = f": {detail}" if detail else ""
             logger.warning(
                 "%s: %s exited %d; see %s%s",
