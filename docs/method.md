@@ -118,6 +118,12 @@ an artificial residue by choosing A/B alternatives independently for each atom.
 Every neighboring residue is considered independently, and the selected and
 available alternatives are recorded.
 
+EDSTATS is run with `USEALT=true`, which reports named alternate conformers as
+separate residue observations instead of pooling their atoms. Alchemy retains
+only the EDSTATS row whose altloc matches the conformer selected above; missing,
+pooled, or contradictory altloc output fails the entry rather than assigning
+density from a discarded conformer to the selected metal site.
+
 `run_bond_analysis()` uses a 4 Å search only to discover broad
 positive-occupancy N/O/S candidates around a configured metal, outside the
 metal's own residue, in a recognized amino acid or water. Discovery does not

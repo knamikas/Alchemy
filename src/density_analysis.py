@@ -584,7 +584,11 @@ def run_density_analysis(
             "QQDOUT",
             qq_out,
         ],
-        f"reslo={reslo},reshi={reshi}\n",
+        # EDSTATS otherwise pools every named alternate conformer into one
+        # residue observation (USEALT defaults to false).  Alchemy selects one
+        # coherent residue conformer by occupancy, so request separate EDSTATS
+        # rows and let ``extract_metal_statistics`` retain that same conformer.
+        f"reslo={reslo},reshi={reshi},usealt=true\n",
         f"{pdb_id}_edstats.log",
         "edstats_s",
     )

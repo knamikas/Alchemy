@@ -104,6 +104,70 @@ def _normalize_edstats_row(fields, header, indices):
     return normalized
 
 
+def _edstats_chain_and_altloc(value, line_number):
+    """Split EDSTATS' USEALT chain label into deposited chain and altloc.
+
+    With ``USEALT=true``, EDSTATS 1.0.9 writes ``CI`` as ``<chain>:<altloc>``
+    (for example ``A:B``) while leaving ``CP`` as the deposited chain.  PDB
+    alternate-location identifiers are one character, so any other colon form
+    is ambiguous and must not be silently joined to a coordinate residue.
+    """
+    text = str(value)
+    if ":" not in text:
+        chain = "" if text in EDSTATS_MISSING_CHAIN_IDS else text
+        return chain, ""
+
+    chain, altloc = text.rsplit(":", 1)
+    if ":" in chain or len(altloc) != 1 or altloc in EDSTATS_MISSING_CHAIN_IDS:
+        raise ValueError(
+            f"invalid EDSTATS alternate-conformer CI value on row "
+            f"{line_number}: {text!r}"
+        )
+    if chain in EDSTATS_MISSING_CHAIN_IDS:
+        chain = ""
+    return chain, altloc
+
+
+def _row_matches_selected_altloc(
+    row_altloc, matched_residues, chain_residues, row_number, line_number
+):
+    """Whether one USEALT row is the conformer selected by Alchemy.
+
+    Author identifiers normally provide the residue.  The chain-local EDSTATS
+    ordinal is also safe for this narrow decision when an identifier join
+    failed: it lets an unmatched cofactor diagnostic discard its unselected
+    alternate rows without pretending that the author-key join succeeded.
+    """
+    residue = matched_residues[0] if len(matched_residues) == 1 else None
+    index = row_number - 1
+    if residue is None and 0 <= index < len(chain_residues):
+        residue = chain_residues[index]
+
+    if residue is None:
+        if row_altloc:
+            raise ValueError(
+                f"EDSTATS alternate conformer {row_altloc!r} on row "
+                f"{line_number} cannot be matched to a coordinate residue"
+            )
+        return True
+
+    selected = residue.selected_altloc
+    if selected:
+        if not row_altloc:
+            raise ValueError(
+                f"EDSTATS row {line_number} pooled alternate conformers for a "
+                f"residue whose selected conformer is {selected!r}; "
+                "USEALT output is required"
+            )
+        return row_altloc == selected
+    if row_altloc:
+        raise ValueError(
+            f"EDSTATS row {line_number} reports alternate conformer "
+            f"{row_altloc!r} for a residue with no selected alternate"
+        )
+    return True
+
+
 def _validated_edstats_header(fields):
     """Return column indices after validating the standard EDSTATS schema."""
     duplicates = sorted({name for name in fields if fields.count(name) > 1})
@@ -368,13 +432,6 @@ def extract_metal_statistics(
                     f"model policy selected model {structure.model_analyzed}"
                 )
             chain_part = fields[indices["CP"]]
-            observation_key = (row_model, chain_part, row_number)
-            if observation_key in observed_edstats_rows:
-                raise ValueError(
-                    f"duplicate EDSTATS NR {row_number} for chain "
-                    f"{chain_part or '_'} of model {row_model}"
-                )
-            observed_edstats_rows.add(observation_key)
             try:
                 fields[indices["RN"]] = canonical_pdb_residue_id(fields[indices["RN"]])
             except ValueError as exc:
@@ -385,20 +442,42 @@ def extract_metal_statistics(
 
             residue_row_count += 1
             coordinate_resname = fields[indices["RT"]]
-            chain = fields[indices["CI"]]
+            chain, row_altloc = _edstats_chain_and_altloc(
+                fields[indices["CI"]], line_number
+            )
+            # Everything downstream addresses the deposited chain.  The chosen
+            # altloc remains explicit on the selected coordinate site's fields.
+            fields[indices["CI"]] = chain
             resnum = fields[indices["RN"]]
             coordinate_key = (coordinate_resname, chain, resnum)
-            observed_residues[coordinate_key] += 1
             matched_residues = structure.residues_for_coordinate_author(
                 coordinate_resname, chain, resnum
             )
+            chain_residues = residues_by_chain_part.get(chain_part, ())
             matched_residues = _resolve_coordinate_residues(
-                residues_by_chain_part.get(chain_part, ()),
+                chain_residues,
                 matched_residues,
                 row_number,
                 line_number,
                 coordinate_key,
             )
+            if not _row_matches_selected_altloc(
+                row_altloc,
+                matched_residues,
+                chain_residues,
+                row_number,
+                line_number,
+            ):
+                continue
+
+            observation_key = (row_model, chain_part, row_number)
+            if observation_key in observed_edstats_rows:
+                raise ValueError(
+                    f"duplicate EDSTATS NR {row_number} for chain "
+                    f"{chain_part or '_'} of model {row_model}"
+                )
+            observed_edstats_rows.add(observation_key)
+            observed_residues[coordinate_key] += 1
             if not matched_residues:
                 mapping_status = "coordinate_residue_not_found"
             else:

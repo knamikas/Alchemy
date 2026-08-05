@@ -619,6 +619,70 @@ def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(tmp_path):
     assert [site.altloc for site in sites] == ["B"]
 
 
+def _alternate_fes_context(tmp_path):
+    builder = StructureBuilder()
+    residue = builder.add_hetero_residue(
+        "FES",
+        1,
+        [
+            AtomSpec("FE1", "FE", (0.0, 0.0, 0.0)),
+            AtomSpec("S1", "S", (1.8, 0.0, 0.0)),
+        ],
+        chain="A",
+    )
+    builder.add_conformers(
+        residue,
+        [
+            ("A", 0.3, {}),
+            ("B", 0.7, {"FE1": (5.0, 0.0, 0.0), "S1": (6.8, 0.0, 0.0)}),
+        ],
+    )
+    return load_structure("test", builder.write_pdb(tmp_path / "alternate_fes.pdb"))
+
+
+def test_usealt_density_follows_the_selected_residue_conformer(tmp_path):
+    """A discarded altloc cannot contribute density to the selected metal."""
+    context = _alternate_fes_context(tmp_path)
+    residue = context.residues[0]
+    assert residue.selected_altloc == "B"
+    stats = _write_rows(
+        tmp_path,
+        [
+            helpers.edstats_row("FES", "A:A", "1", cp="A", nr=1, metrics={"ZDm": 1.1}),
+            helpers.edstats_row("FES", "A:B", "1", cp="A", nr=1, metrics={"ZDm": 1.6}),
+        ],
+    )
+
+    rows, header = _extract(stats, context, cofactors={"FES"})
+
+    assert len(rows) == 1
+    assert rows[0]["site"].altloc == "B"
+    assert rows[0]["fields"][header.index("CI")] == "A"
+    assert rows[0]["fields"][header.index("ZDm")] == "1.6"
+
+
+def test_missing_selected_usealt_row_is_incomplete_density_output(tmp_path):
+    context = _alternate_fes_context(tmp_path)
+    stats = _write_rows(
+        tmp_path,
+        [helpers.edstats_row("FES", "A:A", "1", cp="A", nr=1, metrics={"ZDm": 1.1})],
+    )
+
+    with pytest.raises(ValueError, match=r"incomplete.*FES/A/1"):
+        _extract(stats, context, cofactors={"FES"})
+
+
+def test_pooled_edstats_row_is_rejected_for_an_alternate_residue(tmp_path):
+    context = _alternate_fes_context(tmp_path)
+    stats = _write_rows(
+        tmp_path,
+        [helpers.edstats_row("FES", "A", "1", cp="A", nr=1)],
+    )
+
+    with pytest.raises(ValueError, match="pooled alternate conformers"):
+        _extract(stats, context, cofactors={"FES"})
+
+
 def test_zero_occupancy_ion_is_not_a_selected_density_site(tmp_path):
     """A deposited zero contributes no metal-site density evidence."""
     builder = StructureBuilder()

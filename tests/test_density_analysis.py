@@ -358,8 +358,8 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     def fake_run(
         cmd, input=None, text=None, stdout=None, stderr=None, env=None, timeout=None
     ):
-        seen.append((cmd[0].rsplit("/", 1)[-1], timeout))
         program = cmd[0].rsplit("/", 1)[-1]
+        seen.append((program, timeout, input))
         if program == "fft":
             with open(cmd[cmd.index("MAPOUT") + 1], "wb") as handle:
                 handle.write(b"map")
@@ -382,8 +382,13 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     )
 
     assert len(seen) >= 3, seen
-    assert {timeout for _, timeout in seen} == {123}, (
+    assert {timeout for _, timeout, _ in seen} == {123}, (
         f"every program must receive the same per-program budget: {seen}"
+    )
+    edstats_inputs = [stdin for program, _, stdin in seen if program == "edstats"]
+    assert edstats_inputs == ["reslo=20.0,reshi=2.0,usealt=true\n"], (
+        "EDSTATS must emit separate observations for the residue conformer "
+        f"Alchemy selects: {edstats_inputs}"
     )
 
 
