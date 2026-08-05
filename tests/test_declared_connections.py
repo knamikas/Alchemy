@@ -949,6 +949,37 @@ def test_failed_resolution_of_a_non_metal_declaration_is_silent():
     ) == (None, [], [])
 
 
+@pytest.mark.parametrize("atom_name", ["CA", "CD", "CE", "SG"])
+def test_unresolved_common_atom_names_are_not_mistaken_for_metals(atom_name):
+    connection = SimpleNamespace(
+        partner1=declared_address("ALA", atom_name),
+        partner2=declared_address("SER", "OG"),
+    )
+    resolved = declared_connections._resolve_declared_partners(
+        None, UnresolvableModel(), connection, {}
+    )
+
+    assert resolved.declares_metal is False
+    assert declared_connections._declared_candidate_for_connection(
+        None, connection, "c1", "struct_conn", resolved, set()
+    ) == (None, [], [])
+
+
+@pytest.mark.parametrize(
+    "resname,atom_name,element,expected",
+    [
+        ("HEM", "FE", "Fe", True),
+        ("ALA", "CA", "C", False),
+        ("ZN", "ZN", "C", False),
+    ],
+)
+def test_resolved_element_is_authoritative(resname, atom_name, element, expected):
+    address = declared_address(resname, atom_name)
+    cra = SimpleNamespace(atom=SimpleNamespace(element=SimpleNamespace(name=element)))
+
+    assert declared_connections._declared_partner_is_metal(address, cra) is expected
+
+
 def test_unparsable_connection_file_is_reported_and_not_fatal(tmp_path):
     """A source file gemmi cannot read degrades to a partial result."""
     builder, his, zinc = zinc_histidine_site()

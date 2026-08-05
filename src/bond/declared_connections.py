@@ -129,20 +129,18 @@ def _selected_conformer_atom(structure, atom):
 def _declared_partner_is_metal(address, cra):
     """Whether a source connection partner unambiguously names a metal.
 
-    The resolved atom's element is the best evidence; a malformed declaration
-    may omit that atom, so fall back to unambiguous identifiers such as ``ZN``.
-    Never guess from a prefix: ``CA`` is commonly a protein alpha carbon.
+    A resolved atom's element is authoritative. If resolution failed, only a
+    metal residue name is sufficient evidence: atom names such as ``CA``, ``CD``,
+    ``CE`` and ``SG`` are also ordinary macromolecular atom names.
     """
     source_atom = getattr(cra, "atom", None)
     if source_atom is not None:
         element = str(getattr(source_atom.element, "name", "")).upper()
-        if element in METAL_ELEMENTS:
-            return True
+        return element in METAL_ELEMENTS
 
     residue_id = getattr(address, "res_id", None)
     residue_name = str(getattr(residue_id, "name", "")).strip().upper()
-    atom_name = str(getattr(address, "atom_name", "")).strip().upper()
-    return residue_name in METAL_ELEMENTS or atom_name in METAL_ELEMENTS
+    return residue_name in METAL_ELEMENTS
 
 
 def _declared_candidate_geometry(structure, metal, neighbor, connection):
