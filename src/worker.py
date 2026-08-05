@@ -66,7 +66,7 @@ IDENTIFICATION_REASON_MESSAGES = {
         "matched cofactor has no selected configured metal site"
     ),
     ReasonCode.METAL_SITE_WITHOUT_DENSITY: (
-        "metal site measured for geometry but absent from the statistics table"
+        "selected coordinate metal site is absent from the statistics table"
     ),
 }
 
@@ -453,22 +453,21 @@ def _excluded_zero_occupancy_metals(structure):
     return len(with_absent) - len(selected)
 
 
-def _sites_without_density_rows(rows, site_summaries):
-    """Metal sites bond analysis measured that the statistics table omits.
+def _sites_without_density_rows(rows, structure):
+    """Selected coordinate metal sites that the statistics table omits.
 
-    The two stages select metals by different rules: geometry takes every metal
-    atom by element, while statistics reports a residue only when it is a
-    catalog cofactor or a single-atom ion. A metal inside a multi-atom residue
-    outside the bundled catalog therefore produced contacts with no density
-    evidence, a site summary that was then discarded for want of a row to carry
-    it, and no reason code -- the entry looked complete. Detecting the mismatch
-    here rather than the catalog rule that causes it also covers any later
-    divergence between the two selections.
+    Coordinate analysis selects every canonical metal atom by element, while
+    statistics reports a residue only when it is a catalog cofactor or a
+    single-atom ion. A metal inside a multi-atom residue outside the bundled
+    catalog therefore has no density row. Deriving the expected keys directly
+    from the structure keeps this completeness check active when bond analysis
+    is disabled or fails, and covers any later divergence between selections.
     """
     reported = {
         tuple(row["site_key"]) for row in rows if row.get("site_key") is not None
     }
-    return [key for key in site_summaries if tuple(key) not in reported]
+    selected = structure.metal_atoms(METALS_SET, canonical=True)
+    return [metal.source_key for metal in selected if metal.source_key not in reported]
 
 
 def _append_site_fields(rows, site_summaries, structure):
@@ -715,7 +714,10 @@ def process(pdb_id):
         bond_rows, candidate_rows, site_summaries, bond_meta = _run_bond_stage(
             result, cfg, inputs, structure, rows, header
         )
-        undensitied = _sites_without_density_rows(rows, site_summaries)
+        # An empty header means density production itself failed and already
+        # supplied the precise reason code. This comparison diagnoses a
+        # successful statistics table whose site selection is incomplete.
+        undensitied = _sites_without_density_rows(rows, structure) if header else []
         if undensitied:
             identification_reason_codes = list(
                 dict.fromkeys(
@@ -724,7 +726,7 @@ def process(pdb_id):
                 )
             )
             logger.debug(
-                "%s: %d metal site(s) measured for geometry are absent from the "
+                "%s: %d selected coordinate metal site(s) are absent from the "
                 "statistics table: %s",
                 pdb_id,
                 len(undensitied),

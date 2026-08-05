@@ -211,16 +211,17 @@ def _real_stats_density_stage(pdb_id, mtz, pdb, work_dir, *args, **kwargs):
     )
 
 
+@pytest.mark.parametrize("bonds", [True, False], ids=["bonds", "no-bonds"])
 def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, bonds
 ):
     """The two stages select metals by different rules, and must say when they differ.
 
-    Geometry takes every metal atom by element; statistics reports a residue
-    only when it is a catalog cofactor or a single-atom ion. A metal inside a
-    multi-atom residue absent from the bundled catalog therefore yielded
-    contacts with no density evidence and a site summary that was silently
-    discarded, while the entry still finished ``ok``.
+    Coordinate analysis takes every metal atom by element; statistics reports
+    a residue only when it is a catalog cofactor or a single-atom ion. A metal
+    inside a multi-atom residue absent from the bundled catalog therefore has
+    no density evidence. The mismatch must be reported whether or not bond
+    analysis was requested.
     """
     builder = helpers.StructureBuilder()
     builder.add_hetero_residue(
@@ -239,18 +240,20 @@ def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
         monkeypatch,
         _real_stats_density_stage,
         structure_builder=builder,
-        bonds=True,
+        bonds=bonds,
     )
 
     assert "metal_site_without_density" in result.reason_codes
     assert result.status == "partial"
     assert result.retryable is False
-    # The shape of the inconsistency the code exists to announce: the manifest
-    # counts a coordinate-model site and geometry writes its contact, while
-    # metal_stats_all.csv carries no row for it at all, so a join on the
-    # statistics output silently loses the site.
+    # The manifest counts the coordinate-model site while metal_stats_all.csv
+    # carries no row for it, so a join on statistics would silently lose it.
+    # When requested, bond analysis still retains the site's contact evidence.
     assert result.n_metals == 1
-    assert result.n_bonds, "the contact that prompted the code should still be written"
+    if bonds:
+        assert result.n_bonds, "bond analysis should retain the measured contact"
+    else:
+        assert result.n_bonds == 0
     assert result.rows == []
 
 

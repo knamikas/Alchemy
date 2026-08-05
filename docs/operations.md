@@ -161,7 +161,7 @@ so a code cannot be added or renamed without this list following it.
 | `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |
 | `ambiguous_coordinate_residue_join` | An EDSTATS row matched more than one coordinate residue. |
 | `cofactor_without_selected_metal` | A matched cofactor contains no configured metal site to select. |
-| `metal_site_without_density` | Geometry measured a metal site the statistics table does not report, so its contacts carry no density evidence and it is not counted in `n_metals`. This happens when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot: see [maintenance.md](maintenance.md) for rebuilding it. |
+| `metal_site_without_density` | A selected coordinate metal site is absent from the statistics table, so it has no density evidence; it remains included in the coordinate-site total `n_metals`. This is detected with or without bond analysis and can happen when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot: see [maintenance.md](maintenance.md) for rebuilding it. |
 | `declared_connection_resolution_incomplete` | A source `_struct_conn` or `LINK` record named an atom that could not be resolved in the coordinate model. |
 | `symmetry_search_unavailable` | The structure has no usable cell or space group, so only explicit contacts could be found. |
 | `missing_first_sphere_reference` | No bundled reference distance covers a donor class present at the site, so those contacts cannot be z-scored. |
