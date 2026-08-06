@@ -24,7 +24,7 @@ import run_logging
 
 
 @pytest.fixture(autouse=True)
-def _restore_logging() -> Iterator[None]:
+def restore_logging() -> Iterator[None]:
     """Restore the ``alchemy`` logger: handler configuration is process-wide."""
     root = logging.getLogger(run_logging.LOGGER_NAME)
     saved = (list(root.handlers), root.level, root.propagate)
