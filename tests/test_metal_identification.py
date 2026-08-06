@@ -703,6 +703,27 @@ def test_usealt_density_follows_the_selected_residue_conformer(tmp_path: Path) -
     assert rows[0]["fields"][header.index("ZDm")] == "1.6"
 
 
+def test_usealt_ignores_pooled_summary_beside_conformer_rows(
+    tmp_path: Path,
+) -> None:
+    """EDSTATS 1.0.9 retains a pooled row even with USEALT enabled."""
+    context = _alternate_fes_context(tmp_path)
+    stats = _write_rows(
+        tmp_path,
+        [
+            helpers.edstats_row("FES", "A", "1", cp="A", nr=1),
+            helpers.edstats_row("FES", "A:A", "1", cp="A", nr=1),
+            helpers.edstats_row("FES", "A:B", "1", cp="A", nr=1, metrics={"ZDm": 1.6}),
+        ],
+    )
+
+    rows, header = _extract(stats, context, cofactors={"FES"})
+
+    assert len(rows) == 1
+    assert rows[0]["site"].altloc == "B"
+    assert rows[0]["fields"][header.index("ZDm")] == "1.6"
+
+
 def test_missing_selected_usealt_row_is_incomplete_density_output(
     tmp_path: Path,
 ) -> None:
@@ -716,7 +737,7 @@ def test_missing_selected_usealt_row_is_incomplete_density_output(
         _extract(stats, context, cofactors={"FES"})
 
 
-def test_pooled_edstats_row_is_rejected_for_an_alternate_residue(
+def test_pooled_only_edstats_row_is_incomplete_for_an_alternate_residue(
     tmp_path: Path,
 ) -> None:
     context = _alternate_fes_context(tmp_path)
@@ -725,7 +746,7 @@ def test_pooled_edstats_row_is_rejected_for_an_alternate_residue(
         [helpers.edstats_row("FES", "A", "1", cp="A", nr=1)],
     )
 
-    with pytest.raises(ValueError, match="pooled alternate conformers"):
+    with pytest.raises(ValueError, match=r"incomplete.*FES/A/1"):
         _extract(stats, context, cofactors={"FES"})
 
 

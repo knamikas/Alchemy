@@ -169,11 +169,13 @@ def _row_matches_selected_altloc(
     selected = residue.selected_altloc
     if selected:
         if not row_altloc:
-            raise ValueError(
-                f"EDSTATS row {line_number} pooled alternate conformers for a "
-                f"residue whose selected conformer is {selected!r}; "
-                "USEALT output is required"
-            )
+            # EDSTATS 1.0.9 retains a pooled summary row alongside the
+            # conformer-specific rows requested by USEALT=true.  Ignore that
+            # summary: the selected conformer's row below is the only density
+            # observation Alchemy may use.  If it is absent for a metal or
+            # cofactor, the completeness check at the end of extraction still
+            # rejects the output.
+            return False
         return row_altloc == selected
     if row_altloc:
         raise ValueError(
