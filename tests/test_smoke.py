@@ -111,6 +111,25 @@ def test_src_dir_fixture_points_at_the_modules(
     assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
 
 
+def test_root_launcher_works_outside_the_repository(
+    repo_root: str, tmp_path: Path
+) -> None:
+    """``./alchemy`` resolves src from itself and delegates to the CLI."""
+    launcher = os.path.join(repo_root, "alchemy")
+
+    result = subprocess.run(
+        [launcher, "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Batch Alchemy core pipeline over PDB-REDO." in result.stdout
+    assert "--pdb-redo-root" in result.stdout
+
+
 def test_analysis_writes_nothing_into_the_current_directory(
     work_dir: str, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

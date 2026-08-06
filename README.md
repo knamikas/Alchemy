@@ -9,23 +9,24 @@ contacts can arise from crystallographic symmetry, strict noncrystallographic
 symmetry (NCS), or both. They describe the deposited structure model and do not
 by themselves establish that a metal or ligand is biologically functional.
 
-`src/main.py` is the maintained batch entry point. It can read a local PDB-REDO
-mirror, download explicitly requested entries into a local cache, or process
-manually supplied coordinate and MTZ files.
+`./alchemy` is the command-line entry point for a source checkout. It can read a
+local PDB-REDO mirror, download explicitly requested entries into a local cache,
+or process manually supplied coordinate and MTZ files. `src/main.py` remains the
+maintained Python entry point used by the launcher.
 
 ## Quick start
 
 ```bash
 # Smoke test: 9myr has two Cys3-His zinc sites
-python src/main.py --id 9myr \
+./alchemy --id 9myr \
     --ccp4-setup <path/to/ccp4.setup-sh>
 
 # Additional examples: 6nlr is a multi-element stress case; 9nxl is metal-free
-python src/main.py --id 6nlr --ccp4-setup <…>
-python src/main.py --id 9nxl --ccp4-setup <…>
+./alchemy --id 6nlr --ccp4-setup <…>
+./alchemy --id 9nxl --ccp4-setup <…>
 
 # Run IDs from a comma-, whitespace-, or newline-separated file
-python src/main.py \
+./alchemy \
     --id-file path/to/pdb_ids.txt --ccp4-setup <…>
 ```
 
