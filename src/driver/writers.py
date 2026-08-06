@@ -160,8 +160,9 @@ class OutputWriters:
     def write_stats_rows(self, rows: Sequence[MetalStatsRow]) -> None:
         if not rows:
             return
-        for row in rows:
-            self._stats.writerow([row.pdb_id, row.category, *row.fields])
+        output_rows = [row.as_output_dict(STATS_COLUMNS) for row in rows]
+        for row in output_rows:
+            self._stats.writerow([row[column] for column in STATS_COLUMNS])
             self.n_rows += 1
         self._stats_fh.flush()
 
@@ -197,14 +198,20 @@ class OutputWriters:
         if self._confidence_columns is None or self._confidence_fh is None:
             raise RuntimeError("confidence output is not fully configured")
         expected = set(self._confidence_columns)
-        if set(rows[0]) != expected:
-            raise RuntimeError("confidence row does not match its output schema")
-        self._confidence.writerows(rows)
-        if self._confidence_inputs is not None:
-            self._confidence_inputs.writerows(
+        for row in rows:
+            if set(row) != expected:
+                raise RuntimeError("confidence row does not match its output schema")
+        input_rows = (
+            [
                 {column: row[column] for column in CONFIDENCE_INPUT_COLUMNS}
                 for row in rows
-            )
+            ]
+            if self._confidence_inputs is not None
+            else None
+        )
+        self._confidence.writerows(rows)
+        if self._confidence_inputs is not None and input_rows is not None:
+            self._confidence_inputs.writerows(input_rows)
         self.n_confidence += len(rows)
         self._confidence_fh.flush()
         if self._confidence_inputs_fh is not None:

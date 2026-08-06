@@ -1990,6 +1990,24 @@ class TestOutputWriters:
         assert rows[1] == ["109m", "cofactor"] + fields
         assert len(rows[1]) == len(STATS_COLUMNS)
 
+    def test_stats_batch_is_validated_before_any_rows_are_written(
+        self, tmp_path: Path
+    ) -> None:
+        handles = self._handles(tmp_path)
+        writers = OutputWriters(*handles)
+        fields = [""] * (len(STATS_COLUMNS) - 2)
+        rows = [
+            MetalStatsRow.from_output_fields("109m", "metal", fields),
+            MetalStatsRow.from_output_fields("1cll", "metal", fields[:-1]),
+        ]
+        try:
+            with pytest.raises(ValueError):
+                writers.write_stats_rows(rows)
+        finally:
+            self._close(handles)
+        assert writers.n_rows == 0
+        assert _read_csv(tmp_path / "stats.csv") == [STATS_COLUMNS]
+
     def test_bond_rows_are_written_in_schema_order(self, tmp_path: Path) -> None:
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
@@ -2152,14 +2170,16 @@ class TestOutputWriters:
             confidence_fh=handles.confidence,
             confidence_columns=columns,
         )
-        row: dict[str, Any] = dict.fromkeys(columns, "")
-        row.pop(columns[0])
+        valid: dict[str, Any] = dict.fromkeys(columns, "")
+        malformed = valid.copy()
+        malformed.pop(columns[0])
         try:
             with pytest.raises(RuntimeError):
-                writers.write_confidence_rows([row])
+                writers.write_confidence_rows([valid, malformed])
         finally:
             self._close(handles)
         assert writers.n_confidence == 0
+        assert _read_csv(tmp_path / "confidence.csv") == [columns]
 
     def test_manifest_rows_round_trip_through_the_real_projection(
         self, tmp_path: Path
