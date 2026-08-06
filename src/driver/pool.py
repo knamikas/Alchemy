@@ -9,7 +9,6 @@ which wedges ``Pool.terminate``, so shutdown is bounded explicitly.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import json
 import os
@@ -32,6 +31,7 @@ from typing import (
 from collections.abc import Collection, Mapping, Sequence
 
 from _version import __version__
+from codes import EntryStatus
 from reference_data import (
     cofactor_ids,
     reference_data_checksums,
@@ -44,6 +44,7 @@ from run_logging import (
     create_worker_log_queue,
     start_worker_log_listener,
 )
+from run_config import RunConfig
 from ccp4_setup import (
     REPO_DIR,
     REQUIRED_CCP4_TOOLS,
@@ -139,7 +140,7 @@ def _verify_resolved_ccp4(env: Mapping[str, str], setup_path: str) -> None:
 
 
 def _resolve_ccp4_environment(
-    args: argparse.Namespace,
+    args: RunConfig,
 ) -> tuple[dict[str, str] | None, str | None]:
     """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
     config = load_ccp4_setup_config()
@@ -193,7 +194,7 @@ def _resolve_ccp4_environment(
 
 
 def resolve_ccp4_environment(
-    args: argparse.Namespace,
+    args: RunConfig,
 ) -> tuple[dict[str, str] | None, str | None]:
     """Return ``(env, setup_path)`` for this run, or raise ``DriverError``."""
     try:
@@ -431,7 +432,7 @@ class DriverError(Exception):
 
 
 def select_entry_ids(
-    args: argparse.Namespace, cache_root: str
+    args: RunConfig, cache_root: str
 ) -> tuple[list[str], str, dict[str, str | None] | None]:
     """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
     root = args.pdb_redo_root
@@ -550,7 +551,7 @@ class _BatchTally:
         self.counts[status] = self.counts.get(status, 0) + 1
         if result.no_metals:
             self.no_metals += 1
-        if status == "partial" and result.retryable:
+        if status == EntryStatus.PARTIAL and result.retryable:
             self.retryable_partials += 1
 
     def exit_code(self) -> int:
@@ -575,7 +576,7 @@ def _prepare_output_directory(output_dir: str) -> None:
         ) from None
 
 
-def _classify_run(args: argparse.Namespace) -> tuple[str, bool]:
+def _classify_run(args: RunConfig) -> tuple[str, bool]:
     """Return ``(run_mode, database_run)`` for this invocation.
 
     ``database_run`` is the uncapped full-mirror case, the only one that may
@@ -603,7 +604,7 @@ def _classify_run(args: argparse.Namespace) -> tuple[str, bool]:
 
 
 def plan_confidence(
-    args: argparse.Namespace,
+    args: RunConfig,
     layout: OutputLayout,
     database_run: bool,
     run_log: RunLog,
@@ -658,7 +659,7 @@ def plan_confidence(
 
 
 def _check_resume_is_compatible(
-    args: argparse.Namespace, layout: OutputLayout, plan: ConfidencePlan
+    args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
 ) -> None:
     """Refuse to resume onto output this run cannot safely extend.
 
@@ -704,7 +705,7 @@ def _check_resume_is_compatible(
 
 
 def schedule_entries(
-    args: argparse.Namespace,
+    args: RunConfig,
     layout: OutputLayout,
     cache_root: str,
     run_log: RunLog,
@@ -769,7 +770,7 @@ def _finalize_confidence_reference(layout: OutputLayout) -> tuple[int, int, int]
 
 
 def _finish_without_entries(
-    args: argparse.Namespace, layout: OutputLayout, plan: ConfidencePlan
+    args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
 ) -> int:
     """Exit code for a run whose work list came back empty."""
     if (
@@ -793,7 +794,7 @@ def _finish_without_entries(
 
 
 def _clear_stale_outputs(
-    args: argparse.Namespace, layout: OutputLayout, plan: ConfidencePlan
+    args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
 ) -> None:
     """Remove output from a previous run that this one is about to contradict."""
     try:
@@ -825,9 +826,7 @@ def _clear_stale_outputs(
         raise DriverError(f"Could not clear stale confidence output: {exc}") from None
 
 
-def _choose_worker_count(
-    args: argparse.Namespace, entry_count: int, run_log: RunLog
-) -> int:
+def _choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> int:
     """Size the pool, never above the number of entries there are to run.
 
     A Pool creates every worker up front, and under the spawn start method each
@@ -866,7 +865,7 @@ def _choose_worker_count(
 
 
 def worker_config_from_args(
-    args: argparse.Namespace,
+    args: RunConfig,
     env: dict[str, str],
     root: str,
     cache_root: str,
@@ -927,7 +926,7 @@ def _output_targets(layout: OutputLayout, plan: ConfidencePlan) -> tuple[str, ..
 
 def _open_writers(
     handles: contextlib.ExitStack,
-    args: argparse.Namespace,
+    args: RunConfig,
     plan: ConfidencePlan,
     write_paths: Sequence[str],
 ) -> OutputWriters:
@@ -989,7 +988,7 @@ def should_write_entry(
 
 def write_entry(
     result: EntryResult,
-    args: argparse.Namespace,
+    args: RunConfig,
     plan: ConfidencePlan,
     writers: OutputWriters,
     staging: ResumeStaging | None,
@@ -1109,7 +1108,7 @@ class _WorkerDeathWatch:
 
 
 def _dispatch_entries(
-    args: argparse.Namespace,
+    args: RunConfig,
     ids: Sequence[str],
     cfg: WorkerConfig,
     workers: int,
@@ -1215,7 +1214,7 @@ def _dispatch_entries(
 
 def keep_completed_staging(
     staging: ResumeStaging,
-    args: argparse.Namespace,
+    args: RunConfig,
     plan: ConfidencePlan,
     run_log: RunLog,
 ) -> None:
@@ -1256,7 +1255,7 @@ def keep_completed_staging(
 
 
 def process_entries(
-    args: argparse.Namespace,
+    args: RunConfig,
     ids: Sequence[str],
     cfg: WorkerConfig,
     workers: int,
@@ -1330,7 +1329,7 @@ def process_entries(
 
 
 def _report_batch(
-    args: argparse.Namespace,
+    args: RunConfig,
     layout: OutputLayout,
     plan: ConfidencePlan,
     tally: _BatchTally,
@@ -1405,7 +1404,7 @@ def _report_batch(
     return exit_code
 
 
-def run(args: argparse.Namespace, run_log: RunLog) -> int:
+def run(args: RunConfig, run_log: RunLog) -> int:
     """Execute one batch, returning its exit code."""
     try:
         return _execute(args, run_log)
@@ -1416,7 +1415,7 @@ def run(args: argparse.Namespace, run_log: RunLog) -> int:
 
 
 def _execute_with_output_lock(
-    args: argparse.Namespace,
+    args: RunConfig,
     run_log: RunLog,
     cofactors: Collection[str],
     env: dict[str, str],
@@ -1446,7 +1445,7 @@ def _execute_with_output_lock(
     return _report_batch(args, layout, plan, tally, writers, run_log)
 
 
-def _execute(args: argparse.Namespace, run_log: RunLog) -> int:
+def _execute(args: RunConfig, run_log: RunLog) -> int:
     """Resolve prerequisites, then exclusively own the output for the run."""
     cofactors = _load_cofactor_catalog()
     env, _ = resolve_ccp4_environment(args)

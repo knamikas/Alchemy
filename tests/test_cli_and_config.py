@@ -6,7 +6,6 @@ any CCP4 or network capability is probed, so no test needs a marker.
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import io
 import os
@@ -275,7 +274,7 @@ def test_the_driver_reads_the_setup_path_configuration_writes(
     monkeypatch.setattr(pool, "resolve_env", resolve_env)
     monkeypatch.setattr(pool, "verify_ccp4", verify_ccp4)
 
-    configure = argparse.Namespace(configure_ccp4=str(setup), ccp4_setup=None)
+    configure = cli.parse_args(["--configure-ccp4", str(setup)])
     assert pool.resolve_ccp4_environment(configure) == (None, None)
     assert primary.exists(), "--configure-ccp4 wrote outside the configured list"
 
@@ -286,7 +285,7 @@ def test_the_driver_reads_the_setup_path_configuration_writes(
     monkeypatch.setattr(pool, "ccp4_tools_available", tools_unavailable)
     monkeypatch.delenv("CCP4_SETUP", raising=False)
 
-    run = argparse.Namespace(configure_ccp4=None, ccp4_setup=None)
+    run = cli.parse_args([])
     _, used = pool.resolve_ccp4_environment(run)
 
     assert used == str(setup)
@@ -317,9 +316,7 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
         "the stub must satisfy the PATH probe, or this test proves nothing"
     )
 
-    args = argparse.Namespace(
-        configure_ccp4=None, ccp4_setup="/nonexistent/ccp4.setup-sh"
-    )
+    args = cli.parse_args(["--ccp4-setup", "/nonexistent/ccp4.setup-sh"])
     with pytest.raises(pool.DriverError, match="not found"):
         pool.resolve_ccp4_environment(args)
 
@@ -346,7 +343,7 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     setup = tmp_path / "ccp4.setup-sh"
     setup.write_text(f'export PATH="{requested}:$PATH"\n', encoding="utf-8")
 
-    args = argparse.Namespace(configure_ccp4=None, ccp4_setup=str(setup))
+    args = cli.parse_args(["--ccp4-setup", str(setup)])
     env, used = pool.resolve_ccp4_environment(args)
 
     assert env is not None

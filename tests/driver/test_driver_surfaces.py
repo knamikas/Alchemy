@@ -868,15 +868,7 @@ def test_an_unwritable_cache_is_reported_as_a_driver_error(
         raise PermissionError(13, "Permission denied", str(cache_root))
 
     monkeypatch.setattr(pool, "ensure_entry_available", unwritable)
-    args = argparse.Namespace(
-        id="9myr",
-        id_file=None,
-        pdb_file=None,
-        mtz_file=None,
-        cif_file=None,
-        data_json=None,
-        pdb_redo_root=str(tmp_path / "mirror"),
-    )
+    args = cli.parse_args(["--id", "9myr", "--pdb-redo-root", str(tmp_path / "mirror")])
 
     with pytest.raises(pool.DriverError) as excinfo:
         pool.select_entry_ids(args, str(tmp_path / "cache"))
@@ -1389,7 +1381,7 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
     uncapped runs is reasonable, and failing a multi-day run over an argument
     that changes nothing would be worse than saying so.
     """
-    args = argparse.Namespace(bonds=True, confidence_reference_dir="/tmp/reference")
+    args = cli.parse_args(["--confidence-reference-dir", "/tmp/reference"])
     # Captured with a handler on the logger itself rather than through caplog:
     # the run configures ``alchemy`` not to propagate, so whether caplog sees
     # anything depends on which tests ran first.

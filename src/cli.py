@@ -28,6 +28,7 @@ from run_logging import (
 from ccp4_setup import REPO_DIR
 from driver.pool import DEFAULT_ROOT, run
 from driver.runlog import RunLog
+from run_config import RunConfig
 
 
 logger = logger_for(__name__)
@@ -52,7 +53,7 @@ def positive_int(value: str) -> int:
     return parsed
 
 
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -226,7 +227,32 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "--data-json requires manual structure inputs: --mtz-file with "
             "either --pdb-file or --cif-file"
         )
-    return args
+    return RunConfig(
+        id=args.id,
+        id_file=args.id_file,
+        pdb_file=args.pdb_file,
+        mtz_file=args.mtz_file,
+        cif_file=args.cif_file,
+        data_json=args.data_json,
+        pdb_redo_root=args.pdb_redo_root,
+        pdb_redo_cache=args.pdb_redo_cache,
+        max_pdbs=args.max_pdbs,
+        workers=args.workers,
+        output_dir=args.output_dir,
+        density_map_scope=args.density_map_scope,
+        verbose=args.verbose,
+        quiet=args.quiet,
+        log_dir=args.log_dir,
+        log_file=args.log_file,
+        ccp4_timeout=args.ccp4_timeout,
+        confidence_reference_dir=args.confidence_reference_dir,
+        ccp4_setup=args.ccp4_setup,
+        configure_ccp4=args.configure_ccp4,
+        keep_intermediates=args.keep_intermediates,
+        resume=args.resume,
+        retry_partials=args.retry_partials,
+        bonds=args.bonds,
+    )
 
 
 def _install_termination_handler() -> (

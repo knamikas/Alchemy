@@ -3,6 +3,13 @@
 from enum import StrEnum
 
 
+class EntryStatus(StrEnum):
+    OK = "ok"
+    PARTIAL = "partial"
+    SKIP = "skip"
+    ERROR = "error"
+
+
 class GeometryStatus(StrEnum):
     """Site-level verdict on the geometry of one metal's coordination.
 

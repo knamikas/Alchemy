@@ -24,6 +24,7 @@ from driver.writers import STATS_COLUMNS
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
 from metal_elements import METAL_ELEMENTS
+from output_rows import MetalStatsRow
 from metal_identification import (
     EDSTATS_COLUMNS,
     EDSTATS_METRIC_COLUMNS,
@@ -75,7 +76,7 @@ def _extract(
     pdb_id: str = "test",
     metals: Iterable[str] | None = None,
     cofactors: Iterable[str] = (),
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[MetalStatsRow], list[str]]:
     """``extract_metal_statistics`` with the usual metal set and no cofactors."""
     return extract_metal_statistics(
         pdb_id,

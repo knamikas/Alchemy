@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -34,6 +35,7 @@ import main
 import metal_identification
 import structure_analysis
 import worker
+from codes import EntryStatus
 from driver.progress import ProgressReporter
 from driver import runlog
 from driver.runlog import RunLog
@@ -51,6 +53,8 @@ from driver import resume
 from driver import pool
 from driver import output_lock
 import confidence_score
+from output_rows import MetalStatsRow
+from run_config import RunConfig
 
 
 class _ApproxFactory(Protocol):
@@ -85,7 +89,7 @@ def _read_map_column_resolution_stub(mtz_path: str) -> tuple[float, float]:
 
 
 def _resolved_ccp4_environment(
-    _args: argparse.Namespace,
+    _args: RunConfig,
 ) -> tuple[dict[str, str], None]:
     return dict(os.environ), None
 
@@ -123,6 +127,11 @@ def _cfg(**overrides: Any) -> worker.WorkerConfig:
 
 CFG = _cfg()
 
+
+def _run_config(**overrides: Any) -> RunConfig:
+    return replace(cli.parse_args([]), **overrides)
+
+
 # Columns ``manifest_row`` computes; every other column it copies.
 DERIVED_MANIFEST_COLUMNS = frozenset(
     {
@@ -140,6 +149,8 @@ def _result(pdb_id: str = "109m", **overrides: Any) -> worker.EntryResult:
     """A worker result skeleton plus overrides, as the driver would see it."""
     result = worker.initial_result(pdb_id, CFG, None)
     for name, value in overrides.items():
+        if name == "status":
+            value = EntryStatus(value)
         setattr(result, name, value)
     return result
 
@@ -488,11 +499,15 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 
     monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
 
-    bond_rows, candidate_rows, summaries, _ = worker.run_bond_stage(
+    analysis = worker.run_bond_stage(
         result, _cfg(bonds=True), inputs, structure, [], []
     )
 
-    assert (bond_rows, candidate_rows, summaries) == ([], [], {})
+    assert (analysis.bond_rows, analysis.candidate_rows, analysis.site_summaries) == (
+        [],
+        [],
+        {},
+    )
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
     assert result.retryable is True
@@ -1225,7 +1240,7 @@ class TestInitialResult:
     def test_row_lists_are_independent_between_entries(self) -> None:
         first = worker.initial_result("109m", CFG, None)
         second = worker.initial_result("1cll", CFG, None)
-        first.rows.append({"x": 1})
+        first.rows.append(MetalStatsRow.from_output_fields("109m", "metal", [1]))
         first.reason_codes.append("boom")
         assert second.rows == []
         assert second.reason_codes == []
@@ -1423,20 +1438,22 @@ class TestResumeReplacementSucceeded:
         [
             ("ok", False, True),
             ("ok", True, True),
-            ("OK", True, True),
-            (" ok ", False, True),
             ("partial", False, True),
             ("partial", True, False),
             ("error", False, False),
             ("error", True, False),
             ("skip", False, False),
-            ("", True, False),
         ],
     )
     def test_terminality(self, status: str, retryable: bool, expected: bool) -> None:
         """A retryable or failed retry leaves the previous rows in place."""
         result = _result(status=status, retryable=retryable)
         assert resume.resume_replacement_succeeded(result) is expected
+
+    @pytest.mark.parametrize("status", ["OK", " ok ", ""])
+    def test_an_invalid_internal_status_is_rejected(self, status: str) -> None:
+        with pytest.raises(ValueError):
+            EntryStatus(status)
 
     def test_an_untouched_partial_is_assumed_unfinished(self) -> None:
         """``retryable`` defaults to true, so a partial nothing cleared cannot
@@ -1545,7 +1562,7 @@ class TestResumeStaging:
             csv.writer(handle).writerow([prior[name] for name in MANIFEST_COLUMNS])
 
         def _dispatch(
-            args: argparse.Namespace,
+            args: RunConfig,
             ids: Sequence[str],
             cfg: worker.WorkerConfig,
             workers: int,
@@ -1564,7 +1581,7 @@ class TestResumeStaging:
             raise KeyboardInterrupt
 
         monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
-        args = argparse.Namespace(resume=True, bonds=True, output_dir=str(output_dir))
+        args = _run_config(resume=True, bonds=True, output_dir=str(output_dir))
         run_log = RunLog(args, "pytest")
 
         with pytest.raises(KeyboardInterrupt):
@@ -1596,7 +1613,7 @@ class TestResumeStaging:
         confidence: bool = False,
     ) -> dict[str, Any]:
         """Run the halted-resume path and return the run-log summary."""
-        args = argparse.Namespace(bonds=bonds, output_dir=str(tmp_path))
+        args = _run_config(bonds=bonds, output_dir=str(tmp_path))
         plan = driver_pool.ConfidencePlan()
         # ``enabled`` is derived from the mode, which is what a scoring run sets.
         plan.mode = "reference" if confidence else None
@@ -1927,19 +1944,23 @@ class TestOutputWriters:
         """The end-of-run totals come from these counters, not from re-reading."""
         handles = self._handles(tmp_path)
         writers = OutputWriters(*handles)
-        stats_rows: list[dict[str, Any]] = [
-            {
-                "pdbID": "109m",
-                "category": "metal",
-                "fields": ["x"] * (len(STATS_COLUMNS) - 2),
-            }
+        stats_rows = [
+            MetalStatsRow.from_output_fields(
+                "109m", "metal", ["x"] * (len(STATS_COLUMNS) - 2)
+            )
             for _ in range(3)
         ]
         bond_rows = [
-            dict.fromkeys(coordination_schema.BOND_COLUMNS, "") for _ in range(4)
+            coordination_schema.BondRow(
+                dict.fromkeys(coordination_schema.BOND_COLUMNS, "")
+            )
+            for _ in range(4)
         ]
         candidate_rows = [
-            dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "") for _ in range(2)
+            coordination_schema.CandidateRow(
+                dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")
+            )
+            for _ in range(2)
         ]
         writers.write_stats_rows(stats_rows)
         writers.write_bond_rows(bond_rows)
@@ -1962,7 +1983,7 @@ class TestOutputWriters:
         writers = OutputWriters(*handles)
         fields = [str(i) for i in range(len(STATS_COLUMNS) - 2)]
         writers.write_stats_rows(
-            [{"pdbID": "109m", "category": "cofactor", "fields": fields}]
+            [MetalStatsRow.from_output_fields("109m", "cofactor", fields)]
         )
         self._close(handles)
         rows = _read_csv(tmp_path / "stats.csv")
@@ -1975,7 +1996,7 @@ class TestOutputWriters:
         writers = OutputWriters(*handles)
         row = {column: f"v-{column}" for column in coordination_schema.BOND_COLUMNS}
         shuffled = {key: row[key] for key in reversed(list(row))}
-        writers.write_bond_rows([shuffled])
+        writers.write_bond_rows([coordination_schema.BondRow(shuffled)])
         self._close(handles)
         written = _read_csv(tmp_path / "bonds.csv")[1]
         assert written == [f"v-{column}" for column in coordination_schema.BOND_COLUMNS]
@@ -1986,9 +2007,19 @@ class TestOutputWriters:
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
         writers = OutputWriters(*handles)
-        writers.write_bond_rows([dict.fromkeys(coordination_schema.BOND_COLUMNS, "")])
+        writers.write_bond_rows(
+            [
+                coordination_schema.BondRow(
+                    dict.fromkeys(coordination_schema.BOND_COLUMNS, "")
+                )
+            ]
+        )
         writers.write_candidate_rows(
-            [dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")]
+            [
+                coordination_schema.CandidateRow(
+                    dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")
+                )
+            ]
         )
         self._close(handles)
         assert writers.n_bonds == 0
@@ -2020,7 +2051,7 @@ class TestOutputWriters:
             expected_clause = f"unexpected {drifted}"
         try:
             with pytest.raises(RuntimeError) as excinfo:
-                writers.write_bond_rows([row])
+                coordination_schema.BondRow(row)
         finally:
             self._close(handles)
         message = str(excinfo.value)
@@ -2032,15 +2063,10 @@ class TestOutputWriters:
 
     def test_candidate_row_schema_drift_fails_loudly(self, tmp_path: Path) -> None:
         """Same guard on the candidate stream, named for its own file."""
-        handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
         row = dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")
         row["bogus"] = ""
-        try:
-            with pytest.raises(RuntimeError) as excinfo:
-                writers.write_candidate_rows([row])
-        finally:
-            self._close(handles)
+        with pytest.raises(RuntimeError) as excinfo:
+            coordination_schema.CandidateRow(row)
         assert "metal_candidates_all.csv" in str(excinfo.value)
         assert "unexpected bogus" in str(excinfo.value)
 
@@ -2179,14 +2205,18 @@ class TestOutputWriters:
         writers = OutputWriters(*handles)
         writers.write_stats_rows(
             [
-                {
-                    "pdbID": "109m",
-                    "category": "metal",
-                    "fields": ["x"] * (len(STATS_COLUMNS) - 2),
-                }
+                MetalStatsRow.from_output_fields(
+                    "109m", "metal", ["x"] * (len(STATS_COLUMNS) - 2)
+                )
             ]
         )
-        writers.write_bond_rows([dict.fromkeys(coordination_schema.BOND_COLUMNS, "")])
+        writers.write_bond_rows(
+            [
+                coordination_schema.BondRow(
+                    dict.fromkeys(coordination_schema.BOND_COLUMNS, "")
+                )
+            ]
+        )
         writers.write_manifest_row(
             manifest_row(_result(status="ok"), False, True, {}, {})
         )
@@ -2205,9 +2235,7 @@ class TestScheduleEntries:
     """
 
     @staticmethod
-    def _args(
-        tmp_path: Path, ids: Sequence[str], **overrides: Any
-    ) -> argparse.Namespace:
+    def _args(tmp_path: Path, ids: Sequence[str], **overrides: Any) -> RunConfig:
         id_file = tmp_path / "ids.txt"
         id_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
         fields: dict[str, Any] = {
@@ -2224,7 +2252,7 @@ class TestScheduleEntries:
             "max_pdbs": None,
         }
         fields.update(overrides)
-        return argparse.Namespace(**fields)
+        return _run_config(**fields)
 
     @staticmethod
     def _manifest(tmp_path: Path, done_ids: Sequence[str]) -> Path:
@@ -2238,9 +2266,7 @@ class TestScheduleEntries:
                 writer.writerow(row)
         return path
 
-    def _schedule(
-        self, tmp_path: Path, args: argparse.Namespace
-    ) -> tuple[list[str], RunLog]:
+    def _schedule(self, tmp_path: Path, args: RunConfig) -> tuple[list[str], RunLog]:
         run_log = RunLog(args, "pytest")
         layout = pool.OutputLayout(str(tmp_path))
         ids, _root, _manual = pool.schedule_entries(
@@ -2296,10 +2322,10 @@ class TestWriteEntry:
             return record
 
     @staticmethod
-    def _args(**overrides: Any) -> argparse.Namespace:
+    def _args(**overrides: Any) -> RunConfig:
         fields: dict[str, Any] = {"resume": False, "bonds": True}
         fields.update(overrides)
-        return argparse.Namespace(**fields)
+        return _run_config(**fields)
 
     def test_the_manifest_row_is_written_after_every_data_row(self) -> None:
         writers = self._RecordingWriters()
@@ -2391,7 +2417,7 @@ class TestRunLog:
         self, tmp_path: Path
     ) -> None:
         """One log per invocation accumulates; the four result CSVs do not."""
-        args = argparse.Namespace(output_dir=str(tmp_path), log_dir=None, workers=1)
+        args = _run_config(output_dir=str(tmp_path), log_dir=None, workers=1)
 
         path = RunLog(args, "pytest").write(0)
 
@@ -2400,7 +2426,7 @@ class TestRunLog:
 
     def test_an_explicit_log_dir_is_used_as_given(self, tmp_path: Path) -> None:
         elsewhere = tmp_path / "shared-logs"
-        args = argparse.Namespace(
+        args = _run_config(
             output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
         )
 
@@ -2412,7 +2438,7 @@ class TestRunLog:
     @staticmethod
     def _log(tmp_path: Path, runtimes: Sequence[float]) -> RunLog:
         run_log = RunLog(
-            argparse.Namespace(output_dir=str(tmp_path), log_dir=None, workers=1),
+            _run_config(output_dir=str(tmp_path), log_dir=None, workers=1),
             "pytest",
         )
         for index, runtime in enumerate(runtimes):

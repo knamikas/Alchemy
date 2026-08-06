@@ -37,6 +37,7 @@ import pytest
 import density_analysis as density
 import main
 import worker
+from codes import EntryStatus
 from driver import runlog, writers
 from driver.writers import MANIFEST_COLUMNS
 import cli
@@ -460,7 +461,7 @@ def _stub_process(pdb_id: str) -> worker.EntryResult:
     if step.get("die_after") is not None:
         _kill_self_after(float(step["die_after"]))
 
-    result.status = "ok"
+    result.status = EntryStatus.OK
     result.n_metals = 0
     result.no_metals = True
     result.retryable = False

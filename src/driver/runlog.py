@@ -5,18 +5,19 @@ renders them into one complete temporary file before publishing it under a
 name that cannot overwrite an earlier run.
 """
 
-import argparse
 import os
 import platform
 import shutil
 import tempfile
 import time
 from collections import Counter
+from dataclasses import fields
 from datetime import datetime, UTC
 from typing import Any
 from collections.abc import Mapping
 
 from driver.resources import available_cpu_count, available_memory_bytes
+from run_config import RunConfig
 
 
 from worker import EntryResult, blank_if_unmeasured
@@ -26,7 +27,7 @@ from worker import EntryResult, blank_if_unmeasured
 DEFAULT_LOG_DIRNAME = "logs"
 
 
-def log_dir_for(args: argparse.Namespace) -> str:
+def log_dir_for(args: RunConfig) -> str:
     """Return the directory this run writes its log to."""
     log_dir: str | None = args.log_dir
     output_dir: str = args.output_dir
@@ -96,7 +97,7 @@ def claim_log_path(directory: str, stem: str, source_path: str) -> str:
 class RunLog:
     """Collect compact run diagnostics and write one human-readable log."""
 
-    def __init__(self, args: argparse.Namespace, command: str) -> None:
+    def __init__(self, args: RunConfig, command: str) -> None:
         self.args = args
         self.command = command
         self.started_at = datetime.now(UTC)
@@ -185,7 +186,10 @@ class RunLog:
         )
 
         lines.extend(["", "Configuration", "-------------"])
-        for name, value in sorted(vars(self.args).items()):
+        configuration = (
+            (field.name, getattr(self.args, field.name)) for field in fields(self.args)
+        )
+        for name, value in sorted(configuration):
             lines.append(f"{name}: {self._clean(value)}")
         for name, value in sorted(self.details.items()):
             if name == "initial_available_memory_bytes":

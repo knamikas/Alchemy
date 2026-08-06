@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     # Annotations only, so that the deliberate per-function imports below stay
     # the only place this module reaches into ``src`` at run time.
     from structure_analysis import StructureContext
+    from output_rows import MetalStatsRow
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -956,7 +957,7 @@ def stats_rows_for_structure(
     metals: Iterable[str] | None = None,
     cofactors: Iterable[str] | None = None,
     **kwargs: Any,
-) -> tuple[list[dict[str, Any]], list[str], str]:
+) -> tuple[list[MetalStatsRow], list[str], str]:
     """Write a synthetic ``stats.out``, then parse it back with the real code.
 
     Returns ``(rows, header, stats_path)``, ready to hand to

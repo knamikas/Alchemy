@@ -17,6 +17,8 @@ from collections import Counter, defaultdict
 from typing import Any, TextIO
 from collections.abc import Iterable, Mapping, Sequence
 
+from output_rows import MetalStatsRow
+
 from reference_data import reference_data_id
 
 
@@ -239,10 +241,11 @@ def _orphan_bond_site_input(
 
 
 def prepare_confidence_inputs(
-    stats_rows: Sequence[dict[str, Any]], bond_rows: Sequence[dict[str, Any]]
+    stats_rows: Sequence[Mapping[str, Any]],
+    bond_rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """Return deterministic confidence inputs for every selected metal site."""
-    bonds_by_site: defaultdict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(
+    bonds_by_site: defaultdict[tuple[str, ...], list[Mapping[str, Any]]] = defaultdict(
         list
     )
     for row in bond_rows:
@@ -324,19 +327,12 @@ def prepare_confidence_inputs(
 
 
 def prepare_result_confidence_inputs(
-    stats_rows: Sequence[Mapping[str, Any]],
-    bond_rows: Sequence[dict[str, Any]],
+    stats_rows: Sequence[MetalStatsRow],
+    bond_rows: Sequence[Mapping[str, Any]],
     stats_columns: Sequence[str],
 ) -> list[dict[str, Any]]:
     """Prepare confidence rows from one in-memory Alchemy worker result."""
-    flattened: list[dict[str, Any]] = []
-    for row in stats_rows:
-        values = [row["pdbID"], row["category"], *row["fields"]]
-        if len(values) != len(stats_columns):
-            raise ValueError(
-                "metal statistics row does not match the confidence schema"
-            )
-        flattened.append(dict(zip(stats_columns, values)))
+    flattened = [row.as_output_dict(stats_columns) for row in stats_rows]
     return prepare_confidence_inputs(flattened, bond_rows)
 
 

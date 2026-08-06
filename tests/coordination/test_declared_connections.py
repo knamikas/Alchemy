@@ -27,6 +27,7 @@ from helpers import AtomRef, AtomSpec, ResidueSpec, StructureBuilder
 
 from codes import CandidateSource
 from coordination import analysis as coordination_analysis
+from coordination import schema as coordination_schema
 import coordinate_conversion as conversion
 from coordination import declared_connections
 from structure_analysis import ResidueSelection, StructureContext, load_structure
@@ -60,14 +61,14 @@ class Analysis(NamedTuple):
     """Everything one ``run_bond_analysis`` call produced, plus its context."""
 
     context: StructureContext
-    rows: list[dict[str, Any]]
-    candidates: list[dict[str, Any]]
+    rows: list[coordination_schema.BondRow]
+    candidates: list[coordination_schema.CandidateRow]
     summaries: dict[SummaryKey, dict[str, Any]]
-    metadata: dict[str, Any]
+    metadata: coordination_analysis.BondAnalysisMetadata
 
     def rows_for(
         self, atom_name: str, resnum: str | None = None
-    ) -> list[dict[str, Any]]:
+    ) -> list[coordination_schema.BondRow]:
         return [
             row
             for row in self.rows
@@ -76,7 +77,7 @@ class Analysis(NamedTuple):
         ]
 
     @property
-    def declared_rows(self) -> list[dict[str, Any]]:
+    def declared_rows(self) -> list[coordination_schema.BondRow]:
         return [row for row in self.rows if row["declared_connection"]]
 
 
@@ -121,7 +122,7 @@ def analyze(
 ) -> Analysis:
     """Run the real bond analysis over an already-written analysis PDB."""
     context = load_structure(pdb_id, analysis_pdb)
-    rows, candidates, summaries, metadata = coordination_analysis.run_bond_analysis(
+    result = coordination_analysis.run_bond_analysis(
         pdb_id,
         analysis_pdb,
         [],
@@ -130,7 +131,13 @@ def analyze(
         structure=context,
         connection_path=connection_path,
     )
-    return Analysis(context, rows, candidates, summaries, metadata)
+    return Analysis(
+        context,
+        result.bond_rows,
+        result.candidate_rows,
+        result.site_summaries,
+        result.metadata,
+    )
 
 
 def zinc_histidine_site(
@@ -589,9 +596,8 @@ def test_regression_declared_partner_survives_the_ter_serial_shift(
         float(row["connection_reported_distance"]), abs=1e-3
     )
     assert row["distance"] == approx(2.03, abs=1e-6)
-    assert (
-        "declared_connection_resolution_incomplete"
-        not in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" not in (
+        result.metadata.partial_reason_codes
     )
 
 
@@ -660,9 +666,8 @@ def test_regression_metal_may_be_the_second_declared_partner(
     assert (row["neighbor_resname"], row["neighbor_atom"]) == ("HIS", "NE2")
     assert row["coordination_source"] == ("LINK" if fmt == "pdb" else "struct_conn")
     assert row["distance"] == approx(2.03, abs=1e-6)
-    assert (
-        "declared_connection_resolution_incomplete"
-        not in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" not in (
+        result.metadata.partial_reason_codes
     )
 
 
@@ -793,9 +798,8 @@ def test_regression_declaration_on_a_deselected_conformer_yields_one_row(
     assert row["declared_connection"] is True
     assert row["multi_donor_detected"] is False
     assert row["multi_donor_contact_count"] == 1
-    assert (
-        "declared_connection_conformer_substituted"
-        in (result.metadata["warning_codes"])
+    assert "declared_connection_conformer_substituted" in (
+        result.metadata.warning_codes
     )
     assert (
         len(
@@ -832,9 +836,8 @@ def test_declaration_on_the_selected_conformer_needs_no_substitution(
     (row,) = result.declared_rows
     assert row["neighbor_altloc"] == "B"
     assert row["distance"] == approx(2.20, abs=1e-6)
-    assert (
-        "declared_connection_conformer_substituted"
-        not in (result.metadata["warning_codes"])
+    assert "declared_connection_conformer_substituted" not in (
+        result.metadata.warning_codes
     )
 
 
@@ -858,11 +861,10 @@ def test_declaration_is_dropped_when_the_selected_conformer_lacks_the_atom(
     result = analyze(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
-    assert (
-        "declared_connection_resolution_incomplete"
-        in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" in (
+        result.metadata.partial_reason_codes
     )
-    assert any("conformer" in message for message in result.metadata["messages"])
+    assert any("conformer" in message for message in result.metadata.messages)
     (row,) = result.rows_for("ND1")
     assert row["coordination_status"] == "inferred"
 
@@ -880,15 +882,13 @@ def test_broken_amino_acid_connection_is_outside_metal_analysis(tmp_path: Path) 
 
     result = analyze(analysis_pdb, connection_path=source)
 
-    assert (
-        "declared_connection_resolution_incomplete"
-        not in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" not in (
+        result.metadata.partial_reason_codes
     )
-    assert (
-        "declared_connection_partner_unresolved"
-        not in (result.metadata["warning_codes"])
+    assert "declared_connection_partner_unresolved" not in (
+        result.metadata.warning_codes
     )
-    assert result.metadata["messages"] == []
+    assert result.metadata.messages == []
 
 
 def test_broken_connection_that_names_a_metal_is_partial(tmp_path: Path) -> None:
@@ -902,13 +902,12 @@ def test_broken_connection_that_names_a_metal_is_partial(tmp_path: Path) -> None
 
     result = analyze(analysis_pdb, connection_path=source)
 
-    assert (
-        "declared_connection_resolution_incomplete"
-        in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" in (
+        result.metadata.partial_reason_codes
     )
     assert any(
         "broken-metal" in message and "unresolved" in message
-        for message in result.metadata["messages"]
+        for message in result.metadata.messages
     )
 
 
@@ -942,13 +941,12 @@ def test_partner_absent_from_the_analyzed_model_is_reported(tmp_path: Path) -> N
     result = analyze(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
-    assert (
-        "declared_connection_resolution_incomplete"
-        in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" in (
+        result.metadata.partial_reason_codes
     )
     assert any(
         "gone" in message and "unresolved" in message
-        for message in result.metadata["messages"]
+        for message in result.metadata.messages
     )
 
 
@@ -975,13 +973,12 @@ def test_cluster_metal_absent_from_the_model_is_reported(tmp_path: Path) -> None
     result = analyze(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
-    assert (
-        "declared_connection_resolution_incomplete"
-        in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" in (
+        result.metadata.partial_reason_codes
     )
     assert any(
         "cluster" in message and "unresolved" in message
-        for message in result.metadata["messages"]
+        for message in result.metadata.messages
     )
 
 
@@ -1105,13 +1102,12 @@ def test_unparsable_connection_file_is_reported_and_not_fatal(tmp_path: Path) ->
 
     result = analyze(analysis_pdb, connection_path=str(broken))
 
-    assert (
-        "declared_connection_resolution_incomplete"
-        in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" in (
+        result.metadata.partial_reason_codes
     )
     assert any(
         "struct_conn" in message and "parse failed" in message
-        for message in result.metadata["messages"]
+        for message in result.metadata.messages
     )
     (row,) = result.rows_for("NE2")
     assert row["coordination_status"] == "inferred"
@@ -1131,9 +1127,8 @@ def test_declaration_between_two_metals_is_not_a_coordination_row(
     result = analyze(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
-    assert (
-        "declared_connection_resolution_incomplete"
-        not in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" not in (
+        result.metadata.partial_reason_codes
     )
 
 
@@ -1157,9 +1152,8 @@ def test_declaration_to_a_non_donor_element_is_ignored(tmp_path: Path) -> None:
 
     assert result.rows_for("CE1") == []
     assert result.declared_rows == []
-    assert (
-        "declared_connection_resolution_incomplete"
-        not in (result.metadata["partial_reason_codes"])
+    assert "declared_connection_resolution_incomplete" not in (
+        result.metadata.partial_reason_codes
     )
 
 
@@ -1292,9 +1286,7 @@ def test_declared_zero_occupancy_donor_is_candidate_evidence_not_a_bond(
     )
     assert candidate["context_warning"] is True
     assert "zero_occupancy_neighbor" in candidate["context_warning_reasons"].split("|")
-    assert (
-        "declared_connection_zero_occupancy_partner" in result.metadata["warning_codes"]
-    )
+    assert "declared_connection_zero_occupancy_partner" in result.metadata.warning_codes
 
 
 def test_declared_contact_outside_first_sphere_keeps_measured_geometry(
@@ -1623,7 +1615,7 @@ def test_a_file_without_declarations_produces_no_declared_rows(tmp_path: Path) -
     (row,) = result.rows_for("NE2")
     assert row["coordination_status"] == "inferred"
     assert row["coordination_source"] == "proximity_rule"
-    assert result.metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
+    assert result.metadata.partial_reason_codes == ["missing_dpi_metadata_source"]
 
 
 def _structure_with_one_ncs_operation(
@@ -1701,7 +1693,7 @@ def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
     analysis_builder.add_metal("ZN", 99, chain="Z", pos=(20.0, 20.0, 20.0))
     analysis = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
     context = load_structure("test", analysis)
-    rows, candidates, _, metadata = coordination_analysis.run_bond_analysis(
+    result = coordination_analysis.run_bond_analysis(
         "test",
         analysis,
         [],
@@ -1710,10 +1702,14 @@ def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
         structure=context,
         connection_path=source,
     )
+    rows = result.bond_rows
+    candidates = result.candidate_rows
+    metadata = result.metadata
 
-    trace = "declared_connection_resolution_incomplete" in metadata[
-        "partial_reason_codes"
-    ] or any("unmapped" in message for message in metadata["messages"])
+    trace = (
+        "declared_connection_resolution_incomplete" in metadata.partial_reason_codes
+        or any("unmapped" in message for message in metadata.messages)
+    )
     assert trace, (
         "the declaration produced no audit trace when both partners were "
         f"unresolved (rows={rows!r}, candidates={candidates!r})"
@@ -1750,7 +1746,7 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(
     path = builder.write_cif(tmp_path / "nucleotide.cif")
 
     context = load_structure("test", path)
-    rows, candidates, _, metadata = coordination_analysis.run_bond_analysis(
+    result = coordination_analysis.run_bond_analysis(
         "test",
         path,
         [],
@@ -1759,6 +1755,9 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(
         structure=context,
         connection_path=path,
     )
+    rows = result.bond_rows
+    candidates = result.candidate_rows
+    metadata = result.metadata
 
     assert rows == []
 
@@ -1773,7 +1772,7 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(
     assert row["inferred_donor_allowed"] is False
     # No donor rule can be overridden for a class that has no reference at all.
     assert row["donor_rule_override"] == ""
-    assert "declared_donor_outside_supported_classes" in metadata["warning_codes"]
+    assert "declared_donor_outside_supported_classes" in metadata.warning_codes
 
 
 @pytest.mark.parametrize(

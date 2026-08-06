@@ -26,6 +26,8 @@ from typing import (
 from collections.abc import Iterable, Mapping, Sequence
 
 from coordination.schema import (
+    BondRow,
+    CandidateRow,
     ZSCORE_OUTLIER_CUTOFF,
     bond_row,
     candidate_row,
@@ -959,8 +961,8 @@ def _site_summary(
 
 @dataclass(frozen=True)
 class _MetalAnalysisResult:
-    bond_rows: list[dict[str, Any]]
-    candidate_rows: list[dict[str, Any]]
+    bond_rows: list[BondRow]
+    candidate_rows: list[CandidateRow]
     summary: dict[str, Any]
     unsupported_pairs: set[tuple[str, str]]
 
@@ -1060,6 +1062,22 @@ def _analyze_metal_site(
     )
 
 
+@dataclass(slots=True)
+class BondAnalysisMetadata:
+    partial_reason_codes: list[str]
+    warning_codes: list[str]
+    messages: list[str]
+    retryable: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BondAnalysisResult:
+    bond_rows: list[BondRow]
+    candidate_rows: list[CandidateRow]
+    site_summaries: dict[AtomKey, dict[str, Any]]
+    metadata: BondAnalysisMetadata
+
+
 def run_bond_analysis(
     pdb_id: str,
     pdb_path: str,
@@ -1068,12 +1086,7 @@ def run_bond_analysis(
     dpi_inputs: Mapping[str, Any],
     structure: StructureContext | None = None,
     connection_path: str | None = None,
-) -> tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-    dict[AtomKey, dict[str, Any]],
-    dict[str, Any],
-]:
+) -> BondAnalysisResult:
     """Return contact rows, candidate rows, site summaries, and metadata.
 
     Bond rows come from first-sphere-eligible candidates and from source
@@ -1089,14 +1102,13 @@ def run_bond_analysis(
     non_finite_metals = [
         metal for metal in metals_in_model if not metal.coordinates_valid
     ]
-    metadata: dict[str, Any] = {
-        "partial_reason_codes": [],
-        "warning_codes": list(structure.warning_codes),
-        "messages": [],
-        "retryable": False,
-    }
+    metadata = BondAnalysisMetadata(
+        partial_reason_codes=[],
+        warning_codes=list(structure.warning_codes),
+        messages=[],
+    )
     if not metals_in_model:
-        return [], [], {}, metadata
+        return BondAnalysisResult([], [], {}, metadata)
 
     (declared_candidates, declared_issues, declared_warnings) = (
         collect_declared_candidates(
@@ -1104,14 +1116,14 @@ def run_bond_analysis(
         )
     )
     if declared_issues:
-        metadata["partial_reason_codes"].append(
+        metadata.partial_reason_codes.append(
             ReasonCode.DECLARED_CONNECTION_RESOLUTION_INCOMPLETE
         )
-        metadata["messages"].extend(declared_issues)
-    metadata["warning_codes"].extend(declared_warnings)
+        metadata.messages.extend(declared_issues)
+    metadata.warning_codes.extend(declared_warnings)
     if non_finite_metals:
-        metadata["partial_reason_codes"].append(ReasonCode.NON_FINITE_METAL_COORDINATES)
-        metadata["messages"].append(
+        metadata.partial_reason_codes.append(ReasonCode.NON_FINITE_METAL_COORDINATES)
+        metadata.messages.append(
             "geometry unavailable for selected metal site(s) with non-finite "
             "coordinates: "
             + ", ".join(
@@ -1132,11 +1144,11 @@ def run_bond_analysis(
     ni = count_ni(structure)
     deposited_ni = count_deposited_ni(structure)
     if dpi_reason:
-        metadata["partial_reason_codes"].append(dpi_reason)
-        metadata["messages"].append(f"DPI unavailable: {dpi_reason}")
+        metadata.partial_reason_codes.append(dpi_reason)
+        metadata.messages.append(f"DPI unavailable: {dpi_reason}")
     if not structure.symmetry_search_available:
-        metadata["partial_reason_codes"].append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
-        metadata["messages"].append(
+        metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
+        metadata.messages.append(
             "symmetry search unavailable: "
             + (structure.symmetry_search_failure_reason or "unknown reason")
         )
@@ -1156,8 +1168,8 @@ def run_bond_analysis(
     sig = sigma_index(stats_rows)
     zd_idx = zd_indices(header)
 
-    rows: list[dict[str, Any]] = []
-    candidate_rows: list[dict[str, Any]] = []
+    rows: list[BondRow] = []
+    candidate_rows: list[CandidateRow] = []
     summaries: dict[AtomKey, dict[str, Any]] = {}
     for metal in metals_in_model:
         if not metal.coordinates_valid:
@@ -1194,7 +1206,7 @@ def run_bond_analysis(
             zd_idx,
         )
         if site_result.unsupported_pairs:
-            metadata["partial_reason_codes"].append(
+            metadata.partial_reason_codes.append(
                 ReasonCode.MISSING_FIRST_SPHERE_REFERENCE
             )
             pairs = ", ".join(
@@ -1203,16 +1215,12 @@ def run_bond_analysis(
                     site_result.unsupported_pairs
                 )
             )
-            metadata["messages"].append(
-                f"first-sphere reference unavailable for {pairs}"
-            )
+            metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
         summaries[metal.source_key] = site_result.summary
         rows.extend(site_result.bond_rows)
         candidate_rows.extend(site_result.candidate_rows)
 
-    metadata["partial_reason_codes"] = list(
-        dict.fromkeys(metadata["partial_reason_codes"])
-    )
-    metadata["warning_codes"] = list(dict.fromkeys(metadata["warning_codes"]))
-    metadata["messages"] = list(dict.fromkeys(metadata["messages"]))
-    return rows, candidate_rows, summaries, metadata
+    metadata.partial_reason_codes = list(dict.fromkeys(metadata.partial_reason_codes))
+    metadata.warning_codes = list(dict.fromkeys(metadata.warning_codes))
+    metadata.messages = list(dict.fromkeys(metadata.messages))
+    return BondAnalysisResult(rows, candidate_rows, summaries, metadata)

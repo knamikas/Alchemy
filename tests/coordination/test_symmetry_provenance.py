@@ -27,7 +27,7 @@ import math
 import os
 from pathlib import Path
 from typing import Any, Protocol, cast
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import pytest
 
@@ -36,6 +36,7 @@ import gemmi
 import coordination.analysis as ba
 import codes
 from coordination.contact_record import Candidate
+from coordination.schema import BondRow, CandidateRow
 import structure_analysis as sa
 from metal_elements import METAL_ELEMENTS
 
@@ -100,10 +101,10 @@ class _Analysis:
     def __init__(
         self,
         context: sa.StructureContext,
-        rows: list[dict[str, Any]],
-        candidates: list[dict[str, Any]],
+        rows: list[BondRow],
+        candidates: list[CandidateRow],
         summaries: dict[tuple[int, int, int, int], dict[str, Any]],
-        metadata: dict[str, Any],
+        metadata: ba.BondAnalysisMetadata,
     ) -> None:
         self.context = context
         self.rows = rows
@@ -148,13 +149,19 @@ def _analyze(
         dpi_inputs = helpers.dpi_inputs(pdb_path=path, data_json=data_json)
     else:
         dpi_inputs = helpers.dpi_inputs()
-    rows, candidates, summaries, metadata = ba.run_bond_analysis(
+    result = ba.run_bond_analysis(
         "test", path, stats_rows, header, dpi_inputs, structure=context
     )
-    return _Analysis(context, rows, candidates, summaries, metadata)
+    return _Analysis(
+        context,
+        result.bond_rows,
+        result.candidate_rows,
+        result.site_summaries,
+        result.metadata,
+    )
 
 
-def _transformed_position(row: dict[str, Any]) -> tuple[float, float, float]:
+def _transformed_position(row: Mapping[str, Any]) -> tuple[float, float, float]:
     return (
         row["transformed_neighbor_x"],
         row["transformed_neighbor_y"],
@@ -205,7 +212,7 @@ def _deposited_neighbor() -> sa.AtomSite:
     )
 
 
-def _cell_translation(row: dict[str, Any]) -> tuple[int, int, int]:
+def _cell_translation(row: Mapping[str, Any]) -> tuple[int, int, int]:
     return (
         row["cell_translation_x"],
         row["cell_translation_y"],
@@ -967,7 +974,7 @@ def test_generated_columns_are_blank_without_symmetry_metadata(
     assert "symmetry_search_unavailable" in summary[
         "geometry_not_assessed_reason"
     ].split("|")
-    assert "symmetry_search_unavailable" in analysis.metadata["partial_reason_codes"]
+    assert "symmetry_search_unavailable" in analysis.metadata.partial_reason_codes
 
 
 def test_generated_images_can_change_the_geometry_verdict(tmp_path: Path) -> None:

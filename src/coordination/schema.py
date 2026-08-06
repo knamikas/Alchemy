@@ -12,12 +12,13 @@ The builders are serialization only: every decision they report was made in
 ``coordination.analysis`` before the row is built.
 """
 
-from typing import Any
-from collections.abc import Iterable, Mapping
+from typing import Any, ClassVar, override
+from collections.abc import Iterable, Iterator, Mapping
 
 import gemmi
 
 from coordination.contact_record import Candidate, MultiDonorResult
+from output_rows import CsvValue
 from structure_analysis import NAN, AtomSite, StructureContext
 
 
@@ -305,6 +306,51 @@ def check_row_schema(row: Mapping[str, Any], columns: Iterable[str], name: str) 
     )
 
 
+class _CsvRow(Mapping[str, Any]):
+    __slots__ = ("_values",)
+
+    columns: ClassVar[tuple[str, ...]] = ()
+    indices: ClassVar[dict[str, int]] = {}
+    schema_name: ClassVar[str] = "CSV"
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        check_row_schema(values, self.columns, self.schema_name)
+        ordered: list[CsvValue] = []
+        for column in self.columns:
+            value = values[column]
+            if value is not None and not isinstance(value, (str, int, float, bool)):
+                raise TypeError(f"{column} is not a CSV scalar: {type(value).__name__}")
+            ordered.append(value)
+        self._values = tuple(ordered)
+
+    @override
+    def __getitem__(self, key: str) -> Any:
+        return self._values[self.indices[key]]
+
+    @override
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.columns)
+
+    @override
+    def __len__(self) -> int:
+        return len(self.columns)
+
+    def as_dict(self) -> dict[str, CsvValue]:
+        return dict(zip(self.columns, self._values, strict=True))
+
+
+class BondRow(_CsvRow):
+    columns = tuple(BOND_COLUMNS)
+    indices = {column: index for index, column in enumerate(columns)}
+    schema_name = "metal_bonds_all.csv"
+
+
+class CandidateRow(_CsvRow):
+    columns = tuple(CANDIDATE_COLUMNS)
+    indices = {column: index for index, column in enumerate(columns)}
+    schema_name = "metal_candidates_all.csv"
+
+
 def _bonded_to(is_water: bool = False) -> str:
     return "HOH" if is_water else "P"
 
@@ -477,7 +523,7 @@ def bond_row(
     resolution: float,
     sigma: tuple[float, float, float],
     parent_type: str,
-) -> dict[str, Any]:
+) -> BondRow:
     neighbor = contact.neighbor
     metal_residue = structure.residue_for_atom(metal)
     neighbor_residue = structure.residue_for_atom(neighbor)
@@ -489,102 +535,106 @@ def bond_row(
     geometry = contact.geometry()
     multi_donor = contact.multi_donor()
     context_values = context_warning_values(contact, multi_donor=multi_donor)
-    return {
-        "pdbID": pdb_id,
-        "metal_resname": metal.residue_name,
-        "metal_chain": metal.chain_id,
-        "metal_resnum": metal.resnum,
-        "metal_element": metal.element,
-        "neighbor_resname": neighbor.residue_name,
-        "neighbor_atom": neighbor.atom_name,
-        "neighbor_element": neighbor.element,
-        "distance": geometry.distance,
-        **connection_values,
-        **donor_values,
-        **context_values,
-        "literature_distance": geometry.literature_distance,
-        "literature_stdev": geometry.literature_stdev,
-        "zscore": geometry.zscore,
-        "dpi": dpi,
-        "resolution": resolution,
-        "sigma_mag": mag,
-        "sigma_neg": neg,
-        "sigma_pos": pos,
-        "parent_type": parent_type,
-        "bonded_to": _bonded_to(neighbor.is_water),
-        "model_id": structure.analyzed_model_id,
-        "metal_model_index": metal.model_index,
-        "metal_chain_index": metal.output_chain_index,
-        "metal_residue_index": metal.output_residue_index,
-        "metal_atom_index": metal.atom_index,
-        "metal_atom": metal.atom_name,
-        "metal_icode": metal.insertion_code,
-        "metal_altloc": metal.altloc,
-        "metal_occupancy": metal.occupancy,
-        "metal_occupancy_valid": metal.occupancy_valid,
-        "metal_occupancy_status": metal.occupancy_status,
-        "metal_conformer_mean_occupancy": (
-            metal_residue.selected_conformer_mean_occupancy
-        ),
-        "metal_altloc_options": metal_residue.altloc_options,
-        "metal_altloc_selection_fallback": (metal_residue.altloc_selection_fallback),
-        "neighbor_chain": neighbor.chain_id,
-        "neighbor_resnum": neighbor.resnum,
-        "neighbor_icode": neighbor.insertion_code,
-        "neighbor_model_index": neighbor.model_index,
-        "neighbor_chain_index": neighbor.output_chain_index,
-        "neighbor_residue_index": neighbor.output_residue_index,
-        "neighbor_atom_index": neighbor.atom_index,
-        "neighbor_altloc": neighbor.altloc,
-        "neighbor_occupancy": neighbor.occupancy,
-        "neighbor_occupancy_valid": neighbor.occupancy_valid,
-        "neighbor_occupancy_status": neighbor.occupancy_status,
-        "neighbor_conformer_mean_occupancy": (
-            neighbor_residue.selected_conformer_mean_occupancy
-        ),
-        "neighbor_altloc_options": neighbor_residue.altloc_options,
-        "neighbor_altloc_selection_fallback": (
-            neighbor_residue.altloc_selection_fallback
-        ),
-        "alternative_conformers_present": (
-            metal_residue.alternative_conformers_present
-            or neighbor_residue.alternative_conformers_present
-        ),
-        "altloc_selection_fallback": (
-            metal_residue.altloc_selection_fallback
-            or neighbor_residue.altloc_selection_fallback
-        ),
-        "neighbor_class": _neighbor_class(neighbor),
-        "candidate_contact": True,
-        "reference_covered": geometry.reference_covered,
-        "geometry_outlier": geometry.outlier,
-        "geometry_consistent": geometry.consistent,
-        "multi_donor_detected": multi_donor.detected,
-        "multi_donor_contact_count": multi_donor.contact_count,
-        "multi_donor_geometry_status": multi_donor.geometry_status,
-        "multi_donor_contains_suspect_bond": multi_donor.contains_suspect_bond,
-        "score_eligible": multi_donor.score_eligible,
-        "score_exclusion_reason": multi_donor.score_exclusion_reason,
-        "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
-        "contact_scope": contact.contact_scope,
-        "symmetry_contact": contact.symmetry_contact,
-        "crystallographic_contact": contact.crystallographic_contact,
-        "strict_ncs_contact": contact.strict_ncs_contact,
-        "strict_ncs_operation_id": contact.strict_ncs_operation_id,
-        "symmetry_image_index": contact.symmetry_image_index,
-        "symmetry_operation": contact.symmetry_operation,
-        "cell_translation_x": tx,
-        "cell_translation_y": ty,
-        "cell_translation_z": tz,
-        "transformed_neighbor_x": round(x, 6),
-        "transformed_neighbor_y": round(y, 6),
-        "transformed_neighbor_z": round(z, 6),
-    }
+    return BondRow(
+        {
+            "pdbID": pdb_id,
+            "metal_resname": metal.residue_name,
+            "metal_chain": metal.chain_id,
+            "metal_resnum": metal.resnum,
+            "metal_element": metal.element,
+            "neighbor_resname": neighbor.residue_name,
+            "neighbor_atom": neighbor.atom_name,
+            "neighbor_element": neighbor.element,
+            "distance": geometry.distance,
+            **connection_values,
+            **donor_values,
+            **context_values,
+            "literature_distance": geometry.literature_distance,
+            "literature_stdev": geometry.literature_stdev,
+            "zscore": geometry.zscore,
+            "dpi": dpi,
+            "resolution": resolution,
+            "sigma_mag": mag,
+            "sigma_neg": neg,
+            "sigma_pos": pos,
+            "parent_type": parent_type,
+            "bonded_to": _bonded_to(neighbor.is_water),
+            "model_id": structure.analyzed_model_id,
+            "metal_model_index": metal.model_index,
+            "metal_chain_index": metal.output_chain_index,
+            "metal_residue_index": metal.output_residue_index,
+            "metal_atom_index": metal.atom_index,
+            "metal_atom": metal.atom_name,
+            "metal_icode": metal.insertion_code,
+            "metal_altloc": metal.altloc,
+            "metal_occupancy": metal.occupancy,
+            "metal_occupancy_valid": metal.occupancy_valid,
+            "metal_occupancy_status": metal.occupancy_status,
+            "metal_conformer_mean_occupancy": (
+                metal_residue.selected_conformer_mean_occupancy
+            ),
+            "metal_altloc_options": metal_residue.altloc_options,
+            "metal_altloc_selection_fallback": (
+                metal_residue.altloc_selection_fallback
+            ),
+            "neighbor_chain": neighbor.chain_id,
+            "neighbor_resnum": neighbor.resnum,
+            "neighbor_icode": neighbor.insertion_code,
+            "neighbor_model_index": neighbor.model_index,
+            "neighbor_chain_index": neighbor.output_chain_index,
+            "neighbor_residue_index": neighbor.output_residue_index,
+            "neighbor_atom_index": neighbor.atom_index,
+            "neighbor_altloc": neighbor.altloc,
+            "neighbor_occupancy": neighbor.occupancy,
+            "neighbor_occupancy_valid": neighbor.occupancy_valid,
+            "neighbor_occupancy_status": neighbor.occupancy_status,
+            "neighbor_conformer_mean_occupancy": (
+                neighbor_residue.selected_conformer_mean_occupancy
+            ),
+            "neighbor_altloc_options": neighbor_residue.altloc_options,
+            "neighbor_altloc_selection_fallback": (
+                neighbor_residue.altloc_selection_fallback
+            ),
+            "alternative_conformers_present": (
+                metal_residue.alternative_conformers_present
+                or neighbor_residue.alternative_conformers_present
+            ),
+            "altloc_selection_fallback": (
+                metal_residue.altloc_selection_fallback
+                or neighbor_residue.altloc_selection_fallback
+            ),
+            "neighbor_class": _neighbor_class(neighbor),
+            "candidate_contact": True,
+            "reference_covered": geometry.reference_covered,
+            "geometry_outlier": geometry.outlier,
+            "geometry_consistent": geometry.consistent,
+            "multi_donor_detected": multi_donor.detected,
+            "multi_donor_contact_count": multi_donor.contact_count,
+            "multi_donor_geometry_status": multi_donor.geometry_status,
+            "multi_donor_contains_suspect_bond": multi_donor.contains_suspect_bond,
+            "score_eligible": multi_donor.score_eligible,
+            "score_exclusion_reason": multi_donor.score_exclusion_reason,
+            "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
+            "contact_scope": contact.contact_scope,
+            "symmetry_contact": contact.symmetry_contact,
+            "crystallographic_contact": contact.crystallographic_contact,
+            "strict_ncs_contact": contact.strict_ncs_contact,
+            "strict_ncs_operation_id": contact.strict_ncs_operation_id,
+            "symmetry_image_index": contact.symmetry_image_index,
+            "symmetry_operation": contact.symmetry_operation,
+            "cell_translation_x": tx,
+            "cell_translation_y": ty,
+            "cell_translation_z": tz,
+            "transformed_neighbor_x": round(x, 6),
+            "transformed_neighbor_y": round(y, 6),
+            "transformed_neighbor_z": round(z, 6),
+        }
+    )
 
 
 def candidate_row(
     pdb_id: str, structure: StructureContext, metal: AtomSite, candidate: Candidate
-) -> dict[str, Any]:
+) -> CandidateRow:
     """Return one discovered or declared candidate as a candidate CSV row."""
     neighbor = candidate.neighbor
     x, y, z = candidate.transformed_position
@@ -593,59 +643,61 @@ def candidate_row(
     donor_values = _donor_output_values(candidate)
     context_values = context_warning_values(candidate, include_proximal=True)
     eligibility = candidate.eligibility()
-    return {
-        "pdbID": pdb_id,
-        "candidate_source": "|".join(sorted(candidate.candidate_sources)),
-        "eligibility_status": eligibility.status,
-        "eligibility_reason": eligibility.reason,
-        "first_sphere_eligible": eligibility.first_sphere_eligible,
-        "candidate_distance": round(candidate.distance_raw, 3),
-        "assignment_target": eligibility.assignment_target,
-        "assignment_tolerance": eligibility.assignment_tolerance,
-        "first_sphere_cutoff": eligibility.first_sphere_cutoff,
-        "assignment_reference_kind": eligibility.assignment_reference_kind,
-        "assignment_reference": eligibility.assignment_reference,
-        "inferred_contact_eligible": eligibility.inferred_contact_eligible,
-        **donor_values,
-        **context_values,
-        **connection_values,
-        "metal_resname": metal.residue_name,
-        "metal_chain": metal.chain_id,
-        "metal_resnum": metal.resnum,
-        "metal_element": metal.element,
-        "metal_atom": metal.atom_name,
-        "metal_icode": metal.insertion_code,
-        "metal_altloc": metal.altloc,
-        "metal_occupancy": metal.occupancy,
-        "model_id": structure.analyzed_model_id,
-        "metal_model_index": metal.model_index,
-        "metal_chain_index": metal.output_chain_index,
-        "metal_residue_index": metal.output_residue_index,
-        "metal_atom_index": metal.atom_index,
-        "neighbor_resname": neighbor.residue_name,
-        "neighbor_chain": neighbor.chain_id,
-        "neighbor_resnum": neighbor.resnum,
-        "neighbor_atom": neighbor.atom_name,
-        "neighbor_element": neighbor.element,
-        "neighbor_icode": neighbor.insertion_code,
-        "neighbor_altloc": neighbor.altloc,
-        "neighbor_occupancy": neighbor.occupancy,
-        "neighbor_class": _neighbor_class(neighbor),
-        "neighbor_model_index": neighbor.model_index,
-        "neighbor_chain_index": neighbor.output_chain_index,
-        "neighbor_residue_index": neighbor.output_residue_index,
-        "neighbor_atom_index": neighbor.atom_index,
-        "contact_scope": candidate.contact_scope,
-        "symmetry_contact": candidate.symmetry_contact,
-        "crystallographic_contact": candidate.crystallographic_contact,
-        "strict_ncs_contact": candidate.strict_ncs_contact,
-        "strict_ncs_operation_id": candidate.strict_ncs_operation_id,
-        "symmetry_image_index": candidate.symmetry_image_index,
-        "symmetry_operation": candidate.symmetry_operation,
-        "cell_translation_x": tx,
-        "cell_translation_y": ty,
-        "cell_translation_z": tz,
-        "transformed_neighbor_x": round(x, 6),
-        "transformed_neighbor_y": round(y, 6),
-        "transformed_neighbor_z": round(z, 6),
-    }
+    return CandidateRow(
+        {
+            "pdbID": pdb_id,
+            "candidate_source": "|".join(sorted(candidate.candidate_sources)),
+            "eligibility_status": eligibility.status,
+            "eligibility_reason": eligibility.reason,
+            "first_sphere_eligible": eligibility.first_sphere_eligible,
+            "candidate_distance": round(candidate.distance_raw, 3),
+            "assignment_target": eligibility.assignment_target,
+            "assignment_tolerance": eligibility.assignment_tolerance,
+            "first_sphere_cutoff": eligibility.first_sphere_cutoff,
+            "assignment_reference_kind": eligibility.assignment_reference_kind,
+            "assignment_reference": eligibility.assignment_reference,
+            "inferred_contact_eligible": eligibility.inferred_contact_eligible,
+            **donor_values,
+            **context_values,
+            **connection_values,
+            "metal_resname": metal.residue_name,
+            "metal_chain": metal.chain_id,
+            "metal_resnum": metal.resnum,
+            "metal_element": metal.element,
+            "metal_atom": metal.atom_name,
+            "metal_icode": metal.insertion_code,
+            "metal_altloc": metal.altloc,
+            "metal_occupancy": metal.occupancy,
+            "model_id": structure.analyzed_model_id,
+            "metal_model_index": metal.model_index,
+            "metal_chain_index": metal.output_chain_index,
+            "metal_residue_index": metal.output_residue_index,
+            "metal_atom_index": metal.atom_index,
+            "neighbor_resname": neighbor.residue_name,
+            "neighbor_chain": neighbor.chain_id,
+            "neighbor_resnum": neighbor.resnum,
+            "neighbor_atom": neighbor.atom_name,
+            "neighbor_element": neighbor.element,
+            "neighbor_icode": neighbor.insertion_code,
+            "neighbor_altloc": neighbor.altloc,
+            "neighbor_occupancy": neighbor.occupancy,
+            "neighbor_class": _neighbor_class(neighbor),
+            "neighbor_model_index": neighbor.model_index,
+            "neighbor_chain_index": neighbor.output_chain_index,
+            "neighbor_residue_index": neighbor.output_residue_index,
+            "neighbor_atom_index": neighbor.atom_index,
+            "contact_scope": candidate.contact_scope,
+            "symmetry_contact": candidate.symmetry_contact,
+            "crystallographic_contact": candidate.crystallographic_contact,
+            "strict_ncs_contact": candidate.strict_ncs_contact,
+            "strict_ncs_operation_id": candidate.strict_ncs_operation_id,
+            "symmetry_image_index": candidate.symmetry_image_index,
+            "symmetry_operation": candidate.symmetry_operation,
+            "cell_translation_x": tx,
+            "cell_translation_y": ty,
+            "cell_translation_z": tz,
+            "transformed_neighbor_x": round(x, 6),
+            "transformed_neighbor_y": round(y, 6),
+            "transformed_neighbor_z": round(z, 6),
+        }
+    )

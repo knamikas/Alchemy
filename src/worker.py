@@ -22,9 +22,15 @@ from typing import Any
 from collections.abc import Collection, Mapping
 
 from _version import __version__
-from coordination.analysis import run_bond_analysis
-from codes import ReasonCode, WarningCode
+from coordination.analysis import (
+    BondAnalysisMetadata,
+    BondAnalysisResult,
+    run_bond_analysis,
+)
+from codes import EntryStatus, ReasonCode, WarningCode
 from coordination.schema import (
+    BondRow,
+    CandidateRow,
     STATS_EXTRA_COLUMNS,
     check_row_schema,
     stats_extra_values,
@@ -48,6 +54,7 @@ from inputs import (
 )
 from metal_elements import METAL_ELEMENTS
 from metal_identification import extract_metal_statistics
+from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
 from structure_analysis import NAN, StructureContext, load_structure
 
@@ -211,16 +218,24 @@ def blank_if_unmeasured(value: Any) -> Any:
     return "" if value is None else value
 
 
-def _empty_result_rows() -> list[dict[str, Any]]:
-    return []
-
-
 def _empty_result_codes() -> list[str]:
     return []
 
 
 def _empty_result_timings() -> dict[str, float]:
     return {}
+
+
+def _empty_metal_stats_rows() -> list[MetalStatsRow]:
+    return []
+
+
+def _empty_bond_rows() -> list[BondRow]:
+    return []
+
+
+def _empty_candidate_rows() -> list[CandidateRow]:
+    return []
 
 
 @dataclass(slots=True)
@@ -244,7 +259,7 @@ class EntryResult:
 
     # ``ok``, ``partial``, ``skip`` or ``error``. Starts at ``error`` so a
     # worker that dies mid-entry cannot be mistaken for a success.
-    status: str = "error"
+    status: EntryStatus = EntryStatus.ERROR
     # Starts true for the same reason, and is cleared once a stage has produced
     # a terminal answer.
     retryable: bool = True
@@ -253,9 +268,9 @@ class EntryResult:
     error: str = ""
     no_metals: bool = False
 
-    rows: list[dict[str, Any]] = field(default_factory=_empty_result_rows)
-    bond_rows: list[dict[str, Any]] = field(default_factory=_empty_result_rows)
-    candidate_rows: list[dict[str, Any]] = field(default_factory=_empty_result_rows)
+    rows: list[MetalStatsRow] = field(default_factory=_empty_metal_stats_rows)
+    bond_rows: list[BondRow] = field(default_factory=_empty_bond_rows)
+    candidate_rows: list[CandidateRow] = field(default_factory=_empty_candidate_rows)
     # ``None`` until the bond stage runs -- see the class docstring.
     n_bonds: int | None = None
     n_candidates: int | None = None
@@ -306,7 +321,7 @@ def initial_result(
 def worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult:
     """Synthesize the retryable result a killed worker could not return."""
     result = initial_result(pdb_id, cfg, cfg.manual_inputs)
-    result.status = "error"
+    result.status = EntryStatus.ERROR
     result.retryable = True
     result.reason_codes = [ReasonCode.WORKER_PROCESS_DIED]
     result.error = (
@@ -384,14 +399,14 @@ def _run_density_stage(
     cfg: WorkerConfig,
     inputs: EntryInputs,
     structure: StructureContext,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[MetalStatsRow], list[str]]:
     """Calculate the maps, run EDSTATS, and extract this entry's statistics.
 
     Returns ``(rows, header)``, both empty when density could not be produced;
     the reason is recorded on ``result`` in that case, along with whether it is
     worth retrying.
     """
-    rows: list[dict[str, Any]] = []
+    rows: list[MetalStatsRow] = []
     header: list[str] = []
     density_started = time.monotonic()
     try:
@@ -460,12 +475,12 @@ def _run_density_stage(
     return rows, header
 
 
-def _identification_reason_codes(rows: list[dict[str, Any]]) -> list[ReasonCode]:
+def _identification_reason_codes(rows: list[MetalStatsRow]) -> list[ReasonCode]:
     """Deduplicated reason codes for EDSTATS rows that could not be joined."""
     codes: list[ReasonCode] = []
     for row in rows:
-        mapping_status = row.get("coordinate_mapping_status", "")
-        site_status = row.get("selected_metal_site_status", "")
+        mapping_status = row.coordinate_mapping_status
+        site_status = row.selected_metal_site_status
         if mapping_status == "coordinate_residue_not_found":
             codes.append(ReasonCode.COFACTOR_COORDINATE_JOIN_FAILED)
         elif mapping_status == "multiple_coordinate_residues":
@@ -492,7 +507,7 @@ def _excluded_zero_occupancy_metals(structure: StructureContext) -> int:
 
 
 def _sites_without_density_rows(
-    rows: list[dict[str, Any]], structure: StructureContext
+    rows: list[MetalStatsRow], structure: StructureContext
 ) -> list[tuple[int, int, int, int]]:
     """Selected coordinate metal sites that the statistics table omits.
 
@@ -503,15 +518,13 @@ def _sites_without_density_rows(
     from the structure keeps this completeness check active when bond analysis
     is disabled or fails, and covers any later divergence between selections.
     """
-    reported = {
-        tuple(row["site_key"]) for row in rows if row.get("site_key") is not None
-    }
+    reported = {row.site_key for row in rows if row.site_key is not None}
     selected = structure.metal_atoms(METALS_SET, canonical=True)
     return [metal.source_key for metal in selected if metal.source_key not in reported]
 
 
 def append_site_fields(
-    rows: list[dict[str, Any]],
+    rows: list[MetalStatsRow],
     # Keyed by ``AtomSite.source_key``, but the lookup key below is a row's own
     # ``site_key``, which is ``None`` for a cofactor that joined no metal site.
     site_summaries: Mapping[Any, dict[str, Any]],
@@ -519,28 +532,25 @@ def append_site_fields(
 ) -> None:
     """Extend each EDSTATS row with its per-site contact and provenance values."""
     for index, row in enumerate(rows):
-        summary = dict(site_summaries.get(row.get("site_key"), {}))
-        for name in (
-            "density_observation_id",
-            "density_scope",
-            "density_shared_site_count",
-            "density_is_shared",
-        ):
-            summary[name] = row.get(name, "")
-        summary["coordinate_mapping_status"] = row.get("coordinate_mapping_status", "")
-        summary["selected_metal_site_status"] = row.get(
-            "selected_metal_site_status", ""
-        )
+        summary = dict(site_summaries.get(row.site_key, {}))
+        summary["density_observation_id"] = row.density_observation_id
+        summary["density_scope"] = row.density_scope
+        summary["density_shared_site_count"] = row.density_shared_site_count
+        summary["density_is_shared"] = row.density_is_shared
+        summary["coordinate_mapping_status"] = row.coordinate_mapping_status
+        summary["selected_metal_site_status"] = row.selected_metal_site_status
         coverage = summary.get("geometry_coverage_image_inclusive", NAN)
         if isinstance(coverage, float) and not math.isfinite(coverage):
             coverage = summary.get("geometry_coverage_explicit", NAN)
-        extra = stats_extra_values(structure, row.get("site"), summary)
+        extra = stats_extra_values(structure, row.site, summary)
         if index == 0:
             check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_stats_all.csv")
-        row["fields"] = (
-            row["fields"]
-            + [coverage]
-            + [extra[column] for column in STATS_EXTRA_COLUMNS]
+        rows[index] = row.with_fields(
+            (
+                *row.fields,
+                csv_value(coverage),
+                *(csv_value(extra[column]) for column in STATS_EXTRA_COLUMNS),
+            )
         )
 
 
@@ -549,29 +559,25 @@ def run_bond_stage(
     cfg: WorkerConfig,
     inputs: EntryInputs,
     structure: StructureContext,
-    rows: list[dict[str, Any]],
+    rows: list[MetalStatsRow],
     header: list[str],
-) -> tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-    dict[tuple[int, int, int, int], dict[str, Any]],
-    dict[str, Any],
-]:
+) -> BondAnalysisResult:
     """Evaluate the contacts around each site, unless ``--no-bonds`` cleared it.
 
     Returns ``(bond_rows, candidate_rows, site_summaries, bond_meta)``. A
     bond-stage failure must not lose the EDSTATS rows already computed, so it
     is recorded on ``result`` and the empty defaults are returned instead.
     """
-    bond_rows: list[dict[str, Any]] = []
-    candidate_rows: list[dict[str, Any]] = []
-    site_summaries: dict[tuple[int, int, int, int], dict[str, Any]] = {}
-    bond_meta: dict[str, Any] = {
-        "partial_reason_codes": [],
-        "warning_codes": list(structure.warning_codes),
-        "messages": [],
-        "retryable": False,
-    }
+    analysis = BondAnalysisResult(
+        bond_rows=[],
+        candidate_rows=[],
+        site_summaries={},
+        metadata=BondAnalysisMetadata(
+            partial_reason_codes=[],
+            warning_codes=list(structure.warning_codes),
+            messages=[],
+        ),
+    )
     if not cfg.bonds:
         non_finite_metals = [
             metal
@@ -579,18 +585,18 @@ def run_bond_stage(
             if not metal.coordinates_valid
         ]
         if non_finite_metals:
-            bond_meta["partial_reason_codes"].append(
+            analysis.metadata.partial_reason_codes.append(
                 ReasonCode.NON_FINITE_METAL_COORDINATES
             )
-            bond_meta["messages"].append(
+            analysis.metadata.messages.append(
                 "geometry unavailable for selected metal site(s) with "
                 "non-finite coordinates"
             )
-        return bond_rows, candidate_rows, site_summaries, bond_meta
+        return analysis
 
     bond_started = time.monotonic()
     try:
-        (bond_rows, candidate_rows, site_summaries, bond_meta) = run_bond_analysis(
+        analysis = run_bond_analysis(
             result.pdb_id,
             inputs.pdb,
             rows,
@@ -615,13 +621,13 @@ def run_bond_stage(
         result.retryable = True
     finally:
         result.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)
-    return bond_rows, candidate_rows, site_summaries, bond_meta
+    return analysis
 
 
 def _finalize_result(
     result: EntryResult,
     identification_codes: list[ReasonCode],
-    bond_meta: dict[str, Any],
+    bond_meta: BondAnalysisMetadata,
     structure: StructureContext,
 ) -> None:
     """Merge the stage outcomes into the final status, codes, and counts.
@@ -631,26 +637,24 @@ def _finalize_result(
     """
     result.reason_codes = list(
         dict.fromkeys(
-            result.reason_codes
-            + identification_codes
-            + list(bond_meta["partial_reason_codes"])
+            result.reason_codes + identification_codes + bond_meta.partial_reason_codes
         )
     )
     messages = [IDENTIFICATION_REASON_MESSAGES[code] for code in identification_codes]
-    messages.extend(bond_meta["messages"])
+    messages.extend(bond_meta.messages)
     if messages:
         existing_error = result.error
         result.error = "; ".join(
             ([existing_error] if existing_error else []) + messages
         )
         result.error = truncate(result.error, MAX_MANIFEST_ERROR_CHARS)
-    if bond_meta.get("retryable", False):
+    if bond_meta.retryable:
         result.retryable = True
     result.warning_codes = list(
-        dict.fromkeys(result.warning_codes + bond_meta.get("warning_codes", []))
+        dict.fromkeys(result.warning_codes + bond_meta.warning_codes)
     )
-    status = "partial" if result.reason_codes else "ok"
-    if status == "ok":
+    status = EntryStatus.PARTIAL if result.reason_codes else EntryStatus.OK
+    if status == EntryStatus.OK:
         result.retryable = False
     result.status = status
     # Coordinate-model metal sites, not emitted statistics rows: a failed
@@ -732,7 +736,7 @@ def _finish_if_no_analyzable_metals(
         # metal. Under the no-inference policy, zero recognized sites is
         # therefore not proof of metal absence.
         unknown_count = structure.unknown_element_atom_count
-        result.status = "partial"
+        result.status = EntryStatus.PARTIAL
         result.retryable = False
         result.reason_codes = [ReasonCode.METAL_PRESENCE_INDETERMINATE]
         result.error = truncate(
@@ -748,7 +752,7 @@ def _finish_if_no_analyzable_metals(
 
     # Neither density nor contact analysis can produce output without a
     # canonical metal site, so avoid running two FFTs and EDSTATS.
-    result.status = "ok"
+    result.status = EntryStatus.OK
     result.retryable = False
     result.n_metals = 0
     result.rows = []
@@ -786,7 +790,7 @@ def process(pdb_id: str) -> EntryResult:
             # leaves no temporary directory behind.
             entry = _resolve_entry_dir(pdb_id, cfg)
             if not os.path.isdir(entry):
-                result.status = "skip"
+                result.status = EntryStatus.SKIP
                 result.error = "entry dir missing"
                 return result
             work_dir = create_owned_scratch_directory(
@@ -814,9 +818,7 @@ def process(pdb_id: str) -> EntryResult:
             return result
         rows, header = _run_density_stage(result, cfg, inputs, structure)
         identification_reason_codes = _identification_reason_codes(rows)
-        bond_rows, candidate_rows, site_summaries, bond_meta = run_bond_stage(
-            result, cfg, inputs, structure, rows, header
-        )
+        bond_analysis = run_bond_stage(result, cfg, inputs, structure, rows, header)
         # An empty header means density production itself failed and already
         # supplied the precise reason code. This comparison diagnoses a
         # successful statistics table whose site selection is incomplete.
@@ -837,19 +839,21 @@ def process(pdb_id: str) -> EntryResult:
                 len(sites_without_density),
                 sites_without_density,
             )
-        append_site_fields(rows, site_summaries, structure)
+        append_site_fields(rows, bond_analysis.site_summaries, structure)
         result.rows = rows
-        result.bond_rows = bond_rows
-        result.candidate_rows = candidate_rows
-        _finalize_result(result, identification_reason_codes, bond_meta, structure)
+        result.bond_rows = bond_analysis.bond_rows
+        result.candidate_rows = bond_analysis.candidate_rows
+        _finalize_result(
+            result, identification_reason_codes, bond_analysis.metadata, structure
+        )
     except FileNotFoundError as e:
-        result.status = "skip"
+        result.status = EntryStatus.SKIP
         result.retryable = True
         result.reason_codes = [ReasonCode.MISSING_INPUT]
         result.error = truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS)
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
-        result.status = "error"
+        result.status = EntryStatus.ERROR
         # Retryable regardless: the reason code says the failure will recur on
         # the same inputs, but a resumed run cannot know the inputs are the
         # same. A manual run may name a repaired file, and a mirror entry may

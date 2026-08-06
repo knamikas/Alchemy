@@ -17,6 +17,7 @@ from structure_analysis import (
     StructureContext,
     canonical_pdb_residue_id,
 )
+from output_rows import MetalStatsRow
 
 
 # EDSTATS 1.0.9's standard residue-table schema, whose twelve metrics repeat
@@ -378,33 +379,33 @@ def _density_row(
     site: AtomSite | None,
     residue_key: tuple[int, int, int] | None,
     shared_site_count: int,
-) -> dict[str, Any]:
+) -> MetalStatsRow:
     """Build one site-level row from an extracted EDSTATS residue row.
 
     ``site`` is ``None`` for a cofactor residue with no selected metal site,
     which is also what makes the row's status ``no_selected_metal``.
     """
-    return {
-        "pdbID": pdb_id,
-        "category": category,
-        "resname": resname,
-        "chain": fields[indices["CI"]],
-        "resnum": fields[indices["RN"]],
-        "fields": fields,
-        "density_observation_id": density_observation_id(pdb_id, fields, indices),
-        "density_scope": (
+    return MetalStatsRow(
+        pdb_id=pdb_id,
+        category=category,
+        resname=resname,
+        chain=fields[indices["CI"]],
+        resnum=fields[indices["RN"]],
+        fields=tuple(fields),
+        density_observation_id=density_observation_id(pdb_id, fields, indices),
+        density_scope=(
             "cofactor_residue" if category == "cofactor" else "metal_residue"
         ),
-        "density_shared_site_count": shared_site_count,
-        "density_is_shared": shared_site_count > 1,
-        "coordinate_mapping_status": mapping_status,
-        "selected_metal_site_status": (
+        density_shared_site_count=shared_site_count,
+        density_is_shared=shared_site_count > 1,
+        coordinate_mapping_status=mapping_status,
+        selected_metal_site_status=(
             "selected" if site is not None else "no_selected_metal"
         ),
-        "site": site,
-        "site_key": None if site is None else site.source_key,
-        "residue_key": residue_key,
-    }
+        site=site,
+        site_key=None if site is None else site.source_key,
+        residue_key=residue_key,
+    )
 
 
 @dataclass(frozen=True)
@@ -492,7 +493,7 @@ def _append_density_rows(
     resolved: _ResolvedEdstatsRow,
     metals_upper: set[str],
     cofactors: frozenset[str],
-    rows: list[dict[str, Any]],
+    rows: list[MetalStatsRow],
 ) -> None:
     """Expand one residue observation into site or diagnostic rows."""
     coordinate_resname, _chain, _resnum = resolved.coordinate_key
@@ -565,7 +566,7 @@ def extract_metal_statistics(
     metals_set: Iterable[str],
     cofactor_set: Iterable[str],
     structure: StructureContext,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[MetalStatsRow], list[str]]:
     """Parse an EDSTATS ``stats.out``, returning ``(rows, header)``.
 
     Cofactors match by CCD component name. A plain metal is a single-atom
@@ -587,7 +588,7 @@ def extract_metal_statistics(
     metals_upper = {element.upper() for element in metals_set}
     cofactors = frozenset(cofactor_set)
 
-    rows: list[dict[str, Any]] = []
+    rows: list[MetalStatsRow] = []
     schema: tuple[list[str], dict[str, int]] | None = None
     residue_row_count = 0
     observed_residues: Counter[tuple[str, str, str]] = Counter()

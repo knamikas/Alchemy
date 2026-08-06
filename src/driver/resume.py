@@ -17,7 +17,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 
-from codes import ReasonCode
+from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
@@ -115,8 +115,9 @@ def load_done(
 
 def resume_replacement_succeeded(result: EntryResult) -> bool:
     """Whether a retry produced a terminal result suitable for replacement."""
-    status = str(result.status).strip().lower()
-    return status == "ok" or (status == "partial" and not bool(result.retryable))
+    return result.status == EntryStatus.OK or (
+        result.status == EntryStatus.PARTIAL and not result.retryable
+    )
 
 
 def manifest_values_by_id(path: str, column: str) -> dict[str, str]:

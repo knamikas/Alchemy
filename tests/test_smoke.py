@@ -129,9 +129,10 @@ def test_analysis_writes_nothing_into_the_current_directory(
     stats_rows, header, _ = helpers.stats_rows_for_structure(
         context, inputs / "stats.out", metrics={"ZDm": 2.5}
     )
-    rows, _, _, _ = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test", path, stats_rows, header, helpers.dpi_inputs(), structure=context
     )
+    rows = analysis.bond_rows
 
     assert rows, "the analysis must have actually run for this to mean anything"
     assert os.path.realpath(os.getcwd()) == os.path.realpath(work_dir)
@@ -226,9 +227,13 @@ def test_simple_metal_site_places_donors_at_requested_distances(
     donors = [("HIS", "NE2", 2.03), ("ASP", "OD1", 1.99), ("HOH", "O", 2.09)]
     path = simple_metal_site("ZN", donors).write(tmp_path / f"s{suffix}")
     context = load_structure("test", path)
-    rows, candidates, summaries, metadata = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(), structure=context
     )
+    rows = analysis.bond_rows
+    candidates = analysis.candidate_rows
+    summaries = analysis.site_summaries
+    metadata = analysis.metadata
 
     assert len(summaries) == 1
     measured = {
@@ -238,7 +243,7 @@ def test_simple_metal_site_places_donors_at_requested_distances(
         assert measured[(resname, atom_name)] == approx(distance, abs=1e-6)
     assert len(rows) == len(donors)
     assert candidates
-    assert metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
+    assert metadata.partial_reason_codes == ["missing_dpi_metadata_source"]
 
 
 # A legacy LINK record carries no identifier, so gemmi regenerates one from the
@@ -269,7 +274,7 @@ def test_declared_connection_is_reported_for_both_formats(
     path = builder.write(tmp_path / f"declared{suffix}")
 
     context = load_structure("test", path)
-    rows, _, _, metadata = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test",
         path,
         [],
@@ -278,8 +283,10 @@ def test_declared_connection_is_reported_for_both_formats(
         structure=context,
         connection_path=path,
     )
+    rows = analysis.bond_rows
+    metadata = analysis.metadata
 
-    assert metadata["messages"] == ["DPI unavailable: missing_dpi_metadata_source"]
+    assert metadata.messages == ["DPI unavailable: missing_dpi_metadata_source"]
     declared = [row for row in rows if row["declared_connection"]]
     assert [row["neighbor_atom"] for row in declared] == ["NZ"]
     assert declared[0]["coordination_source"] == expected_source
@@ -345,7 +352,7 @@ def test_connection_can_name_a_specific_conformer(tmp_path: Path) -> None:
     path = builder.write_cif(tmp_path / "altdecl.cif")
 
     context = load_structure("test", path)
-    rows, _, _, metadata = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test",
         path,
         [],
@@ -354,10 +361,12 @@ def test_connection_can_name_a_specific_conformer(tmp_path: Path) -> None:
         structure=context,
         connection_path=path,
     )
+    rows = analysis.bond_rows
+    metadata = analysis.metadata
 
     assert [row["neighbor_altloc"] for row in rows] == ["B"]
     assert rows[0]["distance"] == approx(2.80, abs=1e-6)
-    assert "declared_connection_conformer_substituted" in metadata["warning_codes"]
+    assert "declared_connection_conformer_substituted" in metadata.warning_codes
 
 
 def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path: Path) -> None:
@@ -484,9 +493,10 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path: Path) -> None:
         context, tmp_path / "stats.out", metrics={"ZDm": 3.0, "ZD-m": -1.0, "ZD+m": 4.0}
     )
 
-    rows, _, _, _ = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test", path, stats_rows, header, helpers.dpi_inputs(), structure=context
     )
+    rows = analysis.bond_rows
 
     assert rows
     for row in rows:
@@ -604,9 +614,10 @@ def test_symmetry_image_contacts_are_reachable(tmp_path: Path) -> None:
     path = builder.write_pdb(tmp_path / "sym.pdb")
 
     context = load_structure("test", path)
-    rows, _, _, _ = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test", path, [], list(EDSTATS_HEADER), helpers.dpi_inputs(), structure=context
     )
+    rows = analysis.bond_rows
 
     assert len(rows) == 1
     assert rows[0]["distance"] == approx(1.0, abs=1e-6)
@@ -631,7 +642,7 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(
         tmp_path / "data.json", nrefcnt=50000, rffin=0.2
     )
     context = load_structure("test", path)
-    rows, _, _, metadata = run_bond_analysis(
+    analysis = run_bond_analysis(
         "test",
         path,
         [],
@@ -644,8 +655,10 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(
         ),
         structure=context,
     )
+    rows = analysis.bond_rows
+    metadata = analysis.metadata
 
-    assert metadata["partial_reason_codes"] == []
+    assert metadata.partial_reason_codes == []
     assert rows and math.isfinite(rows[0]["dpi"])
     assert rows[0]["resolution"] == approx(1.5)
     assert math.isfinite(rows[0]["zscore"])

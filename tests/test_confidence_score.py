@@ -16,13 +16,14 @@ import math
 import os
 from collections import Counter
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 from collections.abc import Mapping, Sequence
 
 import pytest
 
 import confidence_score as cs
 import helpers
+from output_rows import MetalStatsRow
 from coordination.schema import STATS_EXTRA_COLUMNS
 
 
@@ -478,7 +479,7 @@ def test_rejected_broad_search_candidates_stay_out_of_the_qg_denominator(
     )
     path = builder.write_pdb(tmp_path / "site.pdb")
     context = load_structure("1abc", path)
-    bonds, candidates, _, _ = run_bond_analysis(
+    analysis = run_bond_analysis(
         "1abc",
         path,
         [],
@@ -486,6 +487,8 @@ def test_rejected_broad_search_candidates_stay_out_of_the_qg_denominator(
         helpers.dpi_inputs(),
         structure=context,
     )
+    bonds = analysis.bond_rows
+    candidates = analysis.candidate_rows
 
     rejected = [
         row
@@ -635,12 +638,12 @@ def test_bond_rows_without_a_density_row_survive_as_unscorable_orphans() -> None
     assert set(orphan) == set(cs.CONFIDENCE_INPUT_COLUMNS)
 
 
-def _result_stats_row(flat: Mapping[str, str]) -> dict[str, Any]:
-    return {
-        "pdbID": flat["pdbID"],
-        "category": flat["category"],
-        "fields": [flat.get(column, "") for column in STATS_FIELD_COLUMNS],
-    }
+def _result_stats_row(flat: Mapping[str, str]) -> MetalStatsRow:
+    return MetalStatsRow.from_output_fields(
+        flat["pdbID"],
+        flat["category"],
+        [flat.get(column, "") for column in STATS_FIELD_COLUMNS],
+    )
 
 
 def test_result_preparation_agrees_with_row_preparation() -> None:
@@ -660,8 +663,8 @@ def test_result_preparation_agrees_with_row_preparation() -> None:
 def test_result_preparation_rejects_a_row_of_the_wrong_width() -> None:
     flat = _stats_row()
     row = _result_stats_row(flat)
-    row["fields"] = row["fields"][:-1]
-    with pytest.raises(ValueError, match="confidence schema"):
+    row = row.with_fields(row.fields[:-1])
+    with pytest.raises(ValueError, match="output schema"):
         cs.prepare_result_confidence_inputs([row], [], STATS_COLUMNS)
 
 

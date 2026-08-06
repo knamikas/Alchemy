@@ -14,11 +14,13 @@ from coordination.schema import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
     STATS_EXTRA_COLUMNS,
-    check_row_schema,
+    BondRow,
+    CandidateRow,
 )
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
 from worker import EntryResult, blank_if_unmeasured
+from output_rows import MetalStatsRow
 
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every
@@ -155,37 +157,33 @@ class OutputWriters:
         if self._confidence_inputs is not None:
             self._confidence_inputs.writeheader()
 
-    def write_stats_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
+    def write_stats_rows(self, rows: Sequence[MetalStatsRow]) -> None:
         if not rows:
             return
         for row in rows:
-            self._stats.writerow([row["pdbID"], row["category"]] + row["fields"])
+            self._stats.writerow([row.pdb_id, row.category, *row.fields])
             self.n_rows += 1
         self._stats_fh.flush()
 
-    def write_bond_rows(self, bond_rows: Sequence[Mapping[str, Any]]) -> None:
+    def write_bond_rows(self, bond_rows: Sequence[BondRow]) -> None:
         if self._bonds is None or self._bonds_fh is None or not bond_rows:
             return
-        check_row_schema(bond_rows[0], BOND_COLUMNS, "metal_bonds_all.csv")
         for bond in bond_rows:
-            self._bonds.writerow([bond[column] for column in BOND_COLUMNS])
+            values = bond.as_dict()
+            self._bonds.writerow([values[column] for column in BOND_COLUMNS])
             self.n_bonds += 1
         self._bonds_fh.flush()
 
-    def write_candidate_rows(self, candidate_rows: Sequence[Mapping[str, Any]]) -> None:
+    def write_candidate_rows(self, candidate_rows: Sequence[CandidateRow]) -> None:
         if (
             self._candidates is None
             or self._candidates_fh is None
             or not candidate_rows
         ):
             return
-        check_row_schema(
-            candidate_rows[0], CANDIDATE_COLUMNS, "metal_candidates_all.csv"
-        )
         for candidate in candidate_rows:
-            self._candidates.writerow(
-                [candidate[column] for column in CANDIDATE_COLUMNS]
-            )
+            values = candidate.as_dict()
+            self._candidates.writerow([values[column] for column in CANDIDATE_COLUMNS])
             self.n_candidates += 1
         self._candidates_fh.flush()
 

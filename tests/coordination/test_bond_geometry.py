@@ -14,6 +14,7 @@ import pytest
 
 import coordination.analysis as ba
 from coordination import schema as coordination_schema
+from coordination.schema import BondRow, CandidateRow
 import codes
 import coordinate_conversion
 from coordination.contact_record import Candidate
@@ -46,10 +47,10 @@ approx = cast(_PytestApi, pytest).approx
 
 
 _AnalysisResult = tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
+    list[BondRow],
+    list[CandidateRow],
     dict[ba.AtomKey, dict[str, Any]],
-    dict[str, Any],
+    ba.BondAnalysisMetadata,
 ]
 
 # Transcribed from README.md's geometry-inference donor table.
@@ -165,8 +166,14 @@ def _analyze(
             data_json=data_json,
             resolution=resolution,
         )
-    return ba.run_bond_analysis(
+    result = ba.run_bond_analysis(
         "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
+    )
+    return (
+        result.bond_rows,
+        result.candidate_rows,
+        result.site_summaries,
+        result.metadata,
     )
 
 
@@ -195,7 +202,7 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
     context = load_structure("test", path)
     metal = context.metal_atoms(["ZN"])[0]
 
-    rows, candidates, summaries, metadata = ba.run_bond_analysis(
+    analysis = ba.run_bond_analysis(
         "test",
         path,
         [],
@@ -204,6 +211,10 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
         structure=context,
         connection_path="",
     )
+    rows = analysis.bond_rows
+    candidates = analysis.candidate_rows
+    summaries = analysis.site_summaries
+    metadata = analysis.metadata
 
     assert rows == []
     assert candidates == []
@@ -213,8 +224,8 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
     assert summaries[metal.source_key]["geometry_not_assessed_reason"] == (
         "non_finite_metal_coordinates"
     )
-    assert "non_finite_metal_coordinates" in metadata["partial_reason_codes"]
-    assert metadata["retryable"] is False
+    assert "non_finite_metal_coordinates" in metadata.partial_reason_codes
+    assert metadata.retryable is False
 
 
 def _dpi_metadata(
@@ -247,7 +258,7 @@ def _contact(neighbor: AtomSite, **fields: Any) -> Candidate:
     return Candidate(neighbor=neighbor, **defaults)
 
 
-def _only(rows: Sequence[dict[str, Any]], atom_name: str) -> dict[str, Any]:
+def _only(rows: Sequence[Mapping[str, Any]], atom_name: str) -> Mapping[str, Any]:
     """The single row/candidate whose neighbour atom is ``atom_name``."""
     matches = [row for row in rows if row["neighbor_atom"] == atom_name]
     assert len(matches) == 1, (
@@ -827,8 +838,8 @@ def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path: Path) 
     assert math.isnan(candidate["assignment_target"])
     assert math.isnan(candidate["first_sphere_cutoff"])
     assert rows == []
-    assert "missing_first_sphere_reference" in metadata["partial_reason_codes"]
-    assert any("K-S" in message for message in metadata["messages"])
+    assert "missing_first_sphere_reference" in metadata.partial_reason_codes
+    assert any("K-S" in message for message in metadata.messages)
 
 
 @pytest.mark.parametrize("distance,eligible", [(2.780, True), (2.781, False)])
@@ -1081,7 +1092,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
     )
     rows, _, _, metadata = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
-    assert metadata["partial_reason_codes"] == []
+    assert metadata.partial_reason_codes == []
     row = _only(rows, "OD1")
     mu, sigma = reference_data.literature_distances()[("ASP", "O", "ZN")]
     assert (mu, sigma) == (1.99, 0.05)
@@ -1365,11 +1376,14 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path: Path) -> None:
         ),
         resolution=1.90,
     )
-    rows, _candidates, summaries, metadata = ba.run_bond_analysis(
+    analysis = ba.run_bond_analysis(
         "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
     )
+    rows = analysis.bond_rows
+    summaries = analysis.site_summaries
+    metadata = analysis.metadata
 
-    assert metadata["partial_reason_codes"] == []
+    assert metadata.partial_reason_codes == []
     row = _only(rows, "O")
     assert row["dpi"] == approx(0.048, abs=DPI_ROUNDING)
     assert row["resolution"] == approx(1.90)
@@ -1861,13 +1875,16 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path: Path) -> None:
         ),
     )
 
-    rows, _candidates, summaries, metadata = ba.run_bond_analysis(
+    analysis = ba.run_bond_analysis(
         "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
     )
+    rows = analysis.bond_rows
+    summaries = analysis.site_summaries
+    metadata = analysis.metadata
 
     summary = next(iter(summaries.values()))
     assert summary["dpi_unavailable_reason"] == ("missing_or_invalid_reflection_count")
-    assert "missing_or_invalid_reflection_count" in (metadata["partial_reason_codes"])
+    assert "missing_or_invalid_reflection_count" in metadata.partial_reason_codes
     assert math.isnan(summary["dpi"])
     row = _only(rows, "O")
     assert row["distance"] == approx(2.09, abs=1e-6)
@@ -1907,7 +1924,7 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path: Path) -> 
     no_dpi_rows, _, _, metadata = _analyze(covered)
 
     row = _only(no_dpi_rows, "OD1")
-    assert metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
+    assert metadata.partial_reason_codes == ["missing_dpi_metadata_source"]
     assert row["reference_covered"] is True
     assert math.isnan(row["dpi"]) and math.isnan(row["zscore"])
     for column in ("geometry_outlier", "geometry_consistent"):
