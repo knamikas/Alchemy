@@ -54,7 +54,7 @@ from metal_identification import extract_metal_statistics
 from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
 from structure_analysis import NAN, StructureContext, load_structure
-from worker_contracts import EntryResult, WorkerConfig
+from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult, WorkerConfig
 
 
 METALS_SET = set(METAL_ELEMENTS)
@@ -629,6 +629,26 @@ def _finish_if_no_analyzable_metals(
     return True
 
 
+def _finish_if_metal_site_limit_exceeded(
+    result: EntryResult, structure: StructureContext
+) -> bool:
+    selected_count = len(structure.metal_atoms(METALS_SET, canonical=True))
+    if selected_count <= MAX_ANALYZED_METAL_SITES:
+        return False
+
+    result.status = EntryStatus.OK
+    result.retryable = False
+    result.n_metals = selected_count
+    result.rows = []
+    result.bond_rows = []
+    result.candidate_rows = []
+    result.n_bonds = 0
+    result.n_candidates = 0
+    result.reason_codes = [ReasonCode.METAL_SITE_LIMIT_EXCEEDED]
+    result.metal_site_limit_exceeded = True
+    return True
+
+
 def process(pdb_id: str) -> EntryResult:
     """Run one entry in an initialized worker and return its result."""
     cfg = worker_config
@@ -679,6 +699,8 @@ def process(pdb_id: str) -> EntryResult:
                     result.warning_codes + [WarningCode.ZERO_OCCUPANCY_METAL_EXCLUDED]
                 )
             )
+        if _finish_if_metal_site_limit_exceeded(result, structure):
+            return result
         if _finish_if_no_analyzable_metals(result, structure):
             return result
         rows, header = _run_density_stage(result, cfg, inputs, structure)

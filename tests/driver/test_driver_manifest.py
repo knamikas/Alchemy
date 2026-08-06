@@ -374,6 +374,68 @@ def test_a_positive_occupancy_metal_raises_no_exclusion_warning(
     assert "zero_occupancy_metal_excluded" not in result.warning_codes
 
 
+def test_a_metal_dense_entry_finishes_before_density_processing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builder = helpers.StructureBuilder()
+    for residue_number in range(1, worker_contracts.MAX_ANALYZED_METAL_SITES + 2):
+        builder.add_metal(
+            "MG",
+            residue_number,
+            chain="A",
+            pos=(float(residue_number), 0.0, 0.0),
+        )
+
+    def density_must_not_run(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("the metal-site pre-check must run before CCP4")
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        density_must_not_run,
+        structure_builder=builder,
+        bonds=True,
+    )
+
+    assert result.status == "ok"
+    assert result.retryable is False
+    assert result.no_metals is False
+    assert result.metal_site_limit_exceeded is True
+    assert result.reason_codes == ["metal_site_limit_exceeded"]
+    assert result.n_metals == worker_contracts.MAX_ANALYZED_METAL_SITES + 1
+    assert result.n_bonds == 0
+    assert result.n_candidates == 0
+    assert result.rows == []
+    assert result.bond_rows == []
+    assert result.candidate_rows == []
+    assert pool.confidence_rows_for(result, pool.ConfidencePlan()) == []
+
+
+def test_the_metal_site_limit_includes_exactly_one_hundred_sites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builder = helpers.StructureBuilder()
+    for residue_number in range(1, worker_contracts.MAX_ANALYZED_METAL_SITES + 1):
+        builder.add_metal(
+            "MG",
+            residue_number,
+            chain="A",
+            pos=(float(residue_number), 0.0, 0.0),
+        )
+
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        structure_builder=builder,
+        bonds=False,
+    )
+
+    assert result.metal_site_limit_exceeded is False
+    assert result.n_metals == worker_contracts.MAX_ANALYZED_METAL_SITES
+    assert len(result.rows) == worker_contracts.MAX_ANALYZED_METAL_SITES
+
+
 def test_a_catalogued_cofactor_metal_raises_no_such_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2426,7 +2488,7 @@ class TestProgressReporter:
         for terminal, expected in ((True, 3), (False, 1)):
             reporter, stream = self._reporter(terminal, lambda: now[0])
             for _ in range(3):
-                reporter.render(1, self._counts(), 0)
+                reporter.render(1, self._counts(), 0, 0)
                 now[0] += ProgressReporter.TERMINAL_INTERVAL_S
             assert stream.getvalue().count("elapsed=") == expected, (
                 f"terminal={terminal} rendered the wrong number of lines"
@@ -2434,12 +2496,18 @@ class TestProgressReporter:
 
     def test_force_renders_regardless_of_the_interval(self) -> None:
         reporter, stream = self._reporter(False, lambda: 1000.0)
-        reporter.render(1, self._counts(), 0)
-        reporter.render(2, self._counts(), 0)
+        reporter.render(1, self._counts(), 0, 0)
+        reporter.render(2, self._counts(), 0, 0)
         assert stream.getvalue().count("elapsed=") == 1
-        reporter.render(10, self._counts(), 0, force=True, final=True)
+        reporter.render(10, self._counts(), 0, 0, force=True, final=True)
         assert stream.getvalue().count("elapsed=") == 2
         assert "[10/10 100.0%]" in stream.getvalue()
+
+    def test_reports_policy_exclusions_beside_metal_free_entries(self) -> None:
+        reporter, stream = self._reporter(False, lambda: 1000.0)
+        reporter.render(2, self._counts(), 1, 1)
+
+        assert "no_metals=1 metal_site_limit_exceeded=1" in stream.getvalue()
 
 
 class TestRunLog:

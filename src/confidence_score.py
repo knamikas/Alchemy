@@ -20,6 +20,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from output_rows import MetalStatsRow
 
 from reference_data import reference_data_id
+from worker_contracts import MAX_ANALYZED_METAL_SITES
 
 
 REFERENCE_METADATA_FILE = "metadata.json"
@@ -505,6 +506,7 @@ def _scoring_metadata() -> dict[str, Any]:
         "percentile_method": "average_rank_empirical_cdf",
         "coverage_policy": COVERAGE_POLICY,
         "input_status_policy": INPUT_STATUS_POLICY,
+        "maximum_entry_metal_sites": MAX_ANALYZED_METAL_SITES,
         "reference_data_id": reference_data_id(),
     }
 
@@ -574,6 +576,7 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         "percentile_method",
         "coverage_policy",
         "input_status_policy",
+        "maximum_entry_metal_sites",
     ):
         if metadata.get(key) != expected[key]:
             raise ValueError(

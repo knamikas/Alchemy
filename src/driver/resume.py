@@ -227,6 +227,11 @@ def _validate_terminal_artifacts(
 ) -> None:
     terminal_ids = set(terminal_rows)
 
+    def metal_site_limit_exceeded(row: _CsvRow) -> bool:
+        return ReasonCode.METAL_SITE_LIMIT_EXCEEDED in {
+            code for code in _csv_text(row, "reason_codes").split("|") if code
+        }
+
     selected_stats: Counter[str] = Counter()
     selected_sites: set[tuple[str, tuple[str, ...]]] = set()
     site_columns = (
@@ -253,13 +258,21 @@ def _validate_terminal_artifacts(
         expected = _manifest_count(row, "n_metals", pdb_id)
         actual = selected_stats[pdb_id]
         status = _csv_text(row, "status").strip().lower()
-        stats_match = actual == expected if status == "ok" else actual <= expected
+        excluded = metal_site_limit_exceeded(row)
+        if excluded:
+            stats_match = actual == 0
+            relation = "exactly 0 policy-excluded rows"
+        elif status == "ok":
+            stats_match = actual == expected
+            relation = f"exactly {expected}"
+        else:
+            stats_match = actual <= expected
+            relation = f"no more than {expected}"
         if not stats_match:
-            relation = "exactly" if status == "ok" else "no more than"
             raise ValueError(
                 f"Resume artifact mismatch for {pdb_id}: manifest n_metals="
                 f"{expected}, but {os.path.basename(stats_path)} has {actual} "
-                f"selected row(s) (expected {relation} {expected})."
+                f"selected row(s) (expected {relation})."
             )
 
     checks: list[tuple[str, str]] = []
@@ -282,6 +295,8 @@ def _validate_terminal_artifacts(
                 pdb_id,
                 blank_is_zero=manifest_column != "n_metals",
             )
+            if manifest_column == "n_metals" and metal_site_limit_exceeded(row):
+                expected = 0
             actual = counts[pdb_id]
             if actual != expected:
                 raise ValueError(

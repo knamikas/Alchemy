@@ -293,6 +293,13 @@ analysis outputs—to write `confidence_scores_all.csv` and a reusable
 score distribution. An interrupted run retains its compact inputs for
 `--resume` but does not publish a completed reference.
 
+The standard database cohort excludes an entry when coordinate inspection
+finds more than 100 selected canonical metal sites. These exceptionally
+metal-dense assemblies contain strongly correlated sites and would otherwise
+have disproportionate influence on the empirical distribution. They are
+recorded in the manifest with their detected site count but do not contribute
+confidence inputs.
+
 The provisional June 2026 fixed score transforms absolute RSZD and maximum
 absolute Zbond through piecewise-linear severity anchors and calculates:
 

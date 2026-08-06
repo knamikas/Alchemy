@@ -121,6 +121,7 @@ class RunLog:
                 "status": result.status,
                 "retryable": bool(result.retryable),
                 "no_metals": bool(result.no_metals),
+                "metal_site_limit_exceeded": bool(result.metal_site_limit_exceeded),
                 "n_metals": result.n_metals,
                 "n_bonds": blank_if_unmeasured(result.n_bonds),
                 "n_candidates": blank_if_unmeasured(result.n_candidates),
@@ -208,6 +209,9 @@ class RunLog:
         )
         retryable_count = sum(entry["retryable"] for entry in self.entries)
         no_metal_count = sum(entry["no_metals"] for entry in self.entries)
+        metal_site_limit_exceeded_count = sum(
+            entry["metal_site_limit_exceeded"] for entry in self.entries
+        )
         map_scope_counts = Counter(
             entry["density_map_scope_used"]
             for entry in self.entries
@@ -225,6 +229,8 @@ class RunLog:
                 f"Status counts: {self._counter_text(status_counts)}",
                 f"Retryable entries: {retryable_count}",
                 f"Metal-free entries: {no_metal_count}",
+                "Entries above the metal-site limit: "
+                f"{metal_site_limit_exceeded_count}",
                 f"Summed entry runtime: {total_entry_s:.3f} s",
                 f"Throughput: {throughput:.2f} entries/minute",
                 f"Reason codes: {self._counter_text(reason_counts)}",
@@ -315,6 +321,8 @@ class RunLog:
                 f"{entry['pdbID']} | status={entry['status']} | "
                 f"retryable={self._clean(entry['retryable'])} | "
                 f"no_metals={self._clean(entry['no_metals'])} | "
+                "metal_site_limit_exceeded="
+                f"{self._clean(entry['metal_site_limit_exceeded'])} | "
                 f"runtime_s={entry['runtime_s']:.2f} | "
                 f"metals={entry['n_metals']} | bonds={entry['n_bonds']} | "
                 f"candidates={entry['n_candidates']} | timings={timing_text} | "

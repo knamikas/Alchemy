@@ -548,6 +548,7 @@ class _BatchTally:
     def __init__(self) -> None:
         self.counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
         self.no_metals = 0
+        self.metal_site_limit_exceeded = 0
         self.retryable_partials = 0
 
     def record(self, result: EntryResult) -> None:
@@ -555,6 +556,8 @@ class _BatchTally:
         self.counts[status] = self.counts.get(status, 0) + 1
         if result.no_metals:
             self.no_metals += 1
+        if result.metal_site_limit_exceeded:
+            self.metal_site_limit_exceeded += 1
         if status == EntryStatus.PARTIAL and result.retryable:
             self.retryable_partials += 1
 
@@ -1033,6 +1036,8 @@ def confidence_rows_for(
     result: EntryResult, plan: ConfidencePlan
 ) -> list[dict[str, Any]]:
     """The confidence rows one entry contributes, scored where a reference is."""
+    if result.metal_site_limit_exceeded:
+        return []
     rows = prepare_result_confidence_inputs(
         result.rows, result.bond_rows, STATS_COLUMNS
     )
@@ -1285,7 +1290,13 @@ def _dispatch_entries(
         memory_pressure_pauses = 0
         memory_pressure_active = False
         completed = 0
-        progress.render(completed, tally.counts, tally.no_metals, force=True)
+        progress.render(
+            completed,
+            tally.counts,
+            tally.no_metals,
+            tally.metal_site_limit_exceeded,
+            force=True,
+        )
         while completed < len(ids):
             batch: list[EntryResult] = []
 
@@ -1360,7 +1371,12 @@ def _dispatch_entries(
                     len(active),
                 )
                 if losses is None:
-                    progress.render(completed, tally.counts, tally.no_metals)
+                    progress.render(
+                        completed,
+                        tally.counts,
+                        tally.no_metals,
+                        tally.metal_site_limit_exceeded,
+                    )
                     time.sleep(0.05)
                     continue
                 batch = losses
@@ -1385,6 +1401,7 @@ def _dispatch_entries(
                     completed,
                     tally.counts,
                     tally.no_metals,
+                    tally.metal_site_limit_exceeded,
                     force=progress.terminal or finished,
                     final=finished,
                 )
@@ -1551,7 +1568,8 @@ def _report_batch(
     print(
         f"Done. ok={tally.counts['ok']} partial={tally.counts['partial']} "
         f"skip={tally.counts['skip']} error={tally.counts['error']} "
-        f"no_metals={tally.no_metals}; "
+        f"no_metals={tally.no_metals} "
+        f"metal_site_limit_exceeded={tally.metal_site_limit_exceeded}; "
         f"{writers.n_rows} metal/cofactor rows -> {layout.stats}",
         flush=True,
     )

@@ -1385,3 +1385,17 @@ def test_input_status_policy_is_part_of_the_reference_identity(
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="input_status_policy"):
         cs.load_reference(str(reference_dir))
+
+
+def test_entry_metal_limit_is_part_of_the_reference_identity(tmp_path: Path) -> None:
+    reference_dir = tmp_path / "reference"
+    cs.write_reference(str(reference_dir), {75.0: 2}, 2)
+    metadata_path = reference_dir / cs.REFERENCE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+    assert metadata["maximum_entry_metal_sites"] == 100
+    metadata["maximum_entry_metal_sites"] = 200
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="maximum_entry_metal_sites"):
+        cs.load_reference(str(reference_dir))

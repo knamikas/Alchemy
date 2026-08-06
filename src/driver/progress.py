@@ -46,6 +46,7 @@ class ProgressReporter:
         completed: int,
         counts: Mapping[str, int],
         no_metal_count: int,
+        metal_site_limit_exceeded_count: int,
         force: bool = False,
         final: bool = False,
     ) -> None:
@@ -61,7 +62,8 @@ class ProgressReporter:
             f"elapsed={self._elapsed_text(now - self.started)} | "
             f"ok={counts['ok']} partial={counts['partial']} "
             f"skip={counts['skip']} error={counts['error']} | "
-            f"no_metals={no_metal_count}"
+            f"no_metals={no_metal_count} "
+            f"metal_site_limit_exceeded={metal_site_limit_exceeded_count}"
         )
         if self.terminal:
             padded = line.ljust(self.last_width)

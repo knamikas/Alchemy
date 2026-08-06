@@ -94,7 +94,7 @@ class ElementStatus(StrEnum):
 
 
 class ReasonCode(StrEnum):
-    """Why an entry did not finish as a plain ``ok``, carried to the manifest.
+    """Why an entry is incomplete or intentionally excluded in the manifest.
 
     These are the most user-visible words Alchemy writes, and
     ``docs/operations.md`` documents them, so they belong here rather than as
@@ -120,6 +120,9 @@ class ReasonCode(StrEnum):
     #: An atom's element could not be trusted, so metal absence cannot be
     #: established under the no-inference policy and no site is analysable.
     METAL_PRESENCE_INDETERMINATE = "metal_presence_indeterminate"
+    #: The standard cohort excludes metal-dense assemblies whose correlated
+    #: sites would dominate both the reference population and batch runtime.
+    METAL_SITE_LIMIT_EXCEEDED = "metal_site_limit_exceeded"
     BOND_STAGE_FAILURE = "bond_stage_failure"
     #: An EDSTATS row for a catalog cofactor matched no coordinate residue.
     COFACTOR_COORDINATE_JOIN_FAILED = "cofactor_coordinate_join_failed"

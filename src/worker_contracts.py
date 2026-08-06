@@ -20,6 +20,10 @@ SYMMETRY_POLICY = (
     "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
 )
 
+# A few metal-dense assemblies contribute thousands of correlated sites and
+# can dominate a database reference built from otherwise small entries.
+MAX_ANALYZED_METAL_SITES = 100
+
 
 @dataclass(frozen=True)
 class WorkerConfig:
@@ -86,6 +90,7 @@ class EntryResult:
     runtime_s: float = 0.0
     error: str = ""
     no_metals: bool = False
+    metal_site_limit_exceeded: bool = False
 
     rows: list[MetalStatsRow] = field(default_factory=_empty_metal_stats_rows)
     bond_rows: list[BondRow] = field(default_factory=_empty_bond_rows)

@@ -61,6 +61,7 @@ Results are written to (the column lists and row builders live in
   it is finalized into `confidence_scores_all.csv` and
   `output/confidence_reference/`. Later small runs write confidence scores
   directly when a compatible frozen database reference is installed.
+
 - `output/manifest.csv` — per-entry status and reason, runtime, input
   provenance, and relevant software and analysis-policy versions.
   `reference_data_id` identifies the bundled catalog and distance table the row
@@ -71,6 +72,12 @@ Results are written to (the column lists and row builders live in
   `n_metals` value counts distinct selected coordinate-model sites, not
   diagnostic or repeated EDSTATS rows; `n_bonds` and `n_candidates` distinguish
   assigned-output size from candidate-evidence size.
+
+Entries with more than 100 selected canonical metal sites are recorded
+in the manifest and excluded before CCP4 processing. This keeps exceptionally
+metal-dense, highly correlated assemblies from dominating the standard database
+cohort; their detected `n_metals` count remains available for audit.
+
 - `output/logs/alchemy_run_YYYYMMDD.log` — one detailed, immutable log for
   each invocation, or `--log-dir` when one is given. Additional runs on the
   same UTC date receive a numeric suffix.

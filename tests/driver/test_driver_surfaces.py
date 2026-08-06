@@ -101,6 +101,7 @@ def _append_terminal_manifest(
     n_metals: str | int = 0,
     n_bonds: str | int = 0,
     n_candidates: str | int = 0,
+    reason_codes: str = "",
 ) -> None:
     _append_csv_row(
         outputs["manifest_path"],
@@ -111,6 +112,7 @@ def _append_terminal_manifest(
         n_metals=n_metals,
         n_bonds=n_bonds,
         n_candidates=n_candidates,
+        reason_codes=reason_codes,
     )
 
 
@@ -147,6 +149,32 @@ def resume_outputs(tmp_path: Path) -> _ResumeOutputs:
 
 def test_matching_headers_are_accepted(resume_outputs: _ResumeOutputs) -> None:
     resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_a_policy_excluded_entry_requires_no_site_rows(
+    resume_outputs: _ResumeOutputs,
+) -> None:
+    _append_terminal_manifest(
+        resume_outputs,
+        n_metals=101,
+        reason_codes="metal_site_limit_exceeded",
+    )
+
+    resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_a_policy_excluded_entry_rejects_stray_site_rows(
+    resume_outputs: _ResumeOutputs,
+) -> None:
+    _append_terminal_manifest(
+        resume_outputs,
+        n_metals=101,
+        reason_codes="metal_site_limit_exceeded",
+    )
+    _append_selected_stats(resume_outputs)
+
+    with pytest.raises(ValueError, match="policy-excluded rows"):
+        resume.validate_resume_schemas(**resume_outputs)
 
 
 def test_absent_outputs_are_accepted(tmp_path: Path) -> None:
