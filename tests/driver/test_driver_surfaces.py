@@ -708,7 +708,7 @@ def test_worker_limits_leave_headroom_and_respect_memory(
         "available_memory_bytes",
         lambda: 8 * resources.AUTO_WORKER_MEMORY_BYTES,
     )
-    assert resources.automatic_worker_limits() == (14, 8)
+    assert resources.automatic_worker_limits() == (14, 6)
 
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 1)
     monkeypatch.setattr(resources, "available_memory_bytes", lambda: 0)
@@ -725,6 +725,20 @@ def test_unknown_memory_leaves_the_limit_unset(
     cpu_limit, memory_limit = resources.automatic_worker_limits()
     assert cpu_limit == 6
     assert memory_limit is None
+
+
+def test_explicit_workers_are_still_capped_for_process_overhead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = cli.parse_args(["--workers", "50", "--output-dir", str(tmp_path)])
+    run_log = runlog.RunLog(args, "pytest")
+    monkeypatch.setattr(pool, "automatic_worker_limits", lambda: (8, 3))
+
+    workers = pool.choose_worker_count(args, entry_count=20, run_log=run_log)
+
+    assert workers == 3
+    assert run_log.details["Requested workers"] == 50
+    assert run_log.details["Selected workers"] == 3
 
 
 class _FailingResponse:
@@ -887,6 +901,7 @@ def _host_meminfo(
     meminfo = tmp_path / "meminfo"
     meminfo.write_text(f"MemAvailable: {host_bytes // 1024} kB\n", encoding="ascii")
     monkeypatch.setattr(resources, "PROC_MEMINFO_PATH", str(meminfo))
+    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(tmp_path / "no-cgroup"))
     monkeypatch.setattr("driver.resources.sys.platform", "linux")
     return meminfo
 
@@ -899,7 +914,7 @@ def test_available_memory_is_read_from_meminfo(
     _host_meminfo(tmp_path, monkeypatch, host_bytes=7 * budget)
 
     assert resources.available_memory_bytes() == 7 * budget
-    assert resources.automatic_worker_limits()[1] == 7
+    assert resources.automatic_worker_limits()[1] == 5
 
 
 def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
@@ -922,25 +937,152 @@ def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
     assert resources.automatic_worker_limits()[1] is None
 
 
-def test_a_cgroup_memory_limit_is_not_detected(
+def test_a_cgroup_v2_memory_limit_caps_host_memory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Alchemy sizes from host memory, so a scheduler job needs --workers.
-
-    A cgroup allowance is deliberately not consulted: it cannot affect a
-    single-structure run at all, because workers are capped at the entry count.
-    ``docs/usage.md`` states the consequence, so this test holds the code to
-    what the documentation promises.
-    """
+    """Containers must not schedule against host RAM they cannot access."""
     budget = resources.AUTO_WORKER_MEMORY_BYTES
     _host_meminfo(tmp_path, monkeypatch, host_bytes=64 * budget)
     # A limit far below host memory, of the kind SLURM or a container imposes.
     cgroup_root = tmp_path / "cgroup"
     (cgroup_root / "batch").mkdir(parents=True)
-    (cgroup_root / "batch" / "memory.max").write_text(str(2 * budget), encoding="ascii")
+    (cgroup_root / "batch" / "memory.max").write_text(str(4 * budget), encoding="ascii")
+    (cgroup_root / "batch" / "memory.current").write_text(str(budget), encoding="ascii")
+    cgroup = tmp_path / "self-cgroup"
+    cgroup.write_text("0::/batch\n", encoding="ascii")
+    monkeypatch.setattr(resources, "CGROUP_ROOT", str(cgroup_root))
+    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(cgroup))
 
-    assert resources.available_memory_bytes() == 64 * budget
-    assert not hasattr(resources, "CGROUP_ROOT")
+    assert resources.available_memory_bytes() == 3 * budget
+
+
+def test_unlimited_cgroup_leaves_host_memory_authoritative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    _host_meminfo(tmp_path, monkeypatch, host_bytes=8 * budget)
+    cgroup_root = tmp_path / "cgroup"
+    cgroup_root.mkdir()
+    (cgroup_root / "memory.max").write_text("max", encoding="ascii")
+    (cgroup_root / "memory.current").write_text("123", encoding="ascii")
+    cgroup = tmp_path / "self-cgroup"
+    cgroup.write_text("0::/\n", encoding="ascii")
+    monkeypatch.setattr(resources, "CGROUP_ROOT", str(cgroup_root))
+    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(cgroup))
+
+    assert resources.available_memory_bytes() == 8 * budget
+
+
+def test_parent_cgroup_limit_applies_when_child_is_unlimited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    _host_meminfo(tmp_path, monkeypatch, host_bytes=32 * budget)
+    cgroup_root = tmp_path / "cgroup"
+    child = cgroup_root / "batch" / "task"
+    child.mkdir(parents=True)
+    (cgroup_root / "memory.max").write_text("max", encoding="ascii")
+    (cgroup_root / "memory.current").write_text("0", encoding="ascii")
+    (cgroup_root / "batch" / "memory.max").write_text(str(6 * budget), encoding="ascii")
+    (cgroup_root / "batch" / "memory.current").write_text(
+        str(2 * budget), encoding="ascii"
+    )
+    (child / "memory.max").write_text("max", encoding="ascii")
+    (child / "memory.current").write_text(str(budget), encoding="ascii")
+    cgroup = tmp_path / "self-cgroup"
+    cgroup.write_text("0::/batch/task\n", encoding="ascii")
+    monkeypatch.setattr(resources, "CGROUP_ROOT", str(cgroup_root))
+    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(cgroup))
+
+    assert resources.available_memory_bytes() == 4 * budget
+
+
+def test_a_cgroup_v1_memory_limit_caps_host_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget = resources.AUTO_WORKER_MEMORY_BYTES
+    _host_meminfo(tmp_path, monkeypatch, host_bytes=32 * budget)
+    cgroup_root = tmp_path / "cgroup"
+    group = cgroup_root / "memory" / "batch"
+    group.mkdir(parents=True)
+    (group / "memory.limit_in_bytes").write_text(str(5 * budget), encoding="ascii")
+    (group / "memory.usage_in_bytes").write_text(str(budget), encoding="ascii")
+    cgroup = tmp_path / "self-cgroup"
+    cgroup.write_text("7:cpu,cpuacct:/batch\n8:memory:/batch\n", encoding="ascii")
+    monkeypatch.setattr(resources, "CGROUP_ROOT", str(cgroup_root))
+    monkeypatch.setattr(resources, "PROC_SELF_CGROUP_PATH", str(cgroup))
+
+    assert resources.available_memory_bytes() == 4 * budget
+
+
+def test_density_memory_estimate_grows_with_cell_volume() -> None:
+    small = resources.estimate_from_properties(
+        "tiny",
+        {"AAXIS": 30, "BAXIS": 40, "CAXIS": 50, "RESOLUTION": 2.0},
+    )
+    large = resources.estimate_from_properties(
+        "huge",
+        {"AAXIS": 210, "BAXIS": 450, "CAXIS": 620, "RESOLUTION": 2.5},
+    )
+
+    assert small is not None and large is not None
+    assert small.bytes == resources.AUTO_WORKER_MEMORY_BYTES
+    assert large.bytes > 8 * 1024**3
+    assert large.combined_map_bytes is not None
+
+
+def test_entry_estimate_reads_only_leading_properties(
+    tmp_path: Path,
+) -> None:
+    pdb_id = "1abc"
+    entry = tmp_path / "ab" / pdb_id
+    entry.mkdir(parents=True)
+    (entry / "data.json").write_text(
+        '{"properties":{"AAXIS":200,"BAXIS":400,"CAXIS":600,'
+        '"RESOLUTION":2.5},"large_later_value":"' + "x" * (5 * 1024**2) + '"}',
+        encoding="utf-8",
+    )
+
+    estimate = resources.estimate_entry_memory(pdb_id, str(tmp_path))
+
+    assert estimate.source == "data_json"
+    assert estimate.bytes > resources.AUTO_WORKER_MEMORY_BYTES
+
+
+def test_entry_estimate_falls_back_to_mtz_size(tmp_path: Path) -> None:
+    pdb_id = "1abc"
+    entry = tmp_path / "ab" / pdb_id
+    entry.mkdir(parents=True)
+    (entry / "data.json").write_text("", encoding="utf-8")
+    mtz = entry / f"{pdb_id}_final.mtz"
+    mtz.write_bytes(b"x" * 1024)
+
+    estimate = resources.estimate_entry_memory(pdb_id, str(tmp_path))
+
+    assert estimate.source == "mtz_size"
+    assert estimate.bytes == resources.AUTO_WORKER_MEMORY_BYTES
+
+
+def test_weighted_admission_skips_a_blocked_large_entry() -> None:
+    gib = 1024**3
+    pending = [
+        resources.EntryMemoryEstimate("large", 7 * gib, "test"),
+        resources.EntryMemoryEstimate("small", gib, "test"),
+    ]
+
+    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 5 * gib, active=True)
+
+    assert admitted is not None and admitted.pdb_id == "small"
+    assert [estimate.pdb_id for estimate in pending] == ["large"]
+
+
+def test_oversized_entry_is_admitted_only_after_active_work_drains() -> None:
+    gib = 1024**3
+    pending = [resources.EntryMemoryEstimate("large", 7 * gib, "test")]
+
+    assert pool.pop_admissible_estimate(pending, 3 * gib, 5 * gib, active=True) is None
+    admitted = pool.pop_admissible_estimate(pending, 0, 5 * gib, active=False)
+    assert admitted is not None and admitted.pdb_id == "large"
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(

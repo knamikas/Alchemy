@@ -27,6 +27,19 @@ Running batches, resuming them, and reading what a run wrote. See
   so map values come from the same Fourier calculation as legacy full-map mode.
   Full temporary maps are deleted as soon as they are no longer needed unless
   `--keep-intermediates` is supplied.
+- Before starting workers, Alchemy estimates each entry's density-stage peak
+  from the `GRID SAMP=5` map dimensions implied by its unit-cell axes and
+  resolution. The estimate includes both maps, overlapping CCP4 copies, fixed
+  worker overhead, FFT-grid rounding, and a safety margin. If usable metadata
+  is absent, MTZ size supplies a conservative fallback; otherwise the entry
+  receives the 1.25 GiB floor. At least 2 GiB or 15% of currently available
+  memory is protected for the OS and driver. The dispatcher can skip past a
+  temporarily blocked large entry to keep fitting small entries active, then
+  runs that large entry when enough reservations drain. An estimate larger
+  than the whole budget is allowed only as the sole active entry, avoiding a
+  scheduling deadlock while making the risk explicit in the log. The detailed
+  run log records the budget, estimate sources, peak reservation and every
+  entry's estimate.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis

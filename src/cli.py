@@ -91,8 +91,8 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         type=positive_int,
         default=None,
         help=(
-            "number of worker processes (minimum: 1); by default Alchemy "
-            "uses the lower CPU or available-memory limit"
+            "worker-process ceiling (minimum: 1); memory-aware admission "
+            "still limits simultaneously active entries"
         ),
     )
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))

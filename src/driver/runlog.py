@@ -111,7 +111,9 @@ class RunLog:
         self.entries: list[dict[str, Any]] = []
         self.driver_error = ""
 
-    def record_entry(self, result: EntryResult) -> None:
+    def record_entry(
+        self, result: EntryResult, memory_estimate_bytes: int | None = None
+    ) -> None:
         """Retain diagnostic fields without keeping large result-row payloads."""
         self.entries.append(
             {
@@ -130,6 +132,7 @@ class RunLog:
                 "density_map_scope_used": result.density_map_scope_used,
                 "density_full_map_bytes": result.density_full_map_bytes,
                 "density_edstats_map_bytes": result.density_edstats_map_bytes,
+                "memory_estimate_bytes": memory_estimate_bytes,
             }
         )
 
@@ -318,6 +321,7 @@ class RunLog:
                 f"density_map_scope={entry['density_map_scope_used'] or '-'} | "
                 f"full_map_bytes={entry['density_full_map_bytes']} | "
                 f"edstats_map_bytes={entry['density_edstats_map_bytes']} | "
+                f"memory_estimate_bytes={entry['memory_estimate_bytes']} | "
                 f"reasons={'|'.join(entry['reason_codes']) or '-'} | "
                 f"warnings={'|'.join(entry['warning_codes']) or '-'} | "
                 f"error={self._clean(entry['error']) or '-'}"

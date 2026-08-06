@@ -20,7 +20,6 @@ import time
 from multiprocessing import (
     Pool,
     SimpleQueue,
-    TimeoutError as MultiprocessingTimeoutError,
 )
 from typing import (
     TYPE_CHECKING,
@@ -71,7 +70,13 @@ from driver.output_lock import (
     OutputDirectoryLockError,
     sweep_owned_scratch_directories,
 )
-from driver.resources import automatic_worker_limits
+from driver.resources import (
+    EntryMemoryEstimate,
+    automatic_worker_limits,
+    available_memory_bytes,
+    estimate_entry_memory,
+    scheduling_memory_budget,
+)
 from driver.resume import (
     ResumeStaging,
     load_done,
@@ -553,6 +558,64 @@ class _BatchTally:
         return batch_exit_code(self.counts, self.retryable_partials)
 
 
+class MemoryPlan:
+    def __init__(
+        self,
+        estimates: Sequence[EntryMemoryEstimate],
+        budget_bytes: int | None,
+        reserve_bytes: int | None,
+    ) -> None:
+        self.estimates = tuple(estimates)
+        self.budget_bytes = budget_bytes
+        self.reserve_bytes = reserve_bytes
+
+
+def plan_entry_memory(
+    ids: Sequence[str], cfg: WorkerConfig, run_log: RunLog
+) -> MemoryPlan:
+    estimates = tuple(
+        estimate_entry_memory(pdb_id, cfg.root, cfg.manual_inputs) for pdb_id in ids
+    )
+    available = available_memory_bytes()
+    budget, reserve = scheduling_memory_budget(available)
+    source_counts: dict[str, int] = {}
+    for estimate in estimates:
+        source_counts[estimate.source] = source_counts.get(estimate.source, 0) + 1
+    largest = max(estimates, key=lambda estimate: estimate.bytes)
+
+    run_log.details.update(
+        memory_scheduler="weighted_entry_estimates",
+        memory_scheduler_budget_bytes=budget if budget is not None else "unavailable",
+        memory_scheduler_reserve_bytes=(
+            reserve if reserve is not None else "unavailable"
+        ),
+        memory_estimate_sources=source_counts,
+        memory_estimate_max_bytes=largest.bytes,
+        memory_estimate_max_entry=largest.pdb_id,
+    )
+    if budget is None:
+        logger.warning(
+            "available memory could not be measured; per-entry estimates were "
+            "computed, but weighted admission has no byte budget"
+        )
+    else:
+        logger.info(
+            "memory-aware scheduling: %.2f GiB worker budget, %.2f GiB "
+            "protected reserve; largest estimate %.2f GiB (%s)",
+            budget / (1024**3),
+            cast(int, reserve) / (1024**3),
+            largest.bytes / (1024**3),
+            largest.pdb_id,
+        )
+    logger.info(
+        "memory estimates: %s",
+        ", ".join(
+            f"{count} {source}" for source, count in sorted(source_counts.items())
+        ),
+    )
+    return MemoryPlan(estimates, budget, reserve)
+
+
 def _load_cofactor_catalog() -> frozenset[str]:
     """Read the bundled metallocofactor catalog, or fail the run naming it."""
     try:
@@ -821,7 +884,7 @@ def _clear_stale_outputs(
         raise DriverError(f"Could not clear stale confidence output: {exc}") from None
 
 
-def _choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> int:
+def choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> int:
     """Size the pool, never above the number of entries there are to run.
 
     A Pool creates every worker up front, and under the spawn start method each
@@ -847,9 +910,23 @@ def _choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> 
         )
         logger.info("  selected workers: %s", workers)
     else:
+        _cpu_limit, memory_limit = automatic_worker_limits()
         workers = min(args.workers, entry_count)
+        if memory_limit is not None:
+            workers = min(workers, memory_limit)
         run_log.details["worker_selection"] = "explicit"
+        run_log.details["Requested workers"] = args.workers
+        run_log.details["Memory worker limit"] = (
+            memory_limit if memory_limit is not None else "unavailable"
+        )
         run_log.details["Selected workers"] = workers
+        if workers < min(args.workers, entry_count):
+            logger.info(
+                "capped the requested %d workers at %d to protect process "
+                "overhead; weighted admission may activate fewer",
+                args.workers,
+                workers,
+            )
     logger.info(
         "processing %d entr%s with %d worker(s)",
         entry_count,
@@ -1028,7 +1105,8 @@ class _WorkerDeathWatch:
     ) -> None:
         self._pool = pool
         self._inflight = inflight
-        self._ids = ids
+        self._ids = list(ids)
+        self._submitted_ids = set(ids)
         self._cfg = cfg
         self._assignments: dict[int, str] = {}
         self._worker_pids: set[int] = set()
@@ -1039,6 +1117,11 @@ class _WorkerDeathWatch:
         # that original roster now: if the first task kills its worker before
         # the result loop's first poll, its vanished pid must still be known.
         dead_worker_pids(self._pool, self._worker_pids)
+
+    def track_submitted_entry(self, pdb_id: str) -> None:
+        if pdb_id not in self._submitted_ids:
+            self._submitted_ids.add(pdb_id)
+            self._ids.append(pdb_id)
 
     def poll(self) -> list[EntryResult]:
         """Results for the entries whose worker has died since the last call."""
@@ -1102,6 +1185,28 @@ class _WorkerDeathWatch:
         return worker_death_result(pdb_id, self._cfg, pid)
 
 
+def pop_admissible_estimate(
+    pending: list[EntryMemoryEstimate],
+    reserved_bytes: int,
+    budget_bytes: int | None,
+    *,
+    active: bool,
+) -> EntryMemoryEstimate | None:
+    """Scanning past a blocked large entry avoids wasting safe worker slots.
+
+    Once active work drains, admitting an over-budget entry alone guarantees
+    progress without exposing it to competing map allocations.
+    """
+    if not pending:
+        return None
+    if budget_bytes is None or not active:
+        return pending.pop(0)
+    for index, estimate in enumerate(pending):
+        if reserved_bytes + estimate.bytes <= budget_bytes:
+            return pending.pop(index)
+    return None
+
+
 def _dispatch_entries(
     args: RunConfig,
     ids: Sequence[str],
@@ -1113,6 +1218,7 @@ def _dispatch_entries(
     prior_counts: tuple[dict[str, str], dict[str, str]],
     prior_ids: set[str],
     run_log: RunLog,
+    memory_plan: MemoryPlan,
 ) -> _BatchTally:
     """Run every entry across a worker pool and write the results as they land.
 
@@ -1146,35 +1252,94 @@ def _dispatch_entries(
         workers, initializer=initialize_worker, initargs=(cfg, inflight, log_queue)
     )
     log_listener = start_worker_log_listener(log_queue)
-    deaths = _WorkerDeathWatch(pool, inflight, ids, cfg)
+    # Death fallback must never blame an entry that the admission controller
+    # has not submitted; doing so would record a failure for work that never ran.
+    deaths = _WorkerDeathWatch(pool, inflight, (), cfg)
     try:
-        results = pool.imap_unordered(process, ids, chunksize=1)
+        pending = list(memory_plan.estimates)
+        estimates_by_id = {
+            estimate.pdb_id: estimate for estimate in memory_plan.estimates
+        }
+        active: dict[str, tuple[Any, EntryMemoryEstimate]] = {}
+        reserved_bytes = 0
+        peak_reserved_bytes = 0
+        max_active = 0
+        oversized_entries: set[str] = set()
         completed = 0
         progress.render(completed, tally.counts, tally.no_metals, force=True)
         while completed < len(ids):
             batch: list[EntryResult] = []
-            try:
-                batch.append(results.next(timeout=1.0))
-            except MultiprocessingTimeoutError:
-                pass
+
+            while pending and len(active) < workers:
+                estimate = pop_admissible_estimate(
+                    pending,
+                    reserved_bytes,
+                    memory_plan.budget_bytes,
+                    active=bool(active),
+                )
+                if estimate is None:
+                    break
+                if (
+                    memory_plan.budget_bytes is not None
+                    and estimate.bytes > memory_plan.budget_bytes
+                ):
+                    oversized_entries.add(estimate.pdb_id)
+                    logger.warning(
+                        "%s has a %.2f GiB memory estimate above the %.2f GiB "
+                        "worker budget; admitting it alone",
+                        estimate.pdb_id,
+                        estimate.bytes / (1024**3),
+                        memory_plan.budget_bytes / (1024**3),
+                    )
+                deaths.track_submitted_entry(estimate.pdb_id)
+                active[estimate.pdb_id] = (
+                    pool.apply_async(process, (estimate.pdb_id,)),
+                    estimate,
+                )
+                reserved_bytes += estimate.bytes
+                peak_reserved_bytes = max(peak_reserved_bytes, reserved_bytes)
+                max_active = max(max_active, len(active))
+
+            ready_ids: list[str] = []
+            for pdb_id, (result, _estimate) in tuple(active.items()):
+                if result.ready():
+                    batch.append(result.get())
+                    ready_ids.append(pdb_id)
+            for pdb_id in ready_ids:
+                _result, estimate = active.pop(pdb_id)
+                reserved_bytes -= estimate.bytes
+
             batch.extend(deaths.poll())
+            for loss in batch:
+                if loss.reason_codes != ["worker_process_died"]:
+                    continue
+                active_item = active.pop(loss.pdb_id, None)
+                if active_item is not None:
+                    reserved_bytes -= active_item[1].bytes
             if not batch:
                 losses = deaths.stalled_losses(
                     completed_ids,
                     time.monotonic() - last_progress,
-                    len(ids) - completed,
+                    len(active),
                 )
                 if losses is None:
                     progress.render(completed, tally.counts, tally.no_metals)
+                    time.sleep(0.05)
                     continue
                 batch = losses
+                for loss in losses:
+                    active_item = active.pop(loss.pdb_id, None)
+                    if active_item is not None:
+                        reserved_bytes -= active_item[1].bytes
             last_progress = time.monotonic()
             for r in batch:
                 if deaths.superseded(r):
                     continue
                 completed += 1
                 completed_ids.add(r.pdb_id)
-                run_log.record_entry(r)
+                run_log.record_entry(
+                    r, memory_estimate_bytes=estimates_by_id[r.pdb_id].bytes
+                )
                 if should_write_entry(args.resume, r, prior_ids):
                     write_entry(r, args, plan, writers, staging, prior_counts)
                 tally.record(r)
@@ -1186,6 +1351,11 @@ def _dispatch_entries(
                     force=progress.terminal or finished,
                     final=finished,
                 )
+        run_log.summary.update(
+            memory_scheduler_peak_reserved_bytes=peak_reserved_bytes,
+            memory_scheduler_max_active_entries=max_active,
+            memory_scheduler_oversized_entries=len(oversized_entries),
+        )
     finally:
         forced = _shutdown_pool(pool)
         # Stopped after the pool is gone, so records emitted during shutdown
@@ -1257,6 +1427,7 @@ def process_entries(
     layout: OutputLayout,
     plan: ConfidencePlan,
     run_log: RunLog,
+    memory_plan: MemoryPlan | None = None,
 ) -> tuple[_BatchTally, OutputWriters]:
     """Open the outputs, run the batch, and commit any staged retry rows.
 
@@ -1272,6 +1443,8 @@ def process_entries(
         if args.resume and not args.bonds
         else {},
     )
+    if memory_plan is None:
+        memory_plan = plan_entry_memory(ids, cfg, run_log)
     # Which ids the manifest already describes; see ``should_write_entry``,
     # which uses it to decide whether a retry may overwrite an existing row.
     prior_ids: set[str] = (
@@ -1297,6 +1470,7 @@ def process_entries(
                 prior_counts,
                 prior_ids,
                 run_log,
+                memory_plan,
             )
             processing_completed = True
             # Bound here so the summary below needs no ``Optional`` narrowing.
@@ -1431,12 +1605,15 @@ def _execute_with_output_lock(
         return _finish_without_entries(args, layout, plan)
 
     _clear_stale_outputs(args, layout, plan)
-    workers = _choose_worker_count(args, len(ids), run_log)
     cfg = worker_config_from_args(
         args, env, root, args.pdb_redo_cache, cofactors, manual_inputs, plan, run_log
     )
+    memory_plan = plan_entry_memory(ids, cfg, run_log)
+    workers = choose_worker_count(args, len(ids), run_log)
 
-    tally, writers = process_entries(args, ids, cfg, workers, layout, plan, run_log)
+    tally, writers = process_entries(
+        args, ids, cfg, workers, layout, plan, run_log, memory_plan
+    )
     return _report_batch(args, layout, plan, tally, writers, run_log)
 
 

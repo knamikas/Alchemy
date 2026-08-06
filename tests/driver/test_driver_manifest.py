@@ -39,6 +39,7 @@ import worker_contracts
 from codes import EntryStatus
 from driver.progress import ProgressReporter
 from driver import runlog
+from driver import resources
 from driver.runlog import RunLog
 from driver.writers import (
     MANIFEST_COLUMNS,
@@ -1573,7 +1574,9 @@ class TestResumeStaging:
             counts: tuple[dict[str, str], dict[str, str]],
             prior: set[str],
             run_log: RunLog,
+            memory_plan: driver_pool.MemoryPlan,
         ) -> None:
+            del memory_plan
             for pdb_id in ids:
                 row = {name: "" for name in MANIFEST_COLUMNS}
                 row.update(pdbID=pdb_id, status="ok", retryable="False")
@@ -1596,6 +1599,14 @@ class TestResumeStaging:
                 layout,
                 driver_pool.ConfidencePlan(),
                 run_log,
+                driver_pool.MemoryPlan(
+                    [
+                        resources.EntryMemoryEstimate("bbbb", 1, "test"),
+                        resources.EntryMemoryEstimate("cccc", 1, "test"),
+                    ],
+                    None,
+                    None,
+                ),
             )
 
         assert [row[0] for row in _read_csv(layout.manifest)[1:]] == [
