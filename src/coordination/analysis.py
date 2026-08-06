@@ -38,7 +38,13 @@ from codes import (
     MultiDonorStatus,
     ReasonCode,
 )
-from coordination.contact_record import Candidate
+from coordination.contact_record import (
+    Candidate,
+    DonorPolicy,
+    EligibilityResult,
+    GeometryResult,
+    MultiDonorResult,
+)
 from coordination.declared_connections import collect_declared_candidates
 from coordination.donor_chemistry import (
     AA,
@@ -340,10 +346,16 @@ def _annotate_donor_policy(
         # class Alchemy can assess: claiming the override elsewhere would label
         # a row as a declared bond that never becomes one.
         supported = candidate.donor_class_supported
-        candidate.inferred_donor_allowed = allowed
-        candidate.inferred_donor_rule = rule
-        candidate.donor_rule_override = (
-            "declared_connection" if declared and not allowed and supported else ""
+        candidate.set_donor_policy(
+            DonorPolicy(
+                inferred_allowed=allowed,
+                rule=rule,
+                override=(
+                    "declared_connection"
+                    if declared and not allowed and supported
+                    else ""
+                ),
+            )
         )
 
 
@@ -368,66 +380,80 @@ def _identify_first_sphere_candidates(
     unsupported_pairs: set[tuple[str, str]] = set()
     for candidate in candidates:
         neighbor = candidate.neighbor
-        donor_allowed = candidate.inferred_donor_allowed
+        donor_allowed = candidate.donor_policy().inferred_allowed
         target, cutoff, reference_kind, reference_key = first_sphere_rule(
             metal, neighbor
         )
         if _candidate_has_zero_occupancy(candidate, metal):
-            candidate.eligibility_status = "zero_occupancy"
-            candidate.eligibility_reason = "zero_occupancy_atom_is_not_contact_evidence"
-            candidate.first_sphere_eligible = False
-            candidate.inferred_contact_eligible = False
-            candidate.assignment_target = target
-            candidate.assignment_tolerance = FIRST_SPHERE_TOLERANCE
-            candidate.first_sphere_cutoff = cutoff
-            candidate.assignment_reference_kind = reference_kind
-            candidate.assignment_reference = reference_key
+            candidate.set_eligibility(
+                EligibilityResult(
+                    status="zero_occupancy",
+                    reason="zero_occupancy_atom_is_not_contact_evidence",
+                    first_sphere_eligible=False,
+                    inferred_contact_eligible=False,
+                    assignment_target=target,
+                    assignment_tolerance=FIRST_SPHERE_TOLERANCE,
+                    first_sphere_cutoff=cutoff,
+                    assignment_reference_kind=reference_kind,
+                    assignment_reference=reference_key,
+                )
+            )
             continue
         if not math.isfinite(cutoff):
             declared = bool(candidate.declared_connections)
             if donor_allowed or declared:
                 unsupported_pairs.add((metal.element, neighbor.element))
-            candidate.eligibility_status = (
-                "missing_assignment_reference"
-                if donor_allowed or declared
-                else "non_typical_donor"
+            candidate.set_eligibility(
+                EligibilityResult(
+                    status=(
+                        "missing_assignment_reference"
+                        if donor_allowed or declared
+                        else "non_typical_donor"
+                    ),
+                    reason=(
+                        "no_metal_donor_assignment_reference"
+                        if donor_allowed or declared
+                        else "atom_not_in_typical_inferred_donor_list"
+                    ),
+                    first_sphere_eligible=False,
+                    inferred_contact_eligible=False,
+                    assignment_target=NAN,
+                    assignment_tolerance=FIRST_SPHERE_TOLERANCE,
+                    first_sphere_cutoff=NAN,
+                    assignment_reference_kind=reference_kind,
+                    assignment_reference=reference_key,
+                )
             )
-            candidate.eligibility_reason = (
-                "no_metal_donor_assignment_reference"
-                if donor_allowed or declared
-                else "atom_not_in_typical_inferred_donor_list"
-            )
-            candidate.first_sphere_eligible = False
-            candidate.inferred_contact_eligible = False
-            candidate.assignment_target = NAN
-            candidate.assignment_tolerance = FIRST_SPHERE_TOLERANCE
-            candidate.first_sphere_cutoff = NAN
-            candidate.assignment_reference_kind = reference_kind
-            candidate.assignment_reference = reference_key
             continue
         is_eligible = candidate.distance_raw <= cutoff + SEARCH_EPSILON
         inferred_eligible = is_eligible and donor_allowed
-        candidate.eligibility_status = (
-            "first_sphere_eligible"
-            if inferred_eligible
-            else ("non_typical_donor" if is_eligible else "outside_first_sphere")
-        )
-        candidate.eligibility_reason = (
-            "distance_within_target_plus_0.75"
-            if inferred_eligible
-            else (
-                "atom_not_in_typical_inferred_donor_list"
-                if is_eligible
-                else "distance_exceeds_target_plus_0.75"
+        candidate.set_eligibility(
+            EligibilityResult(
+                status=(
+                    "first_sphere_eligible"
+                    if inferred_eligible
+                    else (
+                        "non_typical_donor" if is_eligible else "outside_first_sphere"
+                    )
+                ),
+                reason=(
+                    "distance_within_target_plus_0.75"
+                    if inferred_eligible
+                    else (
+                        "atom_not_in_typical_inferred_donor_list"
+                        if is_eligible
+                        else "distance_exceeds_target_plus_0.75"
+                    )
+                ),
+                first_sphere_eligible=is_eligible,
+                inferred_contact_eligible=inferred_eligible,
+                assignment_target=target,
+                assignment_tolerance=FIRST_SPHERE_TOLERANCE,
+                first_sphere_cutoff=cutoff,
+                assignment_reference_kind=reference_kind,
+                assignment_reference=reference_key,
             )
         )
-        candidate.first_sphere_eligible = is_eligible
-        candidate.inferred_contact_eligible = inferred_eligible
-        candidate.assignment_target = target
-        candidate.assignment_tolerance = FIRST_SPHERE_TOLERANCE
-        candidate.first_sphere_cutoff = cutoff
-        candidate.assignment_reference_kind = reference_kind
-        candidate.assignment_reference = reference_key
         if inferred_eligible:
             eligible.append(candidate)
     return (deduplicate_special_position_contacts(eligible), unsupported_pairs)
@@ -568,7 +594,7 @@ def _current_contacts_from_candidates(
         candidate
         for candidate in candidates
         if candidate.declared_connections
-        and not candidate.inferred_contact_eligible
+        and not candidate.eligibility().inferred_contact_eligible
         and candidate.donor_class_supported
         and not _candidate_has_zero_occupancy(candidate, metal)
     ]
@@ -593,11 +619,8 @@ def annotate_contacts(
             mu, stdev = literature
             zscore_raw = zscore(contact.distance_raw, mu, stdev, dpi)
         rounded_zscore = round(zscore_raw, 4) if math.isfinite(zscore_raw) else NAN
-        contact.distance = reported_distance
-        contact.literature_distance = mu
-        contact.literature_stdev = stdev
-        contact.zscore = rounded_zscore
-        contact.reference_covered = literature is not None
+        outlier: bool | str
+        consistent: bool | str
         if math.isfinite(zscore_raw):
             magnitude = abs(zscore_raw)
             outlier = magnitude >= ZSCORE_OUTLIER_CUTOFF or math.isclose(
@@ -606,11 +629,21 @@ def annotate_contacts(
                 rel_tol=0.0,
                 abs_tol=1e-12,
             )
-            contact.geometry_outlier = outlier
-            contact.geometry_consistent = not outlier
+            consistent = not outlier
         else:
-            contact.geometry_outlier = ""
-            contact.geometry_consistent = ""
+            outlier = ""
+            consistent = ""
+        contact.set_geometry(
+            GeometryResult(
+                distance=reported_distance,
+                literature_distance=mu,
+                literature_stdev=stdev,
+                zscore=rounded_zscore,
+                reference_covered=literature is not None,
+                outlier=outlier,
+                consistent=consistent,
+            )
+        )
 
 
 def _residue_image_key(contact: Candidate) -> _ResidueImageKey:
@@ -640,19 +673,22 @@ def _annotate_multi_donor_groups(contacts: Iterable[Candidate]) -> None:
         multi_donor = count >= 2
         if not multi_donor:
             contact = group[0]
-            assessable = (
-                contact.geometry_outlier is True or contact.geometry_consistent is True
+            geometry = contact.geometry()
+            assessable = geometry.outlier is True or geometry.consistent is True
+            contact.set_multi_donor(
+                MultiDonorResult(
+                    detected=False,
+                    contact_count=1,
+                    geometry_status=MultiDonorStatus.SINGLE_DONOR,
+                    contains_suspect_bond=False,
+                    score_eligible=assessable,
+                    score_exclusion_reason=("" if assessable else "zscore_unavailable"),
+                )
             )
-            contact.multi_donor_detected = False
-            contact.multi_donor_contact_count = 1
-            contact.multi_donor_geometry_status = MultiDonorStatus.SINGLE_DONOR
-            contact.multi_donor_contains_suspect_bond = False
-            contact.score_eligible = assessable
-            contact.score_exclusion_reason = "" if assessable else "zscore_unavailable"
             continue
 
-        any_outlier = any(contact.geometry_outlier is True for contact in group)
-        all_consistent = all(contact.geometry_consistent is True for contact in group)
+        any_outlier = any(contact.geometry().outlier is True for contact in group)
+        all_consistent = all(contact.geometry().consistent is True for contact in group)
         if all_consistent:
             status = MultiDonorStatus.CONSISTENT
         elif any_outlier:
@@ -660,15 +696,18 @@ def _annotate_multi_donor_groups(contacts: Iterable[Candidate]) -> None:
         else:
             status = MultiDonorStatus.INDETERMINATE
         for contact in group:
-            assessable = (
-                contact.geometry_outlier is True or contact.geometry_consistent is True
+            geometry = contact.geometry()
+            assessable = geometry.outlier is True or geometry.consistent is True
+            contact.set_multi_donor(
+                MultiDonorResult(
+                    detected=True,
+                    contact_count=count,
+                    geometry_status=status,
+                    contains_suspect_bond=any_outlier,
+                    score_eligible=assessable,
+                    score_exclusion_reason=("" if assessable else "zscore_unavailable"),
+                )
             )
-            contact.multi_donor_detected = True
-            contact.multi_donor_contact_count = count
-            contact.multi_donor_geometry_status = status
-            contact.multi_donor_contains_suspect_bond = any_outlier
-            contact.score_eligible = assessable
-            contact.score_exclusion_reason = "" if assessable else "zscore_unavailable"
 
 
 def _scope_summary(
@@ -692,37 +731,37 @@ def _scope_summary(
             "status": "",
         }
     candidate = len(contacts)
-    covered = sum(bool(contact.reference_covered) for contact in contacts)
-    outlier = sum(contact.geometry_outlier is True for contact in contacts)
-    consistent = sum(contact.geometry_consistent is True for contact in contacts)
-    score_eligible = sum(contact.score_eligible is True for contact in contacts)
+    geometries = [contact.geometry() for contact in contacts]
+    multi_donor = [contact.multi_donor() for contact in contacts]
+    covered = sum(geometry.reference_covered for geometry in geometries)
+    outlier = sum(geometry.outlier is True for geometry in geometries)
+    consistent = sum(geometry.consistent is True for geometry in geometries)
+    score_eligible = sum(result.score_eligible for result in multi_donor)
     score_excluded = candidate - score_eligible
     scored_outlier = sum(
-        contact.score_eligible is True and contact.geometry_outlier is True
-        for contact in contacts
+        result.score_eligible and geometry.outlier is True
+        for result, geometry in zip(multi_donor, geometries)
     )
     scored_consistent = sum(
-        contact.score_eligible is True and contact.geometry_consistent is True
-        for contact in contacts
+        result.score_eligible and geometry.consistent is True
+        for result, geometry in zip(multi_donor, geometries)
     )
     multi_donor_groups = {
         _residue_image_key(contact)
-        for contact in contacts
-        if contact.multi_donor_detected
+        for contact, result in zip(contacts, multi_donor)
+        if result.detected
     }
     suspect_multi_donor_groups = {
         _residue_image_key(contact)
-        for contact in contacts
-        if contact.multi_donor_geometry_status == MultiDonorStatus.SUSPECT
+        for contact, result in zip(contacts, multi_donor)
+        if result.geometry_status == MultiDonorStatus.SUSPECT
     }
     indeterminate_multi_donor_groups = {
         _residue_image_key(contact)
-        for contact in contacts
-        if contact.multi_donor_geometry_status == MultiDonorStatus.INDETERMINATE
+        for contact, result in zip(contacts, multi_donor)
+        if result.geometry_status == MultiDonorStatus.INDETERMINATE
     }
-    multi_donor_contacts = sum(
-        contact.multi_donor_detected is True for contact in contacts
-    )
+    multi_donor_contacts = sum(result.detected for result in multi_donor)
     scored_assessable = scored_outlier + scored_consistent
     if scored_assessable == 0:
         status = GeometryStatus.INSUFFICIENT_DATA
@@ -761,7 +800,10 @@ def _site_context_values(
     non_typical_first_sphere = [
         candidate
         for candidate in candidates
-        if (not candidate.inferred_donor_allowed and candidate.first_sphere_eligible)
+        if (
+            not candidate.donor_policy().inferred_allowed
+            and candidate.eligibility().first_sphere_eligible
+        )
     ]
     if non_typical_first_sphere:
         reasons.append("non_typical_first_sphere_candidate")
@@ -771,7 +813,8 @@ def _site_context_values(
         "context_warning_reasons": "|".join(reasons),
         "non_typical_first_sphere_candidate_count": len(non_typical_first_sphere),
         "declared_donor_override_contact_count": sum(
-            contact.donor_rule_override == "declared_connection" for contact in contacts
+            contact.donor_policy().override == "declared_connection"
+            for contact in contacts
         ),
     }
 

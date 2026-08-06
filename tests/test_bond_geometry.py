@@ -1031,12 +1031,13 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     ba.annotate_contacts([contact], "ZN", 0.12)
 
     assert coordination_schema.ZSCORE_OUTLIER_CUTOFF == 6.0
-    assert contact.literature_distance == approx(2.09)
-    assert contact.literature_stdev == approx(0.05)
-    assert contact.zscore == approx(expected_z)
-    assert contact.reference_covered is True
-    assert contact.geometry_outlier is outlier
-    assert contact.geometry_consistent is (not outlier)
+    geometry = contact.geometry()
+    assert geometry.literature_distance == approx(2.09)
+    assert geometry.literature_stdev == approx(0.05)
+    assert geometry.zscore == approx(expected_z)
+    assert geometry.reference_covered is True
+    assert geometry.outlier is outlier
+    assert geometry.consistent is (not outlier)
 
 
 @pytest.mark.parametrize(
@@ -1063,11 +1064,12 @@ def test_outlier_verdict_uses_unrounded_distance_and_zscore(
 
     ba.annotate_contacts([contact], "ZN", 0.12)
 
-    assert contact.distance == approx(round(distance, 3))
-    assert contact.zscore == approx(round(raw_zscore, 4))
-    assert contact.zscore in (-6.0, 6.0)
-    assert contact.geometry_outlier is outlier
-    assert contact.geometry_consistent is (not outlier)
+    geometry = contact.geometry()
+    assert geometry.distance == approx(round(distance, 3))
+    assert geometry.zscore == approx(round(raw_zscore, 4))
+    assert geometry.zscore in (-6.0, 6.0)
+    assert geometry.outlier is outlier
+    assert geometry.consistent is (not outlier)
 
 
 def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(

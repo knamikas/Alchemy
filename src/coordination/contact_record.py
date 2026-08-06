@@ -23,6 +23,47 @@ def _declared_connection_records() -> list[DeclaredConnectionRecord]:
     return []
 
 
+@dataclass(frozen=True, slots=True)
+class DonorPolicy:
+    inferred_allowed: bool
+    rule: str
+    override: str
+
+
+@dataclass(frozen=True, slots=True)
+class EligibilityResult:
+    status: str
+    reason: str
+    first_sphere_eligible: bool
+    inferred_contact_eligible: bool
+    assignment_target: float
+    assignment_tolerance: float
+    first_sphere_cutoff: float
+    assignment_reference_kind: str
+    assignment_reference: str
+
+
+@dataclass(frozen=True, slots=True)
+class GeometryResult:
+    distance: float
+    literature_distance: float
+    literature_stdev: float
+    zscore: float
+    reference_covered: bool
+    outlier: bool | str
+    consistent: bool | str
+
+
+@dataclass(frozen=True, slots=True)
+class MultiDonorResult:
+    detected: bool
+    contact_count: int
+    geometry_status: MultiDonorStatus
+    contains_suspect_bond: bool
+    score_eligible: bool
+    score_exclusion_reason: str
+
+
 @dataclass(slots=True)
 class Candidate:
     neighbor: AtomSite
@@ -48,41 +89,49 @@ class Candidate:
     #: False for donor classes no bundled reference covers. Those stay
     #: candidate evidence and are never promoted to bond rows.
     donor_class_supported: bool = True
+    _donor_policy: DonorPolicy | None = field(default=None, init=False, repr=False)
+    _eligibility: EligibilityResult | None = field(default=None, init=False, repr=False)
+    _geometry: GeometryResult | None = field(default=None, init=False, repr=False)
+    _multi_donor: MultiDonorResult | None = field(default=None, init=False, repr=False)
 
-    inferred_donor_allowed: bool = True
-    inferred_donor_rule: str | None = None
-    #: ``declared_connection`` where a declaration overrides a donor the atom
-    #: rule would have refused, blank otherwise.
-    donor_rule_override: str | None = None
+    def set_donor_policy(self, result: DonorPolicy) -> None:
+        if self._donor_policy is not None:
+            raise RuntimeError("candidate donor policy was already evaluated")
+        self._donor_policy = result
 
-    #: Whether the distance rule alone accepts this candidate. Distinct from
-    #: ``inferred_contact_eligible``, which also requires a typical donor atom.
-    first_sphere_eligible: bool = False
-    inferred_contact_eligible: bool | None = None
-    eligibility_status: str | None = None
-    eligibility_reason: str | None = None
-    assignment_target: float | None = None
-    assignment_tolerance: float | None = None
-    first_sphere_cutoff: float | None = None
-    #: ``exact`` or ``element_fallback``, and the reference key it resolved to.
-    assignment_reference_kind: str | None = None
-    assignment_reference: str | None = None
+    def donor_policy(self) -> DonorPolicy:
+        if self._donor_policy is None:
+            raise RuntimeError("candidate donor policy has not been evaluated")
+        return self._donor_policy
 
-    distance: float | None = None
-    literature_distance: float | None = None
-    literature_stdev: float | None = None
-    zscore: float | None = None
-    reference_covered: bool | None = None
-    #: ``True``/``False`` where a z-score exists, blank where one does not: the
-    #: outputs keep the two answers apart.
-    geometry_outlier: bool | str | None = None
-    geometry_consistent: bool | str | None = None
+    def set_eligibility(self, result: EligibilityResult) -> None:
+        self.donor_policy()
+        if self._eligibility is not None:
+            raise RuntimeError("candidate eligibility was already evaluated")
+        self._eligibility = result
 
-    multi_donor_detected: bool | None = None
-    multi_donor_contact_count: int | None = None
-    #: ``MultiDonorStatus.SUSPECT`` is not the site-level
-    #: ``GeometryStatus.SUSPECT``: same string, different question.
-    multi_donor_geometry_status: MultiDonorStatus | None = None
-    multi_donor_contains_suspect_bond: bool = False
-    score_eligible: bool | None = None
-    score_exclusion_reason: str | None = None
+    def eligibility(self) -> EligibilityResult:
+        if self._eligibility is None:
+            raise RuntimeError("candidate eligibility has not been evaluated")
+        return self._eligibility
+
+    def set_geometry(self, result: GeometryResult) -> None:
+        if self._geometry is not None:
+            raise RuntimeError("candidate geometry was already evaluated")
+        self._geometry = result
+
+    def geometry(self) -> GeometryResult:
+        if self._geometry is None:
+            raise RuntimeError("candidate geometry has not been evaluated")
+        return self._geometry
+
+    def set_multi_donor(self, result: MultiDonorResult) -> None:
+        self.geometry()
+        if self._multi_donor is not None:
+            raise RuntimeError("candidate multi-donor status was already evaluated")
+        self._multi_donor = result
+
+    def multi_donor(self) -> MultiDonorResult:
+        if self._multi_donor is None:
+            raise RuntimeError("candidate multi-donor status has not been evaluated")
+        return self._multi_donor

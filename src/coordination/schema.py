@@ -17,7 +17,7 @@ from collections.abc import Iterable, Mapping
 
 import gemmi
 
-from coordination.contact_record import Candidate
+from coordination.contact_record import Candidate, MultiDonorResult
 from structure_analysis import NAN, AtomSite, StructureContext
 
 
@@ -311,7 +311,7 @@ def _bonded_to(is_water: bool = False) -> str:
 
 def _connection_output_values(candidate: Candidate) -> dict[str, str | bool]:
     records = candidate.declared_connections
-    inferred = bool(candidate.inferred_contact_eligible)
+    inferred = candidate.eligibility().inferred_contact_eligible
 
     def joined(values: Iterable[object]) -> str:
         rendered: list[str] = []
@@ -343,10 +343,11 @@ def _connection_output_values(candidate: Candidate) -> dict[str, str | bool]:
 
 
 def _donor_output_values(candidate: Candidate) -> dict[str, bool | str | None]:
+    policy = candidate.donor_policy()
     return {
-        "inferred_donor_allowed": candidate.inferred_donor_allowed,
-        "inferred_donor_rule": candidate.inferred_donor_rule,
-        "donor_rule_override": candidate.donor_rule_override,
+        "inferred_donor_allowed": policy.inferred_allowed,
+        "inferred_donor_rule": policy.rule,
+        "donor_rule_override": policy.override,
     }
 
 
@@ -362,19 +363,23 @@ def _neighbor_class(neighbor: AtomSite) -> str:
 
 
 def context_warning_values(
-    candidate: Candidate, include_proximal: bool = False
+    candidate: Candidate,
+    include_proximal: bool = False,
+    multi_donor: MultiDonorResult | None = None,
 ) -> dict[str, Any]:
     reasons: list[str] = []
+    policy = candidate.donor_policy()
+    eligibility = candidate.eligibility()
     if candidate.neighbor.occupancy_valid and candidate.neighbor.occupancy == 0.0:
         reasons.append("zero_occupancy_neighbor")
-    if not candidate.inferred_donor_allowed:
+    if not policy.inferred_allowed:
         if candidate.declared_connections:
             reasons.append("declared_non_typical_donor")
-        elif candidate.first_sphere_eligible:
+        elif eligibility.first_sphere_eligible:
             reasons.append("non_typical_first_sphere_candidate")
         elif include_proximal:
             reasons.append("non_typical_proximal_candidate")
-    if candidate.multi_donor_contains_suspect_bond:
+    if multi_donor is not None and multi_donor.contains_suspect_bond:
         reasons.append("suspect_multi_donor_group")
     reasons = list(dict.fromkeys(reasons))
     return {
@@ -481,7 +486,9 @@ def bond_row(
     mag, neg, pos = sigma
     connection_values = _connection_output_values(contact)
     donor_values = _donor_output_values(contact)
-    context_values = context_warning_values(contact)
+    geometry = contact.geometry()
+    multi_donor = contact.multi_donor()
+    context_values = context_warning_values(contact, multi_donor=multi_donor)
     return {
         "pdbID": pdb_id,
         "metal_resname": metal.residue_name,
@@ -491,13 +498,13 @@ def bond_row(
         "neighbor_resname": neighbor.residue_name,
         "neighbor_atom": neighbor.atom_name,
         "neighbor_element": neighbor.element,
-        "distance": contact.distance,
+        "distance": geometry.distance,
         **connection_values,
         **donor_values,
         **context_values,
-        "literature_distance": contact.literature_distance,
-        "literature_stdev": contact.literature_stdev,
-        "zscore": contact.zscore,
+        "literature_distance": geometry.literature_distance,
+        "literature_stdev": geometry.literature_stdev,
+        "zscore": geometry.zscore,
         "dpi": dpi,
         "resolution": resolution,
         "sigma_mag": mag,
@@ -549,17 +556,15 @@ def bond_row(
         ),
         "neighbor_class": _neighbor_class(neighbor),
         "candidate_contact": True,
-        "reference_covered": contact.reference_covered,
-        "geometry_outlier": contact.geometry_outlier,
-        "geometry_consistent": contact.geometry_consistent,
-        "multi_donor_detected": contact.multi_donor_detected,
-        "multi_donor_contact_count": contact.multi_donor_contact_count,
-        "multi_donor_geometry_status": (contact.multi_donor_geometry_status),
-        "multi_donor_contains_suspect_bond": (
-            contact.multi_donor_contains_suspect_bond
-        ),
-        "score_eligible": contact.score_eligible,
-        "score_exclusion_reason": contact.score_exclusion_reason,
+        "reference_covered": geometry.reference_covered,
+        "geometry_outlier": geometry.outlier,
+        "geometry_consistent": geometry.consistent,
+        "multi_donor_detected": multi_donor.detected,
+        "multi_donor_contact_count": multi_donor.contact_count,
+        "multi_donor_geometry_status": multi_donor.geometry_status,
+        "multi_donor_contains_suspect_bond": multi_donor.contains_suspect_bond,
+        "score_eligible": multi_donor.score_eligible,
+        "score_exclusion_reason": multi_donor.score_exclusion_reason,
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
         "contact_scope": contact.contact_scope,
         "symmetry_contact": contact.symmetry_contact,
@@ -587,19 +592,20 @@ def candidate_row(
     connection_values = _connection_output_values(candidate)
     donor_values = _donor_output_values(candidate)
     context_values = context_warning_values(candidate, include_proximal=True)
+    eligibility = candidate.eligibility()
     return {
         "pdbID": pdb_id,
         "candidate_source": "|".join(sorted(candidate.candidate_sources)),
-        "eligibility_status": candidate.eligibility_status,
-        "eligibility_reason": candidate.eligibility_reason,
-        "first_sphere_eligible": candidate.first_sphere_eligible,
+        "eligibility_status": eligibility.status,
+        "eligibility_reason": eligibility.reason,
+        "first_sphere_eligible": eligibility.first_sphere_eligible,
         "candidate_distance": round(candidate.distance_raw, 3),
-        "assignment_target": candidate.assignment_target,
-        "assignment_tolerance": candidate.assignment_tolerance,
-        "first_sphere_cutoff": candidate.first_sphere_cutoff,
-        "assignment_reference_kind": candidate.assignment_reference_kind,
-        "assignment_reference": candidate.assignment_reference,
-        "inferred_contact_eligible": candidate.inferred_contact_eligible,
+        "assignment_target": eligibility.assignment_target,
+        "assignment_tolerance": eligibility.assignment_tolerance,
+        "first_sphere_cutoff": eligibility.first_sphere_cutoff,
+        "assignment_reference_kind": eligibility.assignment_reference_kind,
+        "assignment_reference": eligibility.assignment_reference,
+        "inferred_contact_eligible": eligibility.inferred_contact_eligible,
         **donor_values,
         **context_values,
         **connection_values,
