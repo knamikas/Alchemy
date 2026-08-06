@@ -1087,14 +1087,38 @@ def test_oversized_entry_is_admitted_only_after_active_work_drains() -> None:
     assert admitted is not None and admitted.pdb_id == "large"
 
 
-def test_high_memory_entry_blocks_every_competing_admission() -> None:
+def test_high_memory_entry_allows_two_ordinary_companions() -> None:
+    gib = 1024**3
+    large = resources.EntryMemoryEstimate("large", 3 * gib, "test")
+    first = resources.EntryMemoryEstimate("first", 2 * gib, "test")
+    second = resources.EntryMemoryEstimate("second", 2 * gib, "test")
+    pending = [first, second]
+
+    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, [large])
+    assert admitted == first
+
+    admitted = pool.pop_admissible_estimate(pending, 5 * gib, 20 * gib, [large, first])
+    assert admitted == second
+
+
+def test_high_memory_entry_blocks_a_third_ordinary_companion() -> None:
+    gib = 1024**3
+    active = [
+        resources.EntryMemoryEstimate("large", 3 * gib, "test"),
+        resources.EntryMemoryEstimate("first", 2 * gib, "test"),
+        resources.EntryMemoryEstimate("second", 2 * gib, "test"),
+    ]
+    pending = [resources.EntryMemoryEstimate("third", 2 * gib, "test")]
+
+    assert pool.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active) is None
+
+
+def test_high_memory_entries_never_overlap() -> None:
     gib = 1024**3
     active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
-    pending = [resources.EntryMemoryEstimate("small", gib, "test")]
+    pending = [resources.EntryMemoryEstimate("another-large", 4 * gib, "test")]
 
-    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
-
-    assert admitted is None
+    assert pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active) is None
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(

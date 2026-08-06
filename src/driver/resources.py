@@ -55,7 +55,7 @@ class EntryMemoryEstimate:
     combined_map_bytes: int | None = None
 
     @property
-    def requires_exclusive_memory(self) -> bool:
+    def is_high_memory(self) -> bool:
         return self.bytes > AUTO_WORKER_MEMORY_BYTES
 
 

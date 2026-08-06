@@ -121,6 +121,10 @@ WORKER_STALL_GRACE_S = 600.0
 # reaches the deadline.
 WORKER_SHUTDOWN_GRACE_S = 5.0
 
+# Two 2 GiB companions leave the measured 7-9 GiB EDSTATS tail enough room on
+# a 30 GiB workstation without returning to the multi-large-entry OOM pattern.
+MAX_ORDINARY_COMPANIONS_WITH_HIGH_MEMORY_ENTRY = 2
+
 # Budget for the `git` probes that stamp run provenance. Exceeding it costs the
 # commit hash, which degrades to "unknown", rather than the run.
 PROVENANCE_COMMAND_TIMEOUT_S = 1
@@ -582,9 +586,7 @@ def plan_entry_memory(
     for estimate in estimates:
         source_counts[estimate.source] = source_counts.get(estimate.source, 0) + 1
     largest = max(estimates, key=lambda estimate: estimate.bytes)
-    exclusive_entries = sum(
-        estimate.requires_exclusive_memory for estimate in estimates
-    )
+    high_memory_entries = sum(estimate.is_high_memory for estimate in estimates)
 
     run_log.details.update(
         memory_scheduler="weighted_entry_estimates",
@@ -595,7 +597,7 @@ def plan_entry_memory(
         memory_estimate_sources=source_counts,
         memory_estimate_max_bytes=largest.bytes,
         memory_estimate_max_entry=largest.pdb_id,
-        memory_exclusive_entries=exclusive_entries,
+        memory_high_memory_entries=high_memory_entries,
     )
     if budget is None:
         logger.warning(
@@ -605,11 +607,11 @@ def plan_entry_memory(
     else:
         logger.info(
             "memory-aware scheduling: %.2f GiB worker budget, %.2f GiB "
-            "protected reserve; %d high-memory entries run exclusively; "
+            "protected reserve; %d high-memory entries are serialized; "
             "largest estimate %.2f GiB (%s)",
             budget / (1024**3),
             cast(int, reserve) / (1024**3),
-            exclusive_entries,
+            high_memory_entries,
             largest.bytes / (1024**3),
             largest.pdb_id,
         )
@@ -1199,17 +1201,23 @@ def pop_admissible_estimate(
 ) -> EntryMemoryEstimate | None:
     """Scanning past a blocked large entry avoids wasting safe worker slots.
 
-    Once active work drains, admitting an over-budget entry alone guarantees
-    progress without exposing it to competing map allocations.
+    Waiting for active work to drain before a large admission prevents two
+    large map allocations from overlapping; the companion cap preserves useful
+    throughput without trusting the byte estimates as exact peaks.
     """
     if not pending:
         return None
     if not active_estimates:
         return pending.pop(0)
-    if any(estimate.requires_exclusive_memory for estimate in active_estimates):
+    high_memory_active = any(estimate.is_high_memory for estimate in active_estimates)
+    ordinary_active = sum(not estimate.is_high_memory for estimate in active_estimates)
+    if (
+        high_memory_active
+        and ordinary_active >= MAX_ORDINARY_COMPANIONS_WITH_HIGH_MEMORY_ENTRY
+    ):
         return None
     for index, estimate in enumerate(pending):
-        if estimate.requires_exclusive_memory:
+        if estimate.is_high_memory:
             continue
         if budget_bytes is None or reserved_bytes + estimate.bytes <= budget_bytes:
             return pending.pop(index)
