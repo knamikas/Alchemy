@@ -24,7 +24,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, cast
 from collections.abc import Sequence
 
 import pytest
@@ -49,6 +49,25 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
     from worker import EntryResult
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
 
 
 class _ResumeOutputs(TypedDict):
@@ -393,13 +412,13 @@ def test_the_exit_code_reports_operational_incompleteness(
     A *terminal* partial is usable but incomplete science that no rerun can
     improve, so it exits zero; a *retryable* one is work still outstanding.
     """
-    assert pool._batch_exit_code(counts, retryable_partials) == expected
+    assert pool.batch_exit_code(counts, retryable_partials) == expected
 
 
 def test_a_missing_status_key_is_treated_as_zero() -> None:
     """Counts are accumulated per status, so an absent key means none seen."""
-    assert pool._batch_exit_code({}, 0) == 0
-    assert pool._batch_exit_code({"error": 2}, 0) == 1
+    assert pool.batch_exit_code({}, 0) == 0
+    assert pool.batch_exit_code({"error": 2}, 0) == 1
 
 
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
@@ -565,7 +584,7 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
-    mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    _, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert pdb.endswith(".pdb"), "a gzipped export must be decompressed first"
     assert os.path.isfile(pdb)
@@ -593,7 +612,7 @@ def test_the_authoritative_mmcif_wins_over_the_legacy_export(
             handle.write("FROM CIF\n")
         return destination
 
-    monkeypatch.setattr(inputs, "_cif_to_pdb", fake_cif_to_pdb)
+    monkeypatch.setattr(inputs, "cif_to_pdb", fake_cif_to_pdb)
     _mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert converted and converted[0].endswith("_final.cif")
@@ -625,7 +644,7 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
             handle.write("END\n")
         return destination
 
-    monkeypatch.setattr(inputs, "_cif_to_pdb", fake_cif_to_pdb)
+    monkeypatch.setattr(inputs, "cif_to_pdb", fake_cif_to_pdb)
     mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
     assert os.path.dirname(mtz) == str(work_dir), "the mirror must not be written to"
@@ -776,13 +795,16 @@ def test_a_transfer_that_fails_midway_reports_no_usable_file(
     would still have missed it. The caller's position is the same as a 404 --
     no file -- and the partial download must not be left behind.
     """
-    monkeypatch.setattr(
-        inputs, "urlopen", lambda url, timeout=None: _FailingResponse(error)
-    )
+
+    def failing_response(_url: str, timeout: float | None = None) -> _FailingResponse:
+        del timeout
+        return _FailingResponse(error)
+
+    monkeypatch.setattr(inputs, "urlopen", failing_response)
     destination = tmp_path / "9myr_final.mtz"
 
     with pytest.raises(FileNotFoundError) as excinfo:
-        inputs._download_stream(
+        inputs.download_stream(
             "https://example.invalid/9myr_final.mtz", str(destination)
         )
 
@@ -796,15 +818,16 @@ def test_a_clean_early_eof_is_not_promoted_into_the_cache(
 ) -> None:
     """HTTPResponse can return EOF without raising for a short response body."""
     body = b"nonempty but truncated"
-    monkeypatch.setattr(
-        inputs,
-        "urlopen",
-        lambda url, timeout=None: _LengthResponse(body, len(body) + 4096),
-    )
+
+    def short_response(_url: str, timeout: float | None = None) -> _LengthResponse:
+        del timeout
+        return _LengthResponse(body, len(body) + 4096)
+
+    monkeypatch.setattr(inputs, "urlopen", short_response)
     destination = tmp_path / "9myr_final.mtz"
 
     with pytest.raises(FileNotFoundError, match=r"expected .* received"):
-        inputs._download_stream(
+        inputs.download_stream(
             "https://example.invalid/9myr_final.mtz", str(destination)
         )
 
@@ -816,14 +839,15 @@ def test_a_body_matching_content_length_is_promoted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     body = b"complete response"
-    monkeypatch.setattr(
-        inputs,
-        "urlopen",
-        lambda url, timeout=None: _LengthResponse(body, len(body)),
-    )
+
+    def complete_response(_url: str, timeout: float | None = None) -> _LengthResponse:
+        del timeout
+        return _LengthResponse(body, len(body))
+
+    monkeypatch.setattr(inputs, "urlopen", complete_response)
     destination = tmp_path / "data.json"
 
-    assert inputs._download_stream(
+    assert inputs.download_stream(
         "https://example.invalid/data.json", str(destination)
     ) == str(destination)
     assert destination.read_bytes() == body
@@ -855,7 +879,7 @@ def test_an_unwritable_cache_is_reported_as_a_driver_error(
     )
 
     with pytest.raises(pool.DriverError) as excinfo:
-        pool._select_entry_ids(args, str(tmp_path / "cache"))
+        pool.select_entry_ids(args, str(tmp_path / "cache"))
 
     message = str(excinfo.value)
     assert "PermissionError" in message
@@ -894,7 +918,13 @@ def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
         resources, "PROC_MEMINFO_PATH", str(tmp_path / "definitely-absent")
     )
     monkeypatch.setattr("driver.resources.sys.platform", "linux")
-    monkeypatch.setattr("driver.resources.os.sysconf", lambda name: 0, raising=False)
+
+    def unavailable_sysconf(_name: str) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        "driver.resources.os.sysconf", unavailable_sysconf, raising=False
+    )
 
     assert resources.available_memory_bytes() is None
     assert resources.automatic_worker_limits()[1] is None
@@ -925,10 +955,12 @@ def test_missing_ccp4_tools_are_named_with_a_remedy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The message must say which tools are absent and how to fix it."""
-    monkeypatch.setattr(
-        "ccp4_setup.shutil.which",
-        lambda tool, path=None: None if tool == "edstats" else "/x",
-    )
+
+    def missing_edstats(tool: str, path: str | None = None) -> str | None:
+        del path
+        return None if tool == "edstats" else "/x"
+
+    monkeypatch.setattr("ccp4_setup.shutil.which", missing_edstats)
 
     with pytest.raises(ccp4_setup.Ccp4SetupError) as excinfo:
         ccp4_setup.verify_ccp4({"PATH": "/x"})
@@ -939,9 +971,11 @@ def test_missing_ccp4_tools_are_named_with_a_remedy(
 
 
 def test_a_complete_ccp4_installation_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "ccp4_setup.shutil.which", lambda tool, path=None: f"/opt/{tool}"
-    )
+    def installed_tool(tool: str, path: str | None = None) -> str:
+        del path
+        return f"/opt/{tool}"
+
+    monkeypatch.setattr("ccp4_setup.shutil.which", installed_tool)
     ccp4_setup.verify_ccp4({"PATH": "/opt"})
 
 
@@ -950,10 +984,12 @@ def test_tool_availability_agrees_with_verification(
 ) -> None:
     """``ccp4_tools_available`` and ``verify_ccp4`` must not disagree, or the
     driver accepts an installation the setup helper rejects."""
-    monkeypatch.setattr(
-        "ccp4_setup.shutil.which",
-        lambda tool, path=None: None if tool == "fft" else "/x",
-    )
+
+    def missing_fft(tool: str, path: str | None = None) -> str | None:
+        del path
+        return None if tool == "fft" else "/x"
+
+    monkeypatch.setattr("ccp4_setup.shutil.which", missing_fft)
 
     assert not ccp4_setup.ccp4_tools_available({"PATH": "/x"})
     with pytest.raises(ccp4_setup.Ccp4SetupError):
@@ -969,7 +1005,12 @@ def test_a_library_caller_never_has_to_catch_systemexit(
     process -- a notebook, a service -- cannot contain it with ``except
     Exception``. The CLI's conversion to an exit is ``test_cli_and_config``.
     """
-    monkeypatch.setattr("ccp4_setup.shutil.which", lambda tool, path=None: None)
+
+    def no_tools(_tool: str, path: str | None = None) -> None:
+        del path
+        return None
+
+    monkeypatch.setattr("ccp4_setup.shutil.which", no_tools)
 
     with pytest.raises(Exception) as excinfo:
         ccp4_setup.verify_ccp4({"PATH": "/x"})
@@ -1052,7 +1093,7 @@ def test_map_column_resolution_spans_only_wholly_finite_reflections(
 
     reslo, reshi = inputs.read_map_column_resolution(path)
 
-    assert (reslo, reshi) == pytest.approx(
+    assert (reslo, reshi) == approx(
         (float(max(spacings[0], spacings[1])), float(min(spacings[0], spacings[1])))
     )
     assert reshi > float(spacings[2])
@@ -1098,7 +1139,7 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path: Path) -> None
     )
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
-    assert inputs.read_resolution(entry_dir, mtz) == pytest.approx(1.72)
+    assert inputs.read_resolution(entry_dir, mtz) == approx(1.72)
 
 
 @pytest.mark.parametrize(
@@ -1120,7 +1161,7 @@ def test_incomplete_metadata_falls_back_to_the_mtz(
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
     resolution = inputs.read_resolution(entry_dir, mtz)
-    assert resolution == pytest.approx(
+    assert resolution == approx(
         inputs.read_resolution(str(tmp_path / "absent"), mtz)
     ), f"{reason} should have fallen back to the MTZ"
 
@@ -1155,7 +1196,7 @@ def test_an_explicit_data_json_path_overrides_the_entry_directory(
 
     assert inputs.read_resolution(
         entry_dir, mtz, data_json_path=str(explicit)
-    ) == pytest.approx(1.72)
+    ) == approx(1.72)
 
 
 @pytest.mark.parametrize(
@@ -1203,7 +1244,7 @@ def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(
     )
 
     with pytest.raises(pool.DriverError, match=r"Invalid --data-json:.*not found"):
-        pool._select_entry_ids(args, str(tmp_path / "cache"))
+        pool.select_entry_ids(args, str(tmp_path / "cache"))
 
 
 def test_intermediates_are_discarded_unless_asked_for() -> None:
@@ -1298,7 +1339,15 @@ def test_real_entry_bytes_are_accepted_as_cached(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "resuming, pdb_id, status, retryable, prior, expected, why",
     [
-        (False, "1abc", "error", True, set(), True, "a fresh run writes everything"),
+        (
+            False,
+            "1abc",
+            "error",
+            True,
+            set[str](),
+            True,
+            "a fresh run writes everything",
+        ),
         (True, "1abc", "ok", False, {"1abc"}, True, "an improved retry replaces"),
         (True, "1abc", "error", True, {"1abc"}, False, "a failed retry must not"),
         (True, "1ABC", "error", True, {"1abc"}, False, "ids compare case-folded"),
@@ -1321,14 +1370,14 @@ def test_a_resumed_run_writes_new_entries_even_when_they_fail(
     manifest row at all, so the artifact --resume reads under-reported the set
     the run had actually scheduled.
     """
-    # A stand-in for EntryResult: _should_write_entry reads only these three
+    # A stand-in for EntryResult: should_write_entry reads only these three
     # fields, and the real dataclass would need six unrelated ones supplied.
     result = cast(
         "EntryResult",
         SimpleNamespace(pdb_id=pdb_id, status=status, retryable=retryable),
     )
 
-    assert pool._should_write_entry(resuming, result, prior) is expected, why
+    assert pool.should_write_entry(resuming, result, prior) is expected, why
 
 
 def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> None:
@@ -1362,8 +1411,8 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
     try:
         # ``None`` for the run log: the uncapped-database branch returns before
         # it is touched, and the parameter is not declared Optional.
-        plan = pool._plan_confidence(
-            args, pool._OutputLayout("/tmp/out"), True, cast("runlog._RunLog", None)
+        plan = pool.plan_confidence(
+            args, pool.OutputLayout("/tmp/out"), True, cast("runlog.RunLog", None)
         )
     finally:
         alchemy_logger.removeHandler(handler)
@@ -1387,7 +1436,7 @@ def test_concurrent_run_logs_claim_distinct_names(tmp_path: Path) -> None:
         source = tmp_path / f"source-{index}"
         source.write_text(f"run {index}\n", encoding="utf-8")
         claimed.append(
-            runlog._claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
+            runlog.claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
         )
 
     assert len({os.path.basename(path) for path in claimed}) == 3
@@ -1411,7 +1460,7 @@ def test_run_log_fallback_never_overwrites_same_day_logs(
         source = tmp_path / f"fallback-source-{index}"
         source.write_text(f"fallback run {index}\n", encoding="utf-8")
         claimed.append(
-            runlog._claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
+            runlog.claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
         )
 
     assert [os.path.basename(path) for path in claimed] == [
@@ -1442,7 +1491,7 @@ def test_concurrent_run_log_fallback_claims_are_distinct(
 
     def claim(index: int) -> tuple[int, str]:
         ready.wait()
-        path = runlog._claim_log_path(
+        path = runlog.claim_log_path(
             str(tmp_path), "alchemy_run_20260805", str(sources[index])
         )
         return index, path

@@ -6,7 +6,7 @@ measures geometry, in ``analysis`` and ``declared_connections``.
 
 # Waters are recognized separately with Gemmi's Residue.is_water(), which also
 # handles WAT, H2O, and DOD.
-AA = frozenset(
+AA: frozenset[str] = frozenset(
     {
         "ALA",
         "ARG",
@@ -35,7 +35,7 @@ AA = frozenset(
 # possible atom is omitted here: it stays a visible candidate and needs a
 # source declaration to become a bond. Polymer-terminal atoms are handled
 # conditionally by the caller.
-INFERRED_DONOR_ATOMS = {
+INFERRED_DONOR_ATOMS: dict[str, frozenset[str]] = {
     "ALA": frozenset(("O",)),
     "ARG": frozenset(("O",)),
     "ASN": frozenset(("O", "OD1")),
@@ -57,12 +57,12 @@ INFERRED_DONOR_ATOMS = {
     "TYR": frozenset(("O", "OH")),
     "VAL": frozenset(("O",)),
 }
-if set(INFERRED_DONOR_ATOMS) != AA:
+if frozenset(INFERRED_DONOR_ATOMS) != AA:
     raise ValueError("INFERRED_DONOR_ATOMS must cover every standard amino acid")
 
-N_TERMINAL_DONOR_ATOMS = frozenset(("N",))
-C_TERMINAL_DONOR_ATOMS = frozenset(("OXT", "OT1", "OT2"))
+N_TERMINAL_DONOR_ATOMS: frozenset[str] = frozenset(("N",))
+C_TERMINAL_DONOR_ATOMS: frozenset[str] = frozenset(("OXT", "OT1", "OT2"))
 
 # Discovery only. The atom-level table above, not this element set, controls
 # geometry-only bond inference.
-DONOR_ELEMENTS = frozenset(("N", "O", "S"))
+DONOR_ELEMENTS: frozenset[str] = frozenset(("N", "O", "S"))

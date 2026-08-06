@@ -5,7 +5,7 @@
 Every input can be absent: manual runs may have no ``data.json``, a coordinate
 file may carry no CRYST1 record, an older deposition may not report R-free.
 Nothing here raises for any of that. Each function degrades to ``NAN`` and
-``_calculate_dpi_details`` returns a reason code naming which input was
+``calculate_dpi_details`` returns a reason code naming which input was
 missing, so the caller still emits the geometry it did measure.
 """
 
@@ -35,7 +35,7 @@ def _is_placeholder_cell(cell: gemmi.UnitCell) -> bool:
     return not cell.is_crystal()
 
 
-def _asu_volume(mtz_path: str, pdb_path: str) -> float:
+def asu_volume(mtz_path: str, pdb_path: str) -> float:
     """Asymmetric-unit volume (A^3) = unit-cell volume / number of symmetry ops.
 
     Prefer the MTZ, which matches the diffraction data; fall back to CRYST1.
@@ -70,7 +70,7 @@ def _asu_volume(mtz_path: str, pdb_path: str) -> float:
     return cell.volume / nops if nops > 0 else NAN
 
 
-def _rfree_from_pdb(pdb_path: str) -> float:
+def rfree_from_pdb(pdb_path: str) -> float:
     """Fallback R-free scrape from a PDB REMARK 3 header (final R-free only)."""
     try:
         with open(pdb_path) as f:
@@ -89,7 +89,7 @@ def _rfree_from_pdb(pdb_path: str) -> float:
     return NAN
 
 
-def _calculate_dpi_details(
+def calculate_dpi_details(
     structure: StructureContext, dpi_inputs: Mapping[str, Any]
 ) -> tuple[float, float, str]:
     """Return ``(dpi, resolution, reason_code)``. Never raises.
@@ -123,13 +123,19 @@ def _calculate_dpi_details(
         rfree = (
             float(rfree)
             if rfree is not None and rfree != ""
-            else _rfree_from_pdb(dpi_inputs["pdb_path"])
+            else rfree_from_pdb(dpi_inputs["pdb_path"])
         )
         nobs = float(nobs) if nobs is not None and nobs != "" else NAN
-        va = _asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
+        # Keep the extension boundary widened to ``object`` so a malformed
+        # runtime value is reported explicitly rather than reaching
+        # ``math.isfinite`` and being folded into the catch-all reason.
+        va = cast(
+            object,
+            asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"]),
+        )
         ni = count_ni(structure)
 
-        if not all(isinstance(x, (float, int)) for x in (nobs, rfree, va)):
+        if not isinstance(va, (float, int)):
             return NAN, resolution, ReasonCode.INVALID_DPI_METADATA
         if not (
             math.isfinite(nobs)

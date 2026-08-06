@@ -13,6 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import math
 import os
+from typing import Protocol, cast
 from collections.abc import Iterable, Mapping, Sequence
 
 import gemmi
@@ -38,7 +39,7 @@ def blank_if_missing(value: str) -> str:
     return "" if value in MISSING_VALUE_TOKENS else str(value)
 
 
-def _decode_pdb_resseq(value: str) -> int:
+def decode_pdb_resseq(value: str) -> int:
     """Decode a four-column decimal or hybrid-36 PDB resSeq value.
 
     Matches the integer Gemmi exposes as ``Residue.seqid.num``, which raw PDB
@@ -85,13 +86,29 @@ def canonical_pdb_residue_id(value: str) -> str:
         number_text = text
     if len(insertion) > 1:
         raise ValueError(f"invalid PDB insertion code in residue id: {value!r}")
-    return f"{_decode_pdb_resseq(number_text)}{insertion}"
+    return f"{decode_pdb_resseq(number_text)}{insertion}"
 
 
 def position_distance(a: Sequence[float], b: Sequence[float]) -> float:
     ax, ay, az = a
     bx, by, bz = b
     return math.sqrt((ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2)
+
+
+class _PbcShiftImage(Protocol):
+    """The typed part of Gemmi's nearest-image result that Alchemy consumes."""
+
+    pbc_shift: tuple[int, int, int]
+
+
+def pbc_translation(image: object) -> tuple[int, int, int]:
+    """Return a nearest image's integer unit-cell translation.
+
+    Gemmi's stub leaves the tuple element type unspecified, so this small
+    boundary records the concrete three-integer contract exposed at runtime.
+    """
+    shift_a, shift_b, shift_c = cast(_PbcShiftImage, image).pbc_shift
+    return int(shift_a), int(shift_b), int(shift_c)
 
 
 def _residue_number(residue: gemmi.Residue) -> int:
@@ -101,7 +118,7 @@ def _residue_number(residue: gemmi.Residue) -> int:
     return number
 
 
-def _valid_occupancy(value: object) -> bool:
+def valid_occupancy(value: object) -> bool:
     if not isinstance(value, (int, float, str)):
         return False
     try:
@@ -111,7 +128,7 @@ def _valid_occupancy(value: object) -> bool:
     return math.isfinite(number) and 0.0 <= number <= 1.0
 
 
-def _parse_pdb_element(value: str) -> tuple[str, str]:
+def parse_pdb_element(value: str) -> tuple[str, str]:
     deposited = value.strip()
     if not deposited:
         return "", ElementStatus.MISSING
@@ -278,7 +295,7 @@ def _overfull_occupancy_summary(
 
     count = 0
     excess = 0.0
-    identities = []
+    identities: list[tuple[object, ...]] = []
     for identity, alternates in by_chemical_site.items():
         if len(alternates) <= 1:
             continue
@@ -362,6 +379,24 @@ class ResidueSelection:
         )
 
 
+_AtomIndex = tuple[int, int, int]
+_AuthorResidueKey = tuple[str, str, str]
+
+
+def _empty_atom_index() -> dict[_AtomIndex, AtomSite]:
+    return {}
+
+
+def _empty_residue_index() -> dict[_AtomIndex, ResidueSelection]:
+    return {}
+
+
+def _empty_author_residue_index() -> dict[
+    _AuthorResidueKey, tuple[ResidueSelection, ...]
+]:
+    return {}
+
+
 @dataclass
 class StructureContext:
     """Gemmi structure plus deterministic first-model analysis metadata."""
@@ -404,20 +439,20 @@ class StructureContext:
     warning_codes: tuple[str, ...]
     _spatial_model: gemmi.Model = field(repr=False)
     _atom_by_indices: Mapping[tuple[int, int, int], AtomSite] = field(
-        repr=False, default_factory=dict
+        repr=False, default_factory=_empty_atom_index
     )
     _residue_by_key: Mapping[tuple[int, int, int], ResidueSelection] = field(
-        repr=False, default_factory=dict
+        repr=False, default_factory=_empty_residue_index
     )
     _residues_by_author: Mapping[tuple[str, str, str], tuple[ResidueSelection, ...]] = (
-        field(repr=False, default_factory=dict)
+        field(repr=False, default_factory=_empty_author_residue_index)
     )
     _residues_by_source_author: Mapping[
         tuple[str, str, str], tuple[ResidueSelection, ...]
-    ] = field(repr=False, default_factory=dict)
-    _residues_by_coordinate_author: Mapping[
+    ] = field(repr=False, default_factory=_empty_author_residue_index)
+    residues_by_coordinate_author_index: Mapping[
         tuple[str, str, str], tuple[ResidueSelection, ...]
-    ] = field(repr=False, default_factory=dict)
+    ] = field(repr=False, default_factory=_empty_author_residue_index)
 
     @property
     def strict_ncs_operation_count(self) -> int:
@@ -500,7 +535,7 @@ class StructureContext:
     def residues_for_coordinate_author(
         self, residue_name: str, chain_id: str, resnum: str
     ) -> tuple[ResidueSelection, ...]:
-        return self._residues_by_coordinate_author.get(
+        return self.residues_by_coordinate_author_index.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
 
@@ -594,9 +629,9 @@ def _raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
                 altloc = blank_if_missing(line[16:17])
                 residue_name = line[17:20].strip()
                 chain_id = line[21:22].strip()
-                residue_number = str(_decode_pdb_resseq(line[22:26]))
+                residue_number = str(decode_pdb_resseq(line[22:26]))
                 insertion_code = blank_if_missing(line[26:27])
-                element, element_status = _parse_pdb_element(line[76:78])
+                element, element_status = parse_pdb_element(line[76:78])
                 text = line[54:60] if len(line) >= 55 else ""
                 stripped = text.strip()
                 if not stripped:
@@ -856,7 +891,7 @@ def _match_raw_occupancies(
                     continue
 
                 match_index = 0
-                serial = atom.serial
+                serial = cast("int | None", atom.serial)
                 if serial is not None:
                     for index, candidate in enumerate(candidates):
                         if candidate.serial == serial:
@@ -876,7 +911,7 @@ def _occupancy_for_atom(
         if raw.valid and raw.value is not None:
             return raw.value, True, OccupancyStatus.VALID
         return value, False, raw.status
-    valid = _valid_occupancy(value)
+    valid = valid_occupancy(value)
     return (
         value,
         valid,
@@ -896,7 +931,7 @@ def _element_for_atom(
     return element, element not in ("", "X")
 
 
-def _site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
+def site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
     """Highest valid occupancy wins; exact ties retain source-file order."""
     if candidate.occupancy_valid != current.occupancy_valid:
         return candidate.occupancy_valid
@@ -905,7 +940,7 @@ def _site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
     return candidate.source_order < current.source_order
 
 
-def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
+def select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
     first = atoms[0]
     named: dict[str, list[AtomSite]] = defaultdict(list)
     blank: list[AtomSite] = []
@@ -968,7 +1003,7 @@ def _select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
             malformed_duplicates += len(pool) - 1
         winner = pool[0]
         for atom in pool[1:]:
-            if _site_is_better(atom, winner):
+            if site_is_better(atom, winner):
                 winner = atom
         contact_atoms.append(winner)
     contact_atoms.sort(key=lambda atom: atom.source_order)
@@ -1024,11 +1059,11 @@ def _symmetry_metadata(
         cell = structure.cell
         if not cell.is_crystal() or cell.volume <= 0:
             return False, "missing_or_invalid_unit_cell", 0, strict_ncs_ids
-        spacegroup = structure.find_spacegroup()
+        spacegroup = cast("gemmi.SpaceGroup | None", structure.find_spacegroup())
         if spacegroup is None:
             # Gemmi's stub declares a non-optional SpaceGroup, but the binding
             # returns None for a file whose space group cannot be identified.
-            return (  # type: ignore[unreachable]
+            return (
                 False,
                 "missing_or_invalid_space_group",
                 0,
@@ -1237,7 +1272,7 @@ def load_structure(
         duplicate_count += 1
         if position_distance(site.xyz, current.xyz) > DUPLICATE_ATOM_POSITION_TOLERANCE:
             coordinate_conflicts += 1
-        if _site_is_better(site, current):
+        if site_is_better(site, current):
             dedup[site.exact_identity] = site
     source_atoms = tuple(sorted(dedup.values(), key=lambda site: site.source_order))
     (
@@ -1250,7 +1285,7 @@ def load_structure(
     for site in source_atoms:
         residue_groups[site.residue_key].append(site)
     residues = tuple(
-        _select_residue(residue_groups[key]) for key in sorted(residue_groups)
+        select_residue(residue_groups[key]) for key in sorted(residue_groups)
     )
     contact_atoms = tuple(
         atom for residue in residues for atom in residue.contact_atoms
@@ -1395,7 +1430,7 @@ def load_structure(
         _residue_by_key=residue_by_key,
         _residues_by_author=residues_by_author,
         _residues_by_source_author=residues_by_source_author,
-        _residues_by_coordinate_author=residues_by_coordinate_author,
+        residues_by_coordinate_author_index=residues_by_coordinate_author,
     )
 
 

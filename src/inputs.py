@@ -12,11 +12,14 @@ import os
 import re
 import shutil
 from http.client import HTTPException
-from typing import Any
+from typing import Any, Protocol, cast
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from coordinate_conversion import _cif_to_pdb
+import numpy as np
+import numpy.typing as npt
+
+from coordinate_conversion import cif_to_pdb
 from run_logging import logger_for
 
 
@@ -25,6 +28,12 @@ from run_logging import logger_for
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 
 logger = logger_for(__name__)
+
+
+class _MtzColumnArray(Protocol):
+    """The concrete array member omitted from part of Gemmi's column stub."""
+
+    array: npt.NDArray[np.float32]
 
 
 def read_data_json_properties(data_json_path: str) -> dict[str, Any]:
@@ -36,7 +45,7 @@ def read_data_json_properties(data_json_path: str) -> dict[str, Any]:
     """
     try:
         with open(data_json_path, encoding="utf-8") as handle:
-            payload = json.load(handle)
+            loaded: object = json.load(handle)
     except FileNotFoundError:
         raise ValueError(f"data.json file not found: {data_json_path}") from None
     except OSError as exc:
@@ -46,14 +55,15 @@ def read_data_json_properties(data_json_path: str) -> dict[str, Any]:
             f"invalid JSON in data.json {data_json_path}: {exc.msg}"
         ) from None
 
-    if not isinstance(payload, dict):
+    if not isinstance(loaded, dict):
         raise ValueError(f"data.json must contain a JSON object: {data_json_path}")
+    payload = cast("dict[str, object]", loaded)
     properties = payload.get("properties")
     if not isinstance(properties, dict):
         raise ValueError(
             f"data.json must contain a properties object: {data_json_path}"
         )
-    return properties
+    return cast("dict[str, Any]", properties)
 
 
 def entry_dir_for(root: str, pdb_id: str) -> str:
@@ -69,7 +79,7 @@ def _gunzip_to(src_gz: str, dst: str) -> str:
     return dst
 
 
-def _first_existing(*paths: str) -> str | None:
+def first_existing(*paths: str) -> str | None:
     return next((path for path in paths if os.path.exists(path)), None)
 
 
@@ -115,7 +125,7 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str
     PDB compatibility export is used only when no mmCIF exists. Compressed
     mirrors are accepted for either format.
     """
-    mtz = _first_existing(
+    mtz = first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
         os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
     )
@@ -124,16 +134,16 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str
     if mtz.endswith(".gz"):
         mtz = _gunzip_to(mtz, os.path.join(work_dir, f"{pdb_id}_final.mtz"))
 
-    cif = _first_existing(
+    cif = first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.cif"),
         os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
     )
     pdb: str | None
     if cif is not None:
-        pdb = _cif_to_pdb(cif, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb"))
+        pdb = cif_to_pdb(cif, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb"))
         return mtz, pdb
 
-    pdb = _first_existing(
+    pdb = first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
         os.path.join(entry_dir, f"{pdb_id}_final.pdb.gz"),
     )
@@ -205,15 +215,14 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
     rather than the overall range of unrelated columns in the MTZ.
     """
     import gemmi
-    import numpy as np
 
     mtz = gemmi.read_mtz_file(mtz_path)
-    columns = []
+    columns: list[gemmi.Mtz.Column] = []
     missing: list[str] = []
     for label in MAP_COEFFICIENT_COLUMNS:
         # gemmi's stub declares a plain Column here, but the binding returns
         # None for a label the file does not carry.
-        column: gemmi.Mtz.Column | None = mtz.column_with_label(label)
+        column = cast("gemmi.Mtz.Column | None", mtz.column_with_label(label))
         if column is None:
             missing.append(label)
         else:
@@ -234,7 +243,7 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
     # are finite, so the mask spans whole rows.
     usable = np.isfinite(d_values) & (d_values > 0.0)
     for column in columns:
-        usable &= np.isfinite(column.array)
+        usable &= np.isfinite(cast(_MtzColumnArray, column).array)
     usable_d = d_values[usable]
     if usable_d.size == 0:
         raise ValueError(
@@ -245,11 +254,11 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
 
 def has_final_files(entry_dir: str, pdb_id: str) -> bool:
     """Whether an entry has final map coefficients and usable coordinates."""
-    mtz = _first_existing(
+    mtz = first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
         os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
     )
-    coordinates = _first_existing(
+    coordinates = first_existing(
         os.path.join(entry_dir, f"{pdb_id}_final.cif"),
         os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
         os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
@@ -288,7 +297,7 @@ def _response_content_length(response: object, url: str) -> int | None:
     return length
 
 
-def _download_stream(url: str, dst: str, timeout: float = 30) -> str:
+def download_stream(url: str, dst: str, timeout: float = 30) -> str:
     """Download URL to dst. Raise FileNotFoundError if no usable file results.
 
     A transfer that begins and then fails -- a reset connection, a read
@@ -345,7 +354,7 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
         url = base + name
         dst = os.path.join(entry, name)
         try:
-            _download_stream(url, dst)
+            download_stream(url, dst)
             return True
         except FileNotFoundError:
             return False
@@ -353,7 +362,7 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
     def fetch_variant(name: str) -> bool:
         # Reuse a cached file only if it is worth reading: short-circuiting on
         # existence alone makes an empty or served-document body permanent.
-        cached = _first_existing(
+        cached = first_existing(
             os.path.join(entry, name), os.path.join(entry, name + ".gz")
         )
         if _is_usable_entry_file(cached):
@@ -404,7 +413,7 @@ def resolve_manual_inputs(
         if not os.path.exists(cif_file):
             raise FileNotFoundError(f"cif file not found: {cif_file}")
         target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdb_id}.pdb")
-        return mtz_file, _cif_to_pdb(cif_file, target_pdb)
+        return mtz_file, cif_to_pdb(cif_file, target_pdb)
 
     if pdb_file:
         if not os.path.exists(pdb_file):
@@ -429,7 +438,7 @@ def enumerate_entries(root: str, limit: int | None = None) -> list[str]:
     ``limit`` stops the walk once that many sorted ids are collected, so a
     small --max-pdbs run does not traverse all ~24k entries.
     """
-    ids = []
+    ids: list[str] = []
     skipped = 0
     for hashdir in sorted(os.listdir(root)):
         hp = os.path.join(root, hashdir)

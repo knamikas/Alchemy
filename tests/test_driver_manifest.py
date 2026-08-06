@@ -15,7 +15,7 @@ import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol
 from collections.abc import Callable
 from collections.abc import Mapping
 from typing import NamedTuple
@@ -34,15 +34,15 @@ import main
 import metal_identification
 import structure_analysis
 import worker
-from driver.progress import _ProgressReporter
+from driver.progress import ProgressReporter
 from driver import runlog
-from driver.runlog import _RunLog
+from driver.runlog import RunLog
 from driver.writers import (
     MANIFEST_COLUMNS,
     MANIFEST_FIELDS,
     STATS_COLUMNS,
-    _manifest_row,
-    _OutputWriters,
+    manifest_row,
+    OutputWriters,
 )
 from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 import cli
@@ -51,6 +51,49 @@ from driver import resume
 from driver import pool
 from driver import output_lock
 import confidence_score
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
+
+
+def _read_resolution_stub(
+    entry_dir: str, mtz_path: str, data_json_path: str | None = None
+) -> float:
+    del entry_dir, mtz_path, data_json_path
+    return 2.0
+
+
+def _read_map_column_resolution_stub(mtz_path: str) -> tuple[float, float]:
+    del mtz_path
+    return 20.0, 2.0
+
+
+def _resolved_ccp4_environment(
+    _args: argparse.Namespace,
+) -> tuple[dict[str, str], None]:
+    return dict(os.environ), None
+
+
+def _empty_metal_statistics(
+    *_args: Any, **_kwargs: Any
+) -> tuple[list[dict[str, Any]], list[str]]:
+    return [], []
 
 
 def _cfg(**overrides: Any) -> worker.WorkerConfig:
@@ -80,7 +123,7 @@ def _cfg(**overrides: Any) -> worker.WorkerConfig:
 
 CFG = _cfg()
 
-# Columns ``_manifest_row`` computes; every other column it copies.
+# Columns ``manifest_row`` computes; every other column it copies.
 DERIVED_MANIFEST_COLUMNS = frozenset(
     {
         "n_metals",
@@ -95,7 +138,7 @@ DERIVED_MANIFEST_COLUMNS = frozenset(
 
 def _result(pdb_id: str = "109m", **overrides: Any) -> worker.EntryResult:
     """A worker result skeleton plus overrides, as the driver would see it."""
-    result = worker._initial_result(pdb_id, CFG, None)
+    result = worker.initial_result(pdb_id, CFG, None)
     for name, value in overrides.items():
         setattr(result, name, value)
     return result
@@ -127,9 +170,9 @@ def _manual_entry(
     mtz_path = tmp_path / "entry.mtz"
     mtz_path.write_bytes(b"unused: the readers below are stubbed")
 
-    monkeypatch.setattr(worker, "read_resolution", lambda *a, **k: 2.0)
+    monkeypatch.setattr(worker, "read_resolution", _read_resolution_stub)
     monkeypatch.setattr(
-        worker, "read_map_column_resolution", lambda *a, **k: (20.0, 2.0)
+        worker, "read_map_column_resolution", _read_map_column_resolution_stub
     )
     monkeypatch.setattr(worker, "run_density_analysis", density_stage)
 
@@ -152,8 +195,9 @@ def _manual_entry(
         ccp4_version="test",
         **cfg_overrides,
     )
-    # monkeypatch restores ``_CFG``; ``_init_worker`` has no teardown counterpart.
-    monkeypatch.setattr(worker, "_CFG", cfg)
+    # monkeypatch restores ``worker_config``; ``initialize_worker`` has no
+    # teardown counterpart.
+    monkeypatch.setattr(worker, "worker_config", cfg)
     return worker.process("1abc")
 
 
@@ -421,7 +465,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 ) -> None:
     """A crashed geometry stage is not legitimate density-only evidence."""
     result = _result()
-    inputs = worker._EntryInputs(
+    inputs = worker.EntryInputs(
         work_dir="/nonexistent",
         mtz="/nonexistent/entry.mtz",
         pdb="/nonexistent/entry.pdb",
@@ -444,7 +488,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 
     monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
 
-    bond_rows, candidate_rows, summaries, _ = worker._run_bond_stage(
+    bond_rows, candidate_rows, summaries, _ = worker.run_bond_stage(
         result, _cfg(bonds=True), inputs, structure, [], []
     )
 
@@ -495,7 +539,7 @@ class TestNoRecognizedMetalOutcome:
         assert result.no_metals is False
         assert "unknown_elements" in result.warning_codes
         assert result.confidence_inputs_missing_reason == "metal_presence_indeterminate"
-        assert pool._confidence_rows_for(result, pool._ConfidencePlan()) == []
+        assert pool.confidence_rows_for(result, pool.ConfidencePlan()) == []
 
     def test_known_nonmetal_structure_remains_an_authoritative_negative(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1057,7 +1101,7 @@ class TestManifestValuesById:
                 {"pdbID": "1blu", "status": "error", "n_bonds": ""},
             ],
         )
-        assert resume._manifest_values_by_id(path, "n_bonds") == {
+        assert resume.manifest_values_by_id(path, "n_bonds") == {
             "109m": "7",
             "1cll": "0",
             "1blu": "",
@@ -1066,10 +1110,8 @@ class TestManifestValuesById:
     def test_missing_and_empty_files_yield_no_values(self, tmp_path: Path) -> None:
         empty = tmp_path / "empty.csv"
         empty.write_text("")
-        assert (
-            resume._manifest_values_by_id(str(tmp_path / "gone.csv"), "n_bonds") == {}
-        )
-        assert resume._manifest_values_by_id(str(empty), "n_bonds") == {}
+        assert resume.manifest_values_by_id(str(tmp_path / "gone.csv"), "n_bonds") == {}
+        assert resume.manifest_values_by_id(str(empty), "n_bonds") == {}
 
     def test_unknown_column_yields_blanks_not_an_error(self, tmp_path: Path) -> None:
         """An older manifest lacking the column must degrade to "not run"."""
@@ -1078,7 +1120,7 @@ class TestManifestValuesById:
             [{"pdbID": "109m", "status": "ok"}],
             columns=["pdbID", "status"],
         )
-        assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": ""}
+        assert resume.manifest_values_by_id(path, "n_bonds") == {"109m": ""}
 
     def test_truncated_rows_do_not_supply_carry_forward_values(
         self, tmp_path: Path
@@ -1090,7 +1132,7 @@ class TestManifestValuesById:
         with open(path, "a", newline="") as handle:
             csv.writer(handle).writerow(["1cll", "ok"])
 
-        assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "7"}
+        assert resume.manifest_values_by_id(path, "n_bonds") == {"109m": "7"}
 
     def test_blank_ids_are_dropped(self, tmp_path: Path) -> None:
         path = _write_manifest(
@@ -1100,7 +1142,7 @@ class TestManifestValuesById:
                 {"pdbID": "109m", "status": "ok", "n_bonds": "1"},
             ],
         )
-        assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "1"}
+        assert resume.manifest_values_by_id(path, "n_bonds") == {"109m": "1"}
 
     def test_a_later_row_supersedes_an_earlier_one(self, tmp_path: Path) -> None:
         """Resume appends, so the last row for an ID is the current one."""
@@ -1111,7 +1153,7 @@ class TestManifestValuesById:
                 {"pdbID": "109m", "status": "ok", "n_bonds": "5"},
             ],
         )
-        assert resume._manifest_values_by_id(path, "n_bonds") == {"109m": "5"}
+        assert resume.manifest_values_by_id(path, "n_bonds") == {"109m": "5"}
 
 
 class TestInitialResult:
@@ -1119,7 +1161,7 @@ class TestInitialResult:
 
     def test_seeds_bond_counts_blank_not_zero(self) -> None:
         """``0`` is a measured result, so an unrun bond stage must stay blank."""
-        result = worker._initial_result("109m", CFG, None)
+        result = worker.initial_result("109m", CFG, None)
         assert result.n_bonds is None
         assert result.n_candidates is None
         assert result.n_bonds != 0
@@ -1127,7 +1169,7 @@ class TestInitialResult:
 
     def test_every_non_derived_manifest_column_is_present_up_front(self) -> None:
         """A failure at any stage still projects onto a complete row."""
-        result = worker._initial_result("109m", CFG, None)
+        result = worker.initial_result("109m", CFG, None)
         required = set(MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
         supplied = {
             column for column, name in MANIFEST_FIELDS.items() if hasattr(result, name)
@@ -1135,13 +1177,13 @@ class TestInitialResult:
         assert required.issubset(supplied)
 
     def test_supplies_the_fields_manifest_row_reads_directly(self) -> None:
-        """``_manifest_row`` reads these without a default; they must exist."""
-        result = worker._initial_result("109m", CFG, None)
+        """``manifest_row`` reads these without a default; they must exist."""
+        result = worker.initial_result("109m", CFG, None)
         for name in ("n_metals", "runtime_s", "n_bonds", "n_candidates", "pdb_id"):
             assert hasattr(result, name)
 
     def test_defaults_to_a_retryable_error(self) -> None:
-        result = worker._initial_result("109m", CFG, None)
+        result = worker.initial_result("109m", CFG, None)
         assert result.status == "error"
         assert result.retryable is True
 
@@ -1149,14 +1191,14 @@ class TestInitialResult:
         """Two runs whose z-scores used different reference distances must be
         distinguishable in the output.
         """
-        result = worker._initial_result("109m", CFG, None)
-        row = _manifest_row(result, False, True, {}, {})
+        result = worker.initial_result("109m", CFG, None)
+        row = manifest_row(result, False, True, {}, {})
 
         assert result.reference_data_id == CFG.reference_data_id
         assert row["reference_data_id"] == CFG.reference_data_id
 
     def test_carries_run_provenance_from_the_config(self) -> None:
-        result = worker._initial_result("109m", CFG, None)
+        result = worker.initial_result("109m", CFG, None)
         assert result.alchemy_version == pool.ALCHEMY_VERSION
         assert result.alchemy_commit == CFG.alchemy_commit
         assert result.gemmi_version == CFG.gemmi_version
@@ -1177,12 +1219,12 @@ class TestInitialResult:
         self, manual_inputs: dict[str, str | None] | None, expected: str
     ) -> None:
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
-        result = worker._initial_result("109m", CFG, manual_inputs)
+        result = worker.initial_result("109m", CFG, manual_inputs)
         assert result.refinement_state == expected
 
     def test_row_lists_are_independent_between_entries(self) -> None:
-        first = worker._initial_result("109m", CFG, None)
-        second = worker._initial_result("1cll", CFG, None)
+        first = worker.initial_result("109m", CFG, None)
+        second = worker.initial_result("1cll", CFG, None)
         first.rows.append({"x": 1})
         first.reason_codes.append("boom")
         assert second.rows == []
@@ -1192,7 +1234,7 @@ class TestInitialResult:
         """``slots=True`` makes a misspelled assignment the error, not a field
         nobody reads and a stale value in the manifest.
         """
-        result = worker._initial_result("109m", CFG, None)
+        result = worker.initial_result("109m", CFG, None)
 
         with pytest.raises(AttributeError, match="retryble"):
             result.retryble = True  # type: ignore[attr-defined]
@@ -1203,8 +1245,8 @@ class TestInitialResult:
         """A ``None`` reaching a CSV as ``"None"`` reads back to the next
         ``--resume`` as a completed stage.
         """
-        result = worker._initial_result("109m", CFG, None)
-        row = _manifest_row(result, False, True, {}, {})
+        result = worker.initial_result("109m", CFG, None)
+        row = manifest_row(result, False, True, {}, {})
 
         for column in ("n_bonds", "n_candidates", "input_model_count"):
             assert row[column] == ""
@@ -1215,7 +1257,7 @@ class TestManifestRow:
     """Projection of a worker result onto the manifest schema."""
 
     def test_projects_exactly_the_manifest_columns(self) -> None:
-        row = _manifest_row(_result(), False, True, {}, {})
+        row = manifest_row(_result(), False, True, {}, {})
         assert set(row) == set(MANIFEST_COLUMNS)
         assert "rows" not in row
         assert "bond_rows" not in row
@@ -1231,7 +1273,7 @@ class TestManifestRow:
             reason_codes=["a", "b"],
             warning_codes=["w"],
         )
-        row = _manifest_row(result, False, True, {}, {})
+        row = manifest_row(result, False, True, {}, {})
         assert row["n_metals"] == 3
         assert row["runtime_s"] == 12.5
         assert row["n_bonds"] == 7
@@ -1241,18 +1283,18 @@ class TestManifestRow:
 
     def test_empty_code_lists_render_blank(self) -> None:
         """No codes must not become a spurious separator or literal '[]'."""
-        row = _manifest_row(_result(), False, True, {}, {})
+        row = manifest_row(_result(), False, True, {}, {})
         assert row["reason_codes"] == ""
         assert row["warning_codes"] == ""
 
     def test_bonds_enabled_reports_the_measured_zero(self) -> None:
-        row = _manifest_row(_result(n_bonds=0, n_candidates=0), False, True, {}, {})
+        row = manifest_row(_result(n_bonds=0, n_candidates=0), False, True, {}, {})
         assert row["n_bonds"] == 0
         assert row["n_candidates"] == 0
 
     def test_fresh_no_bonds_run_writes_blank_counts(self) -> None:
         """Without --resume there is no prior stage to carry forward."""
-        row = _manifest_row(
+        row = manifest_row(
             _result(n_bonds=4, n_candidates=6),
             False,
             False,
@@ -1263,22 +1305,22 @@ class TestManifestRow:
         assert row["n_candidates"] == ""
 
     def test_resume_no_bonds_carries_the_prior_counts_forward(self) -> None:
-        row = _manifest_row(_result("109M"), True, False, {"109m": "6"}, {"109m": "8"})
+        row = manifest_row(_result("109M"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == "6"
         assert row["n_candidates"] == "8"
 
     def test_resume_no_bonds_carry_forward_preserves_a_prior_zero(self) -> None:
-        row = _manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
+        row = manifest_row(_result(), True, False, {"109m": "0"}, {"109m": "0"})
         assert row["n_bonds"] == "0"
         assert row["n_candidates"] == "0"
 
     def test_resume_no_bonds_without_a_prior_row_stays_blank(self) -> None:
-        row = _manifest_row(_result("1cll"), True, False, {"109m": "6"}, {"109m": "8"})
+        row = manifest_row(_result("1cll"), True, False, {"109m": "6"}, {"109m": "8"})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
     def test_prior_blank_counts_are_not_upgraded(self) -> None:
-        row = _manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
+        row = manifest_row(_result(), True, False, {"109m": ""}, {"109m": ""})
         assert row["n_bonds"] == ""
         assert row["n_candidates"] == ""
 
@@ -1309,7 +1351,7 @@ class TestUnrunBondStageChain:
         result = _result(
             "109m", status="error", retryable=True, error="density stage failed"
         )
-        row = _manifest_row(result, False, True, {}, {})
+        row = manifest_row(result, False, True, {}, {})
         manifest = tmp_path / "manifest.csv"
         self._write_rows(manifest, [row])
 
@@ -1327,7 +1369,7 @@ class TestUnrunBondStageChain:
         """
         manifest = tmp_path / "manifest.csv"
 
-        failed = _manifest_row(
+        failed = manifest_row(
             _result("109m", status="error", retryable=True, error="edstats failed"),
             resume=False,
             bonds_enabled=True,
@@ -1337,10 +1379,10 @@ class TestUnrunBondStageChain:
         self._write_rows(manifest, [failed])
 
         assert resume.load_done(str(manifest), bonds_required=False) == set()
-        prior_bonds = resume._manifest_values_by_id(str(manifest), "n_bonds")
-        prior_candidates = resume._manifest_values_by_id(str(manifest), "n_candidates")
+        prior_bonds = resume.manifest_values_by_id(str(manifest), "n_bonds")
+        prior_candidates = resume.manifest_values_by_id(str(manifest), "n_candidates")
 
-        recovered = _manifest_row(
+        recovered = manifest_row(
             _result("109m", status="ok", retryable=False, n_metals=2),
             resume=True,
             bonds_enabled=False,
@@ -1355,7 +1397,7 @@ class TestUnrunBondStageChain:
         assert resume.load_done(str(manifest), bonds_required=True) == set()
 
         # Only a genuine measured zero may let a later resume skip the entry.
-        completed = _manifest_row(
+        completed = manifest_row(
             _result(
                 "109m",
                 status="ok",
@@ -1394,13 +1436,13 @@ class TestResumeReplacementSucceeded:
     def test_terminality(self, status: str, retryable: bool, expected: bool) -> None:
         """A retryable or failed retry leaves the previous rows in place."""
         result = _result(status=status, retryable=retryable)
-        assert resume._resume_replacement_succeeded(result) is expected
+        assert resume.resume_replacement_succeeded(result) is expected
 
     def test_an_untouched_partial_is_assumed_unfinished(self) -> None:
         """``retryable`` defaults to true, so a partial nothing cleared cannot
         replace.
         """
-        assert resume._resume_replacement_succeeded(_result(status="partial")) is False
+        assert resume.resume_replacement_succeeded(_result(status="partial")) is False
 
 
 class TestResumeStaging:
@@ -1431,7 +1473,7 @@ class TestResumeStaging:
 
     def _stage(
         self,
-        staging: resume._ResumeStaging,
+        staging: resume.ResumeStaging,
         names_and_rows: Mapping[int, Sequence[Sequence[str]]],
     ) -> None:
         """Write staged rows for the given staged-file indices."""
@@ -1447,7 +1489,7 @@ class TestResumeStaging:
     ) -> None:
         """Staging is a sibling temp dir so a merge is a same-filesystem move."""
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             assert os.path.isdir(staging.dir)
             assert os.path.dirname(staging.dir) == str(tmp_path)
@@ -1466,7 +1508,7 @@ class TestResumeStaging:
     ) -> None:
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, {0: [["109m", "new"]]})
             staging.commit(bonds_enabled=True)
@@ -1477,7 +1519,7 @@ class TestResumeStaging:
     def test_an_interrupted_batch_commits_the_entries_it_finished(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The halted-run path is reached from ``_process_entries`` itself.
+        """The halted-run path is reached from ``process_entries`` itself.
 
         The loss lived in the wiring: staging was discarded whenever the batch
         failed to run to completion. A test that calls the commit helper
@@ -1486,7 +1528,7 @@ class TestResumeStaging:
         """
         output_dir = tmp_path / "output"
         output_dir.mkdir()
-        layout = driver_pool._OutputLayout(str(output_dir))
+        layout = driver_pool.OutputLayout(str(output_dir))
         headers = (
             (layout.manifest, MANIFEST_COLUMNS),
             (layout.stats, STATS_COLUMNS),
@@ -1507,12 +1549,12 @@ class TestResumeStaging:
             ids: Sequence[str],
             cfg: worker.WorkerConfig,
             workers: int,
-            writers: _OutputWriters,
-            plan: driver_pool._ConfidencePlan,
-            staging: resume._ResumeStaging,
+            writers: OutputWriters,
+            plan: driver_pool.ConfidencePlan,
+            staging: resume.ResumeStaging,
             counts: tuple[dict[str, str], dict[str, str]],
             prior: set[str],
-            run_log: _RunLog,
+            run_log: RunLog,
         ) -> None:
             for pdb_id in ids:
                 row = {name: "" for name in MANIFEST_COLUMNS}
@@ -1523,10 +1565,10 @@ class TestResumeStaging:
 
         monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
         args = argparse.Namespace(resume=True, bonds=True, output_dir=str(output_dir))
-        run_log = _RunLog(args, "pytest")
+        run_log = RunLog(args, "pytest")
 
         with pytest.raises(KeyboardInterrupt):
-            driver_pool._process_entries(
+            driver_pool.process_entries(
                 args,
                 ["bbbb", "cccc"],
                 # ``None`` proves the halted-batch path never reaches the worker
@@ -1534,7 +1576,7 @@ class TestResumeStaging:
                 cast(worker.WorkerConfig, None),
                 1,
                 layout,
-                driver_pool._ConfidencePlan(),
+                driver_pool.ConfidencePlan(),
                 run_log,
             )
 
@@ -1547,7 +1589,7 @@ class TestResumeStaging:
 
     def _interrupt(
         self,
-        staging: resume._ResumeStaging,
+        staging: resume.ResumeStaging,
         tmp_path: Path,
         *,
         bonds: bool = True,
@@ -1555,11 +1597,11 @@ class TestResumeStaging:
     ) -> dict[str, Any]:
         """Run the halted-resume path and return the run-log summary."""
         args = argparse.Namespace(bonds=bonds, output_dir=str(tmp_path))
-        plan = driver_pool._ConfidencePlan()
+        plan = driver_pool.ConfidencePlan()
         # ``enabled`` is derived from the mode, which is what a scoring run sets.
         plan.mode = "reference" if confidence else None
-        run_log = _RunLog(args, "pytest")
-        driver_pool._keep_completed_staging(staging, args, plan, run_log)
+        run_log = RunLog(args, "pytest")
+        driver_pool.keep_completed_staging(staging, args, plan, run_log)
         return run_log.summary
 
     def test_an_interrupted_resume_keeps_the_entries_it_completed(
@@ -1572,7 +1614,7 @@ class TestResumeStaging:
         while the interrupt message promised they had been kept.
         """
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         self._stage(
             staging,
             {
@@ -1595,12 +1637,12 @@ class TestResumeStaging:
     ) -> None:
         """Rows without a manifest row are not promoted, so the entry retries.
 
-        ``_write_entry`` adds the id only after the manifest row, so an entry
+        ``write_entry`` adds the id only after the manifest row, so an entry
         interrupted mid-write is absent from ``replacement_ids``.
         """
         targets = self._outputs(tmp_path)
         before = {path: open(path, "rb").read() for path in targets}
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         self._stage(staging, {1: [["8new", "half-written"]]})
 
         summary = self._interrupt(staging, tmp_path)
@@ -1614,7 +1656,7 @@ class TestResumeStaging:
     ) -> None:
         """A merge failure must not delete the only copy of the work."""
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         self._stage(staging, {0: [["8new", "new"]]})
         staging.replacement_ids.add("8new")
         # A staged file whose header disagrees makes ``commit`` raise.
@@ -1634,7 +1676,7 @@ class TestResumeStaging:
 
     def test_commit_replaces_only_the_retried_ids(self, tmp_path: Path) -> None:
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(
                 staging,
@@ -1659,7 +1701,7 @@ class TestResumeStaging:
         self, tmp_path: Path
     ) -> None:
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, {index: [] for index in range(4)})
             staging.replacement_ids.add("109m")
@@ -1676,7 +1718,7 @@ class TestResumeStaging:
         targets = self._outputs(tmp_path)
         bond_paths = targets[2:4]
         before = {p: open(p, "rb").read() for p in bond_paths}
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(
                 staging,
@@ -1705,7 +1747,7 @@ class TestResumeStaging:
         confidence_path = targets[4]
         before = open(confidence_path, "rb").read()
 
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, {index: [["109m", "new"]] for index in range(5)})
             staging.replacement_ids.add("109m")
@@ -1714,7 +1756,7 @@ class TestResumeStaging:
             staging.discard()
         assert open(confidence_path, "rb").read() == before
 
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, {index: [["109m", "new"]] for index in range(5)})
             staging.replacement_ids.add("109m")
@@ -1740,7 +1782,7 @@ class TestResumeStaging:
                 ]
             )
         targets.append(str(scores))
-        staging = resume._ResumeStaging(str(tmp_path), tuple(targets))
+        staging = resume.ResumeStaging(str(tmp_path), tuple(targets))
         try:
             self._stage(
                 staging,
@@ -1763,7 +1805,7 @@ class TestResumeStaging:
     def test_discard_leaves_previous_rows_intact(self, tmp_path: Path) -> None:
         targets = self._outputs(tmp_path)
         before = {p: open(p, "rb").read() for p in targets}
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         self._stage(staging, {index: [["109m", "new"]] for index in range(4)})
         staging.replacement_ids.add("109m")
         staging.discard()
@@ -1773,7 +1815,7 @@ class TestResumeStaging:
     def test_discard_is_idempotent(self, tmp_path: Path) -> None:
         """Cleanup runs in a finally block and may be reached twice."""
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         staging.discard()
         staging.discard()
         assert not os.path.exists(staging.dir)
@@ -1782,7 +1824,7 @@ class TestResumeStaging:
         self, tmp_path: Path
     ) -> None:
         targets = self._outputs(tmp_path)
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, {index: [["109M", "new"]] for index in range(4)})
             staging.replacement_ids.add("109M")
@@ -1799,7 +1841,7 @@ class TestResumeStaging:
         """A header disagreement must fail loudly, not silently misalign rows."""
         targets = self._outputs(tmp_path)
         before = open(targets[0], "rb").read()
-        staging = resume._ResumeStaging(str(tmp_path), targets)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             with open(staging.staged[0], "w", newline="") as handle:
                 writer = csv.writer(handle)
@@ -1819,7 +1861,7 @@ class TestResumeStaging:
 
 
 class _Handles(NamedTuple):
-    """The open output files, in ``_OutputWriters`` argument order."""
+    """The open output files, in ``OutputWriters`` argument order."""
 
     manifest: Any
     stats: Any
@@ -1863,7 +1905,7 @@ class TestOutputWriters:
     def test_headers_survive_a_run_that_produced_no_rows(self, tmp_path: Path) -> None:
         """README: the CSVs keep their headers when nothing was found."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         writers.write_stats_rows([])
         writers.write_bond_rows([])
         writers.write_candidate_rows([])
@@ -1884,8 +1926,8 @@ class TestOutputWriters:
     ) -> None:
         """The end-of-run totals come from these counters, not from re-reading."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
-        stats_rows = [
+        writers = OutputWriters(*handles)
+        stats_rows: list[dict[str, Any]] = [
             {
                 "pdbID": "109m",
                 "category": "metal",
@@ -1917,7 +1959,7 @@ class TestOutputWriters:
     ) -> None:
         """id and category lead each row; the EDSTATS block follows verbatim."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         fields = [str(i) for i in range(len(STATS_COLUMNS) - 2)]
         writers.write_stats_rows(
             [{"pdbID": "109m", "category": "cofactor", "fields": fields}]
@@ -1930,7 +1972,7 @@ class TestOutputWriters:
     def test_bond_rows_are_written_in_schema_order(self, tmp_path: Path) -> None:
         """Columns are positional, so the projection order is load-bearing."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         row = {column: f"v-{column}" for column in coordination_schema.BOND_COLUMNS}
         shuffled = {key: row[key] for key in reversed(list(row))}
         writers.write_bond_rows([shuffled])
@@ -1943,7 +1985,7 @@ class TestOutputWriters:
     ) -> None:
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         writers.write_bond_rows([dict.fromkeys(coordination_schema.BOND_COLUMNS, "")])
         writers.write_candidate_rows(
             [dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")]
@@ -1966,7 +2008,7 @@ class TestOutputWriters:
     ) -> None:
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         row = dict.fromkeys(getattr(coordination_schema, columns_name), "")
         if mutate == "drop":
             drifted = next(iter(row))
@@ -1991,7 +2033,7 @@ class TestOutputWriters:
     def test_candidate_row_schema_drift_fails_loudly(self, tmp_path: Path) -> None:
         """Same guard on the candidate stream, named for its own file."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         row = dict.fromkeys(coordination_schema.CANDIDATE_COLUMNS, "")
         row["bogus"] = ""
         try:
@@ -2006,7 +2048,7 @@ class TestOutputWriters:
         handles = self._handles(tmp_path, confidence=True)
         try:
             with pytest.raises(ValueError):
-                _OutputWriters(
+                OutputWriters(
                     handles.manifest,
                     handles.stats,
                     handles.bonds,
@@ -2020,7 +2062,7 @@ class TestOutputWriters:
     def test_confidence_header_and_counts(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = _OutputWriters(
+        writers = OutputWriters(
             handles.manifest,
             handles.stats,
             handles.bonds,
@@ -2050,7 +2092,7 @@ class TestOutputWriters:
         handles = self._handles(tmp_path, confidence=True)
         inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
         try:
-            writers = _OutputWriters(
+            writers = OutputWriters(
                 handles.manifest,
                 handles.stats,
                 handles.bonds,
@@ -2076,7 +2118,7 @@ class TestOutputWriters:
     def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = _OutputWriters(
+        writers = OutputWriters(
             handles.manifest,
             handles.stats,
             handles.bonds,
@@ -2084,7 +2126,7 @@ class TestOutputWriters:
             confidence_fh=handles.confidence,
             confidence_columns=columns,
         )
-        row = dict.fromkeys(columns, "")
+        row: dict[str, Any] = dict.fromkeys(columns, "")
         row.pop(columns[0])
         try:
             with pytest.raises(RuntimeError):
@@ -2098,9 +2140,9 @@ class TestOutputWriters:
     ) -> None:
         """A written manifest is readable by load_done without reinterpretation."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         writers.write_manifest_row(
-            _manifest_row(
+            manifest_row(
                 _result(
                     "109m",
                     status="ok",
@@ -2117,14 +2159,14 @@ class TestOutputWriters:
             )
         )
         writers.write_manifest_row(
-            _manifest_row(
+            manifest_row(
                 _result("1cll", status="error", retryable=True), False, True, {}, {}
             )
         )
         self._close(handles)
         path = str(tmp_path / "manifest.csv")
         assert resume.load_done(path, bonds_required=True) == {"109m"}
-        assert resume._manifest_values_by_id(path, "n_bonds") == {
+        assert resume.manifest_values_by_id(path, "n_bonds") == {
             "109m": "0",
             "1cll": "",
         }
@@ -2134,7 +2176,7 @@ class TestOutputWriters:
     ) -> None:
         """An interrupted batch must retain the rows of completed entries."""
         handles = self._handles(tmp_path)
-        writers = _OutputWriters(*handles)
+        writers = OutputWriters(*handles)
         writers.write_stats_rows(
             [
                 {
@@ -2146,7 +2188,7 @@ class TestOutputWriters:
         )
         writers.write_bond_rows([dict.fromkeys(coordination_schema.BOND_COLUMNS, "")])
         writers.write_manifest_row(
-            _manifest_row(_result(status="ok"), False, True, {}, {})
+            manifest_row(_result(status="ok"), False, True, {}, {})
         )
         # Read before ``_close``: the rows must already be on disk.
         assert len(_read_csv(tmp_path / "stats.csv")) == 2
@@ -2198,10 +2240,10 @@ class TestScheduleEntries:
 
     def _schedule(
         self, tmp_path: Path, args: argparse.Namespace
-    ) -> tuple[list[str], _RunLog]:
-        run_log = _RunLog(args, "pytest")
-        layout = pool._OutputLayout(str(tmp_path))
-        ids, _root, _manual = pool._schedule_entries(
+    ) -> tuple[list[str], RunLog]:
+        run_log = RunLog(args, "pytest")
+        layout = pool.OutputLayout(str(tmp_path))
+        ids, _root, _manual = pool.schedule_entries(
             args, layout, str(tmp_path), run_log
         )
         return ids, run_log
@@ -2240,7 +2282,7 @@ class TestWriteEntry:
     class _RecordingWriters:
         """Records the writer calls in order, which is what is under test.
 
-        The real ``_OutputWriters`` writes files and remembers nothing, so the
+        The real ``OutputWriters`` writes files and remembers nothing, so the
         casts below carry this recorder into the precisely-typed parameter.
         """
 
@@ -2261,12 +2303,12 @@ class TestWriteEntry:
 
     def test_the_manifest_row_is_written_after_every_data_row(self) -> None:
         writers = self._RecordingWriters()
-        plan = pool._ConfidencePlan()
-        pool._write_entry(
+        plan = pool.ConfidencePlan()
+        pool.write_entry(
             _result(),
             self._args(),
             plan,
-            cast(_OutputWriters, writers),
+            cast(OutputWriters, writers),
             None,
             ({}, {}),
         )
@@ -2279,14 +2321,14 @@ class TestWriteEntry:
 
     def test_a_staged_entry_is_registered_for_replacement(self) -> None:
         """Staging replaces rows by id, so every written entry must be listed."""
-        # A real ``_ResumeStaging`` would create a scratch directory to hold
+        # A real ``ResumeStaging`` would create a scratch directory to hold
         # rows nothing here writes; registration touches only the id set.
-        staging = cast(resume._ResumeStaging, SimpleNamespace(replacement_ids=set()))
-        pool._write_entry(
+        staging = cast(resume.ResumeStaging, SimpleNamespace(replacement_ids=set()))
+        pool.write_entry(
             _result(),
             self._args(resume=True),
-            pool._ConfidencePlan(),
-            cast(_OutputWriters, self._RecordingWriters()),
+            pool.ConfidencePlan(),
+            cast(OutputWriters, self._RecordingWriters()),
             staging,
             ({}, {}),
         )
@@ -2312,9 +2354,9 @@ class TestProgressReporter:
 
     def _reporter(
         self, terminal: bool, clock: Callable[[], float]
-    ) -> tuple[_ProgressReporter, TestProgressReporter._Stream]:
+    ) -> tuple[ProgressReporter, TestProgressReporter._Stream]:
         stream = self._Stream(terminal)
-        return _ProgressReporter(total=10, stream=stream, clock=clock), stream
+        return ProgressReporter(total=10, stream=stream, clock=clock), stream
 
     def test_a_redirected_run_renders_far_less_often_than_a_terminal(self) -> None:
         """A run redirected to a file must not grow it by a line per second.
@@ -2327,7 +2369,7 @@ class TestProgressReporter:
             reporter, stream = self._reporter(terminal, lambda: now[0])
             for _ in range(3):
                 reporter.render(1, self._counts(), 0)
-                now[0] += _ProgressReporter.TERMINAL_INTERVAL_S
+                now[0] += ProgressReporter.TERMINAL_INTERVAL_S
             assert stream.getvalue().count("elapsed=") == expected, (
                 f"terminal={terminal} rendered the wrong number of lines"
             )
@@ -2351,7 +2393,7 @@ class TestRunLog:
         """One log per invocation accumulates; the four result CSVs do not."""
         args = argparse.Namespace(output_dir=str(tmp_path), log_dir=None, workers=1)
 
-        path = _RunLog(args, "pytest").write(0)
+        path = RunLog(args, "pytest").write(0)
 
         assert os.path.dirname(path) == str(tmp_path / runlog.DEFAULT_LOG_DIRNAME)
         assert sorted(os.listdir(tmp_path)) == [runlog.DEFAULT_LOG_DIRNAME]
@@ -2362,14 +2404,14 @@ class TestRunLog:
             output_dir=str(tmp_path / "out"), log_dir=str(elsewhere), workers=1
         )
 
-        path = _RunLog(args, "pytest").write(0)
+        path = RunLog(args, "pytest").write(0)
 
         assert os.path.dirname(path) == str(elsewhere)
         assert not (tmp_path / "out").exists(), "the output dir is not created here"
 
     @staticmethod
-    def _log(tmp_path: Path, runtimes: Sequence[float]) -> _RunLog:
-        run_log = _RunLog(
+    def _log(tmp_path: Path, runtimes: Sequence[float]) -> RunLog:
+        run_log = RunLog(
             argparse.Namespace(output_dir=str(tmp_path), log_dir=None, workers=1),
             "pytest",
         )
@@ -2461,7 +2503,7 @@ class TestCifToPdb:
     def test_missing_occupancies_are_blank_not_one(self, tmp_path: Path) -> None:
         """README: '.' and '?' become blank PDB occupancy, never 1.00."""
         cif = self._standard_cif(tmp_path)
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         lines = _pdb_atom_lines(out)
         assert len(lines) == 5
         occupancies = [_occupancy_field(line) for line in lines]
@@ -2476,7 +2518,7 @@ class TestCifToPdb:
     ) -> None:
         """Only columns 55-60 change; coordinates, B and element stay put."""
         cif = self._standard_cif(tmp_path)
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         blanked = _pdb_atom_lines(out)[1]
         assert blanked[30:38].strip() == "21.500"
         assert blanked[60:66].strip() == "20.00"
@@ -2522,7 +2564,7 @@ class TestCifToPdb:
             ],
             header=_CIF_HEADER_NO_OCCUPANCY,
         )
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         for line in _pdb_atom_lines(out):
             assert _occupancy_field(line).strip() == "1.00"
 
@@ -2530,14 +2572,14 @@ class TestCifToPdb:
         assert context.occupancy_validation_failed is False
         assert context.defaulted_occupancy_atom_count == 2
         assert "occupancy_dictionary_default_applied" in context.warning_codes
-        assert structure_analysis.count_deposited_ni(context) == pytest.approx(2.0)
+        assert structure_analysis.count_deposited_ni(context) == approx(2.0)
 
     def test_type_symbol_is_written_into_the_pdb_element_field(
         self, tmp_path: Path
     ) -> None:
         """Alchemy reads the element column, never guesses from atom names."""
         cif = self._standard_cif(tmp_path)
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         elements = [_element_field(line) for line in _pdb_atom_lines(out)]
         assert elements == ["N", "C", "C", "ZN", "FE"]
 
@@ -2546,7 +2588,7 @@ class TestCifToPdb:
     ) -> None:
         """A >3-character CCD id cannot fit the legacy field, so map it."""
         cif = self._standard_cif(tmp_path)
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
             remarks = [
                 line.split()
@@ -2584,7 +2626,7 @@ class TestCifToPdb:
                 ),
             ],
         )
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
             assert not any(line.startswith(RESNAME_REMARK_PREFIX) for line in handle)
 
@@ -2595,7 +2637,7 @@ class TestCifToPdb:
         while Alchemy's own output keeps the mmCIF identity.
         """
         cif = self._standard_cif(tmp_path)
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         context = structure_analysis.load_structure("test", out)
         by_atom = {site.atom_name: site for site in context.source_atoms}
 
@@ -2606,8 +2648,8 @@ class TestCifToPdb:
 
         assert by_atom["CA"].occupancy_valid is False
         assert by_atom["C"].occupancy_valid is False
-        assert by_atom["N"].occupancy == pytest.approx(1.0)
-        assert by_atom["ZN"].occupancy == pytest.approx(0.75)
+        assert by_atom["N"].occupancy == approx(1.0)
+        assert by_atom["ZN"].occupancy == approx(0.75)
         assert context.defaulted_occupancy_atom_count == 0
         assert "occupancy_dictionary_default_applied" not in context.warning_codes
 
@@ -2638,7 +2680,7 @@ class TestCifToPdb:
             ],
         )
 
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "many-chains.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "many-chains.pdb"))
         atom_lines = _pdb_atom_lines(out)
         assert len(atom_lines) == 63
         assert {line[21:22] for line in atom_lines} == {"A"}
@@ -2686,16 +2728,14 @@ class TestCifToPdb:
         # without reproducing the packed numbering.
         source = gemmi.read_structure(cif)
         cra = next(item for item in source[0].all() if item.chain.name == "A")
-        resolved = declared_connections._analysis_atom_for_partner(context, cra, {})
+        resolved = declared_connections.analysis_atom_for_partner(context, cra, {})
         assert resolved is not None
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"
 
     def test_missing_input_file_raises_file_not_found(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
-            conversion._cif_to_pdb(
-                str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb")
-            )
+            conversion.cif_to_pdb(str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb"))
 
     def test_duplicate_atom_site_id_is_rejected(self, tmp_path: Path) -> None:
         """Serials key the occupancy restoration; duplicates make it ambiguous."""
@@ -2722,7 +2762,7 @@ class TestCifToPdb:
             ],
         )
         with pytest.raises(ValueError, match="duplicate mmCIF atom_site id"):
-            conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+            conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
 
     def test_code_atom_site_ids_are_mapped_to_generated_pdb_serials(
         self, tmp_path: Path
@@ -2762,7 +2802,7 @@ class TestCifToPdb:
                 ),
             ],
         )
-        out = conversion._cif_to_pdb(cif, str(tmp_path / "out.pdb"))
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         lines = _pdb_atom_lines(out)
 
         # Gemmi groups the two A-chain rows even though the B-chain row was
@@ -2770,9 +2810,9 @@ class TestCifToPdb:
         # association through that reorder.
         assert [line[12:16].strip() for line in lines] == ["N", "C", "ZN"]
         assert [int(line[6:11]) for line in lines] == [1, 2, 4]
-        assert float(_occupancy_field(lines[0])) == pytest.approx(0.25)
+        assert float(_occupancy_field(lines[0])) == approx(0.25)
         assert _occupancy_field(lines[1]).strip() == ""
-        assert float(_occupancy_field(lines[2])) == pytest.approx(0.75)
+        assert float(_occupancy_field(lines[2])) == approx(0.75)
 
     def test_multiple_atom_site_blocks_are_rejected(self, tmp_path: Path) -> None:
         atoms = [
@@ -2788,30 +2828,30 @@ class TestCifToPdb:
         path = tmp_path / "two.cif"
         path.write_text(text)
         with pytest.raises(ValueError, match="exactly one block"):
-            conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
+            conversion.cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
     def test_cif_without_atom_records_is_rejected(self, tmp_path: Path) -> None:
         """A metadata-only mmCIF is not a coordinate file."""
         path = tmp_path / "meta.cif"
         path.write_text("data_TEST\n_cell.length_a 60.0\n")
         with pytest.raises(ValueError, match="exactly one block"):
-            conversion._cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
+            conversion.cif_to_pdb(str(path), str(tmp_path / "out.pdb"))
 
     def test_creates_the_destination_directory(self, tmp_path: Path) -> None:
         cif = self._standard_cif(tmp_path)
         dst = tmp_path / "nested" / "deeper" / "out.pdb"
-        out = conversion._cif_to_pdb(cif, str(dst))
+        out = conversion.cif_to_pdb(cif, str(dst))
         assert out == str(dst)
         assert os.path.isfile(out)
 
 
 class TestResidueConversionRecords:
-    """The identity assertions ``_cif_to_pdb`` enforces on gemmi's writer."""
+    """The identity assertions ``cif_to_pdb`` enforces on gemmi's writer."""
 
     def test_identical_structures_produce_no_records(self) -> None:
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(_BASE_RESIDUES)
-        assert conversion._residue_conversion_records(source, converted) == []
+        assert conversion.residue_conversion_records(source, converted) == []
 
     def test_a_renamed_residue_is_recorded_with_its_author_identity(self) -> None:
         """The record must locate the residue the way the PDB reader will."""
@@ -2827,7 +2867,7 @@ class TestResidueConversionRecords:
                 ("B", 7, "SF4", [("FE1", "FE")]),
             ]
         )
-        assert conversion._residue_conversion_records(source, converted) == [
+        assert conversion.residue_conversion_records(source, converted) == [
             (1, "B", "7", "SF4", "SF4X")
         ]
 
@@ -2836,7 +2876,7 @@ class TestResidueConversionRecords:
         source = _simple_structure(_BASE_RESIDUES)
         converted = _simple_structure(list(reversed(_BASE_RESIDUES)))
         with pytest.raises(ValueError, match="changed residue ordering"):
-            conversion._residue_conversion_records(source, converted)
+            conversion.residue_conversion_records(source, converted)
 
     def test_changed_author_identifiers_are_rejected(self) -> None:
         source = _simple_structure(_BASE_RESIDUES)
@@ -2847,7 +2887,7 @@ class TestResidueConversionRecords:
             ]
         )
         with pytest.raises(ValueError, match="ordering|author identifiers"):
-            conversion._residue_conversion_records(source, converted)
+            conversion.residue_conversion_records(source, converted)
 
     def test_changed_atom_membership_is_rejected(self) -> None:
         source = _simple_structure(_BASE_RESIDUES)
@@ -2858,7 +2898,7 @@ class TestResidueConversionRecords:
             ]
         )
         with pytest.raises(ValueError, match="atom membership"):
-            conversion._residue_conversion_records(source, converted)
+            conversion.residue_conversion_records(source, converted)
 
     def test_changed_duplicate_multiplicity_is_rejected(self) -> None:
         source = _simple_structure(
@@ -2873,12 +2913,12 @@ class TestResidueConversionRecords:
             ]
         )
         with pytest.raises(ValueError, match="ordering|multiplicity"):
-            conversion._residue_conversion_records(source, converted)
+            conversion.residue_conversion_records(source, converted)
 
     def test_the_index_keys_on_model_chain_and_author_resnum(self) -> None:
         """Residues are located by the identifiers EDSTATS also reports."""
         structure = _simple_structure(_BASE_RESIDUES)
-        index, order = conversion._residue_index_by_author(structure, "mmCIF")
+        index, order = conversion.residue_index_by_author(structure, "mmCIF")
         assert order == [(0, "A", "1"), (0, "B", "2")]
         assert index[(0, "B", "2")] == [("ZN", (("ZN", "Zn"),))]
 
@@ -2889,7 +2929,7 @@ class TestResidueConversionRecords:
                 ("A", 1, "ALA", [("N", "N")]),
             ]
         )
-        index, order = conversion._residue_index_by_author(structure, "mmCIF")
+        index, order = conversion.residue_index_by_author(structure, "mmCIF")
         assert order == [(0, "A", "1"), (0, "A", "1")]
         assert [name for name, _ in index[(0, "A", "1")]] == ["GLY", "ALA"]
 
@@ -2921,7 +2961,7 @@ class TestFirstModelPdb:
         )
         source = builder.write_pdb(tmp_path / "site.pdb")
         dst = tmp_path / "first.pdb"
-        path, count = conversion._first_model_pdb(source, str(dst))
+        path, count = conversion.first_model_pdb(source, str(dst))
         assert path == source
         assert count == 1
         assert not dst.exists()
@@ -2930,7 +2970,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        path, count = conversion._first_model_pdb(str(source), str(dst))
+        path, count = conversion.first_model_pdb(str(source), str(dst))
         assert path == str(dst)
         assert count == 2
 
@@ -2945,7 +2985,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        conversion._first_model_pdb(str(source), str(dst))
+        conversion.first_model_pdb(str(source), str(dst))
         for line in dst.read_text().splitlines():
             assert line[:6].strip().upper() not in ("MODEL", "ENDMDL")
         assert gemmi.read_structure(str(dst)).__len__() == 1
@@ -2957,7 +2997,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        conversion._first_model_pdb(str(source), str(dst))
+        conversion.first_model_pdb(str(source), str(dst))
         lines = dst.read_text().splitlines()
         assert not any(line.startswith("NUMMDL") for line in lines)
         assert any(line.startswith("CRYST1") for line in lines)
@@ -2971,7 +3011,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        conversion._first_model_pdb(str(source), str(dst))
+        conversion.first_model_pdb(str(source), str(dst))
         lines = dst.read_text().splitlines()
         assert not any(line.startswith("MASTER") for line in lines)
         assert lines[-1] == "END"
@@ -2981,7 +3021,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "first.pdb"
-        conversion._first_model_pdb(str(source), str(dst))
+        conversion.first_model_pdb(str(source), str(dst))
         source_atom_lines = [
             line for line in _MULTI_MODEL_PDB.splitlines() if line.startswith("ATOM")
         ]
@@ -2993,7 +3033,7 @@ class TestFirstModelPdb:
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
         dst = tmp_path / "nested" / "first.pdb"
-        path, _ = conversion._first_model_pdb(str(source), str(dst))
+        path, _ = conversion.first_model_pdb(str(source), str(dst))
         assert os.path.isfile(path)
 
     def test_reported_model_count_is_the_source_ensemble_size(
@@ -3002,7 +3042,7 @@ class TestFirstModelPdb:
         """The manifest's input_model_count describes the deposited file."""
         source = tmp_path / "multi.pdb"
         source.write_text(_MULTI_MODEL_PDB)
-        _, count = conversion._first_model_pdb(str(source), str(tmp_path / "first.pdb"))
+        _, count = conversion.first_model_pdb(str(source), str(tmp_path / "first.pdb"))
         assert count == 2
         assert len(gemmi.read_structure(str(source))) == count
 
@@ -3028,14 +3068,14 @@ class TestOutputDirectoryLock:
         monkeypatch.setattr(output_lock, "_platform_lock", FakeMsvcrt)
 
         with open(path, "r+", encoding="utf-8") as handle:
-            output_lock._acquire_file_lock(handle)
+            output_lock.acquire_file_lock(handle)
             assert handle.tell() == 0
-            output_lock._release_file_lock(handle)
+            output_lock.release_file_lock(handle)
             assert handle.tell() == 0
 
         assert calls == [
-            (FakeMsvcrt.LK_NBLCK, output_lock._WINDOWS_LOCK_OFFSET, 1),
-            (FakeMsvcrt.LK_UNLCK, output_lock._WINDOWS_LOCK_OFFSET, 1),
+            (FakeMsvcrt.LK_NBLCK, output_lock.WINDOWS_LOCK_OFFSET, 1),
+            (FakeMsvcrt.LK_UNLCK, output_lock.WINDOWS_LOCK_OFFSET, 1),
         ]
 
     def test_lock_path_symlink_is_refused_without_touching_its_target(
@@ -3128,7 +3168,7 @@ class TestOutputDirectoryLock:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         monkeypatch.setattr(
-            pool, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
+            pool, "resolve_ccp4_environment", _resolved_ccp4_environment
         )
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -3182,7 +3222,7 @@ class TestLeakedWorkDirectorySweep:
         staging = tmp_path / os.path.basename(staging)
         (staging / "manifest.csv").write_text("stale", encoding="utf-8")
 
-        removed = pool._sweep_owned_scratch_dirs(str(tmp_path))
+        removed = pool.sweep_owned_scratch_dirs(str(tmp_path))
 
         assert removed == 2
         assert sorted(os.listdir(tmp_path)) == []
@@ -3199,7 +3239,7 @@ class TestLeakedWorkDirectorySweep:
         (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
         (tmp_path / ".alchemy-109m-unmarked").mkdir()
 
-        assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
+        assert pool.sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert sorted(os.listdir(tmp_path)) == [
             ".alchemy-109m-unmarked",
             ".alchemyrc",
@@ -3216,7 +3256,7 @@ class TestLeakedWorkDirectorySweep:
             preserve=True,
         )
 
-        assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
+        assert pool.sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert os.path.isdir(kept)
 
     def test_symlink_is_not_followed_even_if_its_target_is_marked(
@@ -3230,12 +3270,12 @@ class TestLeakedWorkDirectorySweep:
         link = tmp_path / ".alchemy-109m-link"
         link.symlink_to(target, target_is_directory=True)
 
-        assert pool._sweep_owned_scratch_dirs(str(tmp_path)) == 0
+        assert pool.sweep_owned_scratch_dirs(str(tmp_path)) == 0
         assert link.is_symlink()
         assert os.path.isdir(target)
 
     def test_missing_directory_is_not_an_error(self, tmp_path: Path) -> None:
-        assert pool._sweep_owned_scratch_dirs(str(tmp_path / "absent")) == 0
+        assert pool.sweep_owned_scratch_dirs(str(tmp_path / "absent")) == 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
@@ -3250,9 +3290,7 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     if os.geteuid() == 0:
         pytest.skip("root ignores directory permissions")
 
-    monkeypatch.setattr(
-        pool, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
-    )
+    monkeypatch.setattr(pool, "resolve_ccp4_environment", _resolved_ccp4_environment)
     parent = tmp_path / "readonly"
     parent.mkdir()
     parent.chmod(0o500)
@@ -3293,9 +3331,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
     The run itself fails for want of a mirror: sweeping happens at startup, so
     even a failing run must leave the directory clean.
     """
-    monkeypatch.setattr(
-        pool, "resolve_ccp4_environment", lambda args: (dict(os.environ), None)
-    )
+    monkeypatch.setattr(pool, "resolve_ccp4_environment", _resolved_ccp4_environment)
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     leaked: str | Path = output_lock.create_owned_scratch_directory(
@@ -3329,7 +3365,7 @@ class TestDensityResultReachesTheResult:
     """The worker must report the density stage's own answers, not its request."""
 
     @staticmethod
-    def _density(**overrides: Any) -> density.DensityResult:
+    def density_result(**overrides: Any) -> density.DensityResult:
         fields: dict[str, Any] = {
             "stats_out": "/nonexistent/stats.out",
             "rszd": "/nonexistent/rszd.pdb",
@@ -3356,12 +3392,12 @@ class TestDensityResultReachesTheResult:
         result: density.DensityResult,
         **cfg_overrides: Any,
     ) -> worker.EntryResult:
-        monkeypatch.setattr(
-            worker, "extract_metal_statistics", lambda *a, **k: ([], [])
-        )
-        return _manual_entry(
-            tmp_path, monkeypatch, lambda *a, **k: result, **cfg_overrides
-        )
+        monkeypatch.setattr(worker, "extract_metal_statistics", _empty_metal_statistics)
+
+        def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
+            return result
+
+        return _manual_entry(tmp_path, monkeypatch, density_stage, **cfg_overrides)
 
     def test_the_scope_reported_is_the_one_achieved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3375,7 +3411,7 @@ class TestDensityResultReachesTheResult:
         result = self._entry(
             tmp_path,
             monkeypatch,
-            self._density(
+            self.density_result(
                 density_map_scope_requested="model-envelope",
                 density_map_scope_used="full-extent-fallback",
             ),
@@ -3390,7 +3426,7 @@ class TestDensityResultReachesTheResult:
     ) -> None:
         """They are how a run log attributes an entry's cost to a CCP4 program."""
         result = self._entry(
-            tmp_path, monkeypatch, self._density(timings={"edstats_s": 12.5})
+            tmp_path, monkeypatch, self.density_result(timings={"edstats_s": 12.5})
         )
 
         assert result.timings["edstats_s"] == 12.5
@@ -3403,7 +3439,7 @@ class TestDensityResultReachesTheResult:
         result = self._entry(
             tmp_path,
             monkeypatch,
-            self._density(
+            self.density_result(
                 twin_coefficient_normalization_applied=True,
                 twin_coefficient_normalization={"usable_reflections": 10},
             ),
@@ -3416,7 +3452,7 @@ class TestDensityResultReachesTheResult:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool
     ) -> None:
         """The scratch directory holds the maps, so only the flag may keep it."""
-        self._entry(tmp_path, monkeypatch, self._density(), keep=keep)
+        self._entry(tmp_path, monkeypatch, self.density_result(), keep=keep)
 
         scratch = [
             name for name in os.listdir(tmp_path) if name.startswith(".alchemy-")
@@ -3436,18 +3472,22 @@ def test_a_loaded_structure_fills_in_the_model_provenance(
     failed before ``load_structure`` cannot claim a model count; a successful
     load must fill them in.
     """
-    monkeypatch.setattr(worker, "extract_metal_statistics", lambda *a, **k: ([], []))
+    monkeypatch.setattr(worker, "extract_metal_statistics", _empty_metal_statistics)
+
+    def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
+        return TestDensityResultReachesTheResult.density_result()
+
     result = _manual_entry(
         tmp_path,
         monkeypatch,
-        lambda *a, **k: TestDensityResultReachesTheResult._density(),
+        density_stage,
     )
 
     assert result.input_model_count == 1
     assert result.model_analyzed == 1
     assert result.multi_model_structure is False
 
-    row = _manifest_row(result, False, True, {}, {})
+    row = manifest_row(result, False, True, {}, {})
     assert row["input_model_count"] == 1
     assert row["model_analyzed"] == 1
 

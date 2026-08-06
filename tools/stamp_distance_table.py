@@ -56,9 +56,9 @@ def sha256(path: str) -> str:
 def count_rows(path: str) -> int:
     """Count the rows through the loader, so the count matches what it accepts."""
     sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-    from reference_data import _load_literature
+    from reference_data import load_literature
 
-    return len(_load_literature(path))
+    return len(load_literature(path))
 
 
 def build_metadata(path: str, generated: str) -> dict[str, object]:

@@ -9,7 +9,7 @@ can be wrong while ``distance`` and ``symmetry_operation`` still look right:
 
 * **Special-position deduplication.** A metal on a crystallographic axis sees
   several Gemmi images of one deposited donor land on nearly the same point;
-  ``_deduplicate_special_position_contacts`` collapses them inside the 0.8 A
+  ``deduplicate_special_position_contacts`` collapses them inside the 0.8 A
   special-position cutoff, which is a different threshold from the 0.001 A
   tolerance for conflicting duplicate coordinate records.
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 from collections.abc import Callable, Sequence
 
 import pytest
@@ -41,6 +41,25 @@ from metal_elements import METAL_ELEMENTS
 
 import helpers
 from helpers import StructureBuilder, simple_metal_site
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
 
 
 # Every edge is short enough that a donor deposited on the far side of the box
@@ -72,8 +91,7 @@ def _write_structure(
         transform.vec.fromlist([float(value) for value in translation])
         structure.ncs.append(gemmi.NcsOp(transform, str(identifier), False))
     path = str(path)
-    structure.write_pdb(path)
-    return path
+    return helpers.write_pdb(structure, path)
 
 
 class _Analysis:
@@ -330,7 +348,7 @@ def test_symmetry_case_reports_the_expected_operation_and_scope(
     row = analysis.rows[0]
     assert row["symmetry_operation"] == code
     assert row["contact_scope"] == scope
-    assert row["distance"] == pytest.approx(2.09, abs=1e-3)
+    assert row["distance"] == approx(2.09, abs=1e-3)
 
 
 def test_transformed_neighbor_position_reproduces_the_reported_distance(
@@ -349,7 +367,7 @@ def test_transformed_neighbor_position_reproduces_the_reported_distance(
 
     # ``distance`` is rounded to 3 decimals and the position to 6, so the
     # comparison tolerance is the rounding of ``distance`` itself.
-    assert recomputed == pytest.approx(row["distance"], abs=1e-3)
+    assert recomputed == approx(row["distance"], abs=1e-3)
 
 
 def test_published_image_positions_are_rounded_in_both_streams(
@@ -402,7 +420,7 @@ def test_transformed_neighbor_is_the_image_not_the_deposited_atom(
     deposited_distance = sa.position_distance(analysis.metal_xyz, deposited)
 
     if scope == "explicit":
-        assert transformed == pytest.approx(deposited, abs=1e-6)
+        assert transformed == approx(deposited, abs=1e-6)
         assert _cell_translation(row) == (0, 0, 0)
         assert row["symmetry_contact"] is False
         return
@@ -435,7 +453,7 @@ def test_crystallographic_image_matches_an_independent_transform(
         analysis.context, op_number, _cell_translation(row), deposited
     )
 
-    assert _transformed_position(row) == pytest.approx(expected, abs=1e-6)
+    assert _transformed_position(row) == approx(expected, abs=1e-6)
 
 
 def test_candidate_rows_carry_the_same_image_geometry(
@@ -457,14 +475,14 @@ def test_candidate_rows_carry_the_same_image_geometry(
 
     assert candidate["symmetry_operation"] == code
     assert candidate["contact_scope"] == scope
-    assert _transformed_position(candidate) == pytest.approx(
+    assert _transformed_position(candidate) == approx(
         _transformed_position(analysis.rows[0]), abs=1e-9
     )
     assert _cell_translation(candidate) == _cell_translation(analysis.rows[0])
     recomputed = sa.position_distance(
         analysis.metal_xyz, _transformed_position(candidate)
     )
-    assert recomputed == pytest.approx(candidate["candidate_distance"], abs=1e-3)
+    assert recomputed == approx(candidate["candidate_distance"], abs=1e-3)
 
 
 def test_every_bond_row_position_matches_its_distance_in_a_mixed_site(
@@ -491,7 +509,7 @@ def test_every_bond_row_position_matches_its_distance_in_a_mixed_site(
         recomputed = sa.position_distance(
             analysis.metal_xyz, _transformed_position(row)
         )
-        assert recomputed == pytest.approx(row["distance"], abs=1e-3), row
+        assert recomputed == approx(row["distance"], abs=1e-3), row
         _, code_translation = _decode_symmetry_code(row["symmetry_operation"])
         assert _cell_translation(row) == code_translation
 
@@ -523,7 +541,7 @@ def _raw_and_deduplicated(
 ) -> tuple[list[Candidate], list[Candidate]]:
     """Return the pre- and post-collapse candidate lists for the one metal.
 
-    ``_collect_proximal_candidates`` is the last stage that still holds one
+    ``collect_proximal_candidates`` is the last stage that still holds one
     candidate per Gemmi image, so it is the only place the collapse can be
     observed rather than inferred from a count.
     """
@@ -534,8 +552,8 @@ def _raw_and_deduplicated(
         include_symmetry=True,
         positive_occupancy_only=True,
     )
-    raw = ba._collect_proximal_candidates(context, search, metals[0], True)
-    return raw, ba._deduplicate_special_position_contacts(raw)
+    raw = ba.collect_proximal_candidates(context, search, metals[0], True)
+    return raw, ba.deduplicate_special_position_contacts(raw)
 
 
 def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(
@@ -616,7 +634,7 @@ def test_images_collapse_only_within_the_special_position_cutoff(
     measured = sa.position_distance(
         raw[0].transformed_position, raw[1].transformed_position
     )
-    assert measured == pytest.approx(separation, abs=1e-6)
+    assert measured == approx(separation, abs=1e-6)
     assert (measured <= ba.SPECIAL_POSITION_DEDUP_CUTOFF) is (expected_contacts == 1)
 
     assert len(collapsed) == expected_contacts
@@ -661,14 +679,14 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse() -> None:
         == 0.8
     )
 
-    collapsed = ba._deduplicate_special_position_contacts([origin, boundary])
+    collapsed = ba.deduplicate_special_position_contacts([origin, boundary])
     assert len(collapsed) == 1
     assert collapsed[0].candidate_sources == {
         codes.CandidateSource.PROXIMITY_4A,
         codes.CandidateSource.STRUCT_CONN,
     }
 
-    outside = ba._deduplicate_special_position_contacts(
+    outside = ba.deduplicate_special_position_contacts(
         [candidate(0.0, symmetry=False), candidate(0.800001, symmetry=True)]
     )
     assert len(outside) == 2
@@ -764,7 +782,7 @@ def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
 def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path: Path) -> None:
     """The retained representative may not depend on Gemmi's mark order.
 
-    ``_deduplicate_special_position_contacts`` sorts each source-atom group
+    ``deduplicate_special_position_contacts`` sorts each source-atom group
     before comparing; without that sort the reported scope of a special-position
     contact is luck of the draw between runs.
     """
@@ -772,11 +790,11 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path: Path) ->
     context = sa.load_structure("test", path)
     raw, collapsed = _raw_and_deduplicated(context)
 
-    reversed_result = ba._deduplicate_special_position_contacts(list(reversed(raw)))
+    reversed_result = ba.deduplicate_special_position_contacts(list(reversed(raw)))
 
     assert len(collapsed) == len(reversed_result) == 1
     assert reversed_result[0].symmetry_operation == collapsed[0].symmetry_operation
-    assert reversed_result[0].transformed_position == pytest.approx(
+    assert reversed_result[0].transformed_position == approx(
         collapsed[0].transformed_position, abs=1e-9
     )
 
@@ -833,7 +851,7 @@ def test_purely_generated_site_reports_no_explicit_contacts(tmp_path: Path) -> N
     # The explicit-only view has nothing to assess, so it abstains rather than
     # borrowing the image-inclusive coverage.
     assert math.isnan(summary["geometry_coverage_explicit"])
-    assert summary["geometry_coverage_image_inclusive"] == pytest.approx(1.0)
+    assert summary["geometry_coverage_image_inclusive"] == approx(1.0)
 
 
 def test_mixed_site_keeps_the_two_counts_apart(tmp_path: Path) -> None:
@@ -985,7 +1003,7 @@ def test_generated_images_can_change_the_geometry_verdict(tmp_path: Path) -> Non
 
     (outlier,) = [row for row in analysis.rows if row["geometry_outlier"]]
     assert outlier["contact_scope"] == "crystallographic"
-    assert outlier["distance"] == pytest.approx(1.35, abs=1e-3)
+    assert outlier["distance"] == approx(1.35, abs=1e-3)
 
 
 def test_count_divergence_alone_does_not_flip_the_classification_flag(

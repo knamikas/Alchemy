@@ -1,6 +1,6 @@
 """Logging setup for the driver and its worker processes.
 
-``_ProgressReporter``'s terminal line and ``_RunLog``'s per-invocation document
+``ProgressReporter``'s terminal line and ``RunLog``'s per-invocation document
 are not routed through logging: the first would interleave with records and
 lose its carriage-return redraw, and the second has its own schema.
 

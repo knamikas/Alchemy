@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from structure_analysis import (
     OCCUPANCY_DEFAULT_REMARK_PREFIX,
@@ -33,6 +33,14 @@ if TYPE_CHECKING:
 
 # The one-character chain ids accepted by both Gemmi and the CCP4 tools.
 LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+
+class _PdbWritable(Protocol):
+    """The fully typed positional overload of Gemmi's PDB writer."""
+
+    def write_pdb(self, path: str, options: gemmi.PdbWriteOptions, /) -> None: ...
+
+
 LEGACY_PDB_MAX_RESIDUE_NUMBER = 9999
 
 # (atom name, element symbol) pairs, in residue order.
@@ -138,7 +146,7 @@ def _cif_atom_data(
         raise ValueError("generated atom_site row ids did not survive Gemmi parsing")
     ordered_occupancies = tuple(occupancies[serial - 1] for serial in pdb_serials)
     defaulted_counts = tuple(
-        sum(1 for chain in model for residue in chain for atom in residue)
+        sum(1 for chain in model for residue in chain for _atom in residue)
         if occupancy_defaulted
         else 0
         for model in indexed_structure
@@ -151,7 +159,7 @@ def _cif_atom_data(
     )
 
 
-def _residue_index_by_author(
+def residue_index_by_author(
     structure: gemmi.Structure, label: str
 ) -> tuple[dict[tuple[int, str, str], list[_ResidueEntry]], list[tuple[int, str, str]]]:
     """Index residues by ``(model, chain, resnum)``, with the traversal order.
@@ -183,12 +191,12 @@ def _residue_index_by_author(
     return by_author, order
 
 
-def _residue_conversion_records(
+def residue_conversion_records(
     structure: gemmi.Structure, converted_structure: gemmi.Structure
 ) -> list[_ResnameRecord]:
     """Pair source mmCIF residue names with names written to legacy PDB."""
-    source_by_author, source_order = _residue_index_by_author(structure, "mmCIF")
-    converted_by_author, converted_order = _residue_index_by_author(
+    source_by_author, source_order = residue_index_by_author(structure, "mmCIF")
+    converted_by_author, converted_order = residue_index_by_author(
         converted_structure, "converted"
     )
 
@@ -517,7 +525,7 @@ def _write_cif_conversion_provenance(
         handle.writelines(lines)
 
 
-def _cif_to_pdb(cif_path: str, dst: str) -> str:
+def cif_to_pdb(cif_path: str, dst: str) -> str:
     """Convert mmCIF to PDB without discarding occupancy or CCD provenance."""
     import gemmi
 
@@ -556,9 +564,9 @@ def _cif_to_pdb(cif_path: str, dst: str) -> str:
     if identifiers_packed:
         _pack_legacy_pdb_residue_ids(structure)
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    structure.write_pdb(dst)
+    cast(_PdbWritable, structure).write_pdb(dst, gemmi.PdbWriteOptions())
     converted_structure = gemmi.read_structure(dst)
-    residue_records = _residue_conversion_records(structure, converted_structure)
+    residue_records = residue_conversion_records(structure, converted_structure)
     identity_records = (
         _residue_identity_records(source_residues, converted_structure)
         if identifiers_packed
@@ -580,7 +588,7 @@ def _cif_to_pdb(cif_path: str, dst: str) -> str:
     return dst
 
 
-def _first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
+def first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
     """Return a wrapper-free PDB containing the first coordinate model.
 
     The extraction is textual so atom records, occupancies, identifiers, and

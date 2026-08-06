@@ -1,10 +1,26 @@
 """One donor-like atom image near one metal, at each coordination stage."""
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TypedDict
 
 from codes import CandidateSource, ContactScope, MultiDonorStatus
 from structure_analysis import AtomSite
+
+
+class DeclaredConnectionRecord(TypedDict):
+    """Serialized provenance for one source-declared metal contact."""
+
+    source: CandidateSource
+    connection_id: str
+    connection_type: str
+    connection_link_id: str
+    connection_asu: str
+    connection_reported_distance: float
+
+
+def _declared_connection_records() -> list[DeclaredConnectionRecord]:
+    """Return a fresh, fully typed declaration-provenance collection."""
+    return []
 
 
 @dataclass(slots=True)
@@ -22,8 +38,10 @@ class Candidate:
     translation: tuple[int, int, int]
     candidate_sources: set[CandidateSource]
     #: One record per source declaration binding this image, with the fixed
-    #: keys ``_declared_candidate_for_connection`` writes.
-    declared_connections: list[dict[str, Any]] = field(default_factory=list)
+    #: keys ``declared_candidate_for_connection`` writes.
+    declared_connections: list[DeclaredConnectionRecord] = field(
+        default_factory=_declared_connection_records
+    )
     #: Set only on declaration-derived candidates; proximity discovery leaves
     #: it unset because the metal is already the search centre.
     metal: AtomSite | None = None

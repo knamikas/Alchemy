@@ -12,9 +12,9 @@ of that join are load-bearing:
   proximity search already reports.
 * Whether a declaration names a metal is decided twice, once from the
   declaration's own identifiers and again from the resolved atom's element.
-  See ``_resolve_declared_partners``.
+  See ``resolve_declared_partners``.
 
-``_collect_declared_candidates`` never raises: every failure becomes a message
+``collect_declared_candidates`` never raises: every failure becomes a message
 in its ``issues`` list or a code in its ``warnings`` list. A declaration
 Alchemy cannot bind must leave an audit trail, because dropping it silently is
 indistinguishable from a metal that has no coordination at all.
@@ -25,15 +25,15 @@ from __future__ import annotations
 import math
 from typing import (
     TYPE_CHECKING,
-    Any,
     NamedTuple,
     Protocol,
+    TypedDict,
     cast,
 )
 from collections.abc import Mapping, Sequence, Set
 
 from codes import CandidateSource, ContactScope, WarningCode
-from coordination.contact_record import Candidate
+from coordination.contact_record import Candidate, DeclaredConnectionRecord
 from coordination.donor_chemistry import AA, DONOR_ELEMENTS
 from metal_elements import METAL_ELEMENTS, UNAMBIGUOUS_METAL_COMPONENT_IDS
 from structure_analysis import (
@@ -41,6 +41,7 @@ from structure_analysis import (
     AtomSite,
     StructureContext,
     blank_if_missing,
+    pbc_translation,
     position_distance,
 )
 
@@ -66,7 +67,22 @@ class PartnerLocator(Protocol):
 _MetalKey = tuple[int, int, int, int]
 
 
-def _connection_source(path: str | None) -> CandidateSource:
+class _CandidateGeometry(TypedDict):
+    """Geometry fields passed directly into ``Candidate`` construction."""
+
+    distance_raw: float
+    transformed_position: tuple[float, float, float]
+    symmetry_contact: bool
+    crystallographic_contact: bool
+    strict_ncs_contact: bool
+    strict_ncs_operation_id: str
+    contact_scope: ContactScope
+    symmetry_image_index: int
+    symmetry_operation: str
+    translation: tuple[int, int, int]
+
+
+def connection_source(path: str | None) -> CandidateSource:
     lower = str(path or "").lower()
     if lower.endswith(".gz"):
         lower = lower[:-3]
@@ -81,7 +97,7 @@ def _enum_name(value: object) -> str:
     return str(getattr(value, "name", value)).lower()
 
 
-def _analysis_chain_names(connection_path: str) -> dict[str, str]:
+def analysis_chain_names(connection_path: str) -> dict[str, str]:
     """Map source chain names onto the analysis model's chain names.
 
     Replaying Gemmi's ``setup_entities`` and ``shorten_chain_names`` recovers
@@ -90,7 +106,7 @@ def _analysis_chain_names(connection_path: str) -> dict[str, str]:
     """
     import gemmi
 
-    if _connection_source(connection_path) != CandidateSource.STRUCT_CONN:
+    if connection_source(connection_path) != CandidateSource.STRUCT_CONN:
         return {}
     copy = gemmi.read_structure(connection_path)
     if len(copy) == 0:
@@ -105,7 +121,7 @@ def _analysis_chain_names(connection_path: str) -> dict[str, str]:
     }
 
 
-def _analysis_atom_for_partner(
+def analysis_atom_for_partner(
     structure: StructureContext, cra: gemmi.CRA, chain_names: Mapping[str, str]
 ) -> AtomSite | None:
     """Resolve one declared partner to an analysis atom by author identity.
@@ -144,7 +160,7 @@ def _analysis_atom_for_partner(
     return named[0] if named else None
 
 
-def _selected_conformer_atom(
+def selected_conformer_atom(
     structure: StructureContext, atom: AtomSite | None
 ) -> AtomSite | None:
     """Return the selected-conformer record for ``atom``'s chemical site.
@@ -166,7 +182,7 @@ def _selected_conformer_atom(
     return None
 
 
-def _declared_partner_is_metal(
+def declared_partner_is_metal(
     address: gemmi.AtomAddress, cra: gemmi.CRA | None
 ) -> bool:
     """Whether a source connection partner unambiguously names a metal.
@@ -189,12 +205,12 @@ def _declared_partner_is_metal(
     return residue_name in UNAMBIGUOUS_METAL_COMPONENT_IDS
 
 
-def _declared_candidate_geometry(
+def declared_candidate_geometry(
     structure: StructureContext,
     metal: AtomSite,
     neighbor: AtomSite,
     connection: gemmi.Connection,
-) -> dict[str, Any]:
+) -> _CandidateGeometry:
     """Return contact geometry for a resolved declared connection."""
     import gemmi
 
@@ -223,8 +239,7 @@ def _declared_candidate_geometry(
     nearest = cell.find_nearest_image(metal.pos, neighbor.pos, asu)
     transformed_fractional = cell.fract_image(nearest, cell.fractionalize(neighbor.pos))
     transformed = cell.orthogonalize(transformed_fractional)
-    shift_a, shift_b, shift_c = nearest.pbc_shift
-    translation = (int(shift_a), int(shift_b), int(shift_c))
+    translation = pbc_translation(nearest)
     image_index = int(nearest.sym_idx)
     # ``same_asu()`` cannot classify this: after ``setup_cell_images`` the
     # image list holds the strict-NCS transforms too, so an NCS image is "not
@@ -246,7 +261,9 @@ def _declared_candidate_geometry(
         "crystallographic_contact": crystallographic_contact,
         "strict_ncs_contact": strict_ncs_contact,
         "strict_ncs_operation_id": strict_ncs_operation_id,
-        "contact_scope": contact_scope,
+        # ``image_provenance`` is intentionally broad at the structure layer;
+        # every value it returns here is a ``ContactScope`` member.
+        "contact_scope": cast(ContactScope, contact_scope),
         "symmetry_image_index": image_index,
         "symmetry_operation": nearest.symmetry_code(),
         "translation": translation,
@@ -265,7 +282,7 @@ class _PartnerResolution(NamedTuple):
     failure_exception_name: str | None
 
 
-def _resolve_declared_partners(
+def resolve_declared_partners(
     structure: StructureContext,
     source_model: PartnerLocator,
     connection: gemmi.Connection,
@@ -282,22 +299,22 @@ def _resolve_declared_partners(
     """
     addresses = (connection.partner1, connection.partner2)
     declares_metal = any(
-        _declared_partner_is_metal(address, None) for address in addresses
+        declared_partner_is_metal(address, None) for address in addresses
     )
     try:
         source_cras = [
             source_model.find_cra(address, ignore_segment=True) for address in addresses
         ]
         declares_metal = declares_metal or any(
-            _declared_partner_is_metal(address, cra)
+            declared_partner_is_metal(address, cra)
             for address, cra in zip(addresses, source_cras)
         )
         atoms: list[AtomSite | None] = []
         deselected = False
         substituted = False
         for cra in source_cras:
-            declared_atom = _analysis_atom_for_partner(structure, cra, chain_names)
-            selected_atom = _selected_conformer_atom(structure, declared_atom)
+            declared_atom = analysis_atom_for_partner(structure, cra, chain_names)
+            selected_atom = selected_conformer_atom(structure, declared_atom)
             if declared_atom is not None:
                 if selected_atom is None:
                     deselected = True
@@ -311,7 +328,7 @@ def _resolve_declared_partners(
     return _PartnerResolution(atoms, declares_metal, deselected, substituted, None)
 
 
-def _declared_candidate_for_connection(
+def declared_candidate_for_connection(
     structure: StructureContext,
     connection: gemmi.Connection,
     connection_id: str,
@@ -392,7 +409,7 @@ def _declared_candidate_for_connection(
     if not donor_class_supported:
         warnings.append(WarningCode.DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES)
     try:
-        geometry = _declared_candidate_geometry(structure, metal, neighbor, connection)
+        geometry = declared_candidate_geometry(structure, metal, neighbor, connection)
     except Exception as exc:
         issues.append(
             f"{source} {connection_id} geometry unresolved: {type(exc).__name__}: {exc}"
@@ -405,7 +422,7 @@ def _declared_candidate_for_connection(
     if not math.isfinite(reported_distance) or reported_distance <= 0:
         reported_distance = NAN
 
-    record = {
+    record: DeclaredConnectionRecord = {
         "source": source,
         "connection_id": connection_id,
         "connection_type": _enum_name(connection.type),
@@ -424,7 +441,7 @@ def _declared_candidate_for_connection(
     return candidate, issues, warnings
 
 
-def _collect_declared_candidates(
+def collect_declared_candidates(
     structure: StructureContext,
     connection_path: str | None,
     metals: Sequence[AtomSite],
@@ -439,7 +456,7 @@ def _collect_declared_candidates(
 
     if not connection_path:
         return [], [], []
-    source = _connection_source(connection_path)
+    source = connection_source(connection_path)
     try:
         declared_structure = gemmi.read_structure(connection_path)
     except Exception as exc:
@@ -448,18 +465,18 @@ def _collect_declared_candidates(
         return [], [f"{source} contains no coordinate model"], []
 
     source_model = declared_structure[0]
-    chain_names = _analysis_chain_names(connection_path)
+    chain_names = analysis_chain_names(connection_path)
     selected_metal_keys = {metal.source_key for metal in metals}
     candidates: list[Candidate] = []
     issues: list[str] = []
     warnings: list[str] = []
     for index, connection in enumerate(declared_structure.connections, start=1):
         connection_id = str(connection.name).strip() or f"{source}_{index}"
-        resolved = _resolve_declared_partners(
+        resolved = resolve_declared_partners(
             structure, source_model, connection, chain_names
         )
         candidate, connection_issues, connection_warnings = (
-            _declared_candidate_for_connection(
+            declared_candidate_for_connection(
                 structure,
                 connection,
                 connection_id,

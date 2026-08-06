@@ -26,8 +26,8 @@ from run_logging import (
     logger_for,
 )
 from ccp4_setup import REPO_DIR
-from driver.pool import DEFAULT_ROOT, _run
-from driver.runlog import _RunLog
+from driver.pool import DEFAULT_ROOT, run
+from driver.runlog import RunLog
 
 
 logger = logger_for(__name__)
@@ -270,14 +270,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
     command_parts = list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args]
-    run_log = _RunLog(args, shlex.join(command_parts))
+    run_log = RunLog(args, shlex.join(command_parts))
     exit_code = 1
     previous_term = _install_termination_handler()
     try:
-        exit_code = _run(args, run_log)
+        exit_code = run(args, run_log)
         return exit_code
     except KeyboardInterrupt:
-        # ``_run``'s own finally has already shut the pool down, so this only
+        # ``run``'s own finally has already shut the pool down, so this only
         # decides how the interrupt is reported.
         run_log.driver_error = "interrupted before completion"
         print(

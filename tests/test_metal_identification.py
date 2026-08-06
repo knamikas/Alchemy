@@ -27,33 +27,45 @@ from metal_elements import METAL_ELEMENTS
 from metal_identification import (
     EDSTATS_COLUMNS,
     EDSTATS_METRIC_COLUMNS,
-    _classify_residue,
-    _density_observation_id,
-    _expected_edstats_residues,
-    _is_edstats_separator,
-    _normalize_edstats_row,
-    _sigma_for,
-    _sigma_index,
-    _validate_edstats_row,
-    _validated_edstats_header,
-    _zd_indices,
+    classify_residue,
+    density_observation_id,
+    expected_edstats_residues,
+    is_edstats_separator,
+    normalize_edstats_row,
+    sigma_for,
+    sigma_index,
+    validate_edstats_row,
+    validated_edstats_header,
+    zd_indices,
     extract_metal_statistics,
 )
 from structure_analysis import ResidueSelection, StructureContext, load_structure
 
 
 HEADER = list(helpers.EDSTATS_HEADER)
-INDICES = _validated_edstats_header(HEADER)
+INDICES = validated_edstats_header(HEADER)
 
 
 def _normalize(fields: Sequence[str]) -> list[str]:
-    """``_normalize_edstats_row`` against the standard schema."""
-    return _normalize_edstats_row(list(fields), HEADER, INDICES)
+    """``normalize_edstats_row`` against the standard schema."""
+    return normalize_edstats_row(list(fields), HEADER, INDICES)
 
 
 def _validate(fields: Sequence[str], line_number: int = 2) -> int:
-    """``_validate_edstats_row`` against the standard schema."""
-    return _validate_edstats_row(list(fields), HEADER, INDICES, line_number)
+    """``validate_edstats_row`` against the standard schema."""
+    return validate_edstats_row(list(fields), HEADER, INDICES, line_number)
+
+
+def _drop_interior_field(row: list[str]) -> str:
+    return row.pop(3)
+
+
+def _drop_two_trailing_fields(row: list[str]) -> list[str]:
+    return [row.pop(), row.pop()]
+
+
+def _append_field(row: list[str]) -> None:
+    row.append("0.0")
 
 
 def _extract(
@@ -104,8 +116,8 @@ def _remapped_structure(
     return replace(
         context,
         residues=ambiguous if all_residues is None else tuple(all_residues),
-        _residues_by_coordinate_author={
-            **context._residues_by_coordinate_author,
+        residues_by_coordinate_author_index={
+            **context.residues_by_coordinate_author_index,
             author_key: ambiguous,
         },
     )
@@ -113,7 +125,7 @@ def _remapped_structure(
 
 def test_valid_header_maps_every_documented_column_to_its_position() -> None:
     """The standard header validates and yields the schema's column indices."""
-    indices = _validated_edstats_header(list(helpers.EDSTATS_HEADER))
+    indices = validated_edstats_header(list(helpers.EDSTATS_HEADER))
 
     # The fixture literal is independent of the production constants, so a
     # reorder fails here even if parser and constants change together.
@@ -163,7 +175,7 @@ def test_header_deviations_from_the_fixed_schema_are_rejected(
 ) -> None:
     """Alchemy pins the EDSTATS schema; any deviation must fail loudly."""
     with pytest.raises(ValueError) as excinfo:
-        _validated_edstats_header(list(fields))
+        validated_edstats_header(list(fields))
     assert fragment in str(excinfo.value)
 
 
@@ -171,7 +183,7 @@ def test_a_duplicate_column_is_reported_before_the_ordering_check() -> None:
     """A repeated column is ambiguous, so it is named rather than reordered."""
     fields = _header_with(CP="RT")
     with pytest.raises(ValueError, match="duplicate columns: RT"):
-        _validated_edstats_header(fields)
+        validated_edstats_header(fields)
 
 
 def test_extract_rejects_a_reordered_header_file(tmp_path: Path) -> None:
@@ -195,9 +207,9 @@ def test_a_wellformed_row_validates_and_returns_its_model_number() -> None:
 @pytest.mark.parametrize(
     "width, mutate",
     [
-        pytest.param(41, lambda row: row.pop(3), id="41-interior-field-dropped"),
-        pytest.param(40, lambda row: [row.pop(), row.pop()], id="40-two-short"),
-        pytest.param(43, lambda row: row.append("0.0"), id="43-one-long"),
+        pytest.param(41, _drop_interior_field, id="41-interior-field-dropped"),
+        pytest.param(40, _drop_two_trailing_fields, id="40-two-short"),
+        pytest.param(43, _append_field, id="43-one-long"),
     ],
 )
 def test_row_width_must_match_the_header(
@@ -292,7 +304,7 @@ def test_rows_from_another_model_fail_the_entry(tmp_path: Path) -> None:
 )
 def test_model_separator_rows_are_recognized(fields: Sequence[str]) -> None:
     """EDSTATS' synthetic MODEL row is skipped, in both captured shapes."""
-    assert _is_edstats_separator(list(fields))
+    assert is_edstats_separator(list(fields))
 
 
 @pytest.mark.parametrize(
@@ -317,7 +329,7 @@ def test_rows_that_only_resemble_a_separator_are_left_to_validation(
     fields: Sequence[str], why: str
 ) -> None:
     """Recognition is semantic, so malformed rows still reach row validation."""
-    assert not _is_edstats_separator(list(fields)), why
+    assert not is_edstats_separator(list(fields)), why
 
 
 def test_extract_skips_separator_rows_without_counting_them(tmp_path: Path) -> None:
@@ -458,19 +470,19 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path: Path) -> 
 def test_density_observation_id_names_the_edstats_row_not_an_atom() -> None:
     """The identifier is residue-level and case-normalized on the entry id."""
     fields = _normalize(helpers.edstats_row("FES", "B", "5", mn=1, nr=12))
-    observation = _density_observation_id("1ABC", fields, INDICES)
+    observation = density_observation_id("1ABC", fields, INDICES)
 
     assert observation == (
         "1abc/model=1/chain=B/residue=5/component=FES/edstats_row=12"
     )
-    assert observation == _density_observation_id("1ABC", fields, INDICES)
+    assert observation == density_observation_id("1ABC", fields, INDICES)
 
 
 def test_density_observation_id_distinguishes_repeated_author_identifiers() -> None:
     """NR disambiguates two EDSTATS rows with the same author residue id."""
     first = _normalize(helpers.edstats_row("ZN", "B", "1", nr=1))
     second = _normalize(helpers.edstats_row("ZN", "B", "1", nr=2))
-    assert _density_observation_id("test", first, INDICES) != _density_observation_id(
+    assert density_observation_id("test", first, INDICES) != density_observation_id(
         "test", second, INDICES
     )
 
@@ -478,7 +490,7 @@ def test_density_observation_id_distinguishes_repeated_author_identifiers() -> N
 def test_density_observation_id_renders_a_blank_chain_explicitly() -> None:
     """A blank chain becomes ``_`` so the identifier keeps six labelled parts."""
     fields = _normalize(helpers.edstats_row("ZN", "_", "1", omit_cp=True))
-    observation = _density_observation_id("test", fields, INDICES)
+    observation = density_observation_id("test", fields, INDICES)
     assert observation == "test/model=1/chain=_/residue=1/component=ZN/edstats_row=1"
     assert len(observation.split("/")) == 6
 
@@ -585,15 +597,17 @@ def classification_context(
 @pytest.mark.parametrize(
     "resname, cofactors, category, site_count",
     [
-        pytest.param("ZN", set(), "metal", 1, id="monatomic-ion"),
-        pytest.param("FE2", set(), "metal", 1, id="ion-ccd-id-is-not-an-element"),
+        pytest.param("ZN", set[str](), "metal", 1, id="monatomic-ion"),
+        pytest.param("FE2", set[str](), "metal", 1, id="ion-ccd-id-is-not-an-element"),
         pytest.param("FES", {"FES"}, "cofactor", 2, id="catalogued-cluster"),
-        pytest.param("FES", set(), "", 2, id="cluster-absent-from-the-catalog"),
-        pytest.param("MZN", set(), "", 1, id="multi-atom-component-is-not-an-ion"),
+        pytest.param("FES", set[str](), "", 2, id="cluster-absent-from-the-catalog"),
+        pytest.param("MZN", set[str](), "", 1, id="multi-atom-component-is-not-an-ion"),
         pytest.param("MZN", {"MZN"}, "cofactor", 1, id="multi-atom-catalogued"),
-        pytest.param("NO", set(), "", 0, id="component-id-collides-with-an-element"),
-        pytest.param("HOH", set(), "", 0, id="water"),
-        pytest.param("HIS", set(), "", 0, id="amino-acid"),
+        pytest.param(
+            "NO", set[str](), "", 0, id="component-id-collides-with-an-element"
+        ),
+        pytest.param("HOH", set[str](), "", 0, id="water"),
+        pytest.param("HIS", set[str](), "", 0, id="amino-acid"),
         pytest.param("ZN", {"ZN"}, "cofactor", 1, id="catalog-outranks-the-ion-rule"),
     ],
 )
@@ -610,7 +624,7 @@ def test_residue_classification(
     )
     metals = {element.upper() for element in METAL_ELEMENTS}
 
-    result_category, metal_sites = _classify_residue(residue, metals, cofactors)
+    result_category, metal_sites = classify_residue(residue, metals, cofactors)
 
     assert result_category == category
     assert len(metal_sites) == site_count
@@ -622,8 +636,8 @@ def test_an_element_outside_the_configured_set_is_not_a_metal(
 ) -> None:
     """Classification is driven by the caller's metal set, not a fixed list."""
     residue = next(r for r in classification_context.residues if r.residue_name == "ZN")
-    assert _classify_residue(residue, {"CU"}, set()) == ("", [])
-    assert _classify_residue(residue, {"ZN"}, set())[0] == "metal"
+    assert classify_residue(residue, {"CU"}, set()) == ("", [])
+    assert classify_residue(residue, {"ZN"}, set())[0] == "metal"
 
 
 def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(
@@ -641,7 +655,7 @@ def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(
     assert residue.chemical_atom_site_count == 1
     assert residue.selected_altloc == "B"
 
-    category, sites = _classify_residue(residue, {"ZN"}, set())
+    category, sites = classify_residue(residue, {"ZN"}, set())
     assert category == "metal"
     assert [site.altloc for site in sites] == ["B"]
 
@@ -721,8 +735,8 @@ def test_zero_occupancy_ion_is_not_a_selected_density_site(tmp_path: Path) -> No
     context = load_structure("test", builder.write_pdb(tmp_path / "zero.pdb"))
     residue = context.residues[0]
 
-    assert _classify_residue(residue, {"ZN"}, set()) == ("", [])
-    assert _expected_edstats_residues(context, {"ZN"}, set()) == {}
+    assert classify_residue(residue, {"ZN"}, set()) == ("", [])
+    assert expected_edstats_residues(context, {"ZN"}, set()) == {}
 
 
 def test_only_metal_and_cofactor_residues_produce_rows(tmp_path: Path) -> None:
@@ -893,21 +907,21 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
     assert len({row["site_key"] for row in rows}) == 2
     assert [row["fields"][header.index("ZDm")] for row in rows] == ["2.0", "8.0"]
 
-    sigma_index = _sigma_index(rows)
-    zd_indices = _zd_indices(header)
+    indexed_sigma = sigma_index(rows)
+    zd_column_indices = zd_indices(header)
     assert [
-        _sigma_for(
-            sigma_index,
+        sigma_for(
+            indexed_sigma,
             row["resname"],
             row["chain"],
             row["resnum"],
-            zd_indices,
+            zd_column_indices,
             site_key=row["site_key"],
         )[0]
         for row in rows
     ] == [2.0, 8.0]
 
-    worker._append_site_fields(rows, {}, duplicated)
+    worker.append_site_fields(rows, {}, duplicated)
     confidence_inputs = confidence_score.prepare_result_confidence_inputs(
         rows, [], STATS_COLUMNS
     )

@@ -16,7 +16,7 @@ import math
 import os
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 from collections.abc import Mapping, Sequence
 
 import pytest
@@ -24,6 +24,25 @@ import pytest
 import confidence_score as cs
 import helpers
 from coordination.schema import STATS_EXTRA_COLUMNS
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
 
 
 # Compact rows are built directly; the pipeline is run only by the one
@@ -223,7 +242,7 @@ def test_severity_matches_hand_computed_anchor_interpolation(
     anchors: Sequence[tuple[float, float]], expected: dict[float, float]
 ) -> None:
     for value, want in expected.items():
-        assert cs.severity(value, anchors) == pytest.approx(want, abs=1e-12), (
+        assert cs.severity(value, anchors) == approx(want, abs=1e-12), (
             f"severity({value})"
         )
 
@@ -236,9 +255,9 @@ def test_severity_is_continuous_at_every_anchor(
     for x, y in anchors:
         left = cs.severity(x - eps, anchors)
         right = cs.severity(x + eps, anchors)
-        assert cs.severity(x, anchors) == pytest.approx(y, abs=1e-12)
-        assert left == pytest.approx(y, abs=1e-6)
-        assert right == pytest.approx(y, abs=1e-6)
+        assert cs.severity(x, anchors) == approx(y, abs=1e-12)
+        assert left == approx(y, abs=1e-6)
+        assert right == approx(y, abs=1e-6)
 
 
 @pytest.mark.parametrize("anchors", [cs.DENSITY_ANCHORS, cs.GEOMETRY_ANCHORS])
@@ -289,14 +308,14 @@ def test_score_site_matches_the_readme_formula(
 ) -> None:
     result = cs.score_site(rszd, zbond, coverage)
     assert result is not None
-    assert result["density_severity"] == pytest.approx(sr, abs=1e-12)
-    assert result["geometry_severity"] == pytest.approx(sg, abs=1e-12)
-    assert result["density_score_component"] == pytest.approx(0.50 * sr)
-    assert result["geometry_score_component"] == pytest.approx(0.35 * coverage * sg)
-    assert result["interaction_score_component"] == pytest.approx(
+    assert result["density_severity"] == approx(sr, abs=1e-12)
+    assert result["geometry_severity"] == approx(sg, abs=1e-12)
+    assert result["density_score_component"] == approx(0.50 * sr)
+    assert result["geometry_score_component"] == approx(0.35 * coverage * sg)
+    assert result["interaction_score_component"] == approx(
         0.15 * coverage * math.sqrt(sr * sg)
     )
-    assert result["confidence_score"] == pytest.approx(
+    assert result["confidence_score"] == approx(
         _expected_confidence(sr, sg, coverage), abs=1e-9
     )
 
@@ -304,11 +323,11 @@ def test_score_site_matches_the_readme_formula(
 def test_score_site_extreme_endpoints_are_exactly_zero_and_one_hundred() -> None:
     perfect = cs.score_site(0.0, 0.0, 1.0)
     assert perfect is not None
-    assert perfect["confidence_score"] == pytest.approx(100.0, abs=1e-12)
+    assert perfect["confidence_score"] == approx(100.0, abs=1e-12)
     worst = cs.score_site(12.0, 12.0, 1.0)
     assert worst is not None
     # 100*(1 - 0.50 - 0.35 - 0.15) == 0 exactly, no clamping needed.
-    assert worst["confidence_score"] == pytest.approx(0.0, abs=1e-9)
+    assert worst["confidence_score"] == approx(0.0, abs=1e-9)
 
 
 def test_score_site_with_zero_coverage_ignores_geometry_entirely() -> None:
@@ -318,10 +337,10 @@ def test_score_site_with_zero_coverage_ignores_geometry_entirely() -> None:
     assert density_only["geometry_score_component"] == 0.0
     assert density_only["interaction_score_component"] == 0.0
     # 100*(1 - 0.50*0.65) = 67.5
-    assert density_only["confidence_score"] == pytest.approx(67.5, abs=1e-9)
+    assert density_only["confidence_score"] == approx(67.5, abs=1e-9)
     wild_geometry = cs.score_site(6.0, 500.0, 0.0)
     assert wild_geometry is not None
-    assert wild_geometry["confidence_score"] == pytest.approx(67.5, abs=1e-9)
+    assert wild_geometry["confidence_score"] == approx(67.5, abs=1e-9)
 
 
 @pytest.mark.parametrize("coverage,effective", [(1.5, 1.0), (99.0, 1.0)])
@@ -330,7 +349,7 @@ def test_score_site_clamps_coverage_above_one(
 ) -> None:
     result = cs.score_site(3.0, 6.0, coverage)
     assert result is not None
-    assert result["confidence_score"] == pytest.approx(
+    assert result["confidence_score"] == approx(
         _expected_confidence(0.25, 0.70, effective), abs=1e-9
     )
 
@@ -339,7 +358,7 @@ def test_score_site_clamps_negative_coverage_to_the_density_only_branch() -> Non
     result = cs.score_site(3.0, 6.0, -0.4)
     assert result is not None
     assert result["geometry_severity"] == 0.0
-    assert result["confidence_score"] == pytest.approx(
+    assert result["confidence_score"] == approx(
         _expected_confidence(0.25, 0.0, 0.0), abs=1e-9
     )
 
@@ -382,7 +401,7 @@ def test_score_site_stays_within_zero_and_one_hundred_without_clamping() -> None
                     - result["interaction_score_component"]
                 )
                 assert -1e-9 <= raw <= 100.0 + 1e-9, (rszd, zbond, coverage)
-                assert result["confidence_score"] == pytest.approx(raw, abs=1e-9)
+                assert result["confidence_score"] == approx(raw, abs=1e-9)
                 assert 0.0 <= result["confidence_score"] <= 100.0
 
 
@@ -402,7 +421,7 @@ def test_score_site_never_passes_a_negative_argument_to_sqrt() -> None:
                 argument = result["density_severity"] * result["geometry_severity"]
                 assert 0.0 <= argument <= 1.0, (rszd, zbond, coverage, argument)
                 clamped = min(1.0, max(0.0, coverage))
-                assert result["interaction_score_component"] == pytest.approx(
+                assert result["interaction_score_component"] == approx(
                     0.15 * clamped * math.sqrt(argument), abs=1e-12
                 )
                 checked += 1
@@ -428,9 +447,7 @@ def test_geometry_coverage_is_reference_covered_over_assigned(
     (prepared,) = cs.prepare_confidence_inputs([_stats_row()], bonds)
     assert int(prepared["assigned_contact_count"]) == len(covered_flags)
     assert int(prepared["reference_covered_contact_count"]) == expected_covered
-    assert float(prepared["geometry_coverage"]) == pytest.approx(
-        expected_coverage, abs=1e-6
-    )
+    assert float(prepared["geometry_coverage"]) == approx(expected_coverage, abs=1e-6)
 
 
 def test_geometry_coverage_with_no_assigned_contacts_is_zero_not_an_error() -> None:
@@ -526,7 +543,7 @@ def test_max_abs_zbond_takes_the_largest_magnitude_and_names_its_contact() -> No
         _bond_row(zscore=None, neighbor="HOH", atom="O"),
     ]
     (prepared,) = cs.prepare_confidence_inputs([_stats_row()], bonds)
-    assert float(prepared["max_abs_zbond"]) == pytest.approx(7.5)
+    assert float(prepared["max_abs_zbond"]) == approx(7.5)
     assert prepared["max_abs_zbond_neighbor_resname"] == "ASP"
     assert prepared["max_abs_zbond_neighbor_atom"] == "OD1"
     assert prepared["max_abs_zbond_neighbor_chain"] == "C"
@@ -571,7 +588,7 @@ def test_missing_rszd_makes_a_site_unscorable(
     reasons = [r for r in prepared["confidence_inputs_missing_reasons"].split("|") if r]
     assert reasons == ([expected_reason] if expected_reason else [])
     if expected_status == "complete":
-        assert float(prepared["rszd_magnitude"]) == pytest.approx(4.0)
+        assert float(prepared["rszd_magnitude"]) == approx(4.0)
 
 
 def test_partial_geometry_coverage_is_flagged_not_silently_averaged() -> None:
@@ -581,7 +598,7 @@ def test_partial_geometry_coverage_is_flagged_not_silently_averaged() -> None:
     assert "partial_geometry_coverage" in prepared[
         "confidence_inputs_missing_reasons"
     ].split("|")
-    assert float(prepared["geometry_coverage"]) == pytest.approx(0.5)
+    assert float(prepared["geometry_coverage"]) == approx(0.5)
 
 
 def test_declared_inferred_and_multi_donor_contacts_are_counted() -> None:
@@ -775,7 +792,7 @@ def test_percentile_is_the_average_rank_ecdf_of_the_frozen_cohort(
         str(tmp_path / "ref"), Counter({10.0: 1, 20.0: 2, 30.0: 1}), 4
     )
     assert reference.cohort_size == 4
-    assert reference.percentile(score) == pytest.approx(expected, abs=1e-9)
+    assert reference.percentile(score) == approx(expected, abs=1e-9)
 
 
 def test_percentile_is_monotonic_across_the_score_range(tmp_path: Path) -> None:
@@ -866,10 +883,8 @@ def test_small_runs_take_percentiles_from_the_frozen_cohort_only(
     alone = cs.score_against_reference([row], reference)
     # 56.72505 -> 56 database scores below it, none equal.
     expected_score = _expected_confidence(0.25, 0.70, 1.0)
-    assert float(alone[0]["confidence_score"]) == pytest.approx(
-        expected_score, abs=1e-5
-    )
-    assert float(alone[0]["confidence_percentile"]) == pytest.approx(
+    assert float(alone[0]["confidence_score"]) == approx(expected_score, abs=1e-5)
+    assert float(alone[0]["confidence_percentile"]) == approx(
         reference.percentile(expected_score), abs=1e-9
     )
     assert int(alone[0]["confidence_cohort_size"]) == 100
@@ -917,7 +932,7 @@ def test_an_explicit_zero_coverage_is_scored_as_no_geometry(tmp_path: Path) -> N
     assert scored["confidence_scoring_status"] == "density_only"
     assert scored["confidence_scoring_reason"] == "no_usable_geometry"
     # 100*(1 - 0.50*0.25) = 87.5: the geometry terms are absent.
-    assert float(scored["confidence_score"]) == pytest.approx(87.5, abs=1e-6)
+    assert float(scored["confidence_score"]) == approx(87.5, abs=1e-6)
 
 
 def test_unscorable_input_status_overrides_complete_numeric_evidence(
@@ -1073,10 +1088,10 @@ def test_finalize_builds_the_cohort_from_scorable_rows_only(tmp_path: Path) -> N
     _, out_rows = _read_csv_rows(output_path)
     assert len(out_rows) == 5
     # The two identical mid-range sites tie: average rank over a cohort of 3.
-    assert float(out_rows[0]["confidence_percentile"]) == pytest.approx(
+    assert float(out_rows[0]["confidence_percentile"]) == approx(
         100.0 * (0 + 0.5 * 2) / 3, abs=1e-6
     )
-    assert float(out_rows[2]["confidence_percentile"]) == pytest.approx(
+    assert float(out_rows[2]["confidence_percentile"]) == approx(
         100.0 * (2 + 0.5 * 1) / 3, abs=1e-6
     )
     assert {row["confidence_reference_id"] for row in out_rows} == {

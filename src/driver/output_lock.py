@@ -12,7 +12,7 @@ import stat
 import tempfile
 from datetime import datetime, UTC
 from types import TracebackType
-from typing import IO, Any
+from typing import IO, Any, cast
 
 
 _IS_WINDOWS = os.name == "nt"
@@ -34,7 +34,7 @@ class OutputDirectoryLockError(RuntimeError):
 
 _active_lock_handle: IO[str] | None = None
 _active_lock_pid: int | None = None
-_WINDOWS_LOCK_OFFSET = 0x7FFFFFFF
+WINDOWS_LOCK_OFFSET = 0x7FFFFFFF
 
 
 def _open_lock_handle(path: str) -> IO[str]:
@@ -88,7 +88,7 @@ def _open_lock_handle(path: str) -> IO[str]:
         raise
 
 
-def _acquire_file_lock(handle: IO[str]) -> None:
+def acquire_file_lock(handle: IO[str]) -> None:
     """Acquire the platform's non-blocking exclusive lease."""
     if not _IS_WINDOWS:
         _platform_lock.flock(
@@ -99,7 +99,7 @@ def _acquire_file_lock(handle: IO[str]) -> None:
         # Keep the locked byte outside the JSON metadata so a contending
         # process can still report the current owner's details. Windows permits
         # byte-range locks beyond end-of-file.
-        handle.seek(_WINDOWS_LOCK_OFFSET)
+        handle.seek(WINDOWS_LOCK_OFFSET)
         _platform_lock.locking(handle.fileno(), _platform_lock.LK_NBLCK, 1)
     except OSError as exc:
         if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
@@ -109,13 +109,13 @@ def _acquire_file_lock(handle: IO[str]) -> None:
         handle.seek(0)
 
 
-def _release_file_lock(handle: IO[str]) -> None:
+def release_file_lock(handle: IO[str]) -> None:
     """Release the platform lease held by ``handle``."""
     if not _IS_WINDOWS:
         _platform_lock.flock(handle.fileno(), _platform_lock.LOCK_UN)
         return
     try:
-        handle.seek(_WINDOWS_LOCK_OFFSET)
+        handle.seek(WINDOWS_LOCK_OFFSET)
         _platform_lock.locking(handle.fileno(), _platform_lock.LK_UNLCK, 1)
     finally:
         handle.seek(0)
@@ -148,10 +148,13 @@ if _register_at_fork is not None:
 def _owner_description(handle: IO[str]) -> str:
     try:
         handle.seek(0)
-        metadata = json.load(handle)
+        loaded: object = json.load(handle)
     except (OSError, ValueError, TypeError):
         return "owner details unavailable"
-    fields = []
+    if not isinstance(loaded, dict):
+        return "owner details unavailable"
+    metadata = cast("dict[str, object]", loaded)
+    fields: list[str] = []
     for key in ("pid", "hostname", "started_utc", "command"):
         value = metadata.get(key)
         if value not in (None, ""):
@@ -179,7 +182,7 @@ class OutputDirectoryLock:
                 f"Cannot lock output directory {self.output_dir}: {exc.strerror or exc}"
             ) from None
         try:
-            _acquire_file_lock(handle)
+            acquire_file_lock(handle)
         except BlockingIOError:
             owner = _owner_description(handle)
             handle.close()
@@ -194,7 +197,7 @@ class OutputDirectoryLock:
                 f"Cannot lock output directory {self.output_dir}: {exc.strerror or exc}"
             ) from None
         try:
-            metadata = {
+            metadata: dict[str, object] = {
                 "schema": 1,
                 "pid": os.getpid(),
                 "hostname": socket.gethostname(),
@@ -208,7 +211,7 @@ class OutputDirectoryLock:
             handle.flush()
             os.fsync(handle.fileno())
         except BaseException as exc:
-            _release_file_lock(handle)
+            release_file_lock(handle)
             handle.close()
             if isinstance(exc, OSError):
                 raise OutputDirectoryLockError(
@@ -235,7 +238,7 @@ class OutputDirectoryLock:
         _active_lock_handle = None
         _active_lock_pid = None
         try:
-            _release_file_lock(handle)
+            release_file_lock(handle)
         finally:
             handle.close()
 
@@ -250,7 +253,7 @@ def create_owned_scratch_directory(
     """Create scratch carrying the marker required for automatic cleanup."""
     path = tempfile.mkdtemp(prefix=prefix, dir=output_dir)
     marker = os.path.join(path, SCRATCH_MARKER_FILENAME)
-    metadata = {
+    metadata: dict[str, object] = {
         "schema": SCRATCH_MARKER_SCHEMA,
         "owner": "alchemy",
         "kind": str(kind),

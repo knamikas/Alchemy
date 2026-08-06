@@ -27,9 +27,9 @@ from collections.abc import Iterable, Mapping, Sequence
 
 from coordination.schema import (
     ZSCORE_OUTLIER_CUTOFF,
-    _bond_row,
-    _candidate_row,
-    _context_warning_values,
+    bond_row,
+    candidate_row,
+    context_warning_values,
 )
 from codes import (
     CandidateSource,
@@ -39,7 +39,7 @@ from codes import (
     ReasonCode,
 )
 from coordination.contact_record import Candidate
-from coordination.declared_connections import _collect_declared_candidates
+from coordination.declared_connections import collect_declared_candidates
 from coordination.donor_chemistry import (
     AA,
     C_TERMINAL_DONOR_ATOMS,
@@ -47,9 +47,9 @@ from coordination.donor_chemistry import (
     INFERRED_DONOR_ATOMS,
     N_TERMINAL_DONOR_ATOMS,
 )
-from coordination.dpi import _calculate_dpi_details
+from coordination.dpi import calculate_dpi_details
 from metal_elements import METAL_ELEMENTS
-from metal_identification import _sigma_for, _sigma_index, _zd_indices
+from metal_identification import sigma_for, sigma_index, zd_indices
 from reference_data import (
     cluster_ids,
     first_sphere_targets,
@@ -63,6 +63,7 @@ from structure_analysis import (
     count_deposited_ni,
     count_ni,
     load_structure,
+    pbc_translation,
     position_distance,
 )
 
@@ -84,10 +85,10 @@ FIRST_SPHERE_TOLERANCE = 0.75
 SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 
 #: One deposited atom record, as ``AtomSite.source_key`` reports it.
-_AtomKey = tuple[int, int, int, int]
+AtomKey = tuple[int, int, int, int]
 
 #: What makes two candidate records the same atom image around one metal.
-_CandidateIdentity = tuple[_AtomKey, str, tuple[int, int, int], tuple[float, ...]]
+_CandidateIdentity = tuple[AtomKey, str, tuple[int, int, int], tuple[float, ...]]
 
 #: What makes two contacts share one donor-residue image around one metal.
 _ResidueImageKey = tuple[
@@ -134,7 +135,7 @@ def _parent_type(
     return "other"
 
 
-def _zscore(dist: float, mu: float, stdev: float, dpi: float) -> float:
+def zscore(dist: float, mu: float, stdev: float, dpi: float) -> float:
     """Bond-distance z-score, ``(dist - mu)/sqrt(stdev^2 + dpi^2)``.
 
     The denominator carries one DPI, not the ``sqrt(2) * DPI`` an
@@ -195,7 +196,7 @@ def _special_position_preference(
     )
 
 
-def _deduplicate_special_position_contacts(
+def deduplicate_special_position_contacts(
     candidates: Iterable[Candidate],
 ) -> list[Candidate]:
     """Collapse near-coincident images of each deposited source atom.
@@ -203,7 +204,7 @@ def _deduplicate_special_position_contacts(
     Sorting each source-atom group before the spatial comparison makes the
     result independent of Gemmi's NeighborSearch mark order.
     """
-    by_source: dict[_AtomKey, list[Candidate]] = {}
+    by_source: dict[AtomKey, list[Candidate]] = {}
     for candidate in candidates:
         by_source.setdefault(candidate.neighbor.source_key, []).append(candidate)
 
@@ -234,7 +235,7 @@ def _deduplicate_special_position_contacts(
     return contacts
 
 
-def _first_sphere_rule(
+def first_sphere_rule(
     metal: AtomSite, neighbor: AtomSite
 ) -> tuple[float, float, str, str]:
     """Return target, cutoff, and provenance for proximity eligibility."""
@@ -368,7 +369,7 @@ def _identify_first_sphere_candidates(
     for candidate in candidates:
         neighbor = candidate.neighbor
         donor_allowed = candidate.inferred_donor_allowed
-        target, cutoff, reference_kind, reference_key = _first_sphere_rule(
+        target, cutoff, reference_kind, reference_key = first_sphere_rule(
             metal, neighbor
         )
         if _candidate_has_zero_occupancy(candidate, metal):
@@ -429,10 +430,10 @@ def _identify_first_sphere_candidates(
         candidate.assignment_reference = reference_key
         if inferred_eligible:
             eligible.append(candidate)
-    return (_deduplicate_special_position_contacts(eligible), unsupported_pairs)
+    return (deduplicate_special_position_contacts(eligible), unsupported_pairs)
 
 
-def _collect_proximal_candidates(
+def collect_proximal_candidates(
     structure: StructureContext,
     search: gemmi.NeighborSearch,
     metal: AtomSite,
@@ -472,8 +473,7 @@ def _collect_proximal_candidates(
             transformed = structure.structure.cell.find_nearest_pbc_position(
                 metal.pos, neighbor.pos, mark.image_idx
             )
-            shift_a, shift_b, shift_c = nearest.pbc_shift
-            translation = (int(shift_a), int(shift_b), int(shift_c))
+            translation = pbc_translation(nearest)
             image_index = int(nearest.sym_idx)
             (
                 crystallographic_contact,
@@ -573,12 +573,12 @@ def _current_contacts_from_candidates(
         and not _candidate_has_zero_occupancy(candidate, metal)
     ]
     return (
-        _deduplicate_special_position_contacts(eligible + declared_not_inferred),
+        deduplicate_special_position_contacts(eligible + declared_not_inferred),
         unsupported_pairs,
     )
 
 
-def _annotate_contacts(
+def annotate_contacts(
     contacts: Iterable[Candidate], metal_element: str, dpi: float
 ) -> None:
     for contact in contacts:
@@ -591,12 +591,12 @@ def _annotate_contacts(
             mu = stdev = zscore_raw = NAN
         else:
             mu, stdev = literature
-            zscore_raw = _zscore(contact.distance_raw, mu, stdev, dpi)
-        zscore = round(zscore_raw, 4) if math.isfinite(zscore_raw) else NAN
+            zscore_raw = zscore(contact.distance_raw, mu, stdev, dpi)
+        rounded_zscore = round(zscore_raw, 4) if math.isfinite(zscore_raw) else NAN
         contact.distance = reported_distance
         contact.literature_distance = mu
         contact.literature_stdev = stdev
-        contact.zscore = zscore
+        contact.zscore = rounded_zscore
         contact.reference_covered = literature is not None
         if math.isfinite(zscore_raw):
             magnitude = abs(zscore_raw)
@@ -755,7 +755,7 @@ def _site_context_values(
     """Aggregate coordination-relevant context without changing confidence."""
     reasons: list[str] = []
     for contact in contacts:
-        values = _context_warning_values(contact)
+        values = context_warning_values(contact)
         if values["context_warning_reasons"]:
             reasons.extend(values["context_warning_reasons"].split("|"))
     non_typical_first_sphere = [
@@ -857,7 +857,7 @@ def _site_summary(
             else ("none", False, False)
         )
 
-    reasons = []
+    reasons: list[str] = []
     if dpi_reason:
         reasons.append(dpi_reason)
     if not image_search_available:
@@ -925,7 +925,7 @@ def run_bond_analysis(
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
-    dict[_AtomKey, dict[str, Any]],
+    dict[AtomKey, dict[str, Any]],
     dict[str, Any],
 ]:
     """Return contact rows, candidate rows, site summaries, and metadata.
@@ -953,7 +953,7 @@ def run_bond_analysis(
         return [], [], {}, metadata
 
     (declared_candidates, declared_issues, declared_warnings) = (
-        _collect_declared_candidates(
+        collect_declared_candidates(
             structure, connection_path or pdb_path, spatial_metals
         )
     )
@@ -974,7 +974,7 @@ def run_bond_analysis(
                 for metal in non_finite_metals
             )
         )
-    declared_by_metal: dict[_AtomKey, list[Candidate]] = {}
+    declared_by_metal: dict[AtomKey, list[Candidate]] = {}
     for candidate in declared_candidates:
         # Every declaration-derived candidate carries the metal it was resolved
         # against; only proximity discovery leaves the field unset.
@@ -982,7 +982,7 @@ def run_bond_analysis(
             cast(AtomSite, candidate.metal).source_key, []
         ).append(candidate)
 
-    dpi, resolution, dpi_reason = _calculate_dpi_details(structure, dpi_inputs)
+    dpi, resolution, dpi_reason = calculate_dpi_details(structure, dpi_inputs)
     ni = count_ni(structure)
     deposited_ni = count_deposited_ni(structure)
     if dpi_reason:
@@ -1007,12 +1007,12 @@ def run_bond_analysis(
             include_symmetry=True,
             positive_occupancy_only=True,
         )
-    sig = _sigma_index(stats_rows)
-    zd_idx = _zd_indices(header)
+    sig = sigma_index(stats_rows)
+    zd_idx = zd_indices(header)
 
     rows: list[dict[str, Any]] = []
     candidate_rows: list[dict[str, Any]] = []
-    summaries: dict[_AtomKey, dict[str, Any]] = {}
+    summaries: dict[AtomKey, dict[str, Any]] = {}
     for metal in metals_in_model:
         if not metal.coordinates_valid:
             summary = _site_summary(
@@ -1039,20 +1039,20 @@ def run_bond_analysis(
             if not candidate.symmetry_contact
         ]
         explicit_candidates = _merge_candidates(
-            _collect_proximal_candidates(structure, explicit_search, metal, False),
+            collect_proximal_candidates(structure, explicit_search, metal, False),
             explicit_declarations,
         )
         _annotate_donor_policy(structure, explicit_candidates)
         explicit, unsupported_pairs = _current_contacts_from_candidates(
             explicit_candidates, metal
         )
-        _annotate_contacts(explicit, metal.element, dpi)
+        annotate_contacts(explicit, metal.element, dpi)
         _annotate_multi_donor_groups(explicit)
         image_candidates: list[Candidate] | None = None
         image_contacts: list[Candidate] | None = None
         if image_search is not None:
             image_candidates = _merge_candidates(
-                _collect_proximal_candidates(structure, image_search, metal, True),
+                collect_proximal_candidates(structure, image_search, metal, True),
                 metal_declarations,
             )
             _annotate_donor_policy(structure, image_candidates)
@@ -1060,7 +1060,7 @@ def run_bond_analysis(
                 image_candidates, metal
             )
             unsupported_pairs.update(image_unsupported)
-            _annotate_contacts(image_contacts, metal.element, dpi)
+            annotate_contacts(image_contacts, metal.element, dpi)
             _annotate_multi_donor_groups(image_contacts)
         if unsupported_pairs:
             metadata["partial_reason_codes"].append(
@@ -1091,7 +1091,7 @@ def run_bond_analysis(
         summary.update(_site_context_values(primary_contacts, primary_candidates))
         summaries[metal.source_key] = summary
 
-        sigma = _sigma_for(
+        sigma = sigma_for(
             sig,
             metal.residue_name,
             metal.chain_id,
@@ -1101,13 +1101,13 @@ def run_bond_analysis(
         )
         parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
         rows.extend(
-            _bond_row(
+            bond_row(
                 pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_type
             )
             for contact in primary_contacts
         )
         candidate_rows.extend(
-            _candidate_row(pdb_id, structure, metal, candidate)
+            candidate_row(pdb_id, structure, metal, candidate)
             for candidate in primary_candidates
         )
 

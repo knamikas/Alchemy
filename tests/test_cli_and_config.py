@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import pytest
 
@@ -266,15 +266,24 @@ def test_the_driver_reads_the_setup_path_configuration_writes(
     setup = tmp_path / "ccp4.setup-sh"
     setup.write_text("# a setup script that changes nothing\n", encoding="utf-8")
 
-    monkeypatch.setattr(pool, "resolve_env", lambda path: {"PATH": str(path)})
-    monkeypatch.setattr(pool, "verify_ccp4", lambda env: None)
+    def resolve_env(path: str | None) -> dict[str, str]:
+        return {"PATH": str(path)}
+
+    def verify_ccp4(_env: Mapping[str, str]) -> None:
+        return None
+
+    monkeypatch.setattr(pool, "resolve_env", resolve_env)
+    monkeypatch.setattr(pool, "verify_ccp4", verify_ccp4)
 
     configure = argparse.Namespace(configure_ccp4=str(setup), ccp4_setup=None)
     assert pool.resolve_ccp4_environment(configure) == (None, None)
     assert primary.exists(), "--configure-ccp4 wrote outside the configured list"
 
-    monkeypatch.setattr(ccp4_setup, "ccp4_tools_available", lambda env=None: False)
-    monkeypatch.setattr(pool, "ccp4_tools_available", lambda env=None: False)
+    def tools_unavailable(_env: Mapping[str, str] | None = None) -> bool:
+        return False
+
+    monkeypatch.setattr(ccp4_setup, "ccp4_tools_available", tools_unavailable)
+    monkeypatch.setattr(pool, "ccp4_tools_available", tools_unavailable)
     monkeypatch.delenv("CCP4_SETUP", raising=False)
 
     run = argparse.Namespace(configure_ccp4=None, ccp4_setup=None)
@@ -375,7 +384,11 @@ def test_windows_ccp4_setup_output_is_authoritative(
         stdout=f"launcher banner\n{ccp4_setup.ENV_SENTINEL}\nPath=C:\\CCP4\\bin\n",
         stderr="",
     )
-    monkeypatch.setattr("ccp4_setup.subprocess.run", lambda *a, **k: completed)
+
+    def run_stub(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return completed
+
+    monkeypatch.setattr("ccp4_setup.subprocess.run", run_stub)
 
     env = ccp4_setup.resolve_env(str(setup))
 
@@ -437,7 +450,7 @@ def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(
 
     monkeypatch.setattr("driver.pool.subprocess.run", fake_run)
 
-    assert pool._alchemy_commit() == "unknown"
+    assert pool.alchemy_commit() == "unknown"
     assert calls and set(calls) == {pool.PROVENANCE_COMMAND_TIMEOUT_S}
 
 

@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from collections.abc import Mapping, Sequence
 
 
@@ -55,7 +55,7 @@ def _windows_ccp4_setup_candidates() -> list[str]:
     ``%CCP4%`` comes first because the installer sets it, making it the only
     root that is not a guess; the rest are the usual installer defaults.
     """
-    roots = []
+    roots: list[str] = []
     ccp4_root = os.environ.get("CCP4")
     if ccp4_root:
         roots.append(ccp4_root)
@@ -107,10 +107,12 @@ def load_ccp4_setup_config(
             continue
         try:
             with path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            if isinstance(data, dict):
+                loaded: object = json.load(fh)
+            if isinstance(loaded, dict):
+                data = cast("dict[object, object]", loaded)
                 for key, value in data.items():
-                    config.setdefault(key, value)
+                    if isinstance(key, str) and isinstance(value, str):
+                        config.setdefault(key, value)
         except (OSError, json.JSONDecodeError):
             continue
     return config
@@ -213,7 +215,7 @@ def _parse_windows_set_output(stdout: str) -> tuple[dict[str, str], bool]:
     The CCP4 batch launcher prints its own banner first, and any of those lines
     can contain "=", so everything before the sentinel is discarded.
     """
-    env = {}
+    env: dict[str, str] = {}
     seen_sentinel = False
     for line in stdout.splitlines():
         if not seen_sentinel:
@@ -304,7 +306,7 @@ def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
         ) from None
     if out.returncode != 0:
         raise Ccp4SetupError(f"Failed to source CCP4 setup {ccp4_setup}:\n{out.stderr}")
-    env = {}
+    env: dict[str, str] = {}
     for chunk in out.stdout.split("\0"):
         if "=" in chunk:
             k, v = chunk.split("=", 1)

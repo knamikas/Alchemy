@@ -2,8 +2,8 @@
 
 ``process`` never raises: one bad entry must not take the batch down, so every
 failure is recorded in the result as a status, a reason code and a bounded
-message. Configuration reaches a worker once through ``_init_worker`` and is
-held in ``_CFG``, because a pool initializer cannot return a value and passing
+message. Configuration reaches a worker once through ``initialize_worker`` and is
+held in ``worker_config``, because a pool initializer cannot return a value and passing
 the config with every task would pickle it per entry.
 """
 
@@ -26,10 +26,10 @@ from coordination.analysis import run_bond_analysis
 from codes import ReasonCode, WarningCode
 from coordination.schema import (
     STATS_EXTRA_COLUMNS,
-    _check_row_schema,
+    check_row_schema,
     stats_extra_values,
 )
-from coordinate_conversion import _first_model_pdb
+from coordinate_conversion import first_model_pdb
 from density_analysis import (
     Ccp4ToolTimeoutError,
     MtzfixValidationError,
@@ -37,9 +37,9 @@ from density_analysis import (
 )
 from driver.output_lock import create_owned_scratch_directory
 from inputs import (
-    _first_existing,
     ensure_entry_available,
     entry_dir_for,
+    first_existing,
     prepare_inputs,
     read_map_column_resolution,
     read_pdb_redo_is_twin,
@@ -135,18 +135,18 @@ class WorkerConfig:
     reference_data_id: str
 
 
-_CFG: WorkerConfig | None = None
-_INFLIGHT: SimpleQueue[tuple[str, int, str]] | None = None
+worker_config: WorkerConfig | None = None
+_inflight_queue: SimpleQueue[tuple[str, int, str]] | None = None
 
 
-def _init_worker(
+def initialize_worker(
     cfg: WorkerConfig,
     inflight: SimpleQueue[tuple[str, int, str]] | None = None,
     log_queue: Queue[logging.LogRecord] | None = None,
 ) -> None:
-    global _CFG, _INFLIGHT
-    _CFG = cfg
-    _INFLIGHT = inflight
+    global worker_config, _inflight_queue
+    worker_config = cfg
+    _inflight_queue = inflight
     # Give this worker and every CCP4 descendant a group the driver can kill as
     # one unit. If the worker itself is SIGKILLed, its active external program
     # otherwise survives as an orphan and keeps consuming resources/writing
@@ -161,7 +161,7 @@ def _init_worker(
     configure_worker_logging(log_queue, level=cfg.log_level)
 
 
-def _announce_inflight(state: str, pdb_id: str) -> None:
+def announce_inflight(state: str, pdb_id: str) -> None:
     """Tell the driver which entry this worker process currently holds.
 
     A worker killed by the OOM killer or a segfault runs no further Python and
@@ -170,10 +170,10 @@ def _announce_inflight(state: str, pdb_id: str) -> None:
     synchronously, so a notification sent before the work begins is already
     readable when the process dies mid-entry.
     """
-    if _INFLIGHT is None:
+    if _inflight_queue is None:
         return
     try:
-        _INFLIGHT.put((state, os.getpid(), pdb_id))
+        _inflight_queue.put((state, os.getpid(), pdb_id))
     except Exception:  # noqa: BLE001 - bookkeeping must never fail an entry
         pass
 
@@ -211,6 +211,18 @@ def blank_if_unmeasured(value: Any) -> Any:
     return "" if value is None else value
 
 
+def _empty_result_rows() -> list[dict[str, Any]]:
+    return []
+
+
+def _empty_result_codes() -> list[str]:
+    return []
+
+
+def _empty_result_timings() -> dict[str, float]:
+    return {}
+
+
 @dataclass(slots=True)
 class EntryResult:
     """One entry's outcome, with every manifest column present from the outset.
@@ -241,16 +253,16 @@ class EntryResult:
     error: str = ""
     no_metals: bool = False
 
-    rows: list[dict[str, Any]] = field(default_factory=list)
-    bond_rows: list[dict[str, Any]] = field(default_factory=list)
-    candidate_rows: list[dict[str, Any]] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=_empty_result_rows)
+    bond_rows: list[dict[str, Any]] = field(default_factory=_empty_result_rows)
+    candidate_rows: list[dict[str, Any]] = field(default_factory=_empty_result_rows)
     # ``None`` until the bond stage runs -- see the class docstring.
     n_bonds: int | None = None
     n_candidates: int | None = None
 
-    reason_codes: list[str] = field(default_factory=list)
-    warning_codes: list[str] = field(default_factory=list)
-    timings: dict[str, float] = field(default_factory=dict)
+    reason_codes: list[str] = field(default_factory=_empty_result_codes)
+    warning_codes: list[str] = field(default_factory=_empty_result_codes)
+    timings: dict[str, float] = field(default_factory=_empty_result_timings)
 
     density_map_scope_used: str = ""
     density_full_map_bytes: int = 0
@@ -275,7 +287,7 @@ class EntryResult:
     multi_model_structure: bool | None = None
 
 
-def _initial_result(
+def initial_result(
     pdb_id: str,
     cfg: WorkerConfig,
     manual_inputs: dict[str, str | None] | None,
@@ -291,9 +303,9 @@ def _initial_result(
     )
 
 
-def _worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult:
+def worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult:
     """Synthesize the retryable result a killed worker could not return."""
-    result = _initial_result(pdb_id, cfg, cfg.manual_inputs)
+    result = initial_result(pdb_id, cfg, cfg.manual_inputs)
     result.status = "error"
     result.retryable = True
     result.reason_codes = [ReasonCode.WORKER_PROCESS_DIED]
@@ -323,7 +335,7 @@ def _source_coordinate_path(
     if manual:
         return manual.get("cif_file") or manual.get("pdb_file") or ""
     return (
-        _first_existing(
+        first_existing(
             os.path.join(entry, f"{pdb_id}_final.cif"),
             os.path.join(entry, f"{pdb_id}_final.cif.gz"),
             os.path.join(entry, f"{pdb_id}_final.pdb"),
@@ -342,7 +354,7 @@ def _resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
 
 
 @dataclass(frozen=True)
-class _EntryInputs:
+class EntryInputs:
     """What the input stage resolved, and the later stages then read.
 
     Held together rather than threaded through each stage separately, so that
@@ -370,7 +382,7 @@ class _EntryInputs:
 def _run_density_stage(
     result: EntryResult,
     cfg: WorkerConfig,
-    inputs: _EntryInputs,
+    inputs: EntryInputs,
     structure: StructureContext,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Calculate the maps, run EDSTATS, and extract this entry's statistics.
@@ -498,7 +510,7 @@ def _sites_without_density_rows(
     return [metal.source_key for metal in selected if metal.source_key not in reported]
 
 
-def _append_site_fields(
+def append_site_fields(
     rows: list[dict[str, Any]],
     # Keyed by ``AtomSite.source_key``, but the lookup key below is a row's own
     # ``site_key``, which is ``None`` for a cofactor that joined no metal site.
@@ -524,7 +536,7 @@ def _append_site_fields(
             coverage = summary.get("geometry_coverage_explicit", NAN)
         extra = stats_extra_values(structure, row.get("site"), summary)
         if index == 0:
-            _check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_stats_all.csv")
+            check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_stats_all.csv")
         row["fields"] = (
             row["fields"]
             + [coverage]
@@ -532,10 +544,10 @@ def _append_site_fields(
         )
 
 
-def _run_bond_stage(
+def run_bond_stage(
     result: EntryResult,
     cfg: WorkerConfig,
-    inputs: _EntryInputs,
+    inputs: EntryInputs,
     structure: StructureContext,
     rows: list[dict[str, Any]],
     header: list[str],
@@ -651,7 +663,7 @@ def _finalize_result(
 
 def process(pdb_id: str) -> EntryResult:
     """Run one entry in an initialized worker and return its result."""
-    cfg = _CFG
+    cfg = worker_config
     if cfg is None:
         raise RuntimeError("worker configuration has not been initialized")
     t0 = time.monotonic()
@@ -660,8 +672,8 @@ def process(pdb_id: str) -> EntryResult:
     work_dir: str | None = None
     manual_inputs = cfg.manual_inputs
     data_json: str | None = None
-    result = _initial_result(pdb_id, cfg, manual_inputs)
-    _announce_inflight("start", pdb_id)
+    result = initial_result(pdb_id, cfg, manual_inputs)
+    announce_inflight("start", pdb_id)
     try:
         if manual_inputs:
             work_dir = create_owned_scratch_directory(
@@ -712,13 +724,13 @@ def process(pdb_id: str) -> EntryResult:
         model1_pdb = os.path.join(work_dir, f"{pdb_id}_model1.pdb")
         if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
             model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
-        pdb, input_model_count = _first_model_pdb(source_pdb, model1_pdb)
+        pdb, input_model_count = first_model_pdb(source_pdb, model1_pdb)
         result.source_coordinate_format = source_format
         result.analysis_coordinate_format = analysis_format
         result.coordinate_conversion_performed = converted
         result.source_coordinate_path = source_coordinate_path
         result.analysis_coordinate_path = pdb
-        inputs = _EntryInputs(
+        inputs = EntryInputs(
             work_dir=work_dir,
             mtz=mtz,
             pdb=pdb,
@@ -775,7 +787,7 @@ def process(pdb_id: str) -> EntryResult:
             return result
         rows, header = _run_density_stage(result, cfg, inputs, structure)
         identification_reason_codes = _identification_reason_codes(rows)
-        bond_rows, candidate_rows, site_summaries, bond_meta = _run_bond_stage(
+        bond_rows, candidate_rows, site_summaries, bond_meta = run_bond_stage(
             result, cfg, inputs, structure, rows, header
         )
         # An empty header means density production itself failed and already
@@ -798,7 +810,7 @@ def process(pdb_id: str) -> EntryResult:
                 len(sites_without_density),
                 sites_without_density,
             )
-        _append_site_fields(rows, site_summaries, structure)
+        append_site_fields(rows, site_summaries, structure)
         result.rows = rows
         result.bond_rows = bond_rows
         result.candidate_rows = candidate_rows
@@ -841,5 +853,5 @@ def process(pdb_id: str) -> EntryResult:
             shutil.rmtree(work_dir, ignore_errors=True)
             result.timings["cleanup_s"] = round(time.monotonic() - cleanup_started, 3)
         result.runtime_s = round(time.monotonic() - t0, 2)
-        _announce_inflight("end", pdb_id)
+        announce_inflight("end", pdb_id)
     return result

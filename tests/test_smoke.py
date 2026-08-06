@@ -12,6 +12,7 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Protocol, cast
 
 import gemmi
 import pytest
@@ -23,6 +24,25 @@ from helpers import (
     StructureBuilder,
     simple_metal_site,
 )
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
 
 
 def test_src_modules_import() -> None:
@@ -44,7 +64,7 @@ def test_src_modules_import() -> None:
     from coordination import dpi
     import main
     import metal_elements
-    import metal_identification  # noqa: F401 - imported to prove it loads
+    import metal_identification
     import cli
     import structure_analysis
     import worker
@@ -55,14 +75,14 @@ def test_src_modules_import() -> None:
     assert callable(structure_analysis.load_structure)
     assert callable(main.main), "src/main.py must keep working as the entry point"
     assert main.main is cli.main, "the entry point must delegate, not reimplement"
-    assert callable(pool._run)
+    assert callable(pool.run)
     assert callable(worker.process)
     assert writers.MANIFEST_COLUMNS[0] == "pdbID"
-    assert callable(progress._ProgressReporter)
-    assert callable(runlog._RunLog)
+    assert callable(progress.ProgressReporter)
+    assert callable(runlog.RunLog)
     assert resources.available_cpu_count() >= 1
-    assert callable(dpi._calculate_dpi_details)
-    assert callable(declared_connections._collect_declared_candidates)
+    assert callable(dpi.calculate_dpi_details)
+    assert callable(declared_connections.collect_declared_candidates)
     assert schema.BOND_COLUMNS[0] == "pdbID"
     # Compared as a bare string, not through ``.value``: that these members are
     # ``str`` is what lets every status comparison across src/ and the written
@@ -72,6 +92,7 @@ def test_src_modules_import() -> None:
     assert callable(contact_record.Candidate)
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
     assert callable(density_analysis.run_density_analysis)
+    assert callable(metal_identification.extract_metal_statistics)
     assert callable(confidence_score.score_site)
     assert set(ccp4_setup.REQUIRED_CCP4_TOOLS) == {
         "mtzfix",
@@ -214,7 +235,7 @@ def test_simple_metal_site_places_donors_at_requested_distances(
         (row["neighbor_resname"], row["neighbor_atom"]): row["distance"] for row in rows
     }
     for resname, atom_name, distance in donors:
-        assert measured[(resname, atom_name)] == pytest.approx(distance, abs=1e-6)
+        assert measured[(resname, atom_name)] == approx(distance, abs=1e-6)
     assert len(rows) == len(donors)
     assert candidates
     assert metadata["partial_reason_codes"] == ["missing_dpi_metadata_source"]
@@ -263,7 +284,7 @@ def test_declared_connection_is_reported_for_both_formats(
     assert [row["neighbor_atom"] for row in declared] == ["NZ"]
     assert declared[0]["coordination_source"] == expected_source
     assert declared[0]["connection_id"] == expected_id
-    assert float(declared[0]["connection_reported_distance"]) == pytest.approx(2.10)
+    assert float(declared[0]["connection_reported_distance"]) == approx(2.10)
 
 
 def test_conformers_drive_the_altloc_selection_policy(tmp_path: Path) -> None:
@@ -291,7 +312,7 @@ def test_conformers_drive_the_altloc_selection_policy(tmp_path: Path) -> None:
     residue = next(r for r in context.residues if r.residue_name == "HIS")
     assert residue.alternative_conformers_present
     assert residue.selected_altloc == "B"
-    assert residue.selected_conformer_mean_occupancy == pytest.approx(0.65)
+    assert residue.selected_conformer_mean_occupancy == approx(0.65)
     selected = [a for a in residue.contact_atoms if a.atom_name == "NE2"]
     assert [a.altloc for a in selected] == ["B"]
     assert sorted(a.altloc for a in residue.source_atoms if a.atom_name == "NE2") == [
@@ -335,7 +356,7 @@ def test_connection_can_name_a_specific_conformer(tmp_path: Path) -> None:
     )
 
     assert [row["neighbor_altloc"] for row in rows] == ["B"]
-    assert rows[0]["distance"] == pytest.approx(2.80, abs=1e-6)
+    assert rows[0]["distance"] == approx(2.80, abs=1e-6)
     assert "declared_connection_conformer_substituted" in metadata["warning_codes"]
 
 
@@ -355,7 +376,7 @@ def test_occupancy_and_altloc_survive_the_pdb_round_trip(tmp_path: Path) -> None
     context = load_structure("test", path)
     occupancies = {a.atom_name: a.occupancy for a in context.source_atoms}
     assert occupancies == {"MG": 0.5, "O": 0.25}
-    assert count_deposited_ni(context) == pytest.approx(0.75)
+    assert count_deposited_ni(context) == approx(0.75)
 
 
 def test_hetero_residue_builds_a_multi_metal_cofactor(tmp_path: Path) -> None:
@@ -469,9 +490,9 @@ def test_edstats_stats_rows_feed_the_bond_sigma_join(tmp_path: Path) -> None:
 
     assert rows
     for row in rows:
-        assert row["sigma_mag"] == pytest.approx(3.0)
-        assert row["sigma_neg"] == pytest.approx(-1.0)
-        assert row["sigma_pos"] == pytest.approx(4.0)
+        assert row["sigma_mag"] == approx(3.0)
+        assert row["sigma_neg"] == approx(-1.0)
+        assert row["sigma_pos"] == approx(4.0)
 
 
 def test_blank_chain_rows_round_trip_through_the_parser(tmp_path: Path) -> None:
@@ -588,7 +609,7 @@ def test_symmetry_image_contacts_are_reachable(tmp_path: Path) -> None:
     )
 
     assert len(rows) == 1
-    assert rows[0]["distance"] == pytest.approx(1.0, abs=1e-6)
+    assert rows[0]["distance"] == approx(1.0, abs=1e-6)
     assert rows[0]["contact_scope"] == "crystallographic"
     assert rows[0]["crystallographic_contact"]
     assert rows[0]["symmetry_operation"] == "1_455"
@@ -626,7 +647,7 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(
 
     assert metadata["partial_reason_codes"] == []
     assert rows and math.isfinite(rows[0]["dpi"])
-    assert rows[0]["resolution"] == pytest.approx(1.5)
+    assert rows[0]["resolution"] == approx(1.5)
     assert math.isfinite(rows[0]["zscore"])
 
 
@@ -766,14 +787,20 @@ def test_network_marker_only_runs_with_connectivity() -> None:
     url = "https://pdb-redo.eu/db/9myr/data.json"
     with urllib.request.urlopen(url, timeout=30) as response:
         assert response.status == 200
-        payload = json.loads(response.read().decode("utf-8"))
+        loaded: object = json.loads(response.read().decode("utf-8"))
     # A JSON-formatted proxy error is still a dict, so require the
     # crystallographic metadata Alchemy consumes from data.json.
-    assert isinstance(payload, dict)
-    properties = payload.get("properties")
-    assert isinstance(properties, dict) and properties
-    assert float(properties["NREFCNT"]) > 0
-    assert float(properties["DATARESH"]) > 0
+    assert isinstance(loaded, dict)
+    payload = cast("dict[object, object]", loaded)
+    raw_properties = payload.get("properties")
+    assert isinstance(raw_properties, dict) and raw_properties
+    properties = cast("dict[object, object]", raw_properties)
+    nrefcnt = properties["NREFCNT"]
+    dataresh = properties["DATARESH"]
+    assert isinstance(nrefcnt, (str, int, float))
+    assert isinstance(dataresh, (str, int, float))
+    assert float(nrefcnt) > 0
+    assert float(dataresh) > 0
 
 
 def test_element_inference_rejects_ambiguous_names() -> None:

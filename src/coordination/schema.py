@@ -5,7 +5,7 @@ metal-donor contacts, ``metal_candidates_all.csv`` the evidence behind them,
 and ``metal_stats_all.csv`` the EDSTATS table with per-site columns appended.
 Rows are written by projecting them onto their column list, so a key a builder
 gained without a matching column would be dropped in silence and one it lost
-would surface downstream as a bare ``KeyError``. ``_check_row_schema`` catches
+would surface downstream as a bare ``KeyError``. ``check_row_schema`` catches
 both.
 
 The builders are serialization only: every decision they report was made in
@@ -288,12 +288,10 @@ STATS_EXTRA_COLUMNS = [
 ]
 
 
-def _check_row_schema(
-    row: Mapping[str, Any], columns: Iterable[str], name: str
-) -> None:
+def check_row_schema(row: Mapping[str, Any], columns: Iterable[str], name: str) -> None:
     """Fail loudly when a row builder and its CSV schema have drifted apart."""
     expected = set(columns)
-    if row.keys() == expected:
+    if set(row) == expected:
         return
     details: list[str] = []
     missing = sorted(expected - row.keys())
@@ -315,27 +313,32 @@ def _connection_output_values(candidate: Candidate) -> dict[str, str | bool]:
     records = candidate.declared_connections
     inferred = bool(candidate.inferred_contact_eligible)
 
-    def joined(name: str) -> str:
-        values = []
-        for record in records:
-            value = record.get(name, "")
+    def joined(values: Iterable[object]) -> str:
+        rendered: list[str] = []
+        for value in values:
             text = "" if value is None else str(value)
-            values.append("" if text in ("", "nan") else text)
-        return "|".join(values)
+            rendered.append("" if text in ("", "nan") else text)
+        return "|".join(rendered)
 
     return {
         "coordination_status": (
             "declared" if records else ("inferred" if inferred else "unassigned")
         ),
         "coordination_source": (
-            joined("source") if records else ("proximity_rule" if inferred else "")
+            joined(record["source"] for record in records)
+            if records
+            else ("proximity_rule" if inferred else "")
         ),
         "declared_connection": bool(records),
-        "connection_id": joined("connection_id"),
-        "connection_type": joined("connection_type"),
-        "connection_link_id": joined("connection_link_id"),
-        "connection_asu": joined("connection_asu"),
-        "connection_reported_distance": joined("connection_reported_distance"),
+        "connection_id": joined(record["connection_id"] for record in records),
+        "connection_type": joined(record["connection_type"] for record in records),
+        "connection_link_id": joined(
+            record["connection_link_id"] for record in records
+        ),
+        "connection_asu": joined(record["connection_asu"] for record in records),
+        "connection_reported_distance": joined(
+            record["connection_reported_distance"] for record in records
+        ),
     }
 
 
@@ -358,7 +361,7 @@ def _neighbor_class(neighbor: AtomSite) -> str:
     return "other"
 
 
-def _context_warning_values(
+def context_warning_values(
     candidate: Candidate, include_proximal: bool = False
 ) -> dict[str, Any]:
     reasons: list[str] = []
@@ -460,7 +463,7 @@ def stats_extra_values(
     return values
 
 
-def _bond_row(
+def bond_row(
     pdb_id: str,
     structure: StructureContext,
     metal: AtomSite,
@@ -478,7 +481,7 @@ def _bond_row(
     mag, neg, pos = sigma
     connection_values = _connection_output_values(contact)
     donor_values = _donor_output_values(contact)
-    context_values = _context_warning_values(contact)
+    context_values = context_warning_values(contact)
     return {
         "pdbID": pdb_id,
         "metal_resname": metal.residue_name,
@@ -574,7 +577,7 @@ def _bond_row(
     }
 
 
-def _candidate_row(
+def candidate_row(
     pdb_id: str, structure: StructureContext, metal: AtomSite, candidate: Candidate
 ) -> dict[str, Any]:
     """Return one discovered or declared candidate as a candidate CSV row."""
@@ -583,7 +586,7 @@ def _candidate_row(
     tx, ty, tz = candidate.translation
     connection_values = _connection_output_values(candidate)
     donor_values = _donor_output_values(candidate)
-    context_values = _context_warning_values(candidate, include_proximal=True)
+    context_values = context_warning_values(candidate, include_proximal=True)
     return {
         "pdbID": pdb_id,
         "candidate_source": "|".join(sorted(candidate.candidate_sources)),

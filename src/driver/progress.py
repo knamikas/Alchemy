@@ -11,7 +11,7 @@ from typing import TextIO
 from collections.abc import Callable, Mapping
 
 
-class _ProgressReporter:
+class ProgressReporter:
     """Render a throttled one-line progress heartbeat."""
 
     TERMINAL_INTERVAL_S = 1.0

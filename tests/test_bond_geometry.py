@@ -6,7 +6,7 @@ import math
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 from collections.abc import Mapping, Sequence
 
 import gemmi
@@ -26,10 +26,29 @@ from metal_elements import METAL_ELEMENTS
 from structure_analysis import AtomSite, StructureContext, count_ni, load_structure
 
 
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
+
+
 _AnalysisResult = tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
-    dict[ba._AtomKey, dict[str, Any]],
+    dict[ba.AtomKey, dict[str, Any]],
     dict[str, Any],
 ]
 
@@ -128,7 +147,7 @@ def _probe_structure(
     )
     polymer.full_sequence = [resname] * chain_length
     path = str(tmp_path / name)
-    structure.write_pdb(path)
+    helpers.write_pdb(structure, path)
     return path
 
 
@@ -168,7 +187,11 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
         if str(atom.element.name).upper() == "ZN"
     )
     metal_atom.pos = gemmi.Position(float("nan"), 0.0, 0.0)
-    monkeypatch.setattr(gemmi, "read_structure", lambda _path: parsed)
+
+    def read_parsed_structure(_path: str) -> gemmi.Structure:
+        return parsed
+
+    monkeypatch.setattr(gemmi, "read_structure", read_parsed_structure)
     context = load_structure("test", path)
     metal = context.metal_atoms(["ZN"])[0]
 
@@ -287,7 +310,7 @@ def _parse_reference_table(
 ) -> list[tuple[int, str, str, str, float, float]]:
     """Parse metal_distances_info.txt strictly, skipping nothing.
 
-    ``reference_data._load_literature`` drops any line whose numeric columns do
+    ``reference_data.load_literature`` drops any line whose numeric columns do
     not parse; copying that rule would make the comparison against
     ``literature_distances()`` a tautology.
     """
@@ -370,7 +393,7 @@ def test_named_side_chain_donors_become_inferred_bonds(
     assert row["coordination_status"] == "inferred"
     assert row["coordination_source"] == "proximity_rule"
     assert row["declared_connection"] is False
-    assert row["distance"] == pytest.approx(2.0, abs=1e-6)
+    assert row["distance"] == approx(2.0, abs=1e-6)
 
 
 @pytest.mark.parametrize("resname", sorted(helpers.STANDARD_AMINO_ACIDS))
@@ -397,7 +420,7 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(
     assert row["neighbor_resname"] == resname
     assert row["neighbor_class"] == "amino_acid"
     assert row["bonded_to"] == "P"
-    assert row["literature_distance"] == pytest.approx(
+    assert row["literature_distance"] == approx(
         reference_data.literature_distances()[("CA", "O", "ZN")][0]
     )
 
@@ -626,7 +649,7 @@ def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(
     modeled.label_seq = 2
     cif_path = str(tmp_path / "internal_only.cif")
     source.make_mmcif_document().write_file(cif_path)
-    pdb_path = coordinate_conversion._cif_to_pdb(
+    pdb_path = coordinate_conversion.cif_to_pdb(
         cif_path, str(tmp_path / "internal_only.pdb")
     )
 
@@ -659,7 +682,7 @@ def test_incomplete_pdb_seqres_does_not_create_a_terminal_donor(tmp_path: Path) 
     )
     polymer.full_sequence = ["HIS", "HIS", "HIS"]
     path = str(tmp_path / "incomplete_seqres.pdb")
-    structure.write_pdb(path)
+    helpers.write_pdb(structure, path)
 
     rows, candidates, _, _ = _analyze(path)
 
@@ -724,7 +747,7 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     expected_key: tuple[str, str, str],
 ) -> None:
     """An exact reference sets target = mu and cutoff = mu + 0.75 A."""
-    # ``_first_sphere_rule`` reads only element, residue name, atom name and
+    # ``first_sphere_rule`` reads only element, residue name, atom name and
     # water flag, so the remaining fields carry neutral values.
     metal_site = _atom_site(metal)
     neighbor = _atom_site(
@@ -732,12 +755,12 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     )
     mu = reference_data.literature_distances()[expected_key][0]
 
-    target, cutoff, kind, key = ba._first_sphere_rule(metal_site, neighbor)
+    target, cutoff, kind, key = ba.first_sphere_rule(metal_site, neighbor)
 
     assert kind == "exact"
     assert key == ":".join(expected_key)
-    assert target == pytest.approx(mu)
-    assert cutoff == pytest.approx(mu + 0.75)
+    assert target == approx(mu)
+    assert cutoff == approx(mu + 0.75)
     assert ba.FIRST_SPHERE_TOLERANCE == 0.75
 
 
@@ -758,12 +781,12 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
         if metal == "ZN" and atom == "O"
     )
 
-    target, cutoff, kind, key = ba._first_sphere_rule(metal_site, neighbor)
+    target, cutoff, kind, key = ba.first_sphere_rule(metal_site, neighbor)
 
     assert kind == "element_fallback"
     assert key == "*:O:ZN"
-    assert target == pytest.approx(widest_zn_o)
-    assert cutoff == pytest.approx(widest_zn_o + 0.75)
+    assert target == approx(widest_zn_o)
+    assert cutoff == approx(widest_zn_o + 0.75)
     exact_asp = reference_data.literature_distances()[("ASP", "O", "ZN")][0]
     assert cutoff > exact_asp + 0.75
 
@@ -822,9 +845,9 @@ def test_first_sphere_membership_at_the_exact_cutoff_boundary(
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "NE2")
-    assert candidate["candidate_distance"] == pytest.approx(distance)
-    assert candidate["assignment_target"] == pytest.approx(2.03)
-    assert candidate["first_sphere_cutoff"] == pytest.approx(2.78)
+    assert candidate["candidate_distance"] == approx(distance)
+    assert candidate["assignment_target"] == approx(2.03)
+    assert candidate["first_sphere_cutoff"] == approx(2.78)
     assert candidate["first_sphere_eligible"] is eligible
     assert candidate["eligibility_status"] == (
         "first_sphere_eligible" if eligible else "outside_first_sphere"
@@ -859,8 +882,8 @@ def test_dpi_never_widens_the_chemical_cutoff(tmp_path: Path) -> None:
 
     for candidates in (no_dpi_candidates, dpi_candidates):
         candidate = _only(candidates, "NE2")
-        assert candidate["first_sphere_cutoff"] == pytest.approx(2.78)
-        assert candidate["assignment_tolerance"] == pytest.approx(0.75)
+        assert candidate["first_sphere_cutoff"] == approx(2.78)
+        assert candidate["assignment_tolerance"] == approx(0.75)
         assert candidate["first_sphere_eligible"] is False
     assert no_dpi_rows == [] and dpi_rows == []
 
@@ -933,13 +956,13 @@ def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path: Path) 
 
 def test_zscore_matches_the_documented_formula() -> None:
     """z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
-    assert ba._zscore(2.30, 2.09, 0.05, 0.12) == pytest.approx(
+    assert ba.zscore(2.30, 2.09, 0.05, 0.12) == approx(
         (2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2)
     )
     # 0.12 / 0.05 / 0.13 is a right triangle, so this one is exact by hand.
-    assert ba._zscore(2.87, 2.09, 0.05, 0.12) == pytest.approx(6.0)
-    assert ba._zscore(1.31, 2.09, 0.05, 0.12) == pytest.approx(-6.0)
-    assert ba._zscore(2.09, 2.09, 0.05, 0.12) == pytest.approx(0.0)
+    assert ba.zscore(2.87, 2.09, 0.05, 0.12) == approx(6.0)
+    assert ba.zscore(1.31, 2.09, 0.05, 0.12) == approx(-6.0)
+    assert ba.zscore(2.09, 2.09, 0.05, 0.12) == approx(0.0)
 
 
 def test_zscore_denominator_carries_exactly_one_dpi() -> None:
@@ -953,10 +976,10 @@ def test_zscore_denominator_carries_exactly_one_dpi() -> None:
     single = (dist - mu) / math.sqrt(dpi**2 + sigma**2)
     two_atom = (dist - mu) / math.sqrt(2 * dpi**2 + sigma**2)
 
-    assert ba._zscore(dist, mu, sigma, dpi) == pytest.approx(single)
-    assert single == pytest.approx(6.0)
+    assert ba.zscore(dist, mu, sigma, dpi) == approx(single)
+    assert single == approx(6.0)
     assert two_atom < coordination_schema.ZSCORE_OUTLIER_CUTOFF < single
-    assert ba._zscore(dist, mu, sigma, dpi) != pytest.approx(two_atom)
+    assert ba.zscore(dist, mu, sigma, dpi) != approx(two_atom)
 
 
 @pytest.mark.parametrize(
@@ -971,14 +994,14 @@ def test_zscore_propagates_missing_inputs_as_nan(
     mu: float, stdev: float, dpi: float
 ) -> None:
     """Any missing input yields NaN rather than a fabricated number."""
-    assert math.isnan(ba._zscore(2.30, mu, stdev, dpi))
+    assert math.isnan(ba.zscore(2.30, mu, stdev, dpi))
 
 
 def test_zscore_is_nan_when_the_denominator_vanishes() -> None:
     """A zero spread and a zero DPI give no scale, so no z-score."""
-    assert math.isnan(ba._zscore(2.30, 2.09, 0.0, 0.0))
+    assert math.isnan(ba.zscore(2.30, 2.09, 0.0, 0.0))
     # A non-zero spread alone is still a usable scale.
-    assert ba._zscore(2.14, 2.09, 0.05, 0.0) == pytest.approx(1.0)
+    assert ba.zscore(2.14, 2.09, 0.05, 0.0) == approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -1005,12 +1028,12 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     water = next(residue for residue in context.residues if residue.is_water)
     contact = _contact(water.contact_atoms[0], distance_raw=distance)
 
-    ba._annotate_contacts([contact], "ZN", 0.12)
+    ba.annotate_contacts([contact], "ZN", 0.12)
 
     assert coordination_schema.ZSCORE_OUTLIER_CUTOFF == 6.0
-    assert contact.literature_distance == pytest.approx(2.09)
-    assert contact.literature_stdev == pytest.approx(0.05)
-    assert contact.zscore == pytest.approx(expected_z)
+    assert contact.literature_distance == approx(2.09)
+    assert contact.literature_stdev == approx(0.05)
+    assert contact.zscore == approx(expected_z)
     assert contact.reference_covered is True
     assert contact.geometry_outlier is outlier
     assert contact.geometry_consistent is (not outlier)
@@ -1038,10 +1061,10 @@ def test_outlier_verdict_uses_unrounded_distance_and_zscore(
     distance = 2.09 + raw_zscore * denominator
     contact = _contact(water.contact_atoms[0], distance_raw=distance)
 
-    ba._annotate_contacts([contact], "ZN", 0.12)
+    ba.annotate_contacts([contact], "ZN", 0.12)
 
-    assert contact.distance == pytest.approx(round(distance, 3))
-    assert contact.zscore == pytest.approx(round(raw_zscore, 4))
+    assert contact.distance == approx(round(distance, 3))
+    assert contact.zscore == approx(round(raw_zscore, 4))
     assert contact.zscore in (-6.0, 6.0)
     assert contact.geometry_outlier is outlier
     assert contact.geometry_consistent is (not outlier)
@@ -1060,16 +1083,16 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
     row = _only(rows, "OD1")
     mu, sigma = reference_data.literature_distances()[("ASP", "O", "ZN")]
     assert (mu, sigma) == (1.99, 0.05)
-    assert row["literature_distance"] == pytest.approx(mu)
-    assert row["literature_stdev"] == pytest.approx(sigma)
+    assert row["literature_distance"] == approx(mu)
+    assert row["literature_stdev"] == approx(sigma)
     assert math.isfinite(row["dpi"]) and row["dpi"] > 0
 
     expected = round((row["distance"] - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2), 4)
-    assert row["zscore"] == pytest.approx(expected)
+    assert row["zscore"] == approx(expected)
     assert expected > coordination_schema.ZSCORE_OUTLIER_CUTOFF
     assert row["geometry_outlier"] is True
     assert row["geometry_consistent"] is False
-    assert row["zscore_outlier_cutoff"] == pytest.approx(6.0)
+    assert row["zscore_outlier_cutoff"] == approx(6.0)
 
 
 # DPI = 1.28 * ni**(1/2) * va**(1/3) * nobs**(-5/6) * rfree (Blow 2002 eq. 7).
@@ -1078,10 +1101,15 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
 # happy. Every term below is exact: ni = 16 -> 4, va = 200**3 -> 200,
 # nobs = 2**12 -> 2**-10, rfree = 0.25, so
 # DPI = 1.28 * 4 * 200 * 2**-10 * 0.25 = 0.25 A exactly.
-DPI_BASE = {"atom_count": 16, "cell_edge": 200.0, "nrefcnt": 4096, "rffin": 0.25}
+DPI_BASE: dict[str, float] = {
+    "atom_count": 16,
+    "cell_edge": 200.0,
+    "nrefcnt": 4096,
+    "rffin": 0.25,
+}
 DPI_BASE_VALUE = 0.25
 
-# ``_calculate_dpi_details`` rounds to four decimals.
+# ``calculate_dpi_details`` rounds to four decimals.
 DPI_ROUNDING = 5e-5
 
 
@@ -1126,7 +1154,7 @@ def _atom_count_structure(
 
 
 class _DpiRun:
-    """What one ``_calculate_dpi_details`` call needed and produced."""
+    """What one ``calculate_dpi_details`` call needed and produced."""
 
     def __init__(
         self, path: str, context: StructureContext, result: tuple[float, float, str]
@@ -1150,10 +1178,10 @@ def _dpi_details(
     mtz_path: str | None = None,
     name: str = "dpi",
 ) -> _DpiRun:
-    """``_calculate_dpi_details`` over a structure with known ni and va.
+    """``calculate_dpi_details`` over a structure with known ni and va.
 
     ``mtz_path`` defaults to a path that does not exist, which makes
-    ``_asu_volume`` fall back to the coordinate file's CRYST1 record.
+    ``asu_volume`` fall back to the coordinate file's CRYST1 record.
     """
     path = _atom_count_structure(
         tmp_path,
@@ -1174,7 +1202,7 @@ def _dpi_details(
         ),
         resolution=resolution,
     )
-    return _DpiRun(path, context, dpi_module._calculate_dpi_details(context, inputs))
+    return _DpiRun(path, context, dpi_module.calculate_dpi_details(context, inputs))
 
 
 def _dpi_value(tmp_path: Path, **kwargs: Any) -> float:
@@ -1203,15 +1231,15 @@ def test_dpi_equals_the_hand_computed_blow_value(tmp_path: Path) -> None:
         resolution=1.42,
     )
 
-    assert count_ni(run.context) == pytest.approx(16.0)
-    assert dpi_module._asu_volume(
+    assert count_ni(run.context) == approx(16.0)
+    assert dpi_module.asu_volume(
         os.path.join(str(tmp_path), "absent.mtz"), run.path
-    ) == pytest.approx(100.0**3)
+    ) == approx(100.0**3)
 
     assert run.reason == ""
-    assert run.dpi == pytest.approx(0.125, abs=DPI_ROUNDING)
+    assert run.dpi == approx(0.125, abs=DPI_ROUNDING)
     # Resolution is metadata only: it is passed through, never multiplied in.
-    assert run.resolution == pytest.approx(1.42)
+    assert run.resolution == approx(1.42)
 
 
 def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path: Path) -> None:
@@ -1233,13 +1261,13 @@ def test_dpi_at_realistic_crystallographic_magnitudes(tmp_path: Path) -> None:
         resolution=1.90,
     )
 
-    assert count_ni(run.context) == pytest.approx(400.0)
-    assert dpi_module._asu_volume(
+    assert count_ni(run.context) == approx(400.0)
+    assert dpi_module.asu_volume(
         os.path.join(str(tmp_path), "absent.mtz"), run.path
-    ) == pytest.approx(216000.0)
+    ) == approx(216000.0)
     assert run.reason == ""
-    assert run.dpi == pytest.approx(0.048, abs=DPI_ROUNDING)
-    assert run.resolution == pytest.approx(1.90)
+    assert run.dpi == approx(0.048, abs=DPI_ROUNDING)
+    assert run.resolution == approx(1.90)
 
 
 @pytest.mark.parametrize(
@@ -1266,7 +1294,7 @@ def test_each_dpi_input_moves_the_result_by_its_own_exponent(
     """
     inputs = dict(DPI_BASE, **override)
     dpi = _dpi_value(tmp_path, **inputs)
-    assert dpi == pytest.approx(expected, abs=DPI_ROUNDING)
+    assert dpi == approx(expected, abs=DPI_ROUNDING)
 
 
 def test_the_dpi_exponents_are_pinned_individually(tmp_path: Path) -> None:
@@ -1276,24 +1304,25 @@ def test_the_dpi_exponents_are_pinned_individually(tmp_path: Path) -> None:
     compensating change to 1.28 cannot disguise.
     """
     base = _dpi_value(tmp_path, name="base", **DPI_BASE)
-    assert base == pytest.approx(DPI_BASE_VALUE, abs=DPI_ROUNDING)
+    assert base == approx(DPI_BASE_VALUE, abs=DPI_ROUNDING)
 
     measured: dict[str, float] = {}
-    for label, override, factor in (
+    scalings: tuple[tuple[str, dict[str, float], float], ...] = (
         ("ni", {"atom_count": DPI_BASE["atom_count"] * 4}, 4),
         ("va", {"cell_edge": DPI_BASE["cell_edge"] * 2}, 8),  # volume * 8
         ("nobs", {"nrefcnt": DPI_BASE["nrefcnt"] * 2}, 2),
         ("rfree", {"rffin": DPI_BASE["rffin"] * 2}, 2),
-    ):
+    )
+    for label, override, factor in scalings:
         scaled = _dpi_value(tmp_path, name=label, **dict(DPI_BASE, **override))
         measured[label] = math.log(scaled / base) / math.log(factor)
 
     # The nearest wrong exponents are 0.167 to 0.37 away, two orders of
     # magnitude outside this tolerance.
-    assert measured["ni"] == pytest.approx(0.5, abs=1e-3)
-    assert measured["va"] == pytest.approx(1 / 3, abs=1e-3)
-    assert measured["nobs"] == pytest.approx(-5 / 6, abs=1e-3)
-    assert measured["rfree"] == pytest.approx(1.0, abs=1e-3)
+    assert measured["ni"] == approx(0.5, abs=1e-3)
+    assert measured["va"] == approx(1 / 3, abs=1e-3)
+    assert measured["nobs"] == approx(-5 / 6, abs=1e-3)
+    assert measured["rfree"] == approx(1.0, abs=1e-3)
 
 
 def test_dpi_carries_the_1_28_coefficient(tmp_path: Path) -> None:
@@ -1304,14 +1333,14 @@ def test_dpi_carries_the_1_28_coefficient(tmp_path: Path) -> None:
     dropped coefficient and 0.30 for a 1.2 typo.
     """
     dpi = _dpi_value(tmp_path, atom_count=16, cell_edge=100.0, nrefcnt=4096, rffin=0.64)
-    assert dpi == pytest.approx(0.32, abs=DPI_ROUNDING)
+    assert dpi == approx(0.32, abs=DPI_ROUNDING)
 
 
 def test_dpi_is_rounded_to_four_decimals(tmp_path: Path) -> None:
     """The stored DPI is the rounded value, so consumers see a stable number."""
     dpi = _dpi_value(tmp_path, **dict(DPI_BASE, nrefcnt=8192))
     exact = DPI_BASE_VALUE * 2 ** (-5 / 6)
-    assert exact == pytest.approx(0.1403077564, abs=1e-9)
+    assert exact == approx(0.1403077564, abs=1e-9)
     assert dpi == round(exact, 4) == 0.1403
 
 
@@ -1340,19 +1369,19 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path: Path) -> None:
 
     assert metadata["partial_reason_codes"] == []
     row = _only(rows, "O")
-    assert row["dpi"] == pytest.approx(0.048, abs=DPI_ROUNDING)
-    assert row["resolution"] == pytest.approx(1.90)
+    assert row["dpi"] == approx(0.048, abs=DPI_ROUNDING)
+    assert row["resolution"] == approx(1.90)
 
     mu, sigma = reference_data.literature_distances()[("HOH", "O", "ZN")]
     assert (mu, sigma) == (2.09, 0.05)
     expected = round((2.20 - mu) / math.sqrt(0.048**2 + sigma**2), 4)
-    assert expected == pytest.approx(1.5871, abs=1e-4)
-    assert row["zscore"] == pytest.approx(expected, abs=1e-3)
+    assert expected == approx(1.5871, abs=1e-4)
+    assert row["zscore"] == approx(expected, abs=1e-3)
     assert row["geometry_consistent"] is True
 
     summary = next(iter(summaries.values()))
-    assert summary["dpi"] == pytest.approx(0.048, abs=DPI_ROUNDING)
-    assert summary["occupancy_weighted_atom_count"] == pytest.approx(400.0)
+    assert summary["dpi"] == approx(0.048, abs=DPI_ROUNDING)
+    assert summary["occupancy_weighted_atom_count"] == approx(400.0)
     assert summary["dpi_atom_count_multiplier"] == 1
     assert summary["dpi_unavailable_reason"] == ""
 
@@ -1376,8 +1405,8 @@ def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path: Path) -> None:
         occupancy=0.25,
     )
 
-    assert full == pytest.approx(0.125, abs=DPI_ROUNDING)
-    assert quarter == pytest.approx(0.0625, abs=DPI_ROUNDING)
+    assert full == approx(0.125, abs=DPI_ROUNDING)
+    assert quarter == approx(0.0625, abs=DPI_ROUNDING)
 
 
 @pytest.mark.parametrize(
@@ -1403,9 +1432,9 @@ def test_asu_volume_is_the_cell_volume_over_the_operation_count(
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "cell.pdb")
 
-    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    volume = dpi_module.asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
 
-    assert volume == pytest.approx(1.0e6 / operations)
+    assert volume == approx(1.0e6 / operations)
 
 
 def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path: Path) -> None:
@@ -1418,14 +1447,14 @@ def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path: Path) -> No
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "placeholder-cell.pdb")
 
-    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    volume = dpi_module.asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
     assert math.isnan(volume), (
         f"a placeholder 1 A^3 cell was accepted as ASU volume {volume!r}"
     )
 
     data_json = helpers.write_data_json(tmp_path / "data.json")
     context = load_structure("test", path)
-    dpi, _, reason = dpi_module._calculate_dpi_details(
+    dpi, _, reason = dpi_module.calculate_dpi_details(
         context, helpers.dpi_inputs(pdb_path=path, data_json=data_json)
     )
 
@@ -1445,9 +1474,9 @@ def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path: Path) -> None:
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     path = builder.write_pdb(tmp_path / "small-cell.pdb")
 
-    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
+    volume = dpi_module.asu_volume(os.path.join(str(tmp_path), "absent.mtz"), path)
 
-    assert volume == pytest.approx(1000.0)
+    assert volume == approx(1000.0)
 
 
 def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(
@@ -1473,10 +1502,10 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(
     mtz_path = str(tmp_path / "data.mtz")
     mtz.write_to_file(mtz_path)
 
-    assert dpi_module._asu_volume(mtz_path, pdb_path) == pytest.approx(40.0**3 / 4)
-    assert dpi_module._asu_volume(
+    assert dpi_module.asu_volume(mtz_path, pdb_path) == approx(40.0**3 / 4)
+    assert dpi_module.asu_volume(
         os.path.join(str(tmp_path), "absent.mtz"), pdb_path
-    ) == pytest.approx(100.0**3)
+    ) == approx(100.0**3)
 
 
 def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path: Path) -> None:
@@ -1493,7 +1522,7 @@ def test_asu_volume_falls_back_when_the_mtz_is_unreadable(tmp_path: Path) -> Non
     corrupt.write_text("this is not an MTZ file\n", encoding="utf-8")
 
     for mtz in (os.path.join(str(tmp_path), "absent.mtz"), str(corrupt)):
-        assert dpi_module._asu_volume(mtz, pdb_path) == pytest.approx(100.0**3)
+        assert dpi_module.asu_volume(mtz, pdb_path) == approx(100.0**3)
 
 
 @pytest.mark.parametrize(
@@ -1510,7 +1539,7 @@ def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(
 ) -> None:
     """No cell or no space group means no volume -- and NaN, not a guess.
 
-    NaN is what makes ``_calculate_dpi_details`` report
+    NaN is what makes ``calculate_dpi_details`` report
     ``missing_or_invalid_asu_volume``.
     """
     pdb_path = os.path.join(str(tmp_path), "missing.pdb")
@@ -1518,7 +1547,7 @@ def test_asu_volume_is_nan_when_no_source_supplies_cell_and_symmetry(
         with open(pdb_path, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-    volume = dpi_module._asu_volume(os.path.join(str(tmp_path), "absent.mtz"), pdb_path)
+    volume = dpi_module.asu_volume(os.path.join(str(tmp_path), "absent.mtz"), pdb_path)
 
     assert math.isnan(volume)
 
@@ -1540,7 +1569,7 @@ def test_rfree_is_read_from_the_remark_3_header(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert dpi_module._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
+    assert dpi_module.rfree_from_pdb(str(path)) == approx(0.2153)
 
 
 @pytest.mark.parametrize(
@@ -1563,11 +1592,11 @@ def test_rfree_ignores_test_set_estimate_and_per_bin_lines(
     """
     path = tmp_path / "header.pdb"
     path.write_text(_remark_3(line, "FREE R VALUE : 0.21530"), encoding="utf-8")
-    assert dpi_module._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
+    assert dpi_module.rfree_from_pdb(str(path)) == approx(0.2153)
 
     decoy_only = tmp_path / "decoy.pdb"
     decoy_only.write_text(_remark_3(line), encoding="utf-8")
-    assert math.isnan(dpi_module._rfree_from_pdb(str(decoy_only)))
+    assert math.isnan(dpi_module.rfree_from_pdb(str(decoy_only)))
 
 
 def test_rfree_takes_the_first_matching_line(tmp_path: Path) -> None:
@@ -1576,7 +1605,7 @@ def test_rfree_takes_the_first_matching_line(tmp_path: Path) -> None:
     path.write_text(
         _remark_3("FREE R VALUE : 0.21530", "FREE R VALUE : 0.29900"), encoding="utf-8"
     )
-    assert dpi_module._rfree_from_pdb(str(path)) == pytest.approx(0.2153)
+    assert dpi_module.rfree_from_pdb(str(path)) == approx(0.2153)
 
 
 @pytest.mark.parametrize(
@@ -1604,7 +1633,7 @@ def test_rfree_is_nan_when_absent_or_malformed(
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-    assert math.isnan(dpi_module._rfree_from_pdb(path))
+    assert math.isnan(dpi_module.rfree_from_pdb(path))
 
 
 def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path: Path) -> None:
@@ -1623,10 +1652,10 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path: Path) -
         ),
     )
 
-    dpi, _resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
+    dpi, _resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
 
     assert reason == ""
-    assert dpi == pytest.approx(0.125, abs=DPI_ROUNDING)
+    assert dpi == approx(0.125, abs=DPI_ROUNDING)
 
 
 @pytest.mark.parametrize(
@@ -1647,7 +1676,7 @@ def test_missing_reflection_count_is_named(tmp_path: Path, nrefcnt: object) -> N
     assert math.isnan(run.dpi)
     assert run.reason == "missing_or_invalid_reflection_count"
     assert run.context.occupancy_validation_failed is False
-    assert count_ni(run.context) == pytest.approx(16.0)
+    assert count_ni(run.context) == approx(16.0)
 
 
 def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path: Path) -> None:
@@ -1663,7 +1692,7 @@ def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path: Path) ->
             mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
             data_json=data_json,
         )
-        dpi, _resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
+        dpi, _resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
         assert math.isnan(dpi)
         assert reason == "missing_or_invalid_reflection_count"
 
@@ -1721,7 +1750,7 @@ def test_invalid_atom_count_is_named(tmp_path: Path) -> None:
     assert math.isnan(run.dpi)
     assert run.reason == "invalid_dpi_atom_count"
     assert run.context.occupancy_validation_failed is False
-    assert count_ni(run.context) == pytest.approx(0.0)
+    assert count_ni(run.context) == approx(0.0)
 
 
 def test_the_missing_terms_are_reported_in_a_fixed_order(tmp_path: Path) -> None:
@@ -1774,11 +1803,11 @@ def test_a_non_numeric_reflection_count_is_a_calculation_failure(
         data_json=data_json,
     )
 
-    dpi, resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
+    dpi, resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
 
     assert math.isnan(dpi)
     assert reason == "dpi_calculation_failed"
-    assert resolution == pytest.approx(1.50)  # metadata survives the failure
+    assert resolution == approx(1.50)  # metadata survives the failure
 
 
 def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
@@ -1787,13 +1816,17 @@ def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
     """The ``invalid_dpi_metadata`` guard keeps its own reason code.
 
     No real input reaches the branch, since ``nobs`` and ``rfree`` have been
-    through ``float()`` and ``_asu_volume`` returns a float or NaN, so the stub
+    through ``float()`` and ``asu_volume`` returns a float or NaN, so the stub
     is the only way to separate it from the catch-all
     ``dpi_calculation_failed``.
     """
     path = _atom_count_structure(tmp_path, "site.pdb", 16, cell_edge=100.0)
     context = load_structure("test", path)
-    monkeypatch.setattr(dpi_module, "_asu_volume", lambda mtz, pdb: "1000000")
+
+    def non_numeric_asu_volume(_mtz_path: str, _pdb_path: str) -> str:
+        return "1000000"
+
+    monkeypatch.setattr(dpi_module, "asu_volume", non_numeric_asu_volume)
     inputs = helpers.dpi_inputs(
         pdb_path=path,
         mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
@@ -1802,7 +1835,7 @@ def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
         ),
     )
 
-    dpi, _resolution, reason = dpi_module._calculate_dpi_details(context, inputs)
+    dpi, _resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
 
     assert math.isnan(dpi)
     assert reason == "invalid_dpi_metadata"
@@ -1835,7 +1868,7 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path: Path) -> None:
     assert "missing_or_invalid_reflection_count" in (metadata["partial_reason_codes"])
     assert math.isnan(summary["dpi"])
     row = _only(rows, "O")
-    assert row["distance"] == pytest.approx(2.09, abs=1e-6)
+    assert row["distance"] == approx(2.09, abs=1e-6)
     assert math.isnan(row["zscore"])
 
 
@@ -1878,7 +1911,7 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path: Path) -> 
     for column in ("geometry_outlier", "geometry_consistent"):
         assert row[column] == ""
         assert row[column] is not False and row[column] is not True
-    assert row["distance"] == pytest.approx(1.99, abs=1e-6)
+    assert row["distance"] == approx(1.99, abs=1e-6)
 
 
 def test_assessed_geometry_columns_are_complementary_booleans(tmp_path: Path) -> None:
@@ -2035,8 +2068,8 @@ def test_backbone_and_side_chain_contacts_share_one_residue_group(
         assert row["multi_donor_detected"] is True
         assert row["multi_donor_contact_count"] == 2
         assert row["neighbor_resnum"] == "11"
-    assert _only(rows, "OD1")["literature_distance"] == pytest.approx(1.99)
-    assert _only(rows, "O")["literature_distance"] == pytest.approx(2.07)
+    assert _only(rows, "OD1")["literature_distance"] == approx(1.99)
+    assert _only(rows, "O")["literature_distance"] == approx(2.07)
     assert next(iter(summaries.values()))["multi_donor_residue_group_count"] == 1
 
 
@@ -2098,7 +2131,7 @@ def test_group_size_has_no_upper_limit(tmp_path: Path) -> None:
 def test_reference_table_holds_exactly_the_expected_rows_and_keys() -> None:
     """Every bundled row is present, parsed strictly and reachable through ``LIT``.
 
-    ``_load_literature`` silently drops any row whose numeric columns do not
+    ``load_literature`` silently drops any row whose numeric columns do not
     parse, so a corrupted ``CYS S CU`` line would demote Cu-thiolate bonds to
     the element fallback without raising anything.
     """
@@ -2155,13 +2188,13 @@ def test_the_strict_parser_rejects_a_corrupted_row(
         _parse_reference_table(str(damaged))
 
     with pytest.raises(ValueError, match="metal_distances_info.txt line"):
-        reference_data._load_literature(str(damaged))
+        reference_data.load_literature(str(damaged))
 
 
 def test_reference_table_has_no_duplicate_keys() -> None:
     """A repeated (residue, atom, metal) key would be silently overwritten.
 
-    ``_load_literature`` builds a dict, so a duplicate row is invisible at
+    ``load_literature`` builds a dict, so a duplicate row is invisible at
     runtime.
     """
     records = _parse_reference_table(REFERENCE_TABLE)
@@ -2246,7 +2279,5 @@ def test_reference_table_ranks_ions_by_size() -> None:
     assert (
         water["K"] > water["NA"] > water["CA"] > water["MN"] > water["ZN"] > water["MG"]
     )
-    assert water["ZN"] == pytest.approx(2.09)
-    assert reference_data.literature_distances()[("HIS", "N", "ZN")][
-        0
-    ] == pytest.approx(2.03)
+    assert water["ZN"] == approx(2.09)
+    assert reference_data.literature_distances()[("HIS", "N", "ZN")][0] == approx(2.03)

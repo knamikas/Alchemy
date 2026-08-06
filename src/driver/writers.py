@@ -14,7 +14,7 @@ from coordination.schema import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
     STATS_EXTRA_COLUMNS,
-    _check_row_schema,
+    check_row_schema,
 )
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
@@ -70,7 +70,7 @@ STATS_COLUMNS = (
 MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {"pdbID": "pdb_id"}
 
 
-def _manifest_row(
+def manifest_row(
     result: EntryResult,
     resume: bool,
     bonds_enabled: bool,
@@ -98,7 +98,7 @@ def _manifest_row(
     return row
 
 
-class _OutputWriters:
+class OutputWriters:
     """The streamed CSV outputs, with running row counts."""
 
     def __init__(
@@ -166,7 +166,7 @@ class _OutputWriters:
     def write_bond_rows(self, bond_rows: Sequence[Mapping[str, Any]]) -> None:
         if self._bonds is None or self._bonds_fh is None or not bond_rows:
             return
-        _check_row_schema(bond_rows[0], BOND_COLUMNS, "metal_bonds_all.csv")
+        check_row_schema(bond_rows[0], BOND_COLUMNS, "metal_bonds_all.csv")
         for bond in bond_rows:
             self._bonds.writerow([bond[column] for column in BOND_COLUMNS])
             self.n_bonds += 1
@@ -179,7 +179,7 @@ class _OutputWriters:
             or not candidate_rows
         ):
             return
-        _check_row_schema(
+        check_row_schema(
             candidate_rows[0], CANDIDATE_COLUMNS, "metal_candidates_all.csv"
         )
         for candidate in candidate_rows:
@@ -199,7 +199,7 @@ class _OutputWriters:
         if self._confidence_columns is None or self._confidence_fh is None:
             raise RuntimeError("confidence output is not fully configured")
         expected = set(self._confidence_columns)
-        if rows[0].keys() != expected:
+        if set(rows[0]) != expected:
             raise RuntimeError("confidence row does not match its output schema")
         self._confidence.writerows(rows)
         if self._confidence_inputs is not None:

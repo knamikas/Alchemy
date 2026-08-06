@@ -1,6 +1,6 @@
 """The detailed run log written once, at the end of every run.
 
-``_RunLog`` accumulates compact per-entry diagnostics during the batch and
+``RunLog`` accumulates compact per-entry diagnostics during the batch and
 renders them into one complete temporary file before publishing it under a
 name that cannot overwrite an earlier run.
 """
@@ -59,7 +59,7 @@ def _copy_log_exclusively(source_path: str, destination_path: str) -> None:
     os.unlink(source_path)
 
 
-def _claim_log_path(directory: str, stem: str, source_path: str) -> str:
+def claim_log_path(directory: str, stem: str, source_path: str) -> str:
     """Publish a finished log under the first free numbered name.
 
     ``os.link`` fails rather than overwrites when the name is taken, so two
@@ -93,7 +93,7 @@ def _claim_log_path(directory: str, stem: str, source_path: str) -> str:
         return path
 
 
-class _RunLog:
+class RunLog:
     """Collect compact run diagnostics and write one human-readable log."""
 
     def __init__(self, args: argparse.Namespace, command: str) -> None:
@@ -335,7 +335,7 @@ class _RunLog:
         try:
             with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:
                 log.write(self._render(exit_code, finished_at, elapsed_s))
-            path = _claim_log_path(directory, log_stem, temporary_path)
+            path = claim_log_path(directory, log_stem, temporary_path)
         except BaseException:
             try:
                 os.unlink(temporary_path)

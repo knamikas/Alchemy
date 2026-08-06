@@ -38,7 +38,7 @@ class ReferenceDataError(RuntimeError):
     """Bundled reference data is missing, unreadable, or not what it claims."""
 
 
-def _sha256(path: str) -> str:
+def sha256(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for block in iter(lambda: handle.read(65536), b""):
@@ -71,7 +71,7 @@ def _verify_checksum(path: str) -> None:
         ) from exc
     if not recorded:
         raise ReferenceDataError(f"{os.path.basename(sidecar_path)} records no {key}")
-    actual = _sha256(path)
+    actual = sha256(path)
     if actual != recorded:
         raise ReferenceDataError(
             f"{os.path.basename(path)} does not match the checksum recorded in "
@@ -145,11 +145,11 @@ def reference_data_id() -> str:
 
 def _verified_sha256(path: str) -> str:
     _verify_checksum(path)
-    return _sha256(path)
+    return sha256(path)
 
 
 @cache
-def _catalog(
+def catalog(
     path: str = COFACTOR_CATALOG_PATH,
 ) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
     _verify_checksum(path)
@@ -158,17 +158,17 @@ def _catalog(
 
 def cofactor_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Every component id Alchemy treats as a metal-containing cofactor."""
-    return _catalog(path)[0]
+    return catalog(path)[0]
 
 
 def cluster_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Components whose metals sit in an iron-sulfur-style cluster."""
-    return _catalog(path)[1]
+    return catalog(path)[1]
 
 
 def heme_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Components whose metals sit in a heme-style macrocycle."""
-    return _catalog(path)[2]
+    return catalog(path)[2]
 
 
 # Skipped by name rather than by failing to parse, which is what lets every
@@ -176,7 +176,7 @@ def heme_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
 DISTANCE_TABLE_HEADER = ("residue", "atom", "metal", "avg_bond_dist", "st_dev")
 
 
-def _load_literature(
+def load_literature(
     path: str,
 ) -> dict[tuple[str, str, str], tuple[float, float]]:
     """Parse metal_distances_info.txt -> {(residue, atom, metal): (mu, stdev)}.
@@ -245,7 +245,7 @@ def literature_distances(
 ) -> Mapping[tuple[str, str, str], tuple[float, float]]:
     """``{(residue, atom, metal): (mu, stdev)}`` from the literature table."""
     _verify_checksum(path)
-    return MappingProxyType(_load_literature(path))
+    return MappingProxyType(load_literature(path))
 
 
 @cache

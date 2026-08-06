@@ -53,7 +53,7 @@ EDSTATS_NULL_VALUE = "n/a"
 EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
 
 
-def _is_edstats_separator(fields: list[str]) -> bool:
+def is_edstats_separator(fields: list[str]) -> bool:
     """Whether split fields are EDSTATS' synthetic model separator row.
 
     For a MODEL/ENDMDL-wrapped XYZIN, EDSTATS 1.0.9 emits a row whose residue
@@ -76,7 +76,7 @@ def _is_edstats_separator(fields: list[str]) -> bool:
     )
 
 
-def _normalize_edstats_row(
+def normalize_edstats_row(
     fields: Sequence[str], header: Sequence[str], indices: Mapping[str, int]
 ) -> list[str]:
     """Restore and normalize EDSTATS' valid blank-chain representation.
@@ -181,7 +181,7 @@ def _row_matches_selected_altloc(
     return True
 
 
-def _validated_edstats_header(fields: Sequence[str]) -> dict[str, int]:
+def validated_edstats_header(fields: Sequence[str]) -> dict[str, int]:
     """Return column indices after validating the standard EDSTATS schema."""
     duplicates = sorted({name for name in fields if fields.count(name) > 1})
     if duplicates:
@@ -192,7 +192,7 @@ def _validated_edstats_header(fields: Sequence[str]) -> dict[str, int]:
     missing = [name for name in EDSTATS_COLUMNS if name not in fields]
     unexpected = [name for name in fields if name not in EDSTATS_COLUMNS]
     if missing or unexpected:
-        details = []
+        details: list[str] = []
         if missing:
             details.append("missing " + ", ".join(missing))
         if unexpected:
@@ -204,7 +204,7 @@ def _validated_edstats_header(fields: Sequence[str]) -> dict[str, int]:
     return {name: index for index, name in enumerate(fields)}
 
 
-def _validate_edstats_row(
+def validate_edstats_row(
     fields: Sequence[str],
     header: Sequence[str],
     indices: Mapping[str, int],
@@ -241,7 +241,7 @@ def _validate_edstats_row(
         ) from exc
 
 
-def _classify_residue(
+def classify_residue(
     residue: ResidueSelection, metals_upper: set[str], cofactor_set: Iterable[str]
 ) -> tuple[str, list[AtomSite]]:
     """Return ``(category, metal_sites)`` for one coordinate residue.
@@ -265,14 +265,14 @@ def _classify_residue(
     return "", metal_sites
 
 
-def _expected_edstats_residues(
+def expected_edstats_residues(
     structure: StructureContext, metals_upper: set[str], cofactor_set: Iterable[str]
 ) -> Counter[tuple[str, str, str]]:
     """Coordinate residue-key multiplicities Alchemy expects EDSTATS to report."""
     return Counter(
         residue.coordinate_author_key
         for residue in structure.residues
-        if _classify_residue(residue, metals_upper, cofactor_set)[0]
+        if classify_residue(residue, metals_upper, cofactor_set)[0]
     )
 
 
@@ -342,7 +342,7 @@ def _resolve_coordinate_residues(
     )
 
 
-def _density_observation_id(
+def density_observation_id(
     pdb_id: str, fields: Sequence[str], indices: Mapping[str, int]
 ) -> str:
     """Return a stable identifier for one residue-level EDSTATS observation.
@@ -390,7 +390,7 @@ def _density_row(
         "chain": fields[indices["CI"]],
         "resnum": fields[indices["RN"]],
         "fields": fields,
-        "density_observation_id": _density_observation_id(pdb_id, fields, indices),
+        "density_observation_id": density_observation_id(pdb_id, fields, indices),
         "density_scope": (
             "cofactor_residue" if category == "cofactor" else "metal_residue"
         ),
@@ -447,16 +447,16 @@ def extract_metal_statistics(
                 continue
             fields = stripped.split()
             if schema is None:
-                schema = (fields, _validated_edstats_header(fields))
+                schema = (fields, validated_edstats_header(fields))
                 continue
 
-            if _is_edstats_separator(fields):
+            if is_edstats_separator(fields):
                 continue
 
             header, indices = schema
 
-            fields = _normalize_edstats_row(fields, header, indices)
-            row_model = _validate_edstats_row(fields, header, indices, line_number)
+            fields = normalize_edstats_row(fields, header, indices)
+            row_model = validate_edstats_row(fields, header, indices, line_number)
             row_number = _validated_edstats_row_number(fields, indices, line_number)
             if row_model != structure.model_analyzed:
                 raise ValueError(
@@ -531,7 +531,7 @@ def extract_metal_statistics(
             selected_sites: list[tuple[ResidueSelection, str, str, AtomSite]] = []
             for residue in matched_residues:
                 resname = residue.residue_name
-                category, metal_sites = _classify_residue(
+                category, metal_sites = classify_residue(
                     residue, metals_upper, cofactor_set
                 )
                 if category == "cofactor":
@@ -602,7 +602,7 @@ def extract_metal_statistics(
 
     missing_residues = sorted(
         (
-            _expected_edstats_residues(structure, metals_upper, cofactor_set)
+            expected_edstats_residues(structure, metals_upper, cofactor_set)
             - observed_residues
         ).elements()
     )
@@ -627,7 +627,7 @@ def extract_metal_statistics(
 # The density-sigma join reads Z-difference metrics back out of an extracted
 # EDSTATS row, so it lives beside ``EDSTATS_COLUMNS``: a column-order change
 # breaks both.
-def _sigma_index(
+def sigma_index(
     stats_rows: Iterable[Mapping[str, Any]],
 ) -> dict[str, dict[tuple[Any, ...], Sequence[str]]]:
     """Index EDSTATS fields by site, with an unambiguous author-key fallback."""
@@ -652,7 +652,7 @@ def _sigma_index(
 ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
 
 
-def _zd_indices(header: Sequence[str] | None) -> tuple[int, ...] | None:
+def zd_indices(header: Sequence[str] | None) -> tuple[int, ...] | None:
     """Return column indices for ZDm/ZD-m/ZD+m, or ``None`` if any is absent."""
     if not header:
         return None
@@ -662,7 +662,7 @@ def _zd_indices(header: Sequence[str] | None) -> tuple[int, ...] | None:
         return None
 
 
-def _sigma_for(
+def sigma_for(
     sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]],
     resname: str,
     chain: str,

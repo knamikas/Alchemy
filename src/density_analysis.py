@@ -14,7 +14,7 @@ import time
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import IO, Any
+from typing import IO, Any, Protocol, cast
 
 import gemmi
 import numpy as np
@@ -43,6 +43,21 @@ REFMAC_TWIN_COLUMNS = {
     "PHDELWT": "P",
     "FOM": "W",
 }
+
+
+class _MtzColumnData(Protocol):
+    """Gemmi MTZ column members whose stub currently lacks concrete types."""
+
+    dataset_id: int
+    array: npt.NDArray[np.float32]
+    idx: int
+
+
+def _mtz_column_data(column: object) -> _MtzColumnData:
+    """Apply Gemmi's runtime MTZ-column contract at one typed boundary."""
+    return cast(_MtzColumnData, column)
+
+
 REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
 
 
@@ -117,10 +132,12 @@ def _decoded_stderr(error_file: IO[bytes]) -> str:
 def _complex_coefficients(
     amplitudes: npt.NDArray[np.float64], degree_phases: npt.NDArray[np.float64]
 ) -> npt.NDArray[np.complex128]:
-    # NumPy's stubs give every ufunc result dtype ``Any``, so the product below
-    # is inferred as its float64 left operand rather than the complex128 it is.
-    return amplitudes * np.exp(  # type: ignore[return-value]
-        1j * np.deg2rad(degree_phases)
+    # NumPy's stubs do not preserve the concrete complex dtype through this
+    # ufunc composition, although multiplication by the complex exponential
+    # guarantees it at runtime.
+    return cast(
+        npt.NDArray[np.complex128],
+        amplitudes * np.exp(1j * np.deg2rad(degree_phases)),
     )
 
 
@@ -177,10 +194,11 @@ def normalize_refmac_twin_coefficients(
     mtz = gemmi.read_mtz_file(mtz_path)
     if "refmac" not in (mtz.title or "").lower():
         raise ValueError("MTZ title does not identify Refmac output")
-    if mtz.spacegroup is None:
+    spacegroup = cast("gemmi.SpaceGroup | None", mtz.spacegroup)
+    if spacegroup is None:
         raise ValueError("MTZ has no space group for centric-reflection testing")
 
-    columns = {}
+    columns: dict[str, gemmi.Mtz.Column] = {}
     for label, expected_type in REFMAC_TWIN_COLUMNS.items():
         matches = [column for column in mtz.columns if column.label == label]
         if len(matches) != 1:
@@ -195,14 +213,14 @@ def normalize_refmac_twin_coefficients(
         columns[label] = column
 
     coefficient_dataset_ids = {
-        columns[label].dataset_id
+        _mtz_column_data(columns[label]).dataset_id
         for label in ("FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
     }
     if len(coefficient_dataset_ids) != 1:
         raise ValueError("Refmac map coefficients belong to different datasets")
 
     source = {
-        label: np.asarray(columns[label].array, dtype=np.float64)
+        label: np.asarray(_mtz_column_data(columns[label]).array, dtype=np.float64)
         for label in ("FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
     }
     map_finite = np.ones(mtz.nreflections, dtype=bool)
@@ -233,7 +251,7 @@ def normalize_refmac_twin_coefficients(
         )
 
     centric = np.asarray(
-        mtz.spacegroup.operations().centric_flag_array(mtz.make_miller_array()),
+        spacegroup.operations().centric_flag_array(mtz.make_miller_array()),
         dtype=bool,
     )[usable]
     normalized_observed = observed.copy()
@@ -249,7 +267,7 @@ def normalize_refmac_twin_coefficients(
         ("DELFWT", delfwt),
         ("PHDELWT", phdelwt),
     ):
-        output_data[usable, columns[label].idx] = values
+        output_data[usable, _mtz_column_data(columns[label]).idx] = values
     mtz.set_data(output_data)
     mtz.history = [
         *mtz.history,
@@ -261,9 +279,10 @@ def normalize_refmac_twin_coefficients(
     # verify that on the written file rather than on the in-memory arrays.
     written = gemmi.read_mtz_file(output_path)
     written_values = {
-        label: np.asarray(written.column_with_label(label).array, dtype=np.float64)[
-            usable
-        ]
+        label: np.asarray(
+            _mtz_column_data(written.column_with_label(label)).array,
+            dtype=np.float64,
+        )[usable]
         for label in ("FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
     }
     written_observed = _complex_coefficients(

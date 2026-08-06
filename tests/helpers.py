@@ -17,6 +17,8 @@ from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
+    Protocol,
+    cast,
 )
 from collections.abc import Iterable, Mapping, Sequence
 
@@ -37,6 +39,20 @@ Vec3 = tuple[float, float, float]
 # Callers pass ``tmp_path / "name"`` as readily as a plain string; every writer
 # below stringifies its argument.
 _StrPath = str | os.PathLike[str]
+
+
+class _PdbWritable(Protocol):
+    """The fully typed positional overload of Gemmi's PDB writer."""
+
+    def write_pdb(self, path: str, options: gemmi.PdbWriteOptions, /) -> None: ...
+
+
+def write_pdb(structure: gemmi.Structure, path: _StrPath) -> str:
+    """Write a structure through Gemmi's concretely typed overload."""
+    rendered_path = str(path)
+    cast(_PdbWritable, structure).write_pdb(rendered_path, gemmi.PdbWriteOptions())
+    return rendered_path
+
 
 # ``P 21 21 21`` gives four symmetry operations, so symmetry search is available
 # and image contacts are exercised.
@@ -528,9 +544,7 @@ class StructureBuilder:
 
     def write_pdb(self, path: _StrPath) -> str:
         """Write legacy PDB (ATOM/HETATM + LINK); returns the path."""
-        path = str(path)
-        self.to_gemmi().write_pdb(path)
-        return path
+        return write_pdb(self.to_gemmi(), path)
 
     def write_cif(self, path: _StrPath) -> str:
         """Write mmCIF (``_atom_site`` + ``_struct_conn``); returns the path."""

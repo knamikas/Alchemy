@@ -4,7 +4,7 @@ Scope: the driver owns the handlers, workers reach them over a queue rather
 than writing concurrently, and no single record grows without limit.
 
 Out of scope here (owned elsewhere): what individual modules choose to log, and
-the per-run report written by ``driver.runlog._RunLog``, which is an artifact
+the per-run report written by ``driver.runlog.RunLog``, which is an artifact
 rather than a transcript.
 """
 

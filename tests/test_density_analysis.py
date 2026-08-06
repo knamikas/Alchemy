@@ -8,7 +8,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO, Any
+from typing import IO, Any, NoReturn, Protocol, cast
 from collections.abc import Callable
 
 import gemmi
@@ -17,6 +17,31 @@ import pytest
 
 import density_analysis as density
 import inputs
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
+
+
+def _found_command(command: str, path: str | None = None) -> str:
+    """Return a typed successful ``shutil.which`` lookup for CCP4 stubs."""
+    del path
+    return command
 
 
 def _write_refmac_mtz(
@@ -74,8 +99,8 @@ def test_refmac_twin_normalization_uses_edstats_centric_convention(
     )
     assert provenance["usable_reflections"] == 2
     assert provenance["centric_reflections"] == 1
-    assert provenance["raw_identity_max_relative_residual"] == pytest.approx(0)
-    assert provenance["output_identity_max_relative_residual"] == pytest.approx(0)
+    assert provenance["raw_identity_max_relative_residual"] == approx(0)
+    assert provenance["output_identity_max_relative_residual"] == approx(0)
     assert any("Alchemy: normalized twin Refmac" in line for line in normalized.history)
 
 
@@ -184,9 +209,7 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
         stderr.write(b"bad \xff\xfe byte")
         return SimpleNamespace(returncode=1)
 
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: command
-    )
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
     monkeypatch.setattr("density_analysis.subprocess.run", non_utf8_failure)
     source = tmp_path / "source.mtz"
     source.write_bytes(b"source")
@@ -226,9 +249,12 @@ def test_a_helper_holding_stderr_does_not_fake_a_timeout(
     program = _stub_ccp4_program(
         tmp_path, "mtzfix", "echo note >&2\n(sleep 30) &\nexit 1"
     )
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: str(program)
-    )
+
+    def find_program(_command: str, path: str | None = None) -> str:
+        del path
+        return str(program)
+
+    monkeypatch.setattr("density_analysis.shutil.which", find_program)
     source = tmp_path / "source.mtz"
     source.write_bytes(b"source")
     pdb = tmp_path / "model.pdb"
@@ -259,9 +285,7 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: command
-    )
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
     monkeypatch.setattr(
         "density_analysis.subprocess.run",
         _fake_ccp4_run_factory("FAILED a test on re-take\n"),
@@ -315,18 +339,16 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: command
-    )
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
     monkeypatch.setattr(
         "density_analysis.subprocess.run",
         _fake_ccp4_run_factory("some unrelated failure\n"),
     )
-    monkeypatch.setattr(
-        density,
-        "normalize_refmac_twin_coefficients",
-        lambda *_args: pytest.fail("unsafe twin fallback was attempted"),
-    )
+
+    def fail_normalize(_mtz_path: str, _output_path: str) -> NoReturn:
+        pytest.fail("unsafe twin fallback was attempted")
+
+    monkeypatch.setattr(density, "normalize_refmac_twin_coefficients", fail_normalize)
 
     with pytest.raises(RuntimeError, match="mtzfix failed"):
         density.run_density_analysis(
@@ -353,9 +375,7 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: command
-    )
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
 
     def fake_run(
         cmd: Sequence[str],
@@ -410,9 +430,7 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: command
-    )
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
 
     seen: list[tuple[str, float | None, str | None]] = []
 
@@ -525,9 +543,7 @@ def _run_envelope(
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")
     pdb.write_text("END\n", encoding="ascii")
-    monkeypatch.setattr(
-        "density_analysis.shutil.which", lambda command, path=None: command
-    )
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
     monkeypatch.setattr("density_analysis.subprocess.run", fake_run)
     return density.run_density_analysis(
         "1abc",

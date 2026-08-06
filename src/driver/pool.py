@@ -64,11 +64,11 @@ from inputs import (
 from worker import (
     EntryResult,
     WorkerConfig,
-    _init_worker,
-    _worker_death_result,
+    initialize_worker,
     process,
+    worker_death_result,
 )
-from driver.progress import _ProgressReporter
+from driver.progress import ProgressReporter
 from driver.output_lock import (
     OutputDirectoryBusyError,
     OutputDirectoryLock,
@@ -77,15 +77,15 @@ from driver.output_lock import (
 )
 from driver.resources import automatic_worker_limits
 from driver.resume import (
-    _ResumeStaging,
-    _manifest_values_by_id,
-    _resume_replacement_succeeded,
+    ResumeStaging,
     load_done,
+    manifest_values_by_id,
     remove_stale_disabled_bond_outputs,
+    resume_replacement_succeeded,
     validate_resume_schemas,
 )
-from driver.runlog import _RunLog
-from driver.writers import STATS_COLUMNS, _manifest_row, _OutputWriters
+from driver.runlog import RunLog
+from driver.writers import STATS_COLUMNS, OutputWriters, manifest_row
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
     CONFIDENCE_INPUT_COLUMNS,
@@ -202,7 +202,7 @@ def resolve_ccp4_environment(
         raise DriverError(str(exc)) from None
 
 
-def _alchemy_commit() -> str:
+def alchemy_commit() -> str:
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "--short=12", "HEAD"],
@@ -226,7 +226,7 @@ def _alchemy_commit() -> str:
         return "unknown"
 
 
-def _gemmi_version() -> str:
+def gemmi_version() -> str:
     try:
         import gemmi
 
@@ -235,7 +235,7 @@ def _gemmi_version() -> str:
         return "unknown"
 
 
-def _ccp4_version(env: Mapping[str, str]) -> str:
+def ccp4_version(env: Mapping[str, str]) -> str:
     for key in ("CCP4_VERSION", "CCP4_VERSION_CODE", "CCP4VER"):
         if env.get(key):
             return env[key]
@@ -243,7 +243,7 @@ def _ccp4_version(env: Mapping[str, str]) -> str:
     return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
 
 
-def _drain_inflight(
+def drain_inflight(
     inflight: SimpleQueue[tuple[str, int, str]], assignments: dict[int, str]
 ) -> None:
     """Apply pending worker notifications to the pid -> entry assignment map."""
@@ -260,7 +260,7 @@ def _drain_inflight(
             assignments.pop(pid, None)
 
 
-def _dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:
+def dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:
     """Return worker pids that have disappeared since the last check."""
     current = {
         child.pid for child in getattr(pool, "_pool", ()) or () if child.pid is not None
@@ -295,7 +295,7 @@ def _signal_worker_process_group(pid: int, sig: int) -> None:
         pass
 
 
-def _stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bool:
+def stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bool:
     """Stop the worker log listener on a deadline and drop its queue.
 
     ``QueueListener.stop`` puts a sentinel and then joins its thread untimed.
@@ -319,7 +319,7 @@ def _stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> b
     return abandoned
 
 
-def _sweep_owned_scratch_dirs(output_dir: str) -> int:
+def sweep_owned_scratch_dirs(output_dir: str) -> int:
     return sweep_owned_scratch_directories(output_dir)
 
 
@@ -392,7 +392,7 @@ def resolve_confidence_reference_dir(
     return None, candidates
 
 
-def _batch_exit_code(counts: Mapping[str, int], retryable_partial_count: int) -> int:
+def batch_exit_code(counts: Mapping[str, int], retryable_partial_count: int) -> int:
     """Return failure when one or more entries remain operationally incomplete."""
     incomplete = (
         counts.get("error", 0) + counts.get("skip", 0) + retryable_partial_count
@@ -410,7 +410,7 @@ def load_ids_from_file(path: str) -> list[str]:
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"id file not found: {path}")
-    ids = []
+    ids: list[str] = []
     with open(path, encoding="utf-8-sig") as fh:
         for lineno, raw_line in enumerate(fh, 1):
             line = raw_line.split("#", 1)[0].strip()
@@ -430,7 +430,7 @@ class DriverError(Exception):
     """A user-facing driver failure: the message is reported and the run exits 1."""
 
 
-def _select_entry_ids(
+def select_entry_ids(
     args: argparse.Namespace, cache_root: str
 ) -> tuple[list[str], str, dict[str, str | None] | None]:
     """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
@@ -498,7 +498,7 @@ def _select_entry_ids(
     return enumerate_entries(root, limit=limit), root, None
 
 
-class _OutputLayout:
+class OutputLayout:
     """Every path a run reads or writes, all derived from ``--output-dir``."""
 
     def __init__(self, output_dir: str) -> None:
@@ -517,7 +517,7 @@ class _OutputLayout:
         return (self.manifest, self.stats, self.bonds, self.candidates)
 
 
-class _ConfidencePlan:
+class ConfidencePlan:
     """Whether this run scores confidence, and against what.
 
     ``database`` streams the inputs an uncapped full-database run finalizes
@@ -554,7 +554,7 @@ class _BatchTally:
             self.retryable_partials += 1
 
     def exit_code(self) -> int:
-        return _batch_exit_code(self.counts, self.retryable_partials)
+        return batch_exit_code(self.counts, self.retryable_partials)
 
 
 def _load_cofactor_catalog() -> frozenset[str]:
@@ -602,14 +602,14 @@ def _classify_run(args: argparse.Namespace) -> tuple[str, bool]:
     return run_mode, database_run
 
 
-def _plan_confidence(
+def plan_confidence(
     args: argparse.Namespace,
-    layout: _OutputLayout,
+    layout: OutputLayout,
     database_run: bool,
-    run_log: _RunLog,
-) -> _ConfidencePlan:
+    run_log: RunLog,
+) -> ConfidencePlan:
     """Decide this run's confidence mode before any entry is processed."""
-    plan = _ConfidencePlan()
+    plan = ConfidencePlan()
     if not args.bonds:
         return plan
     if database_run:
@@ -658,7 +658,7 @@ def _plan_confidence(
 
 
 def _check_resume_is_compatible(
-    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+    args: argparse.Namespace, layout: OutputLayout, plan: ConfidencePlan
 ) -> None:
     """Refuse to resume onto output this run cannot safely extend.
 
@@ -694,7 +694,7 @@ def _check_resume_is_compatible(
         raise DriverError(str(exc)) from None
     if plan.mode == "reference":
         try:
-            # ``_plan_confidence`` sets the mode only once both of these are
+            # ``plan_confidence`` sets the mode only once both of these are
             # bound, which no annotation on the plan can express.
             validate_scored_reference(
                 cast(str, plan.stream_path), cast(ConfidenceReference, plan.reference)
@@ -703,30 +703,39 @@ def _check_resume_is_compatible(
             raise DriverError(f"Cannot resume confidence output: {exc}") from None
 
 
-def _schedule_entries(
+def schedule_entries(
     args: argparse.Namespace,
-    layout: _OutputLayout,
+    layout: OutputLayout,
     cache_root: str,
-    run_log: _RunLog,
+    run_log: RunLog,
 ) -> tuple[list[str], str, dict[str, str | None] | None]:
     """Return ``(ids, root, manual_inputs)`` for the entries this run will do.
 
     ``--resume`` removes finished entries before ``--max-pdbs`` caps what is
     left; capping first would re-offer the same finished prefix forever.
     """
-    ids, root, manual_inputs = _select_entry_ids(args, cache_root)
+    ids, root, manual_inputs = select_entry_ids(args, cache_root)
     run_log.details["entries_selected_before_resume"] = len(ids)
     run_log.details["resolved_input_root"] = root
 
     if args.resume:
-        done_kwargs = {
-            "bonds_required": args.bonds,
-            "bond_output_present": os.path.isfile(layout.bonds),
-            "candidate_output_present": os.path.isfile(layout.candidates),
-        }
-        normally_done = load_done(layout.manifest, **done_kwargs)
+        bonds_required = bool(args.bonds)
+        bond_output_present = os.path.isfile(layout.bonds)
+        candidate_output_present = os.path.isfile(layout.candidates)
+        normally_done = load_done(
+            layout.manifest,
+            bonds_required=bonds_required,
+            bond_output_present=bond_output_present,
+            candidate_output_present=candidate_output_present,
+        )
         if args.retry_partials:
-            done = load_done(layout.manifest, retry_partial_ids=ids, **done_kwargs)
+            done = load_done(
+                layout.manifest,
+                bonds_required=bonds_required,
+                bond_output_present=bond_output_present,
+                candidate_output_present=candidate_output_present,
+                retry_partial_ids=ids,
+            )
             reselected = normally_done - done
             run_log.details["terminal_partials_reselected"] = len(reselected)
             logger.info(
@@ -749,7 +758,7 @@ def _schedule_entries(
     return ids, root, manual_inputs
 
 
-def _finalize_confidence_reference(layout: _OutputLayout) -> tuple[int, int, int]:
+def _finalize_confidence_reference(layout: OutputLayout) -> tuple[int, int, int]:
     """Score the streamed inputs and freeze the database reference."""
     try:
         return finalize_database_confidence(
@@ -760,7 +769,7 @@ def _finalize_confidence_reference(layout: _OutputLayout) -> tuple[int, int, int
 
 
 def _finish_without_entries(
-    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+    args: argparse.Namespace, layout: OutputLayout, plan: ConfidencePlan
 ) -> int:
     """Exit code for a run whose work list came back empty."""
     if (
@@ -784,7 +793,7 @@ def _finish_without_entries(
 
 
 def _clear_stale_outputs(
-    args: argparse.Namespace, layout: _OutputLayout, plan: _ConfidencePlan
+    args: argparse.Namespace, layout: OutputLayout, plan: ConfidencePlan
 ) -> None:
     """Remove output from a previous run that this one is about to contradict."""
     try:
@@ -817,7 +826,7 @@ def _clear_stale_outputs(
 
 
 def _choose_worker_count(
-    args: argparse.Namespace, entry_count: int, run_log: _RunLog
+    args: argparse.Namespace, entry_count: int, run_log: RunLog
 ) -> int:
     """Size the pool, never above the number of entries there are to run.
 
@@ -856,15 +865,15 @@ def _choose_worker_count(
     return workers
 
 
-def _worker_config(
+def worker_config_from_args(
     args: argparse.Namespace,
     env: dict[str, str],
     root: str,
     cache_root: str,
     cofactors: Collection[str],
     manual_inputs: dict[str, str | None] | None,
-    plan: _ConfidencePlan,
-    run_log: _RunLog,
+    plan: ConfidencePlan,
+    run_log: RunLog,
 ) -> WorkerConfig:
     """Build the config every worker is initialized with, once per run."""
     cfg = WorkerConfig(
@@ -883,9 +892,9 @@ def _worker_config(
         ),
         allow_download=bool(args.id or args.id_file),
         manual_inputs=manual_inputs,
-        alchemy_commit=_alchemy_commit(),
-        gemmi_version=_gemmi_version(),
-        ccp4_version=_ccp4_version(env),
+        alchemy_commit=alchemy_commit(),
+        gemmi_version=gemmi_version(),
+        ccp4_version=ccp4_version(env),
         reference_data_id=reference_data_id(),
     )
     run_log.details.update(
@@ -904,7 +913,7 @@ def _worker_config(
     return cfg
 
 
-def _output_targets(layout: _OutputLayout, plan: _ConfidencePlan) -> tuple[str, ...]:
+def _output_targets(layout: OutputLayout, plan: ConfidencePlan) -> tuple[str, ...]:
     """The output files this run writes, in the order staging expects them."""
     paths = [*layout.core]
     if plan.enabled:
@@ -919,9 +928,9 @@ def _output_targets(layout: _OutputLayout, plan: _ConfidencePlan) -> tuple[str, 
 def _open_writers(
     handles: contextlib.ExitStack,
     args: argparse.Namespace,
-    plan: _ConfidencePlan,
+    plan: ConfidencePlan,
     write_paths: Sequence[str],
-) -> _OutputWriters:
+) -> OutputWriters:
     """Open every output stream this run writes and give them their headers."""
     manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
     confidence_path = write_paths[4] if plan.enabled else None
@@ -930,7 +939,7 @@ def _open_writers(
     def opened(path: str) -> TextIO:
         return handles.enter_context(open(path, "w", newline=""))
 
-    return _OutputWriters(
+    return OutputWriters(
         opened(manifest_path),
         opened(stats_path),
         opened(bonds_path) if args.bonds else None,
@@ -941,8 +950,8 @@ def _open_writers(
     )
 
 
-def _confidence_rows_for(
-    result: EntryResult, plan: _ConfidencePlan
+def confidence_rows_for(
+    result: EntryResult, plan: ConfidencePlan
 ) -> list[dict[str, Any]]:
     """The confidence rows one entry contributes, scored where a reference is."""
     rows = prepare_result_confidence_inputs(
@@ -959,7 +968,7 @@ def _confidence_rows_for(
     return rows
 
 
-def _should_write_entry(
+def should_write_entry(
     resuming: bool, result: EntryResult, prior_ids: set[str]
 ) -> bool:
     """Whether this result's rows belong in the output.
@@ -975,15 +984,15 @@ def _should_write_entry(
         return True
     if str(result.pdb_id).strip().lower() not in prior_ids:
         return True
-    return _resume_replacement_succeeded(result)
+    return resume_replacement_succeeded(result)
 
 
-def _write_entry(
+def write_entry(
     result: EntryResult,
     args: argparse.Namespace,
-    plan: _ConfidencePlan,
-    writers: _OutputWriters,
-    staging: _ResumeStaging | None,
+    plan: ConfidencePlan,
+    writers: OutputWriters,
+    staging: ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
 ) -> None:
     """Write one entry's rows, manifest row last.
@@ -996,9 +1005,9 @@ def _write_entry(
     writers.write_bond_rows(result.bond_rows)
     writers.write_candidate_rows(result.candidate_rows)
     if plan.enabled:
-        writers.write_confidence_rows(_confidence_rows_for(result, plan))
+        writers.write_confidence_rows(confidence_rows_for(result, plan))
     writers.write_manifest_row(
-        _manifest_row(
+        manifest_row(
             result, args.resume, args.bonds, prior_bond_counts, prior_candidate_counts
         )
     )
@@ -1035,13 +1044,13 @@ class _WorkerDeathWatch:
         # no tasks are submitted until after this watch is created. Snapshot
         # that original roster now: if the first task kills its worker before
         # the result loop's first poll, its vanished pid must still be known.
-        _dead_worker_pids(self._pool, self._worker_pids)
+        dead_worker_pids(self._pool, self._worker_pids)
 
     def poll(self) -> list[EntryResult]:
         """Results for the entries whose worker has died since the last call."""
-        _drain_inflight(self._inflight, self._assignments)
-        losses = []
-        for dead_pid in _dead_worker_pids(self._pool, self._worker_pids):
+        drain_inflight(self._inflight, self._assignments)
+        losses: list[EntryResult] = []
+        for dead_pid in dead_worker_pids(self._pool, self._worker_pids):
             if os.name == "posix":
                 _signal_worker_process_group(dead_pid, signal.SIGKILL)
             dead_id = self._assignments.pop(dead_pid, None)
@@ -1076,7 +1085,7 @@ class _WorkerDeathWatch:
         # held by a process that died before naming its entry. A live assigned
         # entry may legitimately spend longer than the fallback grace period
         # inside CCP4, while a completed one already has its real output row.
-        losses = []
+        losses: list[EntryResult] = []
         for stuck_id in self._ids:
             if (
                 stuck_id in self._lost_ids
@@ -1096,7 +1105,7 @@ class _WorkerDeathWatch:
 
     def _lose(self, pdb_id: str, pid: int) -> EntryResult:
         self._lost_ids.add(pdb_id)
-        return _worker_death_result(pdb_id, self._cfg, pid)
+        return worker_death_result(pdb_id, self._cfg, pid)
 
 
 def _dispatch_entries(
@@ -1104,12 +1113,12 @@ def _dispatch_entries(
     ids: Sequence[str],
     cfg: WorkerConfig,
     workers: int,
-    writers: _OutputWriters,
-    plan: _ConfidencePlan,
-    staging: _ResumeStaging | None,
+    writers: OutputWriters,
+    plan: ConfidencePlan,
+    staging: ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
     prior_ids: set[str],
-    run_log: _RunLog,
+    run_log: RunLog,
 ) -> _BatchTally:
     """Run every entry across a worker pool and write the results as they land.
 
@@ -1117,7 +1126,7 @@ def _dispatch_entries(
     the pool alone would hang forever on an entry a killed worker was holding.
     """
     tally = _BatchTally()
-    progress = _ProgressReporter(len(ids))
+    progress = ProgressReporter(len(ids))
     inflight: SimpleQueue[tuple[str, int, str]] = SimpleQueue()
     completed_ids: set[str] = set()
     last_progress = time.monotonic()
@@ -1139,7 +1148,9 @@ def _dispatch_entries(
     # that already has running threads risks the child deadlocking on a lock no
     # thread there holds.
     log_queue = create_worker_log_queue()
-    pool = Pool(workers, initializer=_init_worker, initargs=(cfg, inflight, log_queue))
+    pool = Pool(
+        workers, initializer=initialize_worker, initargs=(cfg, inflight, log_queue)
+    )
     log_listener = start_worker_log_listener(log_queue)
     deaths = _WorkerDeathWatch(pool, inflight, ids, cfg)
     try:
@@ -1147,7 +1158,7 @@ def _dispatch_entries(
         completed = 0
         progress.render(completed, tally.counts, tally.no_metals, force=True)
         while completed < len(ids):
-            batch = []
+            batch: list[EntryResult] = []
             try:
                 batch.append(results.next(timeout=1.0))
             except MultiprocessingTimeoutError:
@@ -1170,8 +1181,8 @@ def _dispatch_entries(
                 completed += 1
                 completed_ids.add(r.pdb_id)
                 run_log.record_entry(r)
-                if _should_write_entry(args.resume, r, prior_ids):
-                    _write_entry(r, args, plan, writers, staging, prior_counts)
+                if should_write_entry(args.resume, r, prior_ids):
+                    write_entry(r, args, plan, writers, staging, prior_counts)
                 tally.record(r)
                 finished = completed == len(ids)
                 progress.render(
@@ -1185,7 +1196,7 @@ def _dispatch_entries(
         forced = _shutdown_pool(pool)
         # Stopped after the pool is gone, so records emitted during shutdown
         # are still forwarded.
-        if _stop_log_listener(log_listener, log_queue):
+        if stop_log_listener(log_listener, log_queue):
             run_log.summary["worker_log_listener_abandoned"] = True
             logger.warning(
                 "the worker log listener did not stop within %gs and was "
@@ -1202,11 +1213,11 @@ def _dispatch_entries(
     return tally
 
 
-def _keep_completed_staging(
-    staging: _ResumeStaging,
+def keep_completed_staging(
+    staging: ResumeStaging,
     args: argparse.Namespace,
-    plan: _ConfidencePlan,
-    run_log: _RunLog,
+    plan: ConfidencePlan,
+    run_log: RunLog,
 ) -> None:
     """Promote the entries a halted resume finished, rather than dropping them.
 
@@ -1244,15 +1255,15 @@ def _keep_completed_staging(
     )
 
 
-def _process_entries(
+def process_entries(
     args: argparse.Namespace,
     ids: Sequence[str],
     cfg: WorkerConfig,
     workers: int,
-    layout: _OutputLayout,
-    plan: _ConfidencePlan,
-    run_log: _RunLog,
-) -> tuple[_BatchTally, _OutputWriters]:
+    layout: OutputLayout,
+    plan: ConfidencePlan,
+    run_log: RunLog,
+) -> tuple[_BatchTally, OutputWriters]:
     """Open the outputs, run the batch, and commit any staged retry rows.
 
     An interrupted batch still commits the entries that completed, so the work
@@ -1260,23 +1271,23 @@ def _process_entries(
     previous run's rows exactly as they were.
     """
     prior_counts = (
-        _manifest_values_by_id(layout.manifest, "n_bonds")
+        manifest_values_by_id(layout.manifest, "n_bonds")
         if args.resume and not args.bonds
         else {},
-        _manifest_values_by_id(layout.manifest, "n_candidates")
+        manifest_values_by_id(layout.manifest, "n_candidates")
         if args.resume and not args.bonds
         else {},
     )
-    # Which ids the manifest already describes; see ``_should_write_entry``,
+    # Which ids the manifest already describes; see ``should_write_entry``,
     # which uses it to decide whether a retry may overwrite an existing row.
-    prior_ids = (
-        set(_manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
+    prior_ids: set[str] = (
+        set(manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
     output_paths = _output_targets(layout, plan)
-    staging = _ResumeStaging(args.output_dir, output_paths) if args.resume else None
+    staging = ResumeStaging(args.output_dir, output_paths) if args.resume else None
     write_paths = staging.staged if staging is not None else output_paths
 
-    writers: _OutputWriters | None = None
+    writers: OutputWriters | None = None
     processing_completed = False
     try:
         with contextlib.ExitStack() as handles:
@@ -1298,7 +1309,7 @@ def _process_entries(
             opened_writers = writers
     finally:
         if staging is not None and not processing_completed:
-            _keep_completed_staging(staging, args, plan, run_log)
+            keep_completed_staging(staging, args, plan, run_log)
 
     run_log.summary.update(
         metal_rows_written=opened_writers.n_rows,
@@ -1320,11 +1331,11 @@ def _process_entries(
 
 def _report_batch(
     args: argparse.Namespace,
-    layout: _OutputLayout,
-    plan: _ConfidencePlan,
+    layout: OutputLayout,
+    plan: ConfidencePlan,
     tally: _BatchTally,
-    writers: _OutputWriters,
-    run_log: _RunLog,
+    writers: OutputWriters,
+    run_log: RunLog,
 ) -> int:
     """Print the human summary, finalize confidence, and return the exit code.
 
@@ -1394,7 +1405,7 @@ def _report_batch(
     return exit_code
 
 
-def _run(args: argparse.Namespace, run_log: _RunLog) -> int:
+def run(args: argparse.Namespace, run_log: RunLog) -> int:
     """Execute one batch, returning its exit code."""
     try:
         return _execute(args, run_log)
@@ -1406,20 +1417,20 @@ def _run(args: argparse.Namespace, run_log: _RunLog) -> int:
 
 def _execute_with_output_lock(
     args: argparse.Namespace,
-    run_log: _RunLog,
+    run_log: RunLog,
     cofactors: Collection[str],
     env: dict[str, str],
 ) -> int:
     """Run every output-reading and output-writing phase under one lease."""
-    _sweep_owned_scratch_dirs(args.output_dir)
-    layout = _OutputLayout(args.output_dir)
+    sweep_owned_scratch_dirs(args.output_dir)
+    layout = OutputLayout(args.output_dir)
     run_mode, database_run = _classify_run(args)
     run_log.details["run_mode"] = run_mode
 
-    plan = _plan_confidence(args, layout, database_run, run_log)
+    plan = plan_confidence(args, layout, database_run, run_log)
     _check_resume_is_compatible(args, layout, plan)
 
-    ids, root, manual_inputs = _schedule_entries(
+    ids, root, manual_inputs = schedule_entries(
         args, layout, args.pdb_redo_cache, run_log
     )
     if not ids:
@@ -1427,15 +1438,15 @@ def _execute_with_output_lock(
 
     _clear_stale_outputs(args, layout, plan)
     workers = _choose_worker_count(args, len(ids), run_log)
-    cfg = _worker_config(
+    cfg = worker_config_from_args(
         args, env, root, args.pdb_redo_cache, cofactors, manual_inputs, plan, run_log
     )
 
-    tally, writers = _process_entries(args, ids, cfg, workers, layout, plan, run_log)
+    tally, writers = process_entries(args, ids, cfg, workers, layout, plan, run_log)
     return _report_batch(args, layout, plan, tally, writers, run_log)
 
 
-def _execute(args: argparse.Namespace, run_log: _RunLog) -> int:
+def _execute(args: argparse.Namespace, run_log: RunLog) -> int:
     """Resolve prerequisites, then exclusively own the output for the run."""
     cofactors = _load_cofactor_catalog()
     env, _ = resolve_ccp4_environment(args)

@@ -551,7 +551,7 @@ def test_documented_thresholds_match_the_constants() -> None:
     from structure_analysis import OVERFULL_OCCUPANCY_NI_FRACTION
 
     prose = _all_prose()
-    documented = [
+    documented: list[tuple[str, int | float, str]] = [
         ("broad candidate search radius", CANDIDATE_SEARCH_RADIUS, "4 Å"),
         ("z-score outlier cutoff", ZSCORE_OUTLIER_CUTOFF, ">= 6"),
         ("first-sphere tolerance", FIRST_SPHERE_TOLERANCE, "0.75"),

@@ -113,13 +113,13 @@ def load_done(
     return done
 
 
-def _resume_replacement_succeeded(result: EntryResult) -> bool:
+def resume_replacement_succeeded(result: EntryResult) -> bool:
     """Whether a retry produced a terminal result suitable for replacement."""
     status = str(result.status).strip().lower()
     return status == "ok" or (status == "partial" and not bool(result.retryable))
 
 
-def _manifest_values_by_id(path: str, column: str) -> dict[str, str]:
+def manifest_values_by_id(path: str, column: str) -> dict[str, str]:
     """Return one manifest column keyed by normalized PDB ID."""
     values: dict[str, str] = {}
     if not os.path.exists(path) or os.path.getsize(path) == 0:
@@ -451,7 +451,7 @@ def _merge_csv_replacements(
         raise
 
 
-class _ResumeStaging:
+class ResumeStaging:
     """Hold a resumed run's rows so completed entries replace their old ones.
 
     Only ids in ``replacement_ids`` are merged, and an id is added there after

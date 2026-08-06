@@ -9,14 +9,13 @@ depending on which module asked, belongs here.
 
 from __future__ import annotations
 
-import functools
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import IO, Any, Protocol, cast
 from collections.abc import Callable, Iterable, Iterator
 
 import pytest
@@ -32,13 +31,17 @@ _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
 )
 
 
+class _CacheClearable(Protocol):
+    def cache_clear(self) -> None: ...
+
+
 def _clear_reference_data_caches() -> None:
     """Drop every memoized read in ``reference_data``."""
-    cached: functools._lru_cache_wrapper[Any]
+    cached: _CacheClearable
     for cached in (
         reference_data.reference_data_checksums,
         reference_data.reference_data_id,
-        reference_data._catalog,
+        reference_data.catalog,
         reference_data.literature_distances,
         reference_data.first_sphere_targets,
     ):
@@ -46,7 +49,7 @@ def _clear_reference_data_caches() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_reference_data_caches() -> Iterator[None]:
+def isolate_reference_data_caches() -> Iterator[None]:
     """Clear the memoized reads around every test in this module.
 
     ``reference_data_checksums`` and ``reference_data_id`` take no arguments, so
@@ -180,9 +183,9 @@ def test_a_file_is_read_once_however_many_callers_ask(
     reads: list[Any] = []
     real_open = open
 
-    def counting_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+    def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[Any]:
         reads.append(file)
-        return real_open(file, *args, **kwargs)
+        return cast(IO[Any], real_open(file, *args, **kwargs))
 
     monkeypatch.setattr("builtins.open", counting_open)
     for _ in range(3):
@@ -222,7 +225,7 @@ def test_both_bundled_files_match_their_recorded_checksums() -> None:
     for path, (sidecar, key) in reference_data.CHECKSUM_SIDECARS.items():
         with open(sidecar, encoding="utf-8") as handle:
             recorded = json.load(handle)[key]
-        assert reference_data._sha256(path) == recorded, (
+        assert reference_data.sha256(path) == recorded, (
             f"{os.path.basename(path)} does not match {os.path.basename(sidecar)}; "
             "rebuild it with its tool or re-stamp the sidecar"
         )
@@ -234,11 +237,11 @@ def test_an_edited_bundled_file_is_refused_at_load(
 ) -> None:
     """A hand edit to either file stops the run rather than changing results."""
     accessor: Callable[[str], object]
-    cached: functools._lru_cache_wrapper[Any]
+    cached: _CacheClearable
     if target == "catalog":
         path = reference_data.COFACTOR_CATALOG_PATH
         accessor = reference_data.cofactor_ids
-        cached = reference_data._catalog
+        cached = reference_data.catalog
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
         edited = text + "ZZZ\tZn\tcluster\n"
@@ -282,7 +285,7 @@ def test_a_missing_sidecar_is_an_error_for_a_bundled_file(
         str(catalog),
         (str(tmp_path / "gone.meta.json"), "catalog_sha256"),
     )
-    reference_data._catalog.cache_clear()
+    reference_data.catalog.cache_clear()
 
     with pytest.raises(reference_data.ReferenceDataError, match="no metadata sidecar"):
         reference_data.cofactor_ids(str(catalog))
@@ -308,7 +311,7 @@ def test_a_damaged_distance_row_fails_the_parse(
     table.write_text(f"HOH O ZN 2.09 0.11\n{row}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        reference_data._load_literature(str(table))
+        reference_data.load_literature(str(table))
 
 
 @pytest.mark.parametrize(
@@ -329,7 +332,7 @@ def test_distance_values_must_be_finite_and_positive(
     table.write_text(f"HOH O ZN {mu} {stdev}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        reference_data._load_literature(str(table))
+        reference_data.load_literature(str(table))
 
 
 def test_duplicate_reference_keys_are_rejected(tmp_path: Path) -> None:
@@ -337,7 +340,7 @@ def test_duplicate_reference_keys_are_rejected(tmp_path: Path) -> None:
     table.write_text("HOH O ZN 2.09 0.11\nHOH O ZN 2.10 0.12\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"line 2 duplicates.*first defined on line 1"):
-        reference_data._load_literature(str(table))
+        reference_data.load_literature(str(table))
 
 
 def test_the_table_header_is_skipped_by_name() -> None:
@@ -360,7 +363,7 @@ def test_a_table_with_no_distances_is_named_as_empty(tmp_path: Path) -> None:
     table.write_text("# only a comment\n\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="no reference distances"):
-        reference_data._load_literature(str(table))
+        reference_data.load_literature(str(table))
 
 
 def _stub_reference_data(
@@ -379,7 +382,7 @@ def _stub_reference_data(
         data.write_text(text, encoding="utf-8")
         sidecar = tmp_path / f"{name}.meta.json"
         sidecar.write_text(
-            json.dumps({key: reference_data._sha256(str(data))}), encoding="utf-8"
+            json.dumps({key: reference_data.sha256(str(data))}), encoding="utf-8"
         )
         paths[str(data)] = (str(sidecar), key)
     monkeypatch.setattr(reference_data, "CHECKSUM_SIDECARS", paths)

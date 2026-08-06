@@ -31,9 +31,11 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
+    Protocol,
     TypeVar,
+    cast,
 )
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Sequence
 
 import pytest
 
@@ -44,6 +46,25 @@ import main
 from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+approx = cast(_PytestApi, pytest).approx
 
 
 _StrPath = str | os.PathLike[str]
@@ -126,7 +147,7 @@ def _file_sha256(path: str) -> str:
 
 def _assert_entry_snapshot(cache_root: str) -> None:
     """Fail clearly if a complete-looking cache is not the pinned snapshot."""
-    mismatches = []
+    mismatches: list[str] = []
     for pdb_id, files in _ENTRY_SNAPSHOT_SHA256.items():
         for suffix, expected in files.items():
             path = entry_file(cache_root, pdb_id, suffix)
@@ -245,7 +266,7 @@ class RunResult:
 
 
 @contextlib.contextmanager
-def _environment(overrides: dict[str, str] | None) -> Iterator[None]:
+def _environment(overrides: dict[str, str] | None) -> Generator[None, None, None]:
     """Temporarily install ``overrides`` into ``os.environ``."""
     saved = os.environ.copy()
     if overrides:
@@ -553,13 +574,13 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
 
         expected_density = _MEASURED_RSZD[("9myr", chain, "201")]
         for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected_density):
-            assert float(site[column]) == pytest.approx(value, abs=_RSZD_TOLERANCE), (
+            assert float(site[column]) == approx(value, abs=_RSZD_TOLERANCE), (
                 chain,
                 column,
             )
         rszd = float(site["ZDm"])
         assert math.isfinite(rszd)
-        assert abs(rszd) == pytest.approx(
+        assert abs(rszd) == approx(
             max(abs(float(site["ZD-m"])), abs(float(site["ZD+m"]))), abs=0.05
         )
 
@@ -576,8 +597,8 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
             mu, sigma = literature_reference(
                 bond["neighbor_resname"], bond["neighbor_element"], "ZN"
             )
-            assert float(bond["literature_distance"]) == pytest.approx(mu)
-            assert float(bond["literature_stdev"]) == pytest.approx(sigma)
+            assert float(bond["literature_distance"]) == approx(mu)
+            assert float(bond["literature_stdev"]) == approx(sigma)
             dpi = float(bond["dpi"])
             assert math.isfinite(dpi) and dpi > 0.0
             denominator = math.sqrt(dpi**2 + sigma**2)
@@ -588,15 +609,15 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
             # denominator that is worth far more than the z-score's own
             # rounding, and a fixed tolerance would be tuned to one entry.
             tolerance = 0.0005 / denominator + 5e-5
-            assert float(bond["zscore"]) == pytest.approx(expected_z, abs=tolerance)
+            assert float(bond["zscore"]) == approx(expected_z, abs=tolerance)
             assert abs(expected_z) < float(bond["zscore_outlier_cutoff"])
             assert bond["geometry_outlier"] == "False"
             assert bond["geometry_consistent"] == "True"
-            assert float(bond["sigma_mag"]) == pytest.approx(rszd)
-            assert float(bond["sigma_neg"]) == pytest.approx(float(site["ZD-m"]))
-            assert float(bond["sigma_pos"]) == pytest.approx(float(site["ZD+m"]))
+            assert float(bond["sigma_mag"]) == approx(rszd)
+            assert float(bond["sigma_neg"]) == approx(float(site["ZD-m"]))
+            assert float(bond["sigma_pos"]) == approx(float(site["ZD+m"]))
 
-    assert literature_reference(*_HIS_N_ZN) == pytest.approx((2.03, 0.05))
+    assert literature_reference(*_HIS_N_ZN) == approx((2.03, 0.05))
 
 
 @_requires_entry_data
@@ -622,12 +643,12 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(
         assert row["selected_metal_site_status"] == "selected", (chain, resnum)
         assert row["coordinate_mapping_status"] == "matched", (chain, resnum)
         for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected):
-            assert float(row[column]) == pytest.approx(value, abs=_RSZD_TOLERANCE), (
+            assert float(row[column]) == approx(value, abs=_RSZD_TOLERANCE), (
                 chain,
                 resnum,
                 column,
             )
-        assert abs(float(row["ZDm"])) == pytest.approx(
+        assert abs(float(row["ZDm"])) == approx(
             max(abs(float(row["ZD-m"])), abs(float(row["ZD+m"]))), abs=0.05
         ), (chain, resnum)
 
@@ -668,7 +689,7 @@ def test_declared_connections_measure_their_own_reported_distance(
         measured = float(row["distance"])
         assert reported > 0.0, where
         # Reported distances are written to two decimals, measured to three.
-        assert measured == pytest.approx(reported, abs=0.02), where
+        assert measured == approx(reported, abs=0.02), where
         # A first-sphere metal-donor contact is a bond length, not a
         # lattice-scale separation.
         assert 1.5 < measured < 3.0, where
@@ -1031,7 +1052,7 @@ def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
     assert bonds, "the bond-enabled resume must actually write bond rows"
     row = manifest_by_id(output_dir)["9myr"]
     assert int(row["n_bonds"]) == len(bonds)
-    assert float(bonds[0]["distance"]) == pytest.approx(2.311, abs=0.02)
+    assert float(bonds[0]["distance"]) == approx(2.311, abs=0.02)
 
 
 @_requires_entry_data
@@ -1129,13 +1150,11 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     assert site["dpi_unavailable_reason"] == "missing_dpi_metadata_source"
     assert not math.isfinite(float(site["dpi"]))
     # Only the DPI-derived numbers are lost; density is unaffected.
-    assert float(site["ZDm"]) == pytest.approx(
-        float(rows_for(batch.stats, "9myr")[0]["ZDm"])
-    )
+    assert float(site["ZDm"]) == approx(float(rows_for(batch.stats, "9myr")[0]["ZDm"]))
 
     bond = read_rows(output_dir, "metal_bonds_all.csv")[0]
     reference = rows_for(batch.bonds, "9myr")[0]
-    assert float(bond["distance"]) == pytest.approx(float(reference["distance"]))
+    assert float(bond["distance"]) == approx(float(reference["distance"]))
     assert bond["neighbor_atom"] == "SG"
     assert not math.isfinite(float(bond["dpi"]))
     assert not math.isfinite(float(bond["zscore"]))
@@ -1454,7 +1473,7 @@ def frozen_reference(
     """
     directory = str(directory)
     os.makedirs(directory, exist_ok=True)
-    rows = []
+    rows: list[dict[str, str]] = []
     for index, (rszd, zbond) in enumerate(itertools.product(rszd_values, zbond_values)):
         row = {column: "" for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
         row.update(
@@ -1483,9 +1502,8 @@ def frozen_reference(
 
     inputs = os.path.join(directory, "confidence_inputs.csv")
     with open(inputs, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle, fieldnames=confidence_score.CONFIDENCE_INPUT_COLUMNS
-        )
+        fieldnames: list[str] = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -1546,8 +1564,8 @@ def assert_policy_was_applied(
             float(row["geometry_coverage"]),
         )
         # 1e-3 absorbs the six-decimal rounding of geometry_coverage in the CSV.
-        assert score == pytest.approx(expected, abs=1e-3), where
-        assert float(row["confidence_percentile"]) == pytest.approx(
+        assert score == approx(expected, abs=1e-3), where
+        assert float(row["confidence_percentile"]) == approx(
             average_rank_percentile(cohort, expected), abs=1e-6
         ), where
         scored += 1
@@ -1633,13 +1651,11 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
         row for row in rows if row["pdbID"] == "9myr" and row["metal_chain"] == "B"
     )
     site = next(row for row in rows_for(batch.stats, "9myr") if row["CI"] == "B")
-    assert float(zinc["rszd_magnitude"]) == pytest.approx(
-        abs(float(site["ZDm"])), abs=1e-6
-    )
+    assert float(zinc["rszd_magnitude"]) == approx(abs(float(site["ZDm"])), abs=1e-6)
     assert float(zinc["max_abs_zbond"]) < _GEOMETRY_ANCHORS[0][0]
     assert float(zinc["geometry_coverage"]) == 1.0
     assert zinc["confidence_scoring_status"] == "complete"
-    assert float(zinc["confidence_score"]) == pytest.approx(
+    assert float(zinc["confidence_score"]) == approx(
         _9MYR_B_CONFIDENCE, abs=_9MYR_B_CONFIDENCE_TOLERANCE
     )
 
@@ -1727,7 +1743,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     # These sites are the cohort, so their average empirical rank is 50 even
     # when tied scores share a percentile.
     percentiles = [float(row["confidence_percentile"]) for row in rows]
-    assert sum(percentiles) / len(percentiles) == pytest.approx(50.0)
+    assert sum(percentiles) / len(percentiles) == approx(50.0)
 
     assert (
         f"13 confidence rows (13 scored; reference cohort 13) -> "
