@@ -17,7 +17,7 @@ discarding measured bond geometry.
 from __future__ import annotations
 
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -914,6 +914,109 @@ def _site_summary(
     }
 
 
+@dataclass(frozen=True)
+class _MetalAnalysisResult:
+    bond_rows: list[dict[str, Any]]
+    candidate_rows: list[dict[str, Any]]
+    summary: dict[str, Any]
+    unsupported_pairs: set[tuple[str, str]]
+
+
+def _analyze_metal_site(
+    pdb_id: str,
+    structure: StructureContext,
+    metal: AtomSite,
+    metal_declarations: Sequence[Candidate],
+    explicit_search: gemmi.NeighborSearch,
+    image_search: gemmi.NeighborSearch | None,
+    dpi: float,
+    resolution: float,
+    ni: float,
+    deposited_ni: float,
+    dpi_reason: str,
+    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]],
+    zd_idx: Sequence[int] | None,
+) -> _MetalAnalysisResult:
+    explicit_declarations = [
+        candidate for candidate in metal_declarations if not candidate.symmetry_contact
+    ]
+    explicit_candidates = _merge_candidates(
+        collect_proximal_candidates(structure, explicit_search, metal, False),
+        explicit_declarations,
+    )
+    _annotate_donor_policy(structure, explicit_candidates)
+    explicit_contacts, unsupported_pairs = _current_contacts_from_candidates(
+        explicit_candidates, metal
+    )
+    annotate_contacts(explicit_contacts, metal.element, dpi)
+    _annotate_multi_donor_groups(explicit_contacts)
+
+    image_candidates: list[Candidate] | None = None
+    image_contacts: list[Candidate] | None = None
+    if image_search is not None:
+        image_candidates = _merge_candidates(
+            collect_proximal_candidates(structure, image_search, metal, True),
+            metal_declarations,
+        )
+        _annotate_donor_policy(structure, image_candidates)
+        image_contacts, image_unsupported = _current_contacts_from_candidates(
+            image_candidates, metal
+        )
+        unsupported_pairs.update(image_unsupported)
+        annotate_contacts(image_contacts, metal.element, dpi)
+        _annotate_multi_donor_groups(image_contacts)
+
+    primary_contacts = (
+        image_contacts if image_contacts is not None else explicit_contacts
+    )
+    primary_candidates = (
+        image_candidates if image_candidates is not None else explicit_candidates
+    )
+    summary = _site_summary(
+        metal,
+        explicit_contacts,
+        image_contacts,
+        dpi,
+        resolution,
+        ni,
+        deposited_ni,
+        dpi_reason,
+        structure,
+    )
+    summary.update(_site_context_values(primary_contacts, primary_candidates))
+
+    sigma = sigma_for(
+        sig,
+        metal.residue_name,
+        metal.chain_id,
+        metal.resnum,
+        zd_idx,
+        site_key=metal.source_key,
+    )
+    parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
+    return _MetalAnalysisResult(
+        bond_rows=[
+            bond_row(
+                pdb_id,
+                structure,
+                metal,
+                contact,
+                dpi,
+                resolution,
+                sigma,
+                parent_type,
+            )
+            for contact in primary_contacts
+        ],
+        candidate_rows=[
+            candidate_row(pdb_id, structure, metal, candidate)
+            for candidate in primary_candidates
+        ],
+        summary=summary,
+        unsupported_pairs=unsupported_pairs,
+    )
+
+
 def run_bond_analysis(
     pdb_id: str,
     pdb_path: str,
@@ -1032,84 +1135,37 @@ def run_bond_analysis(
             summary.update(_site_context_values([], []))
             summaries[metal.source_key] = summary
             continue
-        metal_declarations = declared_by_metal.get(metal.source_key, ())
-        explicit_declarations = [
-            candidate
-            for candidate in metal_declarations
-            if not candidate.symmetry_contact
-        ]
-        explicit_candidates = _merge_candidates(
-            collect_proximal_candidates(structure, explicit_search, metal, False),
-            explicit_declarations,
-        )
-        _annotate_donor_policy(structure, explicit_candidates)
-        explicit, unsupported_pairs = _current_contacts_from_candidates(
-            explicit_candidates, metal
-        )
-        annotate_contacts(explicit, metal.element, dpi)
-        _annotate_multi_donor_groups(explicit)
-        image_candidates: list[Candidate] | None = None
-        image_contacts: list[Candidate] | None = None
-        if image_search is not None:
-            image_candidates = _merge_candidates(
-                collect_proximal_candidates(structure, image_search, metal, True),
-                metal_declarations,
-            )
-            _annotate_donor_policy(structure, image_candidates)
-            image_contacts, image_unsupported = _current_contacts_from_candidates(
-                image_candidates, metal
-            )
-            unsupported_pairs.update(image_unsupported)
-            annotate_contacts(image_contacts, metal.element, dpi)
-            _annotate_multi_donor_groups(image_contacts)
-        if unsupported_pairs:
-            metadata["partial_reason_codes"].append(
-                ReasonCode.MISSING_FIRST_SPHERE_REFERENCE
-            )
-            pairs = ", ".join(
-                f"{metal_element}-{donor_element}"
-                for metal_element, donor_element in sorted(unsupported_pairs)
-            )
-            metadata["messages"].append(
-                f"first-sphere reference unavailable for {pairs}"
-            )
-        primary_contacts = image_contacts if image_contacts is not None else explicit
-        primary_candidates = (
-            image_candidates if image_candidates is not None else explicit_candidates
-        )
-        summary = _site_summary(
+        site_result = _analyze_metal_site(
+            pdb_id,
+            structure,
             metal,
-            explicit,
-            image_contacts,
+            declared_by_metal.get(metal.source_key, ()),
+            explicit_search,
+            image_search,
             dpi,
             resolution,
             ni,
             deposited_ni,
             dpi_reason,
-            structure,
-        )
-        summary.update(_site_context_values(primary_contacts, primary_candidates))
-        summaries[metal.source_key] = summary
-
-        sigma = sigma_for(
             sig,
-            metal.residue_name,
-            metal.chain_id,
-            metal.resnum,
             zd_idx,
-            site_key=metal.source_key,
         )
-        parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
-        rows.extend(
-            bond_row(
-                pdb_id, structure, metal, contact, dpi, resolution, sigma, parent_type
+        if site_result.unsupported_pairs:
+            metadata["partial_reason_codes"].append(
+                ReasonCode.MISSING_FIRST_SPHERE_REFERENCE
             )
-            for contact in primary_contacts
-        )
-        candidate_rows.extend(
-            candidate_row(pdb_id, structure, metal, candidate)
-            for candidate in primary_candidates
-        )
+            pairs = ", ".join(
+                f"{metal_element}-{donor_element}"
+                for metal_element, donor_element in sorted(
+                    site_result.unsupported_pairs
+                )
+            )
+            metadata["messages"].append(
+                f"first-sphere reference unavailable for {pairs}"
+            )
+        summaries[metal.source_key] = site_result.summary
+        rows.extend(site_result.bond_rows)
+        candidate_rows.extend(site_result.candidate_rows)
 
     metadata["partial_reason_codes"] = list(
         dict.fromkeys(metadata["partial_reason_codes"])

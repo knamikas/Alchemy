@@ -1061,8 +1061,8 @@ def _symmetry_metadata(
             return False, "missing_or_invalid_unit_cell", 0, strict_ncs_ids
         spacegroup = cast("gemmi.SpaceGroup | None", structure.find_spacegroup())
         if spacegroup is None:
-            # Gemmi's stub declares a non-optional SpaceGroup, but the binding
-            # returns None for a file whose space group cannot be identified.
+            # The binding returns None for unidentified space groups despite its
+            # non-optional stub, so malformed entries need an explicit boundary.
             return (
                 False,
                 "missing_or_invalid_space_group",
@@ -1074,7 +1074,7 @@ def _symmetry_metadata(
             return False, "missing_or_invalid_space_group", 0, strict_ncs_ids
         structure.setup_cell_images()
         return True, "", operation_count, strict_ncs_ids
-    except Exception as exc:  # one malformed entry must not stop a batch
+    except Exception as exc:  # malformed symmetry must fail one entry, not the batch
         return (
             False,
             f"symmetry_setup_failed:{type(exc).__name__}",
@@ -1083,28 +1083,24 @@ def _symmetry_metadata(
         )
 
 
-def load_structure(
-    pdb_id: str,
-    path: str,
-    source_model_count: int | None = None,
-) -> StructureContext:
-    """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
-    structure = gemmi.read_structure(path)
-    if len(structure) == 0:
-        raise ValueError("coordinate file contains no models")
-    input_model_count = (
-        len(structure) if source_model_count is None else source_model_count
-    )
-    if input_model_count < len(structure):
-        raise ValueError(
-            "source model count cannot be smaller than the analysis model count"
-        )
-    model = structure[0]
-    model_id = str(model.num)
+@dataclass(frozen=True)
+class _SourceModelData:
+    """Raw fields Gemmi normalizes away and their first-model atom mapping."""
+
+    analysis_format: str
+    raw_first: tuple[RawOccupancy, ...]
+    raw_matches: tuple[RawOccupancy | None, ...]
+    source_residue_identities: Mapping[tuple[int, str, str, str], SourceResidueIdentity]
+    defaulted_occupancy_count: int
+    mapping_failed: bool
+    mapping_reason: str
+    legacy_identifiers_packed: bool
+
+
+def _source_model_data(path: str, model: gemmi.Model) -> _SourceModelData:
     analysis_format = (
         "mmcif" if os.path.splitext(path)[1].lower() in (".cif", ".mmcif") else "pdb"
     )
-
     raw_models: list[list[RawOccupancy]] = []
     raw_error = ""
     source_residue_identities: dict[
@@ -1115,6 +1111,7 @@ def load_structure(
         raw_models, raw_error = _raw_pdb_occupancies(path)
         source_residue_identities = _raw_pdb_residue_mapping(path)
         defaulted_occupancy_counts = _raw_pdb_defaulted_occupancy_counts(path)
+
     legacy_identifiers_packed = any(
         identity.residue_number is not None
         and (
@@ -1130,22 +1127,23 @@ def load_structure(
         ), identity in source_residue_identities.items()
     )
     raw_first = raw_models[0] if raw_models else []
-    gemmi_atoms = [atom for chain in model for residue in chain for atom in residue]
-    gemmi_atom_count = len(gemmi_atoms)
+    gemmi_atom_count = sum(
+        1 for chain in model for residue in chain for _atom in residue
+    )
     defaulted_occupancy_count = defaulted_occupancy_counts.get(0, 0)
     if defaulted_occupancy_count not in (0, gemmi_atom_count):
         raise ValueError(
             "defaulted occupancy count does not match the analyzed model atom count"
         )
-    raw_matches: list[RawOccupancy | None]
-    unmatched_gemmi = 0
-    unmatched_raw = 0
+
     if analysis_format == "pdb":
         raw_matches, unmatched_gemmi, unmatched_raw = _match_raw_occupancies(
             model, raw_first
         )
     else:
         raw_matches = [None] * gemmi_atom_count
+        unmatched_gemmi = 0
+        unmatched_raw = 0
     mapping_failed = analysis_format == "pdb" and bool(
         raw_error or unmatched_gemmi or unmatched_raw
     )
@@ -1153,16 +1151,32 @@ def load_structure(
     if mapping_failed and not mapping_reason:
         if len(raw_first) != gemmi_atom_count:
             mapping_reason = (
-                f"raw_atom_count_mismatch:{len(raw_first)}!="
-                f"{gemmi_atom_count};unmatched_gemmi="
-                f"{unmatched_gemmi};unmatched_raw={unmatched_raw}"
+                f"raw_atom_count_mismatch:{len(raw_first)}!={gemmi_atom_count};"
+                f"unmatched_gemmi={unmatched_gemmi};unmatched_raw={unmatched_raw}"
             )
         else:
             mapping_reason = (
-                f"raw_atom_identity_mismatch:unmatched_gemmi="
-                f"{unmatched_gemmi};unmatched_raw={unmatched_raw}"
+                f"raw_atom_identity_mismatch:unmatched_gemmi={unmatched_gemmi};"
+                f"unmatched_raw={unmatched_raw}"
             )
+    return _SourceModelData(
+        analysis_format=analysis_format,
+        raw_first=tuple(raw_first),
+        raw_matches=tuple(raw_matches),
+        source_residue_identities=source_residue_identities,
+        defaulted_occupancy_count=defaulted_occupancy_count,
+        mapping_failed=mapping_failed,
+        mapping_reason=mapping_reason,
+        legacy_identifiers_packed=legacy_identifiers_packed,
+    )
 
+
+def _build_atom_sites(
+    pdb_id: str,
+    model: gemmi.Model,
+    model_id: str,
+    source: _SourceModelData,
+) -> list[AtomSite]:
     all_sites: list[AtomSite] = []
     gemmi_order = 0
     for chain_index, chain in enumerate(model):
@@ -1172,7 +1186,7 @@ def load_structure(
             coordinate_resnum = f"{coordinate_number}{coordinate_insertion}"
             coordinate_residue_name = str(residue.name)
             coordinate_chain_id = str(chain.name)
-            source_identity = source_residue_identities.get(
+            source_identity = source.source_residue_identities.get(
                 (0, coordinate_residue_name, coordinate_chain_id, coordinate_resnum),
                 SourceResidueIdentity(
                     residue_name=coordinate_residue_name,
@@ -1194,20 +1208,24 @@ def load_structure(
             source_resnum = f"{source_number}{source_insertion}"
             for atom_index, atom in enumerate(residue):
                 raw = (
-                    raw_matches[gemmi_order] if gemmi_order < len(raw_matches) else None
+                    source.raw_matches[gemmi_order]
+                    if gemmi_order < len(source.raw_matches)
+                    else None
                 )
                 occupancy, occupancy_valid, occupancy_status = _occupancy_for_atom(
                     atom, raw
                 )
-                if analysis_format == "pdb" and raw is None:
+                if source.analysis_format == "pdb" and raw is None:
                     occupancy_valid = False
                     occupancy_status = OccupancyStatus.RAW_MAPPING_FAILED
                 source_order = (
                     raw.source_order
                     if raw is not None
-                    else len(raw_first) + gemmi_order
+                    else len(source.raw_first) + gemmi_order
                 )
-                element, element_known = _element_for_atom(atom, analysis_format, raw)
+                element, element_known = _element_for_atom(
+                    atom, source.analysis_format, raw
+                )
                 all_sites.append(
                     AtomSite(
                         pdb_id=pdb_id,
@@ -1247,9 +1265,33 @@ def load_structure(
                     )
                 )
                 gemmi_order += 1
+    return all_sites
 
-    # Counted before exact duplicates are collapsed below, so that an invalid
-    # deposited record cannot be hidden by a valid twin.
+
+@dataclass(frozen=True)
+class _AtomInventory:
+    source_atoms: tuple[AtomSite, ...]
+    contact_atoms: tuple[AtomSite, ...]
+    residues: tuple[ResidueSelection, ...]
+    spatial_model: gemmi.Model
+    missing_occupancy_count: int
+    invalid_occupancy_count: int
+    zero_occupancy_count: int
+    duplicate_count: int
+    coordinate_conflict_count: int
+    overfull_site_count: int
+    overfull_excess: float
+    overfull_site_keys: frozenset[tuple[object, ...]]
+    malformed_name_count: int
+    unknown_element_count: int
+    non_finite_coordinate_count: int
+
+
+def _prepare_atom_inventory(
+    model: gemmi.Model, all_sites: Sequence[AtomSite]
+) -> _AtomInventory:
+    # Counted before exact duplicates are collapsed, so a valid twin cannot
+    # hide an invalid deposited record.
     missing_count = sum(
         atom.occupancy_status == OccupancyStatus.MISSING for atom in all_sites
     )
@@ -1275,11 +1317,9 @@ def load_structure(
         if site_is_better(site, current):
             dedup[site.exact_identity] = site
     source_atoms = tuple(sorted(dedup.values(), key=lambda site: site.source_order))
-    (
-        overfull_site_count,
-        overfull_excess,
-        overfull_site_keys,
-    ) = _overfull_occupancy_summary(source_atoms)
+    overfull_site_count, overfull_excess, overfull_site_keys = (
+        _overfull_occupancy_summary(source_atoms)
+    )
 
     residue_groups: dict[tuple[int, int, int], list[AtomSite]] = defaultdict(list)
     for site in source_atoms:
@@ -1296,9 +1336,10 @@ def load_structure(
         for residue in residues
     )
     unknown_count = sum(not atom.element_known for atom in source_atoms)
-    non_finite_coordinate_count = sum(
-        not atom.coordinates_valid for atom in source_atoms
-    )
+    non_finite_count = sum(not atom.coordinates_valid for atom in source_atoms)
+
+    # Gemmi bins every atom during NeighborSearch construction, including atoms
+    # Alchemy never adds explicitly, so non-finite coordinates must be absent.
     spatial_model = model.clone()
     for chain_index, chain in enumerate(model):
         for residue_index, residue in enumerate(chain):
@@ -1312,6 +1353,48 @@ def load_structure(
             ]
             for atom_index in reversed(invalid_indices):
                 del spatial_model[chain_index][residue_index][atom_index]
+
+    return _AtomInventory(
+        source_atoms=source_atoms,
+        contact_atoms=contact_atoms,
+        residues=residues,
+        spatial_model=spatial_model,
+        missing_occupancy_count=missing_count,
+        invalid_occupancy_count=invalid_count,
+        zero_occupancy_count=zero_count,
+        duplicate_count=duplicate_count,
+        coordinate_conflict_count=coordinate_conflicts,
+        overfull_site_count=overfull_site_count,
+        overfull_excess=overfull_excess,
+        overfull_site_keys=overfull_site_keys,
+        malformed_name_count=malformed_names,
+        unknown_element_count=unknown_count,
+        non_finite_coordinate_count=non_finite_count,
+    )
+
+
+def load_structure(
+    pdb_id: str,
+    path: str,
+    source_model_count: int | None = None,
+) -> StructureContext:
+    """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
+    structure = gemmi.read_structure(path)
+    if len(structure) == 0:
+        raise ValueError("coordinate file contains no models")
+    input_model_count = (
+        len(structure) if source_model_count is None else source_model_count
+    )
+    if input_model_count < len(structure):
+        raise ValueError(
+            "source model count cannot be smaller than the analysis model count"
+        )
+    model = structure[0]
+    model_id = str(model.num)
+    source = _source_model_data(path, model)
+    all_sites = _build_atom_sites(pdb_id, model, model_id, source)
+
+    inventory = _prepare_atom_inventory(model, all_sites)
     (
         symmetry_available,
         symmetry_reason,
@@ -1322,34 +1405,34 @@ def load_structure(
     warnings: list[str] = []
     if input_model_count > 1:
         warnings.append(WarningCode.MULTI_MODEL_STRUCTURE)
-    if duplicate_count:
+    if inventory.duplicate_count:
         warnings.append(WarningCode.DUPLICATE_ATOM_RECORDS)
-    if coordinate_conflicts:
+    if inventory.coordinate_conflict_count:
         warnings.append(WarningCode.DUPLICATE_ATOM_COORDINATE_CONFLICT)
-    if malformed_names:
+    if inventory.malformed_name_count:
         warnings.append(WarningCode.MALFORMED_DUPLICATE_ATOM_NAMES)
-    if any(residue.altloc_selection_fallback for residue in residues):
+    if any(residue.altloc_selection_fallback for residue in inventory.residues):
         warnings.append(WarningCode.ALTLOC_SELECTION_FALLBACK)
-    if unknown_count:
+    if inventory.unknown_element_count:
         warnings.append(WarningCode.UNKNOWN_ELEMENTS)
-    if non_finite_coordinate_count:
+    if inventory.non_finite_coordinate_count:
         warnings.append(WarningCode.NON_FINITE_COORDINATES)
-    if zero_count:
+    if inventory.zero_occupancy_count:
         warnings.append(WarningCode.ZERO_OCCUPANCY_ATOMS)
-    if overfull_site_count:
+    if inventory.overfull_site_count:
         warnings.append(WarningCode.OVERFULL_ALTERNATE_OCCUPANCY)
-    if defaulted_occupancy_count:
+    if source.defaulted_occupancy_count:
         warnings.append(WarningCode.OCCUPANCY_DICTIONARY_DEFAULT_APPLIED)
-    if mapping_failed:
+    if source.mapping_failed:
         warnings.append(WarningCode.RAW_OCCUPANCY_MAPPING_FAILED)
-    if legacy_identifiers_packed:
+    if source.legacy_identifiers_packed:
         warnings.append(WarningCode.LEGACY_PDB_IDENTIFIERS_PACKED)
 
     atom_by_indices = {
         (atom.chain_index, atom.residue_index, atom.atom_index): atom
-        for atom in contact_atoms
+        for atom in inventory.contact_atoms
     }
-    residue_by_key = {residue.key: residue for residue in residues}
+    residue_by_key = {residue.key: residue for residue in inventory.residues}
     by_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = defaultdict(
         list
     )
@@ -1359,7 +1442,7 @@ def load_structure(
     by_coordinate_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = (
         defaultdict(list)
     )
-    for selection in residues:
+    for selection in inventory.residues:
         by_source_author_lists[selection.author_key].append(selection)
         by_coordinate_author_lists[selection.coordinate_author_key].append(selection)
         by_author_lists[selection.author_key].append(selection)
@@ -1376,17 +1459,20 @@ def load_structure(
     # An occupancy that cannot be read at all leaves Ni unknowable, so it still
     # voids the DPI. An overfull site is different in kind: the count is known,
     # and only its size relative to Ni decides whether the DPI is affected.
-    countable_ni = _occupancy_weighted_atom_count(source_atoms)
-    if overfull_excess <= 0.0:
+    countable_ni = _occupancy_weighted_atom_count(inventory.source_atoms)
+    if inventory.overfull_excess <= 0.0:
         overfull_invalidates_dpi = False
     elif countable_ni > 0.0:
         overfull_invalidates_dpi = (
-            overfull_excess / countable_ni > OVERFULL_OCCUPANCY_NI_FRACTION
+            inventory.overfull_excess / countable_ni > OVERFULL_OCCUPANCY_NI_FRACTION
         )
     else:
         overfull_invalidates_dpi = True
     occupancy_failed = bool(
-        missing_count or invalid_count or overfull_invalidates_dpi or mapping_failed
+        inventory.missing_occupancy_count
+        or inventory.invalid_occupancy_count
+        or overfull_invalidates_dpi
+        or source.mapping_failed
     )
     return StructureContext(
         pdb_id=pdb_id,
@@ -1399,33 +1485,35 @@ def load_structure(
         model_analyzed=1,
         analyzed_model_id=model_id,
         multi_model_structure=input_model_count > 1,
-        source_atoms=source_atoms,
-        contact_atoms=contact_atoms,
-        residues=residues,
+        source_atoms=inventory.source_atoms,
+        contact_atoms=inventory.contact_atoms,
+        residues=inventory.residues,
         occupancy_validation_failed=occupancy_failed,
-        missing_occupancy_count=missing_count,
-        invalid_occupancy_count=invalid_count,
-        overfull_occupancy_site_count=overfull_site_count,
-        overfull_occupancy_excess=round(overfull_excess, 6),
-        overfull_occupancy_site_keys=overfull_site_keys,
-        defaulted_occupancy_atom_count=defaulted_occupancy_count,
-        zero_occupancy_atom_count=zero_count,
-        duplicate_atom_records_present=duplicate_count > 0,
-        duplicate_atom_record_count=duplicate_count,
-        duplicate_coordinate_conflict_count=coordinate_conflicts,
-        malformed_duplicate_atom_name_count=malformed_names,
-        unknown_element_atom_count=unknown_count,
-        element_validation_warning=("unknown_element_atoms" if unknown_count else ""),
-        non_finite_coordinate_atom_count=non_finite_coordinate_count,
-        raw_occupancy_mapping_failed=mapping_failed,
-        raw_occupancy_mapping_failure_reason=mapping_reason,
+        missing_occupancy_count=inventory.missing_occupancy_count,
+        invalid_occupancy_count=inventory.invalid_occupancy_count,
+        overfull_occupancy_site_count=inventory.overfull_site_count,
+        overfull_occupancy_excess=round(inventory.overfull_excess, 6),
+        overfull_occupancy_site_keys=inventory.overfull_site_keys,
+        defaulted_occupancy_atom_count=source.defaulted_occupancy_count,
+        zero_occupancy_atom_count=inventory.zero_occupancy_count,
+        duplicate_atom_records_present=inventory.duplicate_count > 0,
+        duplicate_atom_record_count=inventory.duplicate_count,
+        duplicate_coordinate_conflict_count=inventory.coordinate_conflict_count,
+        malformed_duplicate_atom_name_count=inventory.malformed_name_count,
+        unknown_element_atom_count=inventory.unknown_element_count,
+        element_validation_warning=(
+            "unknown_element_atoms" if inventory.unknown_element_count else ""
+        ),
+        non_finite_coordinate_atom_count=inventory.non_finite_coordinate_count,
+        raw_occupancy_mapping_failed=source.mapping_failed,
+        raw_occupancy_mapping_failure_reason=source.mapping_reason,
         symmetry_search_available=symmetry_available,
         symmetry_search_failure_reason=symmetry_reason,
         crystallographic_operation_count=crystallographic_operation_count,
         strict_ncs_operation_ids=strict_ncs_operation_ids,
-        analysis_coordinate_format=analysis_format,
+        analysis_coordinate_format=source.analysis_format,
         warning_codes=tuple(warnings),
-        _spatial_model=spatial_model,
+        _spatial_model=inventory.spatial_model,
         _atom_by_indices=atom_by_indices,
         _residue_by_key=residue_by_key,
         _residues_by_author=residues_by_author,

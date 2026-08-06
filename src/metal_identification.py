@@ -6,6 +6,7 @@ line is the column header.
 
 import math
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any
 from collections.abc import Iterable, Mapping, Sequence
 
@@ -406,6 +407,158 @@ def _density_row(
     }
 
 
+@dataclass(frozen=True)
+class _ResolvedEdstatsRow:
+    """One normalized row shared by duplicate, join and completeness checks."""
+
+    fields: list[str]
+    indices: Mapping[str, int]
+    model: int
+    row_number: int
+    chain_part: str
+    coordinate_key: tuple[str, str, str]
+    matched_residues: tuple[ResidueSelection, ...]
+    mapping_status: str
+
+
+def _resolve_edstats_row(
+    fields: Sequence[str],
+    header: Sequence[str],
+    indices: Mapping[str, int],
+    line_number: int,
+    structure: StructureContext,
+    residues_by_chain_part: Mapping[str, tuple[ResidueSelection, ...]],
+) -> _ResolvedEdstatsRow | None:
+    """Return ``None`` for a valid row belonging to a discarded conformer."""
+    normalized = normalize_edstats_row(fields, header, indices)
+    row_model = validate_edstats_row(normalized, header, indices, line_number)
+    row_number = _validated_edstats_row_number(normalized, indices, line_number)
+    if row_model != structure.model_analyzed:
+        raise ValueError(
+            f"EDSTATS returned model {row_model}, but Alchemy's "
+            f"model policy selected model {structure.model_analyzed}"
+        )
+    chain_part = normalized[indices["CP"]]
+    try:
+        normalized[indices["RN"]] = canonical_pdb_residue_id(normalized[indices["RN"]])
+    except ValueError as exc:
+        raise ValueError(
+            f"invalid EDSTATS RN residue identifier on row {line_number}: "
+            f"{normalized[indices['RN']]!r}"
+        ) from exc
+
+    coordinate_resname = normalized[indices["RT"]]
+    chain, row_altloc = _edstats_chain_and_altloc(
+        normalized[indices["CI"]], line_number
+    )
+    # Everything downstream addresses the deposited chain. The chosen altloc
+    # remains explicit on the selected coordinate site's fields.
+    normalized[indices["CI"]] = chain
+    resnum = normalized[indices["RN"]]
+    coordinate_key = (coordinate_resname, chain, resnum)
+    matched_residues = structure.residues_for_coordinate_author(*coordinate_key)
+    chain_residues = residues_by_chain_part.get(chain_part, ())
+    matched_residues = _resolve_coordinate_residues(
+        chain_residues,
+        matched_residues,
+        row_number,
+        line_number,
+        coordinate_key,
+    )
+    if not _row_matches_selected_altloc(
+        row_altloc,
+        matched_residues,
+        chain_residues,
+        row_number,
+        line_number,
+    ):
+        return None
+    return _ResolvedEdstatsRow(
+        fields=normalized,
+        indices=indices,
+        model=row_model,
+        row_number=row_number,
+        chain_part=chain_part,
+        coordinate_key=coordinate_key,
+        matched_residues=matched_residues,
+        mapping_status=(
+            "matched" if matched_residues else "coordinate_residue_not_found"
+        ),
+    )
+
+
+def _append_density_rows(
+    pdb_id: str,
+    resolved: _ResolvedEdstatsRow,
+    metals_upper: set[str],
+    cofactors: frozenset[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    """Expand one residue observation into site or diagnostic rows."""
+    coordinate_resname, _chain, _resnum = resolved.coordinate_key
+    coordinate_name_is_cofactor = coordinate_resname in cofactors
+    matched_cofactor_names: list[str] = []
+    selected_sites: list[tuple[ResidueSelection, str, str, AtomSite]] = []
+    for residue in resolved.matched_residues:
+        resname = residue.residue_name
+        category, metal_sites = classify_residue(residue, metals_upper, cofactors)
+        if category == "cofactor":
+            matched_cofactor_names.append(resname)
+        if not category:
+            continue
+        for site in metal_sites:
+            selected_sites.append((residue, resname, category, site))
+
+    for residue, resname, category, site in selected_sites:
+        output_fields = list(resolved.fields)
+        output_fields[resolved.indices["RT"]] = resname
+        if resolved.mapping_status == "matched":
+            output_fields[resolved.indices["CI"]] = residue.chain_id
+            output_fields[resolved.indices["RN"]] = residue.resnum
+        rows.append(
+            _density_row(
+                pdb_id,
+                output_fields,
+                resolved.indices,
+                resolved.mapping_status,
+                category=category,
+                resname=resname,
+                site=site,
+                residue_key=residue.key,
+                shared_site_count=len(selected_sites),
+            )
+        )
+
+    if not (coordinate_name_is_cofactor or matched_cofactor_names):
+        return
+    if selected_sites:
+        return
+    resname = (
+        matched_cofactor_names[0] if matched_cofactor_names else coordinate_resname
+    )
+    output_fields = list(resolved.fields)
+    output_fields[resolved.indices["RT"]] = resname
+    matched_residue = (
+        resolved.matched_residues[0] if len(resolved.matched_residues) == 1 else None
+    )
+    if matched_residue is not None:
+        output_fields[resolved.indices["CI"]] = matched_residue.chain_id
+        output_fields[resolved.indices["RN"]] = matched_residue.resnum
+    rows.append(
+        _density_row(
+            pdb_id,
+            output_fields,
+            resolved.indices,
+            resolved.mapping_status,
+            category="cofactor",
+            resname=resname,
+            site=None,
+            residue_key=None if matched_residue is None else matched_residue.key,
+            shared_site_count=0,
+        )
+    )
+
+
 def extract_metal_statistics(
     pdb_id: str,
     stats_out: str,
@@ -432,6 +585,7 @@ def extract_metal_statistics(
     """
 
     metals_upper = {element.upper() for element in metals_set}
+    cofactors = frozenset(cofactor_set)
 
     rows: list[dict[str, Any]] = []
     schema: tuple[list[str], dict[str, int]] | None = None
@@ -453,146 +607,49 @@ def extract_metal_statistics(
             if is_edstats_separator(fields):
                 continue
 
-            header, indices = schema
-
-            fields = normalize_edstats_row(fields, header, indices)
-            row_model = validate_edstats_row(fields, header, indices, line_number)
-            row_number = _validated_edstats_row_number(fields, indices, line_number)
-            if row_model != structure.model_analyzed:
-                raise ValueError(
-                    f"EDSTATS returned model {row_model}, but Alchemy's "
-                    f"model policy selected model {structure.model_analyzed}"
-                )
-            chain_part = fields[indices["CP"]]
-            try:
-                fields[indices["RN"]] = canonical_pdb_residue_id(fields[indices["RN"]])
-            except ValueError as exc:
-                raise ValueError(
-                    f"invalid EDSTATS RN residue identifier on row "
-                    f"{line_number}: {fields[indices['RN']]!r}"
-                ) from exc
-
             residue_row_count += 1
-            coordinate_resname = fields[indices["RT"]]
-            chain, row_altloc = _edstats_chain_and_altloc(
-                fields[indices["CI"]], line_number
-            )
-            # Everything downstream addresses the deposited chain.  The chosen
-            # altloc remains explicit on the selected coordinate site's fields.
-            fields[indices["CI"]] = chain
-            resnum = fields[indices["RN"]]
-            coordinate_key = (coordinate_resname, chain, resnum)
-            matched_residues = structure.residues_for_coordinate_author(
-                coordinate_resname, chain, resnum
-            )
-            chain_residues = residues_by_chain_part.get(chain_part, ())
-            matched_residues = _resolve_coordinate_residues(
-                chain_residues,
-                matched_residues,
-                row_number,
+            header, indices = schema
+            resolved = _resolve_edstats_row(
+                fields,
+                header,
+                indices,
                 line_number,
-                coordinate_key,
+                structure,
+                residues_by_chain_part,
             )
-            if not _row_matches_selected_altloc(
-                row_altloc,
-                matched_residues,
-                chain_residues,
-                row_number,
-                line_number,
-            ):
+            if resolved is None:
                 continue
 
-            observation_key = (row_model, chain_part, row_number)
+            observation_key = (
+                resolved.model,
+                resolved.chain_part,
+                resolved.row_number,
+            )
             if observation_key in observed_edstats_rows:
                 raise ValueError(
-                    f"duplicate EDSTATS NR {row_number} for chain "
-                    f"{chain_part or '_'} of model {row_model}"
+                    f"duplicate EDSTATS NR {resolved.row_number} for chain "
+                    f"{resolved.chain_part or '_'} of model {resolved.model}"
                 )
             observed_edstats_rows.add(observation_key)
-            observed_residues[coordinate_key] += 1
-            if not matched_residues:
-                mapping_status = "coordinate_residue_not_found"
-            else:
-                mapping_status = "matched"
-                residue_key = matched_residues[0].key
+            observed_residues[resolved.coordinate_key] += 1
+            if resolved.matched_residues:
+                residue_key = resolved.matched_residues[0].key
                 previous = residue_observations.get(residue_key)
                 if previous is not None:
                     previous_chain, previous_number = previous
+                    coordinate_resname, chain, resnum = resolved.coordinate_key
                     raise ValueError(
                         f"EDSTATS NR {previous_number} of chain "
-                        f"{previous_chain or '_'} and NR {row_number} of chain "
-                        f"{chain_part or '_'} both map to coordinate residue "
+                        f"{previous_chain or '_'} and NR {resolved.row_number} "
+                        f"of chain {resolved.chain_part or '_'} both map to "
+                        "coordinate residue "
                         f"{coordinate_resname}/{chain or '_'}/{resnum}"
                     )
-                residue_observations[residue_key] = (chain_part, row_number)
-
-            coordinate_name_is_cofactor = coordinate_resname in cofactor_set
-            matched_cofactor_names: list[str] = []
-            selected_sites: list[tuple[ResidueSelection, str, str, AtomSite]] = []
-            for residue in matched_residues:
-                resname = residue.residue_name
-                category, metal_sites = classify_residue(
-                    residue, metals_upper, cofactor_set
+                residue_observations[residue_key] = (
+                    resolved.chain_part,
+                    resolved.row_number,
                 )
-                if category == "cofactor":
-                    matched_cofactor_names.append(resname)
-                if not category:
-                    continue
-                for site in metal_sites:
-                    selected_sites.append((residue, resname, category, site))
-
-            density_shared_site_count = len(selected_sites)
-            for residue, resname, category, site in selected_sites:
-                output_fields = list(fields)
-                output_fields[indices["RT"]] = resname
-                if mapping_status == "matched":
-                    output_fields[indices["CI"]] = residue.chain_id
-                    output_fields[indices["RN"]] = residue.resnum
-                rows.append(
-                    _density_row(
-                        pdb_id,
-                        output_fields,
-                        indices,
-                        mapping_status,
-                        category=category,
-                        resname=resname,
-                        site=site,
-                        residue_key=residue.key,
-                        shared_site_count=density_shared_site_count,
-                    )
-                )
-
-            if (
-                coordinate_name_is_cofactor or matched_cofactor_names
-            ) and not selected_sites:
-                resname = (
-                    matched_cofactor_names[0]
-                    if matched_cofactor_names
-                    else coordinate_resname
-                )
-                output_fields = list(fields)
-                output_fields[indices["RT"]] = resname
-                matched_residue = (
-                    matched_residues[0] if len(matched_residues) == 1 else None
-                )
-                if matched_residue is not None:
-                    output_fields[indices["CI"]] = matched_residue.chain_id
-                    output_fields[indices["RN"]] = matched_residue.resnum
-                rows.append(
-                    _density_row(
-                        pdb_id,
-                        output_fields,
-                        indices,
-                        mapping_status,
-                        category="cofactor",
-                        resname=resname,
-                        site=None,
-                        residue_key=(
-                            None if matched_residue is None else matched_residue.key
-                        ),
-                        shared_site_count=0,
-                    )
-                )
+            _append_density_rows(pdb_id, resolved, metals_upper, cofactors, rows)
 
     if schema is None:
         raise ValueError("EDSTATS output is empty")
@@ -602,7 +659,7 @@ def extract_metal_statistics(
 
     missing_residues = sorted(
         (
-            expected_edstats_residues(structure, metals_upper, cofactor_set)
+            expected_edstats_residues(structure, metals_upper, cofactors)
             - observed_residues
         ).elements()
     )

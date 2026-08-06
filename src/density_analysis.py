@@ -115,6 +115,141 @@ class Ccp4ToolTimeoutError(RuntimeError):
         self.timings = dict(timings or {})
 
 
+@dataclass(frozen=True)
+class _DensityPaths:
+    fixed_mtz: str
+    mtzfix_log: str
+    fo_map: str
+    df_map: str
+    stats_out: str
+    rszd: str
+    qq_out: str
+    twin_normalized_mtz: str
+
+    @classmethod
+    def for_entry(cls, pdb_id: str, out_dir: str) -> "_DensityPaths":
+        return cls(
+            fixed_mtz=os.path.join(out_dir, f"{pdb_id}_mtzfix.mtz"),
+            mtzfix_log=os.path.join(out_dir, f"{pdb_id}_mtzfix.log"),
+            fo_map=os.path.join(out_dir, f"{pdb_id}_fo.map"),
+            df_map=os.path.join(out_dir, f"{pdb_id}_df.map"),
+            stats_out=os.path.join(out_dir, f"{pdb_id}_stats.out"),
+            rszd=os.path.join(out_dir, f"{pdb_id}_rszd.pdb"),
+            qq_out=os.path.join(out_dir, f"{pdb_id}_qq.out"),
+            twin_normalized_mtz=os.path.join(out_dir, f"{pdb_id}_twin_edstats.mtz"),
+        )
+
+
+@dataclass
+class _Ccp4Runner:
+    pdb_id: str
+    out_dir: str
+    env: Mapping[str, str] | None
+    tool_timeout_s: float
+    timings: dict[str, float]
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        stdin: str | None,
+        logname: str,
+        timing_name: str,
+        timeout_s: float | None = None,
+    ) -> None:
+        budget = self.tool_timeout_s if timeout_s is None else timeout_s
+        log_path = os.path.join(self.out_dir, logname)
+        resolved = shutil.which(cmd[0], path=(self.env or {}).get("PATH"))
+        if resolved is None:
+            raise RuntimeError(
+                f"required CCP4 program {cmd[0]!r} was not found on PATH"
+            )
+        resolved_cmd = [resolved, *cmd[1:]]
+        program = os.path.basename(resolved)
+        logger.debug("%s: running %s (budget %gs)", self.pdb_id, program, budget)
+        started = time.monotonic()
+        try:
+            # stderr is captured to a file rather than a pipe. Decoding a pipe
+            # under ``text=True`` is strict, so a single non-UTF-8 byte in a
+            # Fortran runtime notice would raise before the exit status was read
+            # and lose the entry to a retryable error that always recurs. And
+            # with no output pipe to drain, the timeout bounds the process
+            # rather than EOF, so a program that leaves a helper holding stderr
+            # cannot report a false timeout at the full budget.
+            #
+            # The program is deliberately left in the worker's process group: a
+            # group of its own would make a timeout kill its descendants too,
+            # but would also let them escape the group-wide signal the driver
+            # uses to stop a worker's CCP4 children at shutdown.
+            with (
+                open(log_path, "w", encoding="utf-8", errors="replace") as log,
+                tempfile.TemporaryFile(dir=self.out_dir) as error_file,
+            ):
+                proc = subprocess.run(
+                    resolved_cmd,
+                    input=stdin,
+                    text=True,
+                    stdout=log,
+                    stderr=error_file,
+                    env=self.env,
+                    timeout=budget,
+                )
+                stderr_text = _decoded_stderr(error_file)
+        except subprocess.TimeoutExpired as exc:
+            logger.error(
+                "%s: %s exceeded its %gs budget; partial log kept at %s",
+                self.pdb_id,
+                program,
+                budget,
+                log_path,
+            )
+            elapsed = time.monotonic() - started
+            self.timings[timing_name] = round(elapsed, 3)
+            raise Ccp4ToolTimeoutError(
+                tool=os.path.basename(resolved_cmd[0]),
+                timeout_s=budget,
+                elapsed_s=elapsed,
+                log_path=log_path,
+                timings=self.timings,
+            ) from exc
+        finally:
+            self.timings.setdefault(timing_name, round(time.monotonic() - started, 3))
+            logger.debug(
+                "%s: %s ended after %.3fs",
+                self.pdb_id,
+                program,
+                self.timings[timing_name],
+            )
+        if proc.returncode == 0:
+            return
+
+        detail = truncate(stderr_text)
+        detail_suffix = f": {detail}" if detail else ""
+        logger.warning(
+            "%s: %s exited %d; see %s%s",
+            self.pdb_id,
+            program,
+            proc.returncode,
+            log_path,
+            detail_suffix,
+        )
+        if os.path.basename(resolved_cmd[0]).lower() == "mtzfix":
+            try:
+                with open(log_path, encoding="utf-8", errors="replace") as handle:
+                    mtzfix_log_text = handle.read()
+            except OSError:
+                mtzfix_log_text = ""
+            if "FAILED a test on re-take" in mtzfix_log_text:
+                raise MtzfixValidationError(
+                    "MTZFIX consistency re-test failed for "
+                    f"{self.pdb_id}{detail_suffix}",
+                    timings=self.timings,
+                )
+        raise RuntimeError(
+            f"{resolved_cmd[0]} failed for {self.pdb_id} (rc={proc.returncode}): "
+            f"see {log_path}{detail_suffix}"
+        )
+
+
 def _decoded_stderr(error_file: IO[bytes]) -> str:
     """Read a CCP4 program's captured stderr, tolerating any byte it wrote.
 
@@ -318,6 +453,214 @@ def normalize_refmac_twin_coefficients(
     }
 
 
+def _prepare_map_mtz(
+    pdb_id: str,
+    mtz_path: str,
+    paths: _DensityPaths,
+    runner: _Ccp4Runner,
+    pdb_redo_is_twin: bool,
+) -> tuple[str, bool, dict[str, Any] | None]:
+    """Return the original, MTZFIX-corrected, or twin-normalized map input."""
+    # MTZFIX writes HKLOUT only when it has corrections to make, so a retained
+    # file from an earlier run would otherwise be read as this run's output.
+    if os.path.lexists(paths.fixed_mtz):
+        if os.path.realpath(paths.fixed_mtz) == os.path.realpath(mtz_path):
+            raise RuntimeError(
+                f"MTZFIX output path would overwrite its input: {mtz_path}"
+            )
+        os.remove(paths.fixed_mtz)
+
+    twin_normalization: dict[str, Any] | None = None
+    try:
+        runner.run(
+            ["mtzfix", "HKLIN", mtz_path, "HKLOUT", paths.fixed_mtz],
+            None,
+            os.path.basename(paths.mtzfix_log),
+            "mtzfix_s",
+        )
+    except MtzfixValidationError as exc:
+        if pdb_redo_is_twin is not True:
+            raise
+        started = time.monotonic()
+        try:
+            twin_normalization = normalize_refmac_twin_coefficients(
+                mtz_path, paths.twin_normalized_mtz
+            )
+        except (OSError, RuntimeError, ValueError) as normalization_error:
+            runner.timings["twin_coefficient_normalization_s"] = round(
+                time.monotonic() - started, 3
+            )
+            raise MtzfixValidationError(
+                f"{exc}; guarded twin coefficient normalization was refused: "
+                f"{normalization_error}",
+                timings=runner.timings,
+            ) from normalization_error
+        else:
+            runner.timings["twin_coefficient_normalization_s"] = round(
+                time.monotonic() - started, 3
+            )
+
+    if twin_normalization is not None:
+        return paths.twin_normalized_mtz, False, twin_normalization
+    if not os.path.exists(paths.fixed_mtz):
+        return mtz_path, False, None
+    if not os.path.isfile(paths.fixed_mtz) or os.path.getsize(paths.fixed_mtz) == 0:
+        raise RuntimeError(f"mtzfix produced an invalid corrected MTZ for {pdb_id}")
+    return paths.fixed_mtz, True, None
+
+
+@dataclass(frozen=True)
+class _MapBuildResult:
+    """Map scope and byte counts after any model-envelope fallback."""
+
+    scope_used: str
+    full_map_bytes: int
+    edstats_map_bytes: int
+
+
+@dataclass(frozen=True)
+class _DensityMapBuilder:
+    pdb_id: str
+    pdb_path: str
+    out_dir: str
+    map_mtz: str
+    paths: _DensityPaths
+    runner: _Ccp4Runner
+
+    def _fft(
+        self,
+        map_path: str,
+        f_label: str,
+        phi_label: str,
+        log_suffix: str,
+        timing_name: str,
+    ) -> None:
+        self.runner.run(
+            ["fft", "HKLIN", self.map_mtz, "MAPOUT", map_path],
+            f"labi F1={f_label} PHI={phi_label}\nGRID SAMP=5\n",
+            f"{self.pdb_id}_fft_{log_suffix}.log",
+            timing_name,
+        )
+
+    def _model_envelope(
+        self, full_map: str, envelope_map: str, log_suffix: str, timing_name: str
+    ) -> None:
+        self.runner.run(
+            [
+                "mapmask",
+                "MAPIN",
+                full_map,
+                "MAPOUT",
+                envelope_map,
+                "XYZIN",
+                self.pdb_path,
+            ],
+            f"BORDER {MODEL_ENVELOPE_BORDER_ANGSTROM}\nEND\n",
+            f"{self.pdb_id}_mapmask_{log_suffix}.log",
+            timing_name,
+        )
+
+    def _map_size(self, path: str, stage: str) -> int:
+        if not os.path.isfile(path):
+            raise RuntimeError(
+                f"{stage} produced no map file for {self.pdb_id}: {path}"
+            )
+        size = os.path.getsize(path)
+        if size == 0:
+            raise RuntimeError(
+                f"{stage} produced an empty map file for {self.pdb_id}: {path}"
+            )
+        return size
+
+    def _map_extent_requires_full_map(self, path: str) -> bool:
+        """Return whether a positive translated crop is unsafe for EDSTATS.
+
+        EDSTATS accepts cropped grids that overlap or extend in the negative
+        direction, but wraps lookups into the primary unit cell when an entire
+        stored axis begins beyond its positive edge, which MAPMASK can produce
+        for a translated deposited model.
+        """
+        with open(path, "rb") as handle:
+            header = handle.read(1024)
+        if len(header) != 1024:
+            raise RuntimeError(
+                f"MAPMASK produced an invalid CCP4 map header for {self.pdb_id}: {path}"
+            )
+        for byte_order in ("<", ">"):
+            words = struct.unpack(f"{byte_order}256i", header)
+            counts = words[0:3]
+            mode = words[3]
+            starts = words[4:7]
+            sampling = words[7:10]
+            axes = words[16:19]
+            if (
+                mode not in (0, 1, 2, 6, 12)
+                or any(value <= 0 for value in counts + sampling)
+                or sorted(axes) != [1, 2, 3]
+            ):
+                continue
+            xyz_starts = [0, 0, 0]
+            for start, _count, axis in zip(starts, counts, axes):
+                xyz_starts[axis - 1] = start
+            return any(
+                start >= grid_size for start, grid_size in zip(xyz_starts, sampling)
+            )
+        raise RuntimeError(
+            f"MAPMASK produced an unrecognized CCP4 map header for "
+            f"{self.pdb_id}: {path}"
+        )
+
+    def build(self, map_scope: str, keep_full_maps: bool) -> _MapBuildResult:
+        if map_scope == "full":
+            self._fft(self.paths.fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
+            self._fft(self.paths.df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
+            full_bytes = self._map_size(
+                self.paths.fo_map, "2mFo-DFc FFT"
+            ) + self._map_size(self.paths.df_map, "mFo-DFc FFT")
+            return _MapBuildResult(map_scope, full_bytes, full_bytes)
+
+        full_fo_map = os.path.join(self.out_dir, f"{self.pdb_id}_fo_full.map")
+        self._fft(full_fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
+        self._model_envelope(full_fo_map, self.paths.fo_map, "fo", "mapmask_2fofc_s")
+        full_fo_bytes = self._map_size(full_fo_map, "2mFo-DFc FFT")
+        envelope_fo_bytes = self._map_size(self.paths.fo_map, "2mFo-DFc MAPMASK")
+
+        fallback_scope = ""
+        if envelope_fo_bytes >= full_fo_bytes:
+            fallback_scope = "full-size-fallback"
+        elif self._map_extent_requires_full_map(self.paths.fo_map):
+            fallback_scope = "full-extent-fallback"
+        if fallback_scope:
+            os.remove(self.paths.fo_map)
+            os.replace(full_fo_map, self.paths.fo_map)
+            self._fft(self.paths.df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
+            full_bytes = full_fo_bytes + self._map_size(
+                self.paths.df_map, "mFo-DFc FFT"
+            )
+            return _MapBuildResult(fallback_scope, full_bytes, full_bytes)
+
+        if not keep_full_maps:
+            os.remove(full_fo_map)
+        full_df_map = os.path.join(self.out_dir, f"{self.pdb_id}_df_full.map")
+        self._fft(full_df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
+        self._model_envelope(full_df_map, self.paths.df_map, "df", "mapmask_fofc_s")
+        full_df_bytes = self._map_size(full_df_map, "mFo-DFc FFT")
+        envelope_df_bytes = self._map_size(self.paths.df_map, "mFo-DFc MAPMASK")
+        if full_df_bytes != full_fo_bytes or envelope_df_bytes != envelope_fo_bytes:
+            raise RuntimeError(
+                f"density map extents differ for {self.pdb_id}: "
+                f"full={full_fo_bytes}/{full_df_bytes}, "
+                f"model-envelope={envelope_fo_bytes}/{envelope_df_bytes}"
+            )
+        if not keep_full_maps:
+            os.remove(full_df_map)
+        return _MapBuildResult(
+            map_scope,
+            full_fo_bytes + full_df_bytes,
+            envelope_fo_bytes + envelope_df_bytes,
+        )
+
+
 def run_density_analysis(
     pdb_id: str,
     mtz_path: str,
@@ -343,302 +686,32 @@ def run_density_analysis(
         )
 
     os.makedirs(out_dir, exist_ok=True)
-    fixed_mtz = os.path.join(out_dir, f"{pdb_id}_mtzfix.mtz")
-    mtzfix_log = os.path.join(out_dir, f"{pdb_id}_mtzfix.log")
-    fo_map = os.path.join(out_dir, f"{pdb_id}_fo.map")
-    df_map = os.path.join(out_dir, f"{pdb_id}_df.map")
-    stats_out = os.path.join(out_dir, f"{pdb_id}_stats.out")
-    rszd = os.path.join(out_dir, f"{pdb_id}_rszd.pdb")
-    qq_out = os.path.join(out_dir, f"{pdb_id}_qq.out")
-    twin_normalized_mtz = os.path.join(out_dir, f"{pdb_id}_twin_edstats.mtz")
-
+    paths = _DensityPaths.for_entry(pdb_id, out_dir)
     timings: dict[str, float] = {}
+    runner = _Ccp4Runner(pdb_id, out_dir, env, tool_timeout_s, timings)
+    map_mtz, mtzfix_applied, twin_normalization = _prepare_map_mtz(
+        pdb_id, mtz_path, paths, runner, pdb_redo_is_twin
+    )
 
-    def _run(
-        cmd: Sequence[str],
-        stdin: str | None,
-        logname: str,
-        timing_name: str,
-        timeout_s: float = tool_timeout_s,
-    ) -> None:
-        log_path = os.path.join(out_dir, logname)
-        resolved = shutil.which(cmd[0], path=(env or {}).get("PATH"))
-        if resolved is None:
-            raise RuntimeError(
-                f"required CCP4 program {cmd[0]!r} was not found on PATH"
-            )
-        cmd = [resolved, *cmd[1:]]
-        program = os.path.basename(resolved)
-        logger.debug("%s: running %s (budget %gs)", pdb_id, program, timeout_s)
-        started = time.monotonic()
-        try:
-            # stderr is captured to a file rather than a pipe. Decoding a pipe
-            # under ``text=True`` is strict, so a single non-UTF-8 byte in a
-            # Fortran runtime notice would raise before the exit status was read
-            # and lose the entry to a retryable error that always recurs. And
-            # with no output pipe to drain, the timeout bounds the process
-            # rather than EOF, so a program that leaves a helper holding stderr
-            # cannot report a false timeout at the full budget.
-            #
-            # The program is deliberately left in the worker's process group: a
-            # group of its own would make a timeout kill its descendants too,
-            # but would also let them escape the group-wide signal the driver
-            # uses to stop a worker's CCP4 children at shutdown.
-            with (
-                open(log_path, "w", encoding="utf-8", errors="replace") as log,
-                tempfile.TemporaryFile(dir=out_dir) as error_file,
-            ):
-                proc = subprocess.run(
-                    cmd,
-                    input=stdin,
-                    text=True,
-                    stdout=log,
-                    stderr=error_file,
-                    env=env,
-                    timeout=timeout_s,
-                )
-                stderr_text = _decoded_stderr(error_file)
-        except subprocess.TimeoutExpired as exc:
-            logger.error(
-                "%s: %s exceeded its %gs budget; partial log kept at %s",
-                pdb_id,
-                program,
-                timeout_s,
-                log_path,
-            )
-            # subprocess.run has already killed and reaped the child; the
-            # partial log is the only evidence of where it stalled.
-            elapsed = time.monotonic() - started
-            timings[timing_name] = round(elapsed, 3)
-            raise Ccp4ToolTimeoutError(
-                tool=os.path.basename(cmd[0]),
-                timeout_s=timeout_s,
-                elapsed_s=elapsed,
-                log_path=log_path,
-                timings=timings,
-            ) from exc
-        finally:
-            timings.setdefault(timing_name, round(time.monotonic() - started, 3))
-            logger.debug(
-                "%s: %s ended after %.3fs", pdb_id, program, timings[timing_name]
-            )
-        if proc.returncode != 0:
-            detail = truncate(stderr_text)
-            detail_suffix = f": {detail}" if detail else ""
-            logger.warning(
-                "%s: %s exited %d; see %s%s",
-                pdb_id,
-                program,
-                proc.returncode,
-                log_path,
-                detail_suffix,
-            )
-            if os.path.basename(cmd[0]).lower() == "mtzfix":
-                try:
-                    with open(log_path, encoding="utf-8", errors="replace") as handle:
-                        mtzfix_log_text = handle.read()
-                except OSError:
-                    mtzfix_log_text = ""
-                if "FAILED a test on re-take" in mtzfix_log_text:
-                    raise MtzfixValidationError(
-                        "MTZFIX consistency re-test failed for "
-                        f"{pdb_id}{detail_suffix}",
-                        timings=timings,
-                    )
-            raise RuntimeError(
-                f"{cmd[0]} failed for {pdb_id} (rc={proc.returncode}): "
-                f"see {log_path}{detail_suffix}"
-            )
+    map_result = _DensityMapBuilder(
+        pdb_id, pdb_path, out_dir, map_mtz, paths, runner
+    ).build(map_scope, keep_full_maps)
 
-    # MTZFIX writes HKLOUT only when it has corrections to make, so a retained
-    # file from an earlier run would be read as this run's output.
-    if os.path.lexists(fixed_mtz):
-        if os.path.realpath(fixed_mtz) == os.path.realpath(mtz_path):
-            raise RuntimeError(
-                f"MTZFIX output path would overwrite its input: {mtz_path}"
-            )
-        os.remove(fixed_mtz)
-    twin_normalization = None
-    try:
-        _run(
-            ["mtzfix", "HKLIN", mtz_path, "HKLOUT", fixed_mtz],
-            None,
-            os.path.basename(mtzfix_log),
-            "mtzfix_s",
-        )
-    except MtzfixValidationError as exc:
-        if pdb_redo_is_twin is not True:
-            raise
-        started = time.monotonic()
-        try:
-            twin_normalization = normalize_refmac_twin_coefficients(
-                mtz_path, twin_normalized_mtz
-            )
-        except (OSError, RuntimeError, ValueError) as normalization_error:
-            timings["twin_coefficient_normalization_s"] = round(
-                time.monotonic() - started, 3
-            )
-            raise MtzfixValidationError(
-                f"{exc}; guarded twin coefficient normalization was refused: "
-                f"{normalization_error}",
-                timings=timings,
-            ) from normalization_error
-        else:
-            timings["twin_coefficient_normalization_s"] = round(
-                time.monotonic() - started, 3
-            )
-
-    if twin_normalization is not None:
-        map_mtz = twin_normalized_mtz
-        mtzfix_applied = False
-    elif os.path.exists(fixed_mtz):
-        if not os.path.isfile(fixed_mtz) or os.path.getsize(fixed_mtz) == 0:
-            raise RuntimeError(f"mtzfix produced an invalid corrected MTZ for {pdb_id}")
-        map_mtz = fixed_mtz
-        mtzfix_applied = True
-    else:
-        map_mtz = mtz_path
-        mtzfix_applied = False
-
-    def _fft(
-        map_path: str,
-        f_label: str,
-        phi_label: str,
-        log_suffix: str,
-        timing_name: str,
-    ) -> None:
-        _run(
-            ["fft", "HKLIN", map_mtz, "MAPOUT", map_path],
-            f"labi F1={f_label} PHI={phi_label}\nGRID SAMP=5\n",
-            f"{pdb_id}_fft_{log_suffix}.log",
-            timing_name,
-        )
-
-    def _model_envelope(
-        full_map: str, envelope_map: str, log_suffix: str, timing_name: str
-    ) -> None:
-        _run(
-            ["mapmask", "MAPIN", full_map, "MAPOUT", envelope_map, "XYZIN", pdb_path],
-            f"BORDER {MODEL_ENVELOPE_BORDER_ANGSTROM}\nEND\n",
-            f"{pdb_id}_mapmask_{log_suffix}.log",
-            timing_name,
-        )
-
-    def _map_size(path: str, stage: str) -> int:
-        if not os.path.isfile(path):
-            raise RuntimeError(f"{stage} produced no map file for {pdb_id}: {path}")
-        size = os.path.getsize(path)
-        if size == 0:
-            raise RuntimeError(
-                f"{stage} produced an empty map file for {pdb_id}: {path}"
-            )
-        return size
-
-    def _map_extent_requires_full_map(path: str) -> bool:
-        """Return whether a positive translated crop is unsafe for EDSTATS.
-
-        EDSTATS accepts cropped grids that overlap or extend in the negative
-        direction, but wraps lookups into the primary unit cell when an entire
-        stored axis begins beyond its positive edge, which MAPMASK can produce
-        for a translated deposited model.
-        """
-        with open(path, "rb") as handle:
-            header = handle.read(1024)
-        if len(header) != 1024:
-            raise RuntimeError(
-                f"MAPMASK produced an invalid CCP4 map header for {pdb_id}: {path}"
-            )
-        for byte_order in ("<", ">"):
-            words = struct.unpack(f"{byte_order}256i", header)
-            counts = words[0:3]
-            mode = words[3]
-            starts = words[4:7]
-            sampling = words[7:10]
-            axes = words[16:19]
-            if (
-                mode not in (0, 1, 2, 6, 12)
-                or any(value <= 0 for value in counts + sampling)
-                or sorted(axes) != [1, 2, 3]
-            ):
-                continue
-            xyz_starts = [0, 0, 0]
-            for start, _count, axis in zip(starts, counts, axes):
-                xyz_starts[axis - 1] = start
-            return any(
-                start >= grid_size for start, grid_size in zip(xyz_starts, sampling)
-            )
-        raise RuntimeError(
-            f"MAPMASK produced an unrecognized CCP4 map header for {pdb_id}: {path}"
-        )
-
-    map_scope_used = map_scope
-    full_map_bytes = 0
-    edstats_map_bytes = 0
-    if map_scope == "full":
-        _fft(fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
-        _fft(df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
-        full_map_bytes = _map_size(fo_map, "2mFo-DFc FFT") + _map_size(
-            df_map, "mFo-DFc FFT"
-        )
-        edstats_map_bytes = full_map_bytes
-    else:
-        full_fo_map = os.path.join(out_dir, f"{pdb_id}_fo_full.map")
-        _fft(full_fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
-        _model_envelope(full_fo_map, fo_map, "fo", "mapmask_2fofc_s")
-        full_fo_bytes = _map_size(full_fo_map, "2mFo-DFc FFT")
-        envelope_fo_bytes = _map_size(fo_map, "2mFo-DFc MAPMASK")
-        full_map_bytes += full_fo_bytes
-
-        # A model spanning most or all of the cell can crop to an envelope
-        # larger than FFT's own map. Either fallback keeps the full map and
-        # skips MAPMASK for the second map too.
-        fallback_scope = ""
-        if envelope_fo_bytes >= full_fo_bytes:
-            fallback_scope = "full-size-fallback"
-        elif _map_extent_requires_full_map(fo_map):
-            fallback_scope = "full-extent-fallback"
-        if fallback_scope:
-            os.remove(fo_map)
-            os.replace(full_fo_map, fo_map)
-            map_scope_used = fallback_scope
-            _fft(df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
-            full_map_bytes += _map_size(df_map, "mFo-DFc FFT")
-            edstats_map_bytes = full_map_bytes
-        else:
-            edstats_map_bytes += envelope_fo_bytes
-            if not keep_full_maps:
-                os.remove(full_fo_map)
-            full_df_map = os.path.join(out_dir, f"{pdb_id}_df_full.map")
-            _fft(full_df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
-            _model_envelope(full_df_map, df_map, "df", "mapmask_fofc_s")
-            full_df_bytes = _map_size(full_df_map, "mFo-DFc FFT")
-            envelope_df_bytes = _map_size(df_map, "mFo-DFc MAPMASK")
-            if full_df_bytes != full_fo_bytes or envelope_df_bytes != envelope_fo_bytes:
-                raise RuntimeError(
-                    f"density map extents differ for {pdb_id}: "
-                    f"full={full_fo_bytes}/{full_df_bytes}, "
-                    f"model-envelope={envelope_fo_bytes}/{envelope_df_bytes}"
-                )
-            full_map_bytes += full_df_bytes
-            edstats_map_bytes += envelope_df_bytes
-            if not keep_full_maps:
-                os.remove(full_df_map)
-
-    _run(
+    runner.run(
         [
             "edstats",
             "XYZIN",
             pdb_path,
             "MAPIN1",
-            fo_map,
+            paths.fo_map,
             "MAPIN2",
-            df_map,
+            paths.df_map,
             "XYZOUT",
-            rszd,
+            paths.rszd,
             "OUT",
-            stats_out,
+            paths.stats_out,
             "QQDOUT",
-            qq_out,
+            paths.qq_out,
         ],
         # EDSTATS otherwise pools every named alternate conformer into one
         # residue observation (USEALT defaults to false).  Alchemy selects one
@@ -649,23 +722,23 @@ def run_density_analysis(
         "edstats_s",
     )
 
-    if not os.path.exists(stats_out):
+    if not os.path.exists(paths.stats_out):
         raise RuntimeError(f"edstats produced no stats file for {pdb_id}")
     return DensityResult(
-        stats_out=stats_out,
-        rszd=rszd,
-        fo_map=fo_map,
-        df_map=df_map,
+        stats_out=paths.stats_out,
+        rszd=paths.rszd,
+        fo_map=paths.fo_map,
+        df_map=paths.df_map,
         mtz_for_maps=map_mtz,
-        mtzfix_log=mtzfix_log,
+        mtzfix_log=paths.mtzfix_log,
         mtzfix_applied=mtzfix_applied,
         timings=timings,
         twin_coefficient_normalization_applied=(twin_normalization is not None),
         twin_coefficient_normalization=twin_normalization,
         density_map_scope_requested=map_scope,
-        density_map_scope_used=map_scope_used,
-        full_map_bytes=full_map_bytes,
-        edstats_map_bytes=edstats_map_bytes,
+        density_map_scope_used=map_result.scope_used,
+        full_map_bytes=map_result.full_map_bytes,
+        edstats_map_bytes=map_result.edstats_map_bytes,
     )
 
 

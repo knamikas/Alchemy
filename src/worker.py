@@ -661,6 +661,105 @@ def _finalize_result(
     result.n_candidates = len(result.candidate_rows)
 
 
+def _prepare_analysis_inputs(
+    pdb_id: str,
+    cfg: WorkerConfig,
+    result: EntryResult,
+    entry: str,
+    work_dir: str,
+) -> tuple[EntryInputs, StructureContext]:
+    """Prepare the same first-model PDB for EDSTATS and Gemmi."""
+    manual_inputs = cfg.manual_inputs
+    data_json: str | None = None
+    if manual_inputs:
+        mtz, pdb = resolve_manual_inputs(
+            pdb_id,
+            pdb_file=manual_inputs.get("pdb_file"),
+            mtz_file=manual_inputs.get("mtz_file"),
+            cif_file=manual_inputs.get("cif_file"),
+            work_dir=work_dir,
+        )
+        entry = os.path.dirname(pdb) or work_dir
+        data_json = manual_inputs.get("data_json")
+        data_reshi = read_resolution(entry, mtz, data_json_path=data_json)
+    else:
+        mtz, pdb = prepare_inputs(pdb_id, entry, work_dir)
+        data_reshi = read_resolution(entry, mtz)
+
+    density_data_json = data_json if manual_inputs else os.path.join(entry, "data.json")
+    pdb_redo_is_twin = read_pdb_redo_is_twin(
+        density_data_json,
+        required=bool(manual_inputs and data_json),
+    )
+    map_reslo, map_reshi = read_map_column_resolution(mtz)
+    source_pdb = pdb
+    source_coordinate_path = _source_coordinate_path(cfg, pdb_id, entry, source_pdb)
+    source_format, analysis_format, converted = _coordinate_provenance(
+        cfg, source_coordinate_path
+    )
+    model1_pdb = os.path.join(work_dir, f"{pdb_id}_model1.pdb")
+    if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
+        model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
+    pdb, input_model_count = first_model_pdb(source_pdb, model1_pdb)
+    result.source_coordinate_format = source_format
+    result.analysis_coordinate_format = analysis_format
+    result.coordinate_conversion_performed = converted
+    result.source_coordinate_path = source_coordinate_path
+    result.analysis_coordinate_path = pdb
+    inputs = EntryInputs(
+        work_dir=work_dir,
+        mtz=mtz,
+        pdb=pdb,
+        data_json=density_data_json,
+        data_reshi=data_reshi,
+        map_reslo=map_reslo,
+        map_reshi=map_reshi,
+        pdb_redo_is_twin=pdb_redo_is_twin,
+        source_coordinate_path=source_coordinate_path,
+    )
+    structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
+    return inputs, structure
+
+
+def _finish_if_no_analyzable_metals(
+    result: EntryResult, structure: StructureContext
+) -> bool:
+    """Finish early only when density and contact stages cannot produce output."""
+    if structure.metal_atoms(METALS_SET, canonical=True):
+        return False
+    if structure.unknown_element_atom_count:
+        # A missing or invalid deposited element could belong to a configured
+        # metal. Under the no-inference policy, zero recognized sites is
+        # therefore not proof of metal absence.
+        unknown_count = structure.unknown_element_atom_count
+        result.status = "partial"
+        result.retryable = False
+        result.reason_codes = [ReasonCode.METAL_PRESENCE_INDETERMINATE]
+        result.error = truncate(
+            "cannot establish metal absence: "
+            f"{unknown_count} atom(s) have missing or invalid element symbols",
+            MAX_MANIFEST_ERROR_CHARS,
+        )
+        result.n_metals = 0
+        result.confidence_inputs_missing_reason = (
+            ReasonCode.METAL_PRESENCE_INDETERMINATE
+        )
+        return True
+
+    # Neither density nor contact analysis can produce output without a
+    # canonical metal site, so avoid running two FFTs and EDSTATS.
+    result.status = "ok"
+    result.retryable = False
+    result.n_metals = 0
+    result.rows = []
+    result.bond_rows = []
+    result.candidate_rows = []
+    result.n_bonds = 0
+    result.n_candidates = 0
+    result.no_metals = True
+    return True
+
+
 def process(pdb_id: str) -> EntryResult:
     """Run one entry in an initialized worker and return its result."""
     cfg = worker_config
@@ -671,7 +770,6 @@ def process(pdb_id: str) -> EntryResult:
     # a predictable <output-dir>/<pdbID> path could already hold user data.
     work_dir: str | None = None
     manual_inputs = cfg.manual_inputs
-    data_json: str | None = None
     result = initial_result(pdb_id, cfg, manual_inputs)
     announce_inflight("start", pdb_id)
     try:
@@ -682,16 +780,7 @@ def process(pdb_id: str) -> EntryResult:
                 kind="entry",
                 preserve=cfg.keep,
             )
-            mtz, pdb = resolve_manual_inputs(
-                pdb_id,
-                pdb_file=manual_inputs.get("pdb_file"),
-                mtz_file=manual_inputs.get("mtz_file"),
-                cif_file=manual_inputs.get("cif_file"),
-                work_dir=work_dir,
-            )
-            entry = os.path.dirname(pdb) or work_dir
-            data_json = manual_inputs.get("data_json")
-            data_reshi = read_resolution(entry, mtz, data_json_path=data_json)
+            entry = work_dir
         else:
             # Resolved before any scratch space exists, so a missing entry
             # leaves no temporary directory behind.
@@ -706,42 +795,9 @@ def process(pdb_id: str) -> EntryResult:
                 kind="entry",
                 preserve=cfg.keep,
             )
-            mtz, pdb = prepare_inputs(pdb_id, entry, work_dir)
-            data_reshi = read_resolution(entry, mtz)
-        density_data_json = (
-            data_json if manual_inputs else os.path.join(entry, "data.json")
+        inputs, structure = _prepare_analysis_inputs(
+            pdb_id, cfg, result, entry, work_dir
         )
-        pdb_redo_is_twin = read_pdb_redo_is_twin(
-            density_data_json,
-            required=bool(manual_inputs and data_json),
-        )
-        map_reslo, map_reshi = read_map_column_resolution(mtz)
-        source_pdb = pdb
-        source_coordinate_path = _source_coordinate_path(cfg, pdb_id, entry, source_pdb)
-        source_format, analysis_format, converted = _coordinate_provenance(
-            cfg, source_coordinate_path
-        )
-        model1_pdb = os.path.join(work_dir, f"{pdb_id}_model1.pdb")
-        if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
-            model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
-        pdb, input_model_count = first_model_pdb(source_pdb, model1_pdb)
-        result.source_coordinate_format = source_format
-        result.analysis_coordinate_format = analysis_format
-        result.coordinate_conversion_performed = converted
-        result.source_coordinate_path = source_coordinate_path
-        result.analysis_coordinate_path = pdb
-        inputs = EntryInputs(
-            work_dir=work_dir,
-            mtz=mtz,
-            pdb=pdb,
-            data_json=density_data_json,
-            data_reshi=data_reshi,
-            map_reslo=map_reslo,
-            map_reshi=map_reshi,
-            pdb_redo_is_twin=pdb_redo_is_twin,
-            source_coordinate_path=source_coordinate_path,
-        )
-        structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
         result.timings["input_structure_s"] = round(time.monotonic() - t0, 3)
         result.analysis_coordinate_format = structure.analysis_coordinate_format
         result.input_model_count = structure.input_model_count
@@ -754,36 +810,7 @@ def process(pdb_id: str) -> EntryResult:
                     result.warning_codes + [WarningCode.ZERO_OCCUPANCY_METAL_EXCLUDED]
                 )
             )
-        if not structure.metal_atoms(METALS_SET, canonical=True):
-            if structure.unknown_element_atom_count:
-                # A missing or invalid deposited element could belong to a
-                # configured metal. Under the no-inference policy, zero
-                # recognized sites is therefore not proof of metal absence.
-                unknown_count = structure.unknown_element_atom_count
-                result.status = "partial"
-                result.retryable = False
-                result.reason_codes = [ReasonCode.METAL_PRESENCE_INDETERMINATE]
-                result.error = truncate(
-                    "cannot establish metal absence: "
-                    f"{unknown_count} atom(s) have missing or invalid element symbols",
-                    MAX_MANIFEST_ERROR_CHARS,
-                )
-                result.n_metals = 0
-                result.confidence_inputs_missing_reason = (
-                    ReasonCode.METAL_PRESENCE_INDETERMINATE
-                )
-                return result
-            # Skip two FFT maps and EDSTATS: with no canonical metal site,
-            # neither density nor contact analysis can produce output.
-            result.status = "ok"
-            result.retryable = False
-            result.n_metals = 0
-            result.rows = []
-            result.bond_rows = []
-            result.candidate_rows = []
-            result.n_bonds = 0
-            result.n_candidates = 0
-            result.no_metals = True
+        if _finish_if_no_analyzable_metals(result, structure):
             return result
         rows, header = _run_density_stage(result, cfg, inputs, structure)
         identification_reason_codes = _identification_reason_codes(rows)
