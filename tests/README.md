@@ -12,6 +12,10 @@ python3 -m pytest
 
 Alchemy supports Python 3.11 and newer and requires gemmi 0.7 or newer.
 
+Tests under `coordination/`, `driver/`, and `tools/` follow the corresponding
+source subsystems. Whole-run coverage lives under `integration/`. Shared
+fixtures and builders remain in `conftest.py` and `helpers.py`.
+
 ## Common commands
 
 ```bash
@@ -19,7 +23,7 @@ Alchemy supports Python 3.11 and newer and requires gemmi 0.7 or newer.
 python3 -m pytest --no-ccp4 --no-network --skip-slow
 
 # Full PDB-REDO integration tests
-python3 -m pytest tests/test_pipeline_integration.py \
+python3 -m pytest tests/integration/test_pipeline_integration.py \
     --require-ccp4 --require-entry-data -v
 
 # Coverage, as CI measures it
