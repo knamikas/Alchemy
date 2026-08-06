@@ -582,6 +582,9 @@ def plan_entry_memory(
     for estimate in estimates:
         source_counts[estimate.source] = source_counts.get(estimate.source, 0) + 1
     largest = max(estimates, key=lambda estimate: estimate.bytes)
+    exclusive_entries = sum(
+        estimate.requires_exclusive_memory for estimate in estimates
+    )
 
     run_log.details.update(
         memory_scheduler="weighted_entry_estimates",
@@ -592,6 +595,7 @@ def plan_entry_memory(
         memory_estimate_sources=source_counts,
         memory_estimate_max_bytes=largest.bytes,
         memory_estimate_max_entry=largest.pdb_id,
+        memory_exclusive_entries=exclusive_entries,
     )
     if budget is None:
         logger.warning(
@@ -601,9 +605,11 @@ def plan_entry_memory(
     else:
         logger.info(
             "memory-aware scheduling: %.2f GiB worker budget, %.2f GiB "
-            "protected reserve; largest estimate %.2f GiB (%s)",
+            "protected reserve; %d high-memory entries run exclusively; "
+            "largest estimate %.2f GiB (%s)",
             budget / (1024**3),
             cast(int, reserve) / (1024**3),
+            exclusive_entries,
             largest.bytes / (1024**3),
             largest.pdb_id,
         )
@@ -1189,8 +1195,7 @@ def pop_admissible_estimate(
     pending: list[EntryMemoryEstimate],
     reserved_bytes: int,
     budget_bytes: int | None,
-    *,
-    active: bool,
+    active_estimates: Collection[EntryMemoryEstimate],
 ) -> EntryMemoryEstimate | None:
     """Scanning past a blocked large entry avoids wasting safe worker slots.
 
@@ -1199,10 +1204,14 @@ def pop_admissible_estimate(
     """
     if not pending:
         return None
-    if budget_bytes is None or not active:
+    if not active_estimates:
         return pending.pop(0)
+    if any(estimate.requires_exclusive_memory for estimate in active_estimates):
+        return None
     for index, estimate in enumerate(pending):
-        if reserved_bytes + estimate.bytes <= budget_bytes:
+        if estimate.requires_exclusive_memory:
+            continue
+        if budget_bytes is None or reserved_bytes + estimate.bytes <= budget_bytes:
             return pending.pop(index)
     return None
 
@@ -1265,17 +1274,37 @@ def _dispatch_entries(
         peak_reserved_bytes = 0
         max_active = 0
         oversized_entries: set[str] = set()
+        memory_pressure_pauses = 0
+        memory_pressure_active = False
         completed = 0
         progress.render(completed, tally.counts, tally.no_metals, force=True)
         while completed < len(ids):
             batch: list[EntryResult] = []
 
             while pending and len(active) < workers:
+                current_available = available_memory_bytes()
+                if (
+                    active
+                    and memory_plan.reserve_bytes is not None
+                    and current_available is not None
+                    and current_available <= memory_plan.reserve_bytes
+                ):
+                    if not memory_pressure_active:
+                        memory_pressure_pauses += 1
+                        logger.warning(
+                            "pausing new entries: %.2f GiB available has reached "
+                            "the %.2f GiB protected reserve",
+                            current_available / (1024**3),
+                            memory_plan.reserve_bytes / (1024**3),
+                        )
+                    memory_pressure_active = True
+                    break
+                memory_pressure_active = False
                 estimate = pop_admissible_estimate(
                     pending,
                     reserved_bytes,
                     memory_plan.budget_bytes,
-                    active=bool(active),
+                    [item[1] for item in active.values()],
                 )
                 if estimate is None:
                     break
@@ -1355,6 +1384,7 @@ def _dispatch_entries(
             memory_scheduler_peak_reserved_bytes=peak_reserved_bytes,
             memory_scheduler_max_active_entries=max_active,
             memory_scheduler_oversized_entries=len(oversized_entries),
+            memory_scheduler_pressure_pauses=memory_pressure_pauses,
         )
     finally:
         forced = _shutdown_pool(pool)

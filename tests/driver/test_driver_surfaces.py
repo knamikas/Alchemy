@@ -1065,12 +1065,13 @@ def test_entry_estimate_falls_back_to_mtz_size(tmp_path: Path) -> None:
 
 def test_weighted_admission_skips_a_blocked_large_entry() -> None:
     gib = 1024**3
+    active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
     pending = [
         resources.EntryMemoryEstimate("large", 7 * gib, "test"),
         resources.EntryMemoryEstimate("small", gib, "test"),
     ]
 
-    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 5 * gib, active=True)
+    admitted = pool.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active)
 
     assert admitted is not None and admitted.pdb_id == "small"
     assert [estimate.pdb_id for estimate in pending] == ["large"]
@@ -1078,11 +1079,22 @@ def test_weighted_admission_skips_a_blocked_large_entry() -> None:
 
 def test_oversized_entry_is_admitted_only_after_active_work_drains() -> None:
     gib = 1024**3
+    active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
     pending = [resources.EntryMemoryEstimate("large", 7 * gib, "test")]
 
-    assert pool.pop_admissible_estimate(pending, 3 * gib, 5 * gib, active=True) is None
-    admitted = pool.pop_admissible_estimate(pending, 0, 5 * gib, active=False)
+    assert pool.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active) is None
+    admitted = pool.pop_admissible_estimate(pending, 0, 5 * gib, [])
     assert admitted is not None and admitted.pdb_id == "large"
+
+
+def test_high_memory_entry_blocks_every_competing_admission() -> None:
+    gib = 1024**3
+    active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
+    pending = [resources.EntryMemoryEstimate("small", gib, "test")]
+
+    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
+
+    assert admitted is None
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(

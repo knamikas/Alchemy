@@ -18,9 +18,9 @@ from collections.abc import Callable, Mapping
 
 GIB = 1024**3
 
-# Retain the old 1.25 GiB allowance as a floor: it covers interpreter and CCP4
-# overhead for small maps without pretending it can cover the large-cell tail.
-AUTO_WORKER_MEMORY_BYTES = 1280 * 1024 * 1024
+# A 2 GiB floor prevents many ordinary CCP4 processes from consuming the OS
+# reserve together before their map-dependent estimates become significant.
+AUTO_WORKER_MEMORY_BYTES = 2 * GIB
 
 # Match density_analysis.py's GRID SAMP=5 and add margin because CCP4 rounds
 # each requested dimension to an FFT-compatible grid.
@@ -36,8 +36,8 @@ MTZ_GZIP_SIZE_FALLBACK_MULTIPLIER = 128
 
 # Do not turn every byte reported as available into a CCP4 allocation.  The
 # driver, desktop, filesystem cache and short-lived program overlap need room.
-MEMORY_RESERVE_MIN_BYTES = 2 * GIB
-MEMORY_RESERVE_FRACTION = 0.15
+MEMORY_RESERVE_MIN_BYTES = 4 * GIB
+MEMORY_RESERVE_FRACTION = 0.20
 
 PROC_MEMINFO_PATH = "/proc/meminfo"
 PROC_SELF_CGROUP_PATH = "/proc/self/cgroup"
@@ -53,6 +53,10 @@ class EntryMemoryEstimate:
     bytes: int
     source: str
     combined_map_bytes: int | None = None
+
+    @property
+    def requires_exclusive_memory(self) -> bool:
+        return self.bytes > AUTO_WORKER_MEMORY_BYTES
 
 
 def available_cpu_count() -> int:

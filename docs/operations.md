@@ -32,14 +32,15 @@ Running batches, resuming them, and reading what a run wrote. See
   resolution. The estimate includes both maps, overlapping CCP4 copies, fixed
   worker overhead, FFT-grid rounding, and a safety margin. If usable metadata
   is absent, MTZ size supplies a conservative fallback; otherwise the entry
-  receives the 1.25 GiB floor. At least 2 GiB or 15% of currently available
-  memory is protected for the OS and driver. The dispatcher can skip past a
-  temporarily blocked large entry to keep fitting small entries active, then
-  runs that large entry when enough reservations drain. An estimate larger
-  than the whole budget is allowed only as the sole active entry, avoiding a
-  scheduling deadlock while making the risk explicit in the log. The detailed
-  run log records the budget, estimate sources, peak reservation and every
-  entry's estimate.
+  receives the 2 GiB floor. At least 4 GiB or 20% of currently available
+  memory is protected for the OS and driver. Any entry estimated above the
+  floor runs with no competing entry; measured EDSTATS peaks on large cells
+  make summed estimates unsafe even when their total fits physical RAM. The
+  dispatcher can skip past a temporarily blocked large entry to keep fitting
+  small entries active, then runs that entry after active work drains. It also
+  pauses new admission whenever measured headroom falls into the protected
+  reserve. The detailed run log records the budget, estimate sources, peak
+  reservation, pressure pauses, and every entry's estimate.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis

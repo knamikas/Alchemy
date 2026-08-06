@@ -557,7 +557,7 @@ def test_documented_thresholds_match_the_constants() -> None:
         ("first-sphere tolerance", FIRST_SPHERE_TOLERANCE, "0.75"),
         ("model-envelope border", MODEL_ENVELOPE_BORDER_ANGSTROM, "10 Angstrom"),
         ("per-program CCP4 budget", CCP4_TOOL_TIMEOUT_S, "900"),
-        ("per-worker memory budget", AUTO_WORKER_MEMORY_BYTES, "1.25 GiB"),
+        ("per-worker memory budget", AUTO_WORKER_MEMORY_BYTES, "2 GiB"),
         ("overfull occupancy fraction", OVERFULL_OCCUPANCY_NI_FRACTION, "0.2%"),
     ]
 
@@ -576,5 +576,5 @@ def test_documented_thresholds_match_the_constants() -> None:
         0.75,
     )
     assert (MODEL_ENVELOPE_BORDER_ANGSTROM, CCP4_TOOL_TIMEOUT_S) == (10, 15 * 60)
-    assert AUTO_WORKER_MEMORY_BYTES == 1280 * 1024 * 1024
+    assert AUTO_WORKER_MEMORY_BYTES == 2 * 1024**3
     assert OVERFULL_OCCUPANCY_NI_FRACTION == 0.002
