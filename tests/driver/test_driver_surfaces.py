@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     # helpers that build MTZ files, and ``worker`` is never imported at all.
     import numpy as np
     from numpy.typing import NDArray
-    from worker import EntryResult
+    from worker_contracts import EntryResult
 
 
 class _ApproxFactory(Protocol):

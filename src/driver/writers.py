@@ -19,7 +19,7 @@ from coordination.schema import (
 )
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
-from worker import EntryResult, blank_if_unmeasured
+from worker_contracts import EntryResult, blank_if_unmeasured
 from output_rows import MetalStatsRow
 
 

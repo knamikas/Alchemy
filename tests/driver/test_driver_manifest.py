@@ -35,6 +35,7 @@ import main
 import metal_identification
 import structure_analysis
 import worker
+import worker_contracts
 from codes import EntryStatus
 from driver.progress import ProgressReporter
 from driver import runlog
@@ -100,7 +101,7 @@ def _empty_metal_statistics(
     return [], []
 
 
-def _cfg(**overrides: Any) -> worker.WorkerConfig:
+def _cfg(**overrides: Any) -> worker_contracts.WorkerConfig:
     """A complete ``WorkerConfig`` with test placeholders."""
     fields: dict[str, Any] = {
         "root": "/nonexistent/root",
@@ -122,7 +123,7 @@ def _cfg(**overrides: Any) -> worker.WorkerConfig:
         "reference_data_id": "0123456789ab",
     }
     fields.update(overrides)
-    return worker.WorkerConfig(**fields)
+    return worker_contracts.WorkerConfig(**fields)
 
 
 CFG = _cfg()
@@ -145,7 +146,7 @@ DERIVED_MANIFEST_COLUMNS = frozenset(
 )
 
 
-def _result(pdb_id: str = "109m", **overrides: Any) -> worker.EntryResult:
+def _result(pdb_id: str = "109m", **overrides: Any) -> worker_contracts.EntryResult:
     """A worker result skeleton plus overrides, as the driver would see it."""
     result = worker.initial_result(pdb_id, CFG, None)
     for name, value in overrides.items():
@@ -164,7 +165,7 @@ def _manual_entry(
     pdb_transform: Callable[[Path], None] | None = None,
     bonds: bool = False,
     **cfg_overrides: Any,
-) -> worker.EntryResult:
+) -> worker_contracts.EntryResult:
     """Run one manual-input entry through ``worker.process``.
 
     Only the three MTZ-dependent readers are stubbed; structure loading, result
@@ -1218,9 +1219,9 @@ class TestInitialResult:
         assert result.alchemy_commit == CFG.alchemy_commit
         assert result.gemmi_version == CFG.gemmi_version
         assert result.ccp4_version == CFG.ccp4_version
-        assert result.model_policy == worker.MODEL_POLICY
-        assert result.altloc_policy == worker.ALTLOC_POLICY
-        assert result.symmetry_contact_policy == worker.SYMMETRY_POLICY
+        assert result.model_policy == worker_contracts.MODEL_POLICY
+        assert result.altloc_policy == worker_contracts.ALTLOC_POLICY
+        assert result.symmetry_contact_policy == worker_contracts.SYMMETRY_POLICY
 
     @pytest.mark.parametrize(
         "manual_inputs,expected",
@@ -1564,7 +1565,7 @@ class TestResumeStaging:
         def _dispatch(
             args: RunConfig,
             ids: Sequence[str],
-            cfg: worker.WorkerConfig,
+            cfg: worker_contracts.WorkerConfig,
             workers: int,
             writers: OutputWriters,
             plan: driver_pool.ConfidencePlan,
@@ -1590,7 +1591,7 @@ class TestResumeStaging:
                 ["bbbb", "cccc"],
                 # ``None`` proves the halted-batch path never reaches the worker
                 # configuration: ``_dispatch_entries`` is replaced above.
-                cast(worker.WorkerConfig, None),
+                cast(worker_contracts.WorkerConfig, None),
                 1,
                 layout,
                 driver_pool.ConfidencePlan(),
@@ -3437,7 +3438,7 @@ class TestDensityResultReachesTheResult:
         monkeypatch: pytest.MonkeyPatch,
         result: density.DensityResult,
         **cfg_overrides: Any,
-    ) -> worker.EntryResult:
+    ) -> worker_contracts.EntryResult:
         monkeypatch.setattr(worker, "extract_metal_statistics", _empty_metal_statistics)
 
         def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
@@ -3549,7 +3550,7 @@ class TestCcp4TimeoutOutcome:
     @staticmethod
     def _entry(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
-    ) -> worker.EntryResult:
+    ) -> worker_contracts.EntryResult:
         """Run one manual-input entry whose density stage raises ``failure``."""
 
         def fake_density(*args: Any, **kwargs: Any) -> None:

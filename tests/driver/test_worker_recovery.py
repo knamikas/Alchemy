@@ -37,6 +37,7 @@ import pytest
 import density_analysis as density
 import main
 import worker
+import worker_contracts
 from codes import EntryStatus
 from driver import runlog, writers
 from driver.writers import MANIFEST_COLUMNS
@@ -97,10 +98,10 @@ class _BrokenQueue:
 
 def _reference_cfg(
     output_dir: str, manual_inputs: dict[str, str | None] | None = None
-) -> worker.WorkerConfig:
+) -> worker_contracts.WorkerConfig:
     """Build the worker config exactly as ``driver_pool.run`` assembles it."""
     env = dict(os.environ)
-    return worker.WorkerConfig(
+    return worker_contracts.WorkerConfig(
         root=os.path.join(output_dir, "root"),
         mirror_root=os.path.join(output_dir, "mirror"),
         cache_root=os.path.join(output_dir, "cache"),
@@ -424,7 +425,7 @@ def _kill_self_after(delay: float) -> None:
     threading.Thread(target=kill, daemon=True).start()
 
 
-def _stub_process(pdb_id: str) -> worker.EntryResult:
+def _stub_process(pdb_id: str) -> worker_contracts.EntryResult:
     """Stand in for ``worker.process``: no CCP4, no downloads, scripted deaths.
 
     Every entry announces itself exactly as the real worker does, so the driver
@@ -1037,7 +1038,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         run_log,
     )
 
-    assert isinstance(cfg, worker.WorkerConfig)
+    assert isinstance(cfg, worker_contracts.WorkerConfig)
     # The log keeps the two hashes the id was composed from, so a changed id can
     # be attributed to a file.
     assert cfg.reference_data_id == reference_data.reference_data_id()

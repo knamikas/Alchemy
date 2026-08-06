@@ -20,7 +20,7 @@ from driver.resources import available_cpu_count, available_memory_bytes
 from run_config import RunConfig
 
 
-from worker import EntryResult, blank_if_unmeasured
+from worker_contracts import EntryResult, blank_if_unmeasured
 
 # A subdirectory rather than the output directory itself: one log accumulates
 # per invocation, and the startup sweep never sees them beside the result CSVs.

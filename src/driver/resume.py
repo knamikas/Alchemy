@@ -21,7 +21,7 @@ from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
-from worker import EntryResult
+from worker_contracts import EntryResult
 
 
 # A row read back is not ``dict[str, str]``: DictReader fills a short row's

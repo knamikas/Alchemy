@@ -62,13 +62,8 @@ from inputs import (
     infer_pdb_id_from_path,
     read_data_json_properties,
 )
-from worker import (
-    EntryResult,
-    WorkerConfig,
-    initialize_worker,
-    process,
-    worker_death_result,
-)
+from worker import initialize_worker, process, worker_death_result
+from worker_contracts import EntryResult, WorkerConfig
 from driver.progress import ProgressReporter
 from driver.output_lock import (
     OutputDirectoryBusyError,

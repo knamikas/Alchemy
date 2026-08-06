@@ -16,12 +16,11 @@ import os
 import shutil
 import signal
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from multiprocessing.queues import Queue, SimpleQueue
 from typing import Any
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 
-from _version import __version__
 from coordination.analysis import (
     BondAnalysisMetadata,
     BondAnalysisResult,
@@ -29,8 +28,6 @@ from coordination.analysis import (
 )
 from codes import EntryStatus, ReasonCode, WarningCode
 from coordination.schema import (
-    BondRow,
-    CandidateRow,
     STATS_EXTRA_COLUMNS,
     check_row_schema,
     stats_extra_values,
@@ -57,15 +54,10 @@ from metal_identification import extract_metal_statistics
 from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
 from structure_analysis import NAN, StructureContext, load_structure
+from worker_contracts import EntryResult, WorkerConfig
 
 
 METALS_SET = set(METAL_ELEMENTS)
-
-MODEL_POLICY = "first"
-ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
-SYMMETRY_POLICY = (
-    "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
-)
 
 # Reported alongside the machine-readable code in the manifest's error column.
 IDENTIFICATION_REASON_MESSAGES = {
@@ -106,40 +98,6 @@ DETERMINISTIC_PROCESSING_ERRORS = (
     TypeError,
     ValueError,
 )
-
-
-@dataclass(frozen=True)
-class WorkerConfig:
-    """Everything one run decides once and every worker then reads.
-
-    The freeze is shallow: ``env`` and ``manual_inputs`` remain mutable dicts,
-    and a worker mutating one diverges only its own unpickled copy.
-    """
-
-    root: str
-    mirror_root: str
-    cache_root: str
-    # Carries CCP4 on PATH, and is passed to every subprocess.
-    env: dict[str, str]
-    output_dir: str
-    # CCD component ids treated as metal cofactors.
-    cofactors: Collection[str]
-    # --keep-intermediates: retain each entry's scratch directory.
-    keep: bool
-    # Whether to run the contact stage, cleared by --no-bonds.
-    bonds: bool
-    density_map_scope: str
-    ccp4_timeout_s: int
-    # Level for this worker's logging handler; the driver owns the sink.
-    log_level: int
-    allow_download: bool
-    # The four explicit input paths of a manual run, or ``None`` for a batch.
-    manual_inputs: dict[str, str | None] | None
-    # Run provenance stamped into every manifest row.
-    alchemy_commit: str
-    gemmi_version: str
-    ccp4_version: str
-    reference_data_id: str
 
 
 worker_config: WorkerConfig | None = None
@@ -207,99 +165,6 @@ def _preserve_timeout_log(
         return destination
     except OSError:
         return ""
-
-
-def blank_if_unmeasured(value: Any) -> Any:
-    """Render a not-yet-measured field as the blank the outputs expect.
-
-    A ``None`` reaching a CSV as the string ``"None"``, or a run log as
-    ``null``, would be read by the next ``--resume`` as a real value.
-    """
-    return "" if value is None else value
-
-
-def _empty_result_codes() -> list[str]:
-    return []
-
-
-def _empty_result_timings() -> dict[str, float]:
-    return {}
-
-
-def _empty_metal_stats_rows() -> list[MetalStatsRow]:
-    return []
-
-
-def _empty_bond_rows() -> list[BondRow]:
-    return []
-
-
-def _empty_candidate_rows() -> list[CandidateRow]:
-    return []
-
-
-@dataclass(slots=True)
-class EntryResult:
-    """One entry's outcome, with every manifest column present from the outset.
-
-    Not-yet-measured is ``None``, never zero: zero ``n_bonds`` means the bond
-    stage ran and found nothing, and a later ``--resume`` reads a non-blank
-    count as proof the stage completed and skips the entry permanently.
-    """
-
-    # The CSV column keeps the deposited spelling ``pdbID``.
-    pdb_id: str
-    alchemy_commit: str
-    gemmi_version: str
-    ccp4_version: str
-    # The bundled catalog and distance table this row was measured against;
-    # two rows are comparable only if they share it.
-    reference_data_id: str
-    refinement_state: str
-
-    # ``ok``, ``partial``, ``skip`` or ``error``. Starts at ``error`` so a
-    # worker that dies mid-entry cannot be mistaken for a success.
-    status: EntryStatus = EntryStatus.ERROR
-    # Starts true for the same reason, and is cleared once a stage has produced
-    # a terminal answer.
-    retryable: bool = True
-    n_metals: int = 0
-    runtime_s: float = 0.0
-    error: str = ""
-    no_metals: bool = False
-
-    rows: list[MetalStatsRow] = field(default_factory=_empty_metal_stats_rows)
-    bond_rows: list[BondRow] = field(default_factory=_empty_bond_rows)
-    candidate_rows: list[CandidateRow] = field(default_factory=_empty_candidate_rows)
-    # ``None`` until the bond stage runs -- see the class docstring.
-    n_bonds: int | None = None
-    n_candidates: int | None = None
-
-    reason_codes: list[str] = field(default_factory=_empty_result_codes)
-    warning_codes: list[str] = field(default_factory=_empty_result_codes)
-    timings: dict[str, float] = field(default_factory=_empty_result_timings)
-
-    density_map_scope_used: str = ""
-    density_full_map_bytes: int = 0
-    density_edstats_map_bytes: int = 0
-    confidence_inputs_missing_reason: str = ""
-    ccp4_timeout_log_path: str = ""
-
-    alchemy_version: str = __version__
-    source_coordinate_format: str = ""
-    analysis_coordinate_format: str = "pdb"
-    coordinate_conversion_performed: bool = False
-    source_coordinate_path: str = ""
-    analysis_coordinate_path: str = ""
-
-    # Copied onto every row so a CSV is readable without the code behind it.
-    model_policy: str = MODEL_POLICY
-    altloc_policy: str = ALTLOC_POLICY
-    symmetry_contact_policy: str = SYMMETRY_POLICY
-    # ``None`` until the coordinates load.
-    input_model_count: int | None = None
-    model_analyzed: int | None = None
-    multi_model_structure: bool | None = None
 
 
 def initial_result(
