@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Any, ClassVar, override
+from typing import Any, ClassVar
 from collections.abc import Iterator, Mapping, Sequence
+
+from typing_extensions import override
 
 from structure_analysis import AtomSite
 

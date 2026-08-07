@@ -22,8 +22,8 @@ Requirements
 * CCP4 `mtzfix`, `fft`, `mapmask`, and `edstats` on PATH -- either already
   sourced, or via --ccp4-setup pointing at a CCP4 setup script
   (e.g. <CCP4>/bin/ccp4.setup-sh on POSIX or ccp4.setup.bat on Windows).
-* Run under Python 3.11+ with gemmi>=0.7.0 and numpy>=1.17. Both are
-  required; gemmi does not install numpy.
+* Run under Python 3.11+ with gemmi>=0.7.0, numpy>=1.17, and
+  typing_extensions>=4.6. These are required; gemmi does not install numpy.
 
 Examples
 --------

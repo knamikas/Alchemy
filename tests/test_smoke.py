@@ -116,9 +116,14 @@ def test_root_launcher_works_outside_the_repository(
 ) -> None:
     """``./alchemy`` resolves src from itself and delegates to the CLI."""
     launcher = os.path.join(repo_root, "alchemy")
+    command = [launcher, "--help"]
+    # Windows does not dispatch extensionless shebang files, but invoking the
+    # same file through Python still exercises its repository-path resolution.
+    if sys.platform == "win32":
+        command.insert(0, sys.executable)
 
     result = subprocess.run(
-        [launcher, "--help"],
+        command,
         cwd=tmp_path,
         text=True,
         capture_output=True,

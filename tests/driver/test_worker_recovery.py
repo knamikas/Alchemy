@@ -497,6 +497,12 @@ def _driver_child(
     _stub_marker_dir = marker_dir
     try:
         driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+        # These scenarios require the requested process topology; inheriting a
+        # CI container's memory cap can serialize them and test a different case.
+        driver_pool.automatic_worker_limits = lambda: (  # type: ignore[attr-defined]
+            max(1, len(script)),
+            None,
+        )
         # The stub has to replace ``process`` as driver.pool sees it, and that
         # module imported the name from worker; strict's no-implicit-reexport
         # objects to reaching it there, not to the patch.

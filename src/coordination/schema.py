@@ -14,10 +14,11 @@ The builders are serialization only: every decision they report was made in
 """
 
 import hashlib
-from typing import Any, ClassVar, override
+from typing import Any, ClassVar
 from collections.abc import Iterable, Iterator, Mapping
 
 import gemmi
+from typing_extensions import override
 
 from coordination.contact_record import Candidate, MultiDonorResult
 from output_rows import CsvValue
