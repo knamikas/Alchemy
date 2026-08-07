@@ -2253,14 +2253,18 @@ class TestOutputWriters:
         )
         writers.write_confidence_rows([])
         assert writers.n_confidence == 0
-        writers.write_confidence_rows(
-            [dict.fromkeys(columns, ""), dict.fromkeys(columns, "")]
-        )
+        first: dict[str, object] = dict.fromkeys(columns, "")
+        first["context_warning"] = True
+        first["rszd_magnitude"] = float("nan")
+        writers.write_confidence_rows([first, dict.fromkeys(columns, "")])
         self._close(handles)
         rows = _read_csv(tmp_path / "confidence.csv")
         assert rows[0] == columns
         assert writers.n_confidence == 2
         assert len(rows) == 3
+        written = dict(zip(columns, rows[1], strict=True))
+        assert written["context_warning"] == "true"
+        assert written["rszd_magnitude"] == ""
 
     def test_scored_confidence_stream_projects_synchronized_inputs(
         self, tmp_path: Path

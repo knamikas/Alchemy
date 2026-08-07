@@ -17,9 +17,9 @@ from collections import Counter, defaultdict
 from typing import Any, TextIO
 from collections.abc import Iterable, Mapping, Sequence
 
-from output_rows import MetalStatsRow
+from output_rows import MetalStatsRow, scientific_csv_value
 
-from reference_data import reference_data_id
+from reference_data import cofactor_ids, reference_data_id
 from worker_contracts import MAX_ANALYZED_METAL_SITES
 
 
@@ -27,8 +27,16 @@ REFERENCE_METADATA_FILE = "metadata.json"
 REFERENCE_DISTRIBUTION_FILE = "score_distribution.csv"
 DENSITY_ANCHORS = ((2.0, 0.0), (3.0, 0.25), (6.0, 0.65), (12.0, 1.0))
 GEOMETRY_ANCHORS = ((2.0, 0.0), (3.0, 0.35), (6.0, 0.70), (12.0, 1.0))
+CONFIDENCE_METHOD_VERSION = "provisional_june_2026_v2"
+CONFIDENCE_SCHEMA_VERSION = 2
+COHORT_WEIGHTING = "per_metal_site"
+SCORE_DECIMAL_PLACES = 6
 
 SITE_KEY_COLUMNS = (
+    "pdbID",
+    "metal_site_id",
+)
+LEGACY_SITE_KEY_COLUMNS = (
     "pdbID",
     "metal_model_index",
     "metal_chain_index",
@@ -38,6 +46,7 @@ SITE_KEY_COLUMNS = (
 
 IDENTITY_COLUMNS = (
     "pdbID",
+    "metal_site_id",
     "category",
     "density_observation_id",
     "density_scope",
@@ -68,6 +77,7 @@ CONFIDENCE_INPUT_COLUMNS = (
     "zbond_available_contact_count",
     "geometry_coverage",
     "max_abs_zbond",
+    "max_abs_zbond_contact_id",
     "max_abs_zbond_neighbor_resname",
     "max_abs_zbond_neighbor_chain",
     "max_abs_zbond_neighbor_resnum",
@@ -85,21 +95,57 @@ CONFIDENCE_INPUT_COLUMNS = (
 ANALYSIS_COLUMNS = (
     "density_severity",
     "geometry_severity",
-    "density_score_component",
-    "geometry_score_component",
-    "interaction_score_component",
+    "density_penalty_fraction",
+    "geometry_penalty_fraction",
+    "interaction_penalty_fraction",
     "confidence_score",
     "confidence_percentile",
     "confidence_scoring_status",
     "confidence_scoring_reason",
     "confidence_reference_id",
+    "confidence_cohort_id",
     "confidence_cohort_size",
-    "confidence_context_warning",
-    "confidence_context_warning_reasons",
 )
 
 SCORABLE_INPUT_STATUSES = frozenset({"complete", "partial_geometry", "density_only"})
-INPUT_STATUS_POLICY = "explicit_scorable_statuses"
+CONFIDENCE_INPUT_STATUSES = SCORABLE_INPUT_STATUSES | {"unscorable"}
+INPUT_STATUS_POLICY = "explicit_scorable_statuses_v2"
+CONFIDENCE_BOOLEAN_COLUMNS = frozenset({"density_is_shared", "context_warning"})
+REFERENCE_METADATA_FIELDS = frozenset(
+    {
+        "confidence_method_version",
+        "confidence_schema_version",
+        "cohort_weighting",
+        "score_decimal_places",
+        "density_anchors",
+        "geometry_anchors",
+        "weights",
+        "percentile_method",
+        "coverage_policy",
+        "input_status_policy",
+        "maximum_entry_metal_sites",
+        "reference_data_id",
+        "reference_id",
+        "distribution_file",
+        "distinct_score_count",
+        "scorable_cohort_size",
+        "cohort_id",
+        "confidence_inputs_file",
+        "confidence_inputs_sha256",
+        "input_row_count",
+        "input_entry_count",
+        "scorable_entry_count",
+        "input_status_counts",
+        "source_manifest_file",
+        "source_manifest_sha256",
+        "source_entry_count",
+        "manifest_status_counts",
+        "no_metals_entry_count",
+        "metal_site_limit_exceeded_entry_count",
+        "metal_bearing_entry_count",
+        "software_versions",
+    }
+)
 
 
 def _required_columns(
@@ -111,7 +157,9 @@ def _required_columns(
 
 
 def _site_key(row: Mapping[str, Any]) -> tuple[str, ...]:
-    return tuple(str(row[column]).strip() for column in SITE_KEY_COLUMNS)
+    site_id = str(row.get("metal_site_id", "")).strip()
+    columns = SITE_KEY_COLUMNS if site_id else LEGACY_SITE_KEY_COLUMNS
+    return tuple(str(row.get(column, "")).strip() for column in columns)
 
 
 def _finite_float(value: Any) -> float:
@@ -133,7 +181,7 @@ def _confidence_inputs_are_scorable(row: Mapping[str, Any]) -> bool:
     )
 
 
-def _format_significant(value: float, digits: int = 6) -> str:
+def _format_decimal(value: float, decimal_places: int = 6) -> str:
     """Render a confidence number without trailing zeros, blanking non-finite.
 
     Distinct from ``structure_analysis._format_number``, which renders a fixed
@@ -142,7 +190,19 @@ def _format_significant(value: float, digits: int = 6) -> str:
     """
     if not math.isfinite(value):
         return ""
-    return f"{value:.{digits}f}".rstrip("0").rstrip(".")
+    return f"{value:.{decimal_places}f}".rstrip("0").rstrip(".")
+
+
+def canonical_confidence_score(value: float) -> float:
+    return float(f"{value:.{SCORE_DECIMAL_PLACES}f}")
+
+
+def _confidence_csv_value(column: str, value: object) -> object:
+    if column in CONFIDENCE_BOOLEAN_COLUMNS and isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "false"}:
+            return normalized
+    return scientific_csv_value(value)
 
 
 def _read_csv(path: str, label: str) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
@@ -151,6 +211,45 @@ def _read_csv(path: str, label: str) -> tuple[tuple[str, ...], list[dict[str, An
         if reader.fieldnames is None:
             raise ValueError(f"{label} has no CSV header")
         return tuple(reader.fieldnames), list(reader)
+
+
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _manifest_provenance(path: str) -> dict[str, Any]:
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    status_counts = Counter(row.get("status", "") for row in rows)
+    software_columns = (
+        "alchemy_version",
+        "alchemy_commit",
+        "gemmi_version",
+        "ccp4_version",
+    )
+    software = {
+        column: sorted({row.get(column, "") for row in rows if row.get(column, "")})
+        for column in software_columns
+    }
+    return {
+        "source_manifest_file": os.path.basename(path),
+        "source_manifest_sha256": _file_sha256(path),
+        "source_entry_count": len(rows),
+        "manifest_status_counts": dict(sorted(status_counts.items())),
+        "no_metals_entry_count": sum(_true(row.get("no_metals", "")) for row in rows),
+        "metal_site_limit_exceeded_entry_count": sum(
+            _true(row.get("metal_site_limit_exceeded", "")) for row in rows
+        ),
+        "metal_bearing_entry_count": sum(
+            (_finite_float(row.get("n_metals", "")) > 0) for row in rows
+        ),
+        "software_versions": software,
+    }
 
 
 def _bond_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -176,8 +275,9 @@ def _bond_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "assigned_contact_count": assigned,
         "reference_covered_contact_count": reference_covered,
         "zbond_available_contact_count": len(finite_bonds),
-        "geometry_coverage": _format_significant(coverage),
-        "max_abs_zbond": _format_significant(largest[0]) if largest else "",
+        "geometry_coverage": _format_decimal(coverage),
+        "max_abs_zbond": _format_decimal(largest[0]) if largest else "",
+        "max_abs_zbond_contact_id": largest_row.get("contact_id", ""),
         "max_abs_zbond_neighbor_resname": largest_row.get("neighbor_resname", ""),
         "max_abs_zbond_neighbor_chain": largest_row.get("neighbor_chain", ""),
         "max_abs_zbond_neighbor_resnum": largest_row.get("neighbor_resnum", ""),
@@ -214,14 +314,21 @@ def _orphan_bond_site_input(
     values: dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
     values.update(
         {
-            "pdbID": key[0],
-            "category": first.get("parent_type", ""),
+            "pdbID": first.get("pdbID", key[0]),
+            "category": (
+                "cofactor"
+                if str(first.get("metal_resname", "")).upper() in cofactor_ids()
+                else "metal"
+                if first.get("parent_type", "") == "ion"
+                else ""
+            ),
+            "metal_site_id": first.get("metal_site_id", ""),
             "coordinate_mapping_status": "density_row_unavailable",
             "selected_metal_site_status": "selected_without_density_row",
-            "metal_model_index": key[1],
-            "metal_chain_index": key[2],
-            "metal_residue_index": key[3],
-            "metal_atom_index": key[4],
+            "metal_model_index": first.get("metal_model_index", ""),
+            "metal_chain_index": first.get("metal_chain_index", ""),
+            "metal_residue_index": first.get("metal_residue_index", ""),
+            "metal_atom_index": first.get("metal_atom_index", ""),
             "metal_resname": first.get("metal_resname", ""),
             "metal_chain": first.get("metal_chain", ""),
             "metal_resnum": first.get("metal_resnum", ""),
@@ -294,6 +401,11 @@ def prepare_confidence_inputs(
             or "rszd_unavailable" in missing_reasons
         ):
             status = "unscorable"
+        elif (
+            summary["reference_covered_contact_count"] > 0
+            and summary["zbond_available_contact_count"] == 0
+        ):
+            status = "unscorable"
         elif summary["reference_covered_contact_count"] == 0:
             status = "density_only"
         elif (
@@ -307,9 +419,9 @@ def prepare_confidence_inputs(
         output = {column: stats.get(column, "") for column in IDENTITY_COLUMNS}
         output.update(
             {
-                "rszd_magnitude": _format_significant(rszd),
-                "rszd_negative": _format_significant(negative),
-                "rszd_positive": _format_significant(positive),
+                "rszd_magnitude": _format_decimal(rszd),
+                "rszd_negative": _format_decimal(negative),
+                "rszd_positive": _format_decimal(positive),
                 **summary,
                 "suspect_multi_donor_residue_group_count": stats.get(
                     "suspect_multi_donor_residue_group_count", ""
@@ -420,9 +532,9 @@ def score_site(
     return {
         "density_severity": density_severity,
         "geometry_severity": geometry_severity,
-        "density_score_component": density_component,
-        "geometry_score_component": geometry_component,
-        "interaction_score_component": interaction_component,
+        "density_penalty_fraction": density_component,
+        "geometry_penalty_fraction": geometry_component,
+        "interaction_penalty_fraction": interaction_component,
         "confidence_score": min(100.0, max(0.0, confidence)),
     }
 
@@ -453,9 +565,11 @@ class ConfidenceReference:
         self.cohort_size = running
         self.metadata = dict(metadata)
         self.reference_id: str = self.metadata.get("reference_id", "")
+        self.cohort_id: str = self.metadata.get("cohort_id", "")
 
     def percentile(self, score: float) -> float:
         """Average-rank ECDF percentile against the frozen database cohort."""
+        score = canonical_confidence_score(score)
         index = bisect.bisect_left(self.values, score)
         if index < len(self.values) and self.values[index] == score:
             below = self.cumulative_below[index]
@@ -496,6 +610,10 @@ def _scoring_metadata() -> dict[str, Any]:
     a different reference id rather than a quietly wrong percentile.
     """
     return {
+        "confidence_method_version": CONFIDENCE_METHOD_VERSION,
+        "confidence_schema_version": CONFIDENCE_SCHEMA_VERSION,
+        "cohort_weighting": COHORT_WEIGHTING,
+        "score_decimal_places": SCORE_DECIMAL_PLACES,
         "density_anchors": [list(anchor) for anchor in DENSITY_ANCHORS],
         "geometry_anchors": [list(anchor) for anchor in GEOMETRY_ANCHORS],
         "weights": {
@@ -523,10 +641,21 @@ def _reference_identifier(score_counts: Mapping[float, int]) -> str:
     return "alchemy-confidence-" + digest.hexdigest()[:20]
 
 
+def _normalized_score_counts(score_counts: Mapping[float, int]) -> Counter[float]:
+    normalized: Counter[float] = Counter()
+    for score, count in score_counts.items():
+        normalized[canonical_confidence_score(score)] += count
+    return normalized
+
+
 def write_reference(
-    reference_dir: str, score_counts: Mapping[float, int], input_row_count: int
+    reference_dir: str,
+    score_counts: Mapping[float, int],
+    input_row_count: int,
+    cohort_provenance: Mapping[str, Any] | None = None,
 ) -> "ConfidenceReference":
     """Write a reusable database confidence distribution and its metadata."""
+    score_counts = _normalized_score_counts(score_counts)
     if not score_counts:
         raise ValueError("cannot build a confidence reference with no scores")
     os.makedirs(reference_dir, exist_ok=True)
@@ -538,7 +667,7 @@ def write_reference(
         writer = csv.writer(handle)
         writer.writerow(("confidence_score", "count"))
         for score in sorted(score_counts):
-            writer.writerow((repr(score), score_counts[score]))
+            writer.writerow((_format_decimal(score), score_counts[score]))
     os.replace(distribution_tmp, distribution_path)
 
     metadata = _scoring_metadata()
@@ -551,6 +680,15 @@ def write_reference(
             "distribution_file": REFERENCE_DISTRIBUTION_FILE,
         }
     )
+    provenance = dict(cohort_provenance or {})
+    if "cohort_id" not in provenance:
+        fallback_identity = hashlib.sha256(
+            f"{_reference_identifier(score_counts)}\n{input_row_count}\n".encode(
+                "ascii"
+            )
+        ).hexdigest()
+        provenance["cohort_id"] = "alchemy-cohort-" + fallback_identity[:20]
+    metadata.update(provenance)
     metadata_tmp = metadata_path + ".tmp"
     with open(metadata_tmp, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2, sort_keys=True)
@@ -570,6 +708,10 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         metadata = json.load(handle)
     expected = _scoring_metadata()
     for key in (
+        "confidence_method_version",
+        "confidence_schema_version",
+        "cohort_weighting",
+        "score_decimal_places",
         "density_anchors",
         "geometry_anchors",
         "weights",
@@ -590,6 +732,16 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
             "was measured against different reference distances; rebuild the "
             "reference with an uncapped database run."
         )
+    cohort_id = metadata.get("cohort_id")
+    if not isinstance(cohort_id, str) or not cohort_id.startswith("alchemy-cohort-"):
+        raise ValueError("confidence reference has no valid cohort identifier")
+    inputs_sha256 = metadata.get("confidence_inputs_sha256")
+    if inputs_sha256 is not None and (
+        not isinstance(inputs_sha256, str)
+        or len(inputs_sha256) != 64
+        or cohort_id != "alchemy-cohort-" + inputs_sha256[:20]
+    ):
+        raise ValueError("confidence reference cohort identifier does not match input")
     distribution_path = os.path.join(
         reference_dir,
         metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE),
@@ -618,6 +770,13 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
     reference = ConfidenceReference(values, counts, metadata)
     if reference.cohort_size != metadata.get("scorable_cohort_size"):
         raise ValueError("confidence reference cohort size does not match metadata")
+    if len(reference.values) != metadata.get("distinct_score_count"):
+        raise ValueError(
+            "confidence reference distinct score count does not match data"
+        )
+    input_row_count = metadata.get("input_row_count")
+    if not isinstance(input_row_count, int) or input_row_count < reference.cohort_size:
+        raise ValueError("confidence reference input row count is invalid")
     return reference
 
 
@@ -637,12 +796,24 @@ def _score_prepared_row(
     output = dict(row)
     if result is None:
         input_status = str(row.get("confidence_inputs_status", "")).strip()
+        missing_reasons = {
+            reason
+            for reason in str(row.get("confidence_inputs_missing_reasons", "")).split(
+                "|"
+            )
+            if reason
+        }
         output.update({column: "" for column in ANALYSIS_COLUMNS})
         output.update(
             {
                 "confidence_scoring_status": "unscorable",
                 "confidence_scoring_reason": (
-                    "confidence_inputs_unscorable"
+                    "zbond_unavailable_with_nonzero_coverage"
+                    if "zbond_unavailable_for_reference" in missing_reasons
+                    and coverage_valid
+                    and coverage > 0.0
+                    and not math.isfinite(zbond)
+                    else "confidence_inputs_unscorable"
                     if input_status == "unscorable"
                     else "confidence_inputs_status_invalid"
                     if not inputs_scorable
@@ -653,20 +824,18 @@ def _score_prepared_row(
                     else "zbond_unavailable_with_nonzero_coverage"
                 ),
                 "confidence_reference_id": reference.reference_id,
+                "confidence_cohort_id": reference.cohort_id,
                 "confidence_cohort_size": reference.cohort_size,
-                "confidence_context_warning": row.get("context_warning", ""),
-                "confidence_context_warning_reasons": row.get(
-                    "context_warning_reasons", ""
-                ),
             }
         )
         return output, None
 
-    output.update({key: _format_significant(value) for key, value in result.items()})
-    score = result["confidence_score"]
+    output.update({key: _format_decimal(value) for key, value in result.items()})
+    score = canonical_confidence_score(result["confidence_score"])
+    output["confidence_score"] = _format_decimal(score)
     output.update(
         {
-            "confidence_percentile": _format_significant(reference.percentile(score)),
+            "confidence_percentile": _format_decimal(reference.percentile(score)),
             "confidence_scoring_status": (
                 "density_only"
                 if coverage == 0.0
@@ -678,11 +847,8 @@ def _score_prepared_row(
                 else ("geometry_coverage_below_one" if coverage < 1.0 else "")
             ),
             "confidence_reference_id": reference.reference_id,
+            "confidence_cohort_id": reference.cohort_id,
             "confidence_cohort_size": reference.cohort_size,
-            "confidence_context_warning": row.get("context_warning", ""),
-            "confidence_context_warning_reasons": row.get(
-                "context_warning_reasons", ""
-            ),
         }
     )
     return output, score
@@ -703,6 +869,7 @@ def _validated_input_reader(
     _required_columns(
         input_columns,
         (
+            "metal_site_id",
             "rszd_magnitude",
             "max_abs_zbond",
             "geometry_coverage",
@@ -718,7 +885,10 @@ def _validated_input_reader(
 
 
 def finalize_database_confidence(
-    input_path: str, output_path: str, reference_dir: str
+    input_path: str,
+    output_path: str,
+    reference_dir: str,
+    manifest_path: str | None = None,
 ) -> tuple[int, int, int]:
     """Build the database reference and assign final values from compact rows."""
     # Metadata is the completion marker. Remove it before rebuilding so a
@@ -728,10 +898,17 @@ def finalize_database_confidence(
         os.unlink(metadata_path)
     score_counts: Counter[float] = Counter()
     input_row_count = 0
+    input_entry_ids: set[str] = set()
+    scorable_entry_ids: set[str] = set()
+    input_status_counts: Counter[str] = Counter()
     with open(input_path, newline="", encoding="utf-8") as handle:
         _, rows = _validated_input_reader(handle)
         for row in rows:
             input_row_count += 1
+            pdb_id = str(row.get("pdbID", "")).strip().lower()
+            if pdb_id:
+                input_entry_ids.add(pdb_id)
+            input_status_counts[str(row.get("confidence_inputs_status", ""))] += 1
             if not _confidence_inputs_are_scorable(row):
                 continue
             rszd = _finite_float(row.get("rszd_magnitude", ""))
@@ -743,8 +920,28 @@ def finalize_database_confidence(
                 else None
             )
             if result is not None:
-                score_counts[result["confidence_score"]] += 1
-    reference = write_reference(reference_dir, score_counts, input_row_count)
+                score_counts[
+                    canonical_confidence_score(result["confidence_score"])
+                ] += 1
+                if pdb_id:
+                    scorable_entry_ids.add(pdb_id)
+    inputs_sha256 = _file_sha256(input_path)
+    provenance: dict[str, Any] = {
+        "cohort_id": "alchemy-cohort-" + inputs_sha256[:20],
+        "confidence_inputs_file": os.path.basename(input_path),
+        "confidence_inputs_sha256": inputs_sha256,
+        "input_entry_count": len(input_entry_ids),
+        "scorable_entry_count": len(scorable_entry_ids),
+        "input_status_counts": dict(sorted(input_status_counts.items())),
+    }
+    if manifest_path is not None:
+        provenance.update(_manifest_provenance(manifest_path))
+    reference = write_reference(
+        reference_dir,
+        score_counts,
+        input_row_count,
+        cohort_provenance=provenance,
+    )
     total, scored = score_file_against_reference(input_path, output_path, reference)
     return total, scored, reference.cohort_size
 
@@ -770,7 +967,12 @@ def score_file_against_reference(
             writer.writeheader()
             for row in rows:
                 output, score = _score_prepared_row(row, reference)
-                writer.writerow(output)
+                writer.writerow(
+                    {
+                        column: _confidence_csv_value(column, value)
+                        for column, value in output.items()
+                    }
+                )
                 total += 1
                 scored += score is not None
         os.replace(output_tmp, output_path)
@@ -787,21 +989,30 @@ def validate_scored_reference(path: str, reference: "ConfidenceReference") -> No
     """Refuse resume output containing rows from another frozen reference."""
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        if "confidence_reference_id" not in (reader.fieldnames or ()):
-            raise ValueError("existing confidence output has no reference identifier")
+        required = {"confidence_reference_id", "confidence_cohort_id"}
+        if not required.issubset(reader.fieldnames or ()):
+            raise ValueError(
+                "existing confidence output has no reference or cohort identifier"
+            )
         identifiers: set[str] = set()
+        cohort_identifiers: set[str] = set()
         for row in reader:
             identifier = (row.get("confidence_reference_id") or "").strip()
-            if not identifier:
+            cohort_id = (row.get("confidence_cohort_id") or "").strip()
+            if not identifier or not cohort_id:
                 raise ValueError(
-                    "existing confidence output has a blank reference identifier "
+                    "existing confidence output has a blank reference or cohort "
+                    "identifier "
                     f"at CSV row {reader.line_num}"
                 )
             identifiers.add(identifier)
+            cohort_identifiers.add(cohort_id)
     if identifiers and identifiers != {reference.reference_id}:
         raise ValueError(
             "existing confidence output uses a different database reference"
         )
+    if cohort_identifiers and cohort_identifiers != {reference.cohort_id}:
+        raise ValueError("existing confidence output uses a different database cohort")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -824,6 +1035,10 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="output frozen database reference directory",
     )
+    finalize.add_argument(
+        "--manifest",
+        help="optional completed run manifest to record as cohort provenance",
+    )
 
     score = commands.add_parser(
         "score", help="score inputs against a frozen database reference"
@@ -843,7 +1058,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "finalize":
             total, scored, cohort = finalize_database_confidence(
-                args.input, args.output, args.reference_dir
+                args.input,
+                args.output,
+                args.reference_dir,
+                manifest_path=args.manifest,
             )
             print(
                 f"finalized {total} rows ({scored} scored; database cohort "

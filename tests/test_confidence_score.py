@@ -11,6 +11,7 @@ never from the code's current output.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -75,6 +76,7 @@ def _stats_row(
     row.update(
         {
             "pdbID": pdb_id,
+            "metal_site_id": f"{pdb_id}:m0:c1:r2:a0",
             "category": "metal",
             "density_observation_id": f"{pdb_id}/ZN",
             "density_scope": "site",
@@ -114,7 +116,9 @@ def _bond_row(
     row.update(
         {
             "pdbID": pdb_id,
-            "parent_type": "metal",
+            "metal_site_id": f"{pdb_id}:m0:c1:r2:a0",
+            "contact_id": f"{pdb_id}:m0:c1:r2:a0:c{neighbor}-{atom}",
+            "parent_type": "ion",
             "metal_resname": "ZN",
             "metal_chain": "B",
             "metal_resnum": "1",
@@ -145,6 +149,7 @@ def _input_row(**overrides: str) -> dict[str, str]:
     row.update(
         {
             "pdbID": "1abc",
+            "metal_site_id": "1abc:m0:c1:r2:a0",
             "category": "metal",
             "selected_metal_site_status": "selected",
             "metal_resname": "ZN",
@@ -311,9 +316,9 @@ def test_score_site_matches_the_readme_formula(
     assert result is not None
     assert result["density_severity"] == approx(sr, abs=1e-12)
     assert result["geometry_severity"] == approx(sg, abs=1e-12)
-    assert result["density_score_component"] == approx(0.50 * sr)
-    assert result["geometry_score_component"] == approx(0.35 * coverage * sg)
-    assert result["interaction_score_component"] == approx(
+    assert result["density_penalty_fraction"] == approx(0.50 * sr)
+    assert result["geometry_penalty_fraction"] == approx(0.35 * coverage * sg)
+    assert result["interaction_penalty_fraction"] == approx(
         0.15 * coverage * math.sqrt(sr * sg)
     )
     assert result["confidence_score"] == approx(
@@ -335,8 +340,8 @@ def test_score_site_with_zero_coverage_ignores_geometry_entirely() -> None:
     density_only = cs.score_site(6.0, math.nan, 0.0)
     assert density_only is not None
     assert density_only["geometry_severity"] == 0.0
-    assert density_only["geometry_score_component"] == 0.0
-    assert density_only["interaction_score_component"] == 0.0
+    assert density_only["geometry_penalty_fraction"] == 0.0
+    assert density_only["interaction_penalty_fraction"] == 0.0
     # 100*(1 - 0.50*0.65) = 67.5
     assert density_only["confidence_score"] == approx(67.5, abs=1e-9)
     wild_geometry = cs.score_site(6.0, 500.0, 0.0)
@@ -397,9 +402,9 @@ def test_score_site_stays_within_zero_and_one_hundred_without_clamping() -> None
                 assert result is not None
                 raw = 100.0 * (
                     1.0
-                    - result["density_score_component"]
-                    - result["geometry_score_component"]
-                    - result["interaction_score_component"]
+                    - result["density_penalty_fraction"]
+                    - result["geometry_penalty_fraction"]
+                    - result["interaction_penalty_fraction"]
                 )
                 assert -1e-9 <= raw <= 100.0 + 1e-9, (rszd, zbond, coverage)
                 assert result["confidence_score"] == approx(raw, abs=1e-9)
@@ -422,7 +427,7 @@ def test_score_site_never_passes_a_negative_argument_to_sqrt() -> None:
                 argument = result["density_severity"] * result["geometry_severity"]
                 assert 0.0 <= argument <= 1.0, (rszd, zbond, coverage, argument)
                 clamped = min(1.0, max(0.0, coverage))
-                assert result["interaction_score_component"] == approx(
+                assert result["interaction_penalty_fraction"] == approx(
                     0.15 * clamped * math.sqrt(argument), abs=1e-12
                 )
                 checked += 1
@@ -519,7 +524,7 @@ def test_finite_zbond_count_is_recorded_apart_from_reference_coverage(
     assert int(prepared["zbond_available_contact_count"]) == 0
     assert float(prepared["geometry_coverage"]) == 1.0
     assert prepared["max_abs_zbond"] == ""
-    assert prepared["confidence_inputs_status"] == "partial_geometry"
+    assert prepared["confidence_inputs_status"] == "unscorable"
     assert "zbond_unavailable_for_reference" in prepared[
         "confidence_inputs_missing_reasons"
     ].split("|")
@@ -551,6 +556,7 @@ def test_max_abs_zbond_takes_the_largest_magnitude_and_names_its_contact() -> No
     assert prepared["max_abs_zbond_neighbor_atom"] == "OD1"
     assert prepared["max_abs_zbond_neighbor_chain"] == "C"
     assert prepared["max_abs_zbond_neighbor_resnum"] == "42"
+    assert prepared["max_abs_zbond_contact_id"].endswith(":cASP-OD1")
     assert int(prepared["zbond_available_contact_count"]) == 2
 
 
@@ -634,8 +640,16 @@ def test_bond_rows_without_a_density_row_survive_as_unscorable_orphans() -> None
     assert "rszd_unavailable" in reasons
     assert "density_row_unavailable" in reasons
     assert int(orphan["assigned_contact_count"]) == 2
+    assert orphan["category"] == "metal"
+    assert orphan["metal_site_id"] == "1abc:m0:c1:r2:a0"
     assert orphan["metal_resname"] == "ZN"
     assert set(orphan) == set(cs.CONFIDENCE_INPUT_COLUMNS)
+
+
+def test_orphan_cofactor_uses_the_same_category_vocabulary_as_density_rows() -> None:
+    bond = _bond_row(parent_type="heme", metal_resname="HEM", metal_atom="FE")
+    (orphan,) = cs.prepare_confidence_inputs([], [bond])
+    assert orphan["category"] == "cofactor"
 
 
 def _result_stats_row(flat: Mapping[str, str]) -> MetalStatsRow:
@@ -734,6 +748,13 @@ def test_reference_round_trips_through_disk_unchanged(tmp_path: Path) -> None:
     assert loaded.reference_id == written.reference_id
     assert loaded.metadata["input_row_count"] == 11
     assert loaded.metadata["distinct_score_count"] == 3
+    assert loaded.metadata["confidence_method_version"] == (
+        cs.CONFIDENCE_METHOD_VERSION
+    )
+    assert loaded.metadata["confidence_schema_version"] == cs.CONFIDENCE_SCHEMA_VERSION
+    assert loaded.metadata["cohort_weighting"] == "per_metal_site"
+    assert loaded.metadata["score_decimal_places"] == cs.SCORE_DECIMAL_PLACES
+    assert loaded.cohort_id.startswith("alchemy-cohort-")
     for score in written.values:
         assert loaded.percentile(score) == written.percentile(score)
 
@@ -770,6 +791,7 @@ def test_reference_id_is_deterministic_and_tracks_the_distribution(
     # The row count of the run is provenance, not part of the identity.
     other_input_count = cs.write_reference(str(tmp_path / "f"), counts, 900)
     assert other_input_count.reference_id == first.reference_id
+    assert other_input_count.cohort_id != first.cohort_id
 
 
 def test_write_reference_refuses_an_empty_cohort(tmp_path: Path) -> None:
@@ -834,7 +856,7 @@ def test_load_reference_rejects_a_tampered_distribution(tmp_path: Path) -> None:
     cs.write_reference(str(reference_dir), Counter({10.0: 1, 20.0: 2}), 3)
     distribution = reference_dir / cs.REFERENCE_DISTRIBUTION_FILE
     text = distribution.read_text(encoding="utf-8")
-    distribution.write_text(text.replace("20.0,2", "20.0,5"), encoding="utf-8")
+    distribution.write_text(text.replace("20,2", "20,5"), encoding="utf-8")
     with pytest.raises(ValueError, match="identifier does not match"):
         cs.load_reference(str(reference_dir))
 
@@ -985,10 +1007,8 @@ def test_context_warning_is_carried_through_without_changing_the_score(
     )
     scored_plain, scored_warned = cs.score_against_reference([plain, warned], reference)
     assert scored_plain["confidence_score"] == scored_warned["confidence_score"]
-    assert scored_warned["confidence_context_warning"] == "True"
-    assert scored_warned["confidence_context_warning_reasons"] == (
-        "suspect_multi_donor_group"
-    )
+    assert scored_warned["context_warning"] == "True"
+    assert scored_warned["context_warning_reasons"] == "suspect_multi_donor_group"
 
 
 def test_score_file_writes_input_columns_plus_analysis_columns(
@@ -1006,6 +1026,7 @@ def test_score_file_writes_input_columns_plus_analysis_columns(
     assert header == list(cs.CONFIDENCE_INPUT_COLUMNS) + list(cs.ANALYSIS_COLUMNS)
     assert not os.path.exists(output_path + ".tmp")
     assert rows[0]["metal_resname"] == "ZN"
+    assert rows[0]["context_warning"] == "false"
 
 
 def test_score_file_refuses_already_scored_input_and_leaves_no_partial_output(
@@ -1025,7 +1046,8 @@ def test_score_file_refuses_already_scored_input_and_leaves_no_partial_output(
 
 
 @pytest.mark.parametrize(
-    "required_column", ["max_abs_zbond", "confidence_inputs_status"]
+    "required_column",
+    ["metal_site_id", "max_abs_zbond", "confidence_inputs_status"],
 )
 def test_score_file_requires_the_evidence_and_validity_columns(
     tmp_path: Path, required_column: str
@@ -1078,14 +1100,21 @@ def test_finalize_builds_the_cohort_from_scorable_rows_only(tmp_path: Path) -> N
 
     expected = Counter(
         {
-            round(_expected_confidence(0.25, 0.70, 1.0), 12): 2,
+            cs.canonical_confidence_score(_expected_confidence(0.25, 0.70, 1.0)): 2,
             100.0: 1,
         }
     )
     reference = cs.load_reference(reference_dir)
     assert reference.cohort_size == 3
     assert reference.metadata["input_row_count"] == 5
-    assert [round(value, 12) for value in reference.values] == sorted(expected)
+    inputs_sha256 = hashlib.sha256(Path(input_path).read_bytes()).hexdigest()
+    assert reference.metadata["confidence_inputs_sha256"] == inputs_sha256
+    assert reference.metadata["cohort_id"] == ("alchemy-cohort-" + inputs_sha256[:20])
+    assert reference.metadata["confidence_inputs_file"] == "in.csv"
+    assert reference.metadata["input_entry_count"] == 1
+    assert reference.metadata["scorable_entry_count"] == 1
+    assert reference.metadata["input_status_counts"] == {"complete": 5}
+    assert list(reference.values) == sorted(expected)
     assert reference.counts == tuple(expected[key] for key in sorted(expected))
 
     _, out_rows = _read_csv_rows(output_path)
@@ -1100,6 +1129,106 @@ def test_finalize_builds_the_cohort_from_scorable_rows_only(tmp_path: Path) -> N
     assert {row["confidence_reference_id"] for row in out_rows} == {
         reference.reference_id
     }
+    assert {row["confidence_cohort_id"] for row in out_rows} == {reference.cohort_id}
+
+
+def test_finalize_records_manifest_and_software_provenance(tmp_path: Path) -> None:
+    input_path = _write_input_csv(tmp_path / "inputs.csv", [_input_row()])
+    manifest = tmp_path / "manifest.csv"
+    fieldnames = [
+        "pdbID",
+        "status",
+        "no_metals",
+        "metal_site_limit_exceeded",
+        "n_metals",
+        "alchemy_version",
+        "alchemy_commit",
+        "gemmi_version",
+        "ccp4_version",
+    ]
+    with open(manifest, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    "pdbID": "1abc",
+                    "status": "ok",
+                    "no_metals": "false",
+                    "metal_site_limit_exceeded": "false",
+                    "n_metals": "1",
+                    "alchemy_version": "1.2.3",
+                    "alchemy_commit": "abc123",
+                    "gemmi_version": "0.7.3",
+                    "ccp4_version": "9.0",
+                },
+                {
+                    "pdbID": "2def",
+                    "status": "partial",
+                    "no_metals": "true",
+                    "metal_site_limit_exceeded": "false",
+                    "n_metals": "0",
+                    "alchemy_version": "1.2.3",
+                    "alchemy_commit": "abc123",
+                    "gemmi_version": "0.7.3",
+                    "ccp4_version": "9.0",
+                },
+            ]
+        )
+
+    cs.finalize_database_confidence(
+        input_path,
+        str(tmp_path / "scores.csv"),
+        str(tmp_path / "reference"),
+        manifest_path=str(manifest),
+    )
+    reference = cs.load_reference(str(tmp_path / "reference"))
+    metadata = reference.metadata
+    assert metadata["source_manifest_file"] == "manifest.csv"
+    assert (
+        metadata["source_manifest_sha256"]
+        == hashlib.sha256(manifest.read_bytes()).hexdigest()
+    )
+    assert metadata["source_entry_count"] == 2
+    assert metadata["manifest_status_counts"] == {"ok": 1, "partial": 1}
+    assert metadata["no_metals_entry_count"] == 1
+    assert metadata["metal_site_limit_exceeded_entry_count"] == 0
+    assert metadata["metal_bearing_entry_count"] == 1
+    assert metadata["software_versions"] == {
+        "alchemy_commit": ["abc123"],
+        "alchemy_version": ["1.2.3"],
+        "ccp4_version": ["9.0"],
+        "gemmi_version": ["0.7.3"],
+    }
+
+
+def test_published_score_precision_defines_reference_ties(tmp_path: Path) -> None:
+    rows = [
+        _input_row(
+            metal_atom_index="0",
+            rszd_magnitude="1.8",
+            max_abs_zbond="2.081",
+            geometry_coverage="1",
+        ),
+        _input_row(
+            metal_atom_index="1",
+            rszd_magnitude="0.7",
+            max_abs_zbond="2.0945",
+            geometry_coverage="0.857143",
+        ),
+    ]
+    input_path = _write_input_csv(tmp_path / "inputs.csv", rows)
+    output_path = str(tmp_path / "scores.csv")
+    cs.finalize_database_confidence(
+        input_path, output_path, str(tmp_path / "reference")
+    )
+    _, scored = _read_csv_rows(output_path)
+    assert {row["confidence_score"] for row in scored} == {"99.00775"}
+    assert {row["confidence_percentile"] for row in scored} == {"50"}
+
+    reference = cs.load_reference(str(tmp_path / "reference"))
+    assert reference.values == (99.00775,)
+    assert reference.counts == (2,)
 
 
 def test_finalize_excludes_explicitly_unscorable_numeric_rows(
@@ -1223,12 +1352,38 @@ def test_validate_scored_reference_rejects_another_database_snapshot(
         cs.validate_scored_reference(output_path, reference)
 
 
+def test_validate_scored_reference_rejects_another_exact_cohort(
+    tmp_path: Path,
+) -> None:
+    counts = Counter({10.0: 1, 20.0: 2})
+    first = cs.write_reference(
+        str(tmp_path / "ref_a"),
+        counts,
+        3,
+        cohort_provenance={"cohort_id": "alchemy-cohort-a"},
+    )
+    second = cs.write_reference(
+        str(tmp_path / "ref_b"),
+        counts,
+        3,
+        cohort_provenance={"cohort_id": "alchemy-cohort-b"},
+    )
+    assert first.reference_id == second.reference_id
+    assert first.cohort_id != second.cohort_id
+
+    input_path = _write_input_csv(tmp_path / "in.csv", [_input_row()])
+    output_path = str(tmp_path / "out.csv")
+    cs.score_file_against_reference(input_path, output_path, first)
+    with pytest.raises(ValueError, match="different database cohort"):
+        cs.validate_scored_reference(output_path, second)
+
+
 def test_validate_scored_reference_requires_the_identifier_column(
     tmp_path: Path,
 ) -> None:
     reference = _frozen_reference(tmp_path)
     path = _write_input_csv(tmp_path / "unscored.csv", [_input_row()])
-    with pytest.raises(ValueError, match="no reference identifier"):
+    with pytest.raises(ValueError, match="no reference or cohort identifier"):
         cs.validate_scored_reference(path, reference)
 
 
@@ -1257,6 +1412,7 @@ def test_validate_scored_reference_tolerates_an_empty_scored_file(
     # foreign row in the same columns is refused.
     foreign = {column: "" for column in columns}
     foreign["confidence_reference_id"] = "alchemy-confidence-someotherrun"
+    foreign["confidence_cohort_id"] = reference.cohort_id
     populated = _write_input_csv(tmp_path / "one_row.csv", [foreign], columns)
     with pytest.raises(ValueError, match="different database reference"):
         cs.validate_scored_reference(populated, reference)
@@ -1271,7 +1427,9 @@ def test_validate_scored_reference_rejects_a_blank_identifier_row(
     blank = {column: "" for column in columns}
     path = _write_input_csv(tmp_path / "blank_id.csv", [blank], columns)
 
-    with pytest.raises(ValueError, match=r"blank reference identifier at CSV row 2"):
+    with pytest.raises(
+        ValueError, match=r"blank reference or cohort identifier at CSV row 2"
+    ):
         cs.validate_scored_reference(path, reference)
 
 
@@ -1283,10 +1441,13 @@ def test_validate_scored_reference_rejects_blank_ids_mixed_with_valid_ids(
     columns = list(cs.CONFIDENCE_INPUT_COLUMNS) + list(cs.ANALYSIS_COLUMNS)
     valid = {column: "" for column in columns}
     valid["confidence_reference_id"] = reference.reference_id
+    valid["confidence_cohort_id"] = reference.cohort_id
     blank = {column: "" for column in columns}
     path = _write_input_csv(tmp_path / "mixed_ids.csv", [valid, blank], columns)
 
-    with pytest.raises(ValueError, match=r"blank reference identifier at CSV row 3"):
+    with pytest.raises(
+        ValueError, match=r"blank reference or cohort identifier at CSV row 3"
+    ):
         cs.validate_scored_reference(path, reference)
 
 

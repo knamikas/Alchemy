@@ -7,7 +7,6 @@ back to decide what still needs running.
 """
 
 import csv
-import math
 from typing import Any, TextIO
 from collections.abc import Mapping, Sequence
 
@@ -21,7 +20,7 @@ from coordination.schema import (
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from metal_identification import EDSTATS_COLUMNS
 from worker_contracts import EntryResult, blank_if_unmeasured
-from output_rows import MetalStatsRow
+from output_rows import MetalStatsRow, scientific_csv_value
 
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every
@@ -84,14 +83,6 @@ def _manifest_value(value: object) -> object:
     value = blank_if_unmeasured(value)
     if isinstance(value, bool):
         return "true" if value else "false"
-    return value
-
-
-def _scientific_csv_value(value: object) -> object:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, float) and not math.isfinite(value):
-        return ""
     return value
 
 
@@ -187,7 +178,7 @@ class OutputWriters:
         output_rows = [row.as_output_dict(STATS_COLUMNS) for row in rows]
         for row in output_rows:
             self._stats.writerow(
-                [_scientific_csv_value(row[column]) for column in STATS_COLUMNS]
+                [scientific_csv_value(row[column]) for column in STATS_COLUMNS]
             )
             self.n_rows += 1
         self._stats_fh.flush()
@@ -198,7 +189,7 @@ class OutputWriters:
         for bond in bond_rows:
             values = bond.as_dict()
             self._bonds.writerow(
-                [_scientific_csv_value(values[column]) for column in BOND_COLUMNS]
+                [scientific_csv_value(values[column]) for column in BOND_COLUMNS]
             )
             self.n_bonds += 1
         self._bonds_fh.flush()
@@ -213,7 +204,7 @@ class OutputWriters:
         for candidate in candidate_rows:
             values = candidate.as_dict()
             self._candidates.writerow(
-                [_scientific_csv_value(values[column]) for column in CANDIDATE_COLUMNS]
+                [scientific_csv_value(values[column]) for column in CANDIDATE_COLUMNS]
             )
             self.n_candidates += 1
         self._candidates_fh.flush()
@@ -239,9 +230,21 @@ class OutputWriters:
             if self._confidence_inputs is not None
             else None
         )
-        self._confidence.writerows(rows)
+        self._confidence.writerows(
+            {
+                column: scientific_csv_value(row[column])
+                for column in self._confidence_columns
+            }
+            for row in rows
+        )
         if self._confidence_inputs is not None and input_rows is not None:
-            self._confidence_inputs.writerows(input_rows)
+            self._confidence_inputs.writerows(
+                {
+                    column: scientific_csv_value(row[column])
+                    for column in CONFIDENCE_INPUT_COLUMNS
+                }
+                for row in input_rows
+            )
         self.n_confidence += len(rows)
         self._confidence_fh.flush()
         if self._confidence_inputs_fh is not None:

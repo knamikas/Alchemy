@@ -35,7 +35,13 @@ DOCS_DIR = os.path.join(REPO_ROOT, "docs")
 # Every prose file a reader is sent to.
 DOC_PATHS = [README_PATH, os.path.join(REPO_ROOT, "tests", "README.md")] + [
     os.path.join(DOCS_DIR, name)
-    for name in ("usage.md", "method.md", "operations.md", "maintenance.md")
+    for name in (
+        "usage.md",
+        "method.md",
+        "output-schema.md",
+        "operations.md",
+        "maintenance.md",
+    )
 ]
 PYPROJECT_PATH = os.path.join(REPO_ROOT, "pyproject.toml")
 
@@ -498,7 +504,12 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
     from enum import StrEnum
 
     import codes as codes_module
-    from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
+    from confidence_score import (
+        ANALYSIS_COLUMNS,
+        CONFIDENCE_INPUT_COLUMNS,
+        CONFIDENCE_INPUT_STATUSES,
+        REFERENCE_METADATA_FIELDS,
+    )
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
 
@@ -512,6 +523,7 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         ANALYSIS_COLUMNS,
     ):
         known |= set(columns)
+    known |= CONFIDENCE_INPUT_STATUSES | REFERENCE_METADATA_FIELDS
     for name in dir(codes_module):
         candidate = getattr(codes_module, name)
         if (

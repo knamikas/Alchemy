@@ -836,7 +836,10 @@ def _finalize_confidence_reference(layout: OutputLayout) -> tuple[int, int, int]
     """Score the streamed inputs and freeze the database reference."""
     try:
         return finalize_database_confidence(
-            layout.confidence_inputs, layout.confidence_scores, layout.reference_dir
+            layout.confidence_inputs,
+            layout.confidence_scores,
+            layout.reference_dir,
+            manifest_path=layout.manifest,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise DriverError(f"Confidence finalization failed: {exc}") from None

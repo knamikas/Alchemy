@@ -180,3 +180,91 @@ declaration. Candidate discovery does not itself assign a bond.
 
 `coordination_status` describes the candidate's evidence before all final bond
 filters. It is deliberately not an alias for `assigned_as_bond`.
+
+## `confidence_inputs_all.csv`
+
+Grain: one compact evidence row per manifest-counted selected metal site during
+an uncapped database run. The file is retained so the score and frozen
+reference can be reproduced without rerunning CCP4. Later targeted runs do not
+create a database cohort; when a reference is installed, their prepared inputs
+are embedded directly in `confidence_scores_all.csv`.
+
+| Columns | Meaning |
+| --- | --- |
+| `pdbID`, `metal_site_id` | Entry and supported join key to `metal_sites_all.csv` and `metal_bonds_all.csv`. |
+| `category` | `metal` or `cofactor`; blank only when an unresolved site cannot be classified. |
+| `density_observation_id`, `density_scope`, `density_shared_site_count`, `density_is_shared` | Density-observation join key, measurement scope, multiplicity, and shared-observation flag. |
+| `coordinate_mapping_status`, `selected_metal_site_status` | Whether density and coordinate evidence were resolved for the selected site. |
+| `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location. |
+| `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited metal-site identity. |
+| `rszd_magnitude`, `rszd_negative`, `rszd_positive` | Absolute metal-site RSZD and the signed negative/positive difference-density statistics used for audit. |
+| `assigned_contact_count`, `reference_covered_contact_count`, `zbond_available_contact_count` | Assigned contacts, contacts covered by the literature reference, and contacts with a finite Zbond. |
+| `geometry_coverage` | Literature-reference-covered contacts divided by all assigned contacts; the score's `QG`. |
+| `max_abs_zbond`, `max_abs_zbond_contact_id` | Largest usable absolute Zbond and its supported join key to `metal_bonds_all.csv`. |
+| `max_abs_zbond_neighbor_resname`, `max_abs_zbond_neighbor_chain`, `max_abs_zbond_neighbor_resnum`, `max_abs_zbond_neighbor_atom` | Human-readable identity of the contact supplying `max_abs_zbond`. |
+| `declared_contact_count`, `inferred_contact_count`, `multi_donor_contact_count`, `suspect_multi_donor_residue_group_count` | Coordination provenance and chelation context. |
+| `context_warning`, `context_warning_reasons` | Interpretive warning carried into the score output without changing the score. |
+| `confidence_inputs_status`, `confidence_inputs_missing_reasons` | Evidence completeness and pipe-separated reasons for missing or partial evidence. |
+
+`confidence_inputs_status` is `complete`, `partial_geometry`, `density_only`, or
+`unscorable`. A site with reference-covered contacts but no finite Zbond is
+`unscorable`; it is not silently treated as density-only.
+
+## `confidence_scores_all.csv`
+
+Grain: one row per confidence input. All `confidence_inputs_all.csv` columns are
+preserved as the leading block, followed by these analysis columns:
+
+| Columns | Meaning |
+| --- | --- |
+| `density_severity`, `geometry_severity` | Piecewise-linear `SR` and `SG` values on the unit interval. |
+| `density_penalty_fraction`, `geometry_penalty_fraction`, `interaction_penalty_fraction` | The three unitless terms subtracted inside the confidence formula. They sum to at most one and are fractions, not percentage points. |
+| `confidence_score` | Fixed-formula confidence from 0 to 100; higher is better. |
+| `confidence_percentile` | Average-rank empirical percentile within the frozen scorable cohort; higher is better. Large ties can keep the best tied score below the 100th percentile. |
+| `confidence_scoring_status`, `confidence_scoring_reason` | Whether the score is complete, partial-geometry, density-only, or unscorable and why. |
+| `confidence_reference_id` | Identity of the compatible scoring policy plus canonical score distribution. |
+| `confidence_cohort_id` | Identity of the exact confidence-input artifact that produced the reference cohort. |
+| `confidence_cohort_size` | Number of scorable metal sites in the frozen distribution. |
+
+Scores are canonicalized to six decimal places before the reference distribution
+is counted. Consequently, identical published scores always receive identical
+percentiles and floating-point residue cannot create artificial rank differences.
+
+The cohort is weighted per scorable metal site, not per structure. This is the
+appropriate interpretation for a site-level percentile, but it must not be
+mistaken for a structure-weighted statistic.
+
+## `confidence_reference/`
+
+The frozen reference is portable only as the pair of files below. The metadata
+is its completion marker; Alchemy removes it before rebuilding so a failed
+finalization cannot leave an older reference looking current.
+
+### `score_distribution.csv`
+
+| Columns | Meaning |
+| --- | --- |
+| `confidence_score` | Canonical six-decimal score value. |
+| `count` | Scorable cohort sites with exactly that published score. |
+
+### `metadata.json`
+
+The scoring contract is recorded by `confidence_method_version`,
+`confidence_schema_version`, `score_decimal_places`, `density_anchors`,
+`geometry_anchors`, `weights`, `coverage_policy`, `input_status_policy`,
+`percentile_method`, `cohort_weighting`, `maximum_entry_metal_sites`, and
+`reference_data_id`. Alchemy refuses to load a reference whose contract differs
+from the running code.
+
+The distribution is described by `reference_id`, `distribution_file`,
+`distinct_score_count`, and `scorable_cohort_size`. The source cohort is
+described separately by `cohort_id`, `confidence_inputs_file`,
+`confidence_inputs_sha256`, `input_row_count`, `input_entry_count`,
+`scorable_entry_count`, and `input_status_counts`.
+
+When database finalization receives the run manifest, metadata additionally
+contains `source_manifest_file`, `source_manifest_sha256`, `source_entry_count`,
+`manifest_status_counts`, `no_metals_entry_count`,
+`metal_site_limit_exceeded_entry_count`, `metal_bearing_entry_count`, and
+`software_versions`. Hashes identify exact artifacts; the reference ID and
+cohort ID deliberately answer different questions.

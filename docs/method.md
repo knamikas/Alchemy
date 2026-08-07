@@ -274,8 +274,9 @@ to `confidence_inputs_all.csv`. It never rereads the complete statistics and
 bond tables to reconstruct those inputs.
 
 The compact row records the magnitude of metal-site `ZDm` as `rszd_magnitude`,
-the largest absolute Zbond among assigned contacts, the responsible contact,
-and geometry coverage. Geometry coverage is the number of assigned contacts
+the largest absolute Zbond among assigned contacts, the responsible
+`max_abs_zbond_contact_id`, and geometry coverage. `metal_site_id` joins the
+row directly to the site, bond, and candidate tables. Geometry coverage is the number of assigned contacts
 with an exact reference distance divided by the total number of assigned
 contacts, matching the manuscript definition of `QG`. The finite-Zbond count is
 recorded separately so missing DPI cannot be mistaken for usable geometry
@@ -311,8 +312,13 @@ confidence = 100 * (1 - 0.50*SR - 0.35*QG*SG
 Alchemy also reports an average-rank percentile relative to the scorable full
 database cohort, its size, and a policy identifier. The fixed-formula score and
 database percentile are visibly distinct. A deterministic
-`confidence_reference_id` identifies the exact frozen policy and score
-distribution and prevents resumed output from mixing database snapshots.
+`confidence_reference_id` identifies the compatible scoring method and
+canonical score distribution. A separate `confidence_cohort_id` identifies the
+exact compact-input artifact, and resume validation prevents either identity
+from being mixed. Scores are canonicalized to six decimal places before
+ranking, so two identically published scores cannot receive different
+percentiles. Reference metadata records per-metal-site weighting, input and
+manifest hashes, cohort counts, input statuses, and software provenance.
 `context_warning` is carried into the result as an interpretive annotation and
 does not subtract points.
 
@@ -338,7 +344,9 @@ disabled.
 `src/confidence_score.py` retains `finalize` and `score` subcommands for recovery
 and reproducibility using already compact confidence-input CSVs; neither command
 reconstructs inputs by rescanning `metal_sites_all.csv` or
-`metal_bonds_all.csv`.
+`metal_bonds_all.csv`. Recovery finalization should pass `--manifest` when the
+completed manifest is available so the rebuilt reference retains entry counts,
+artifact hashes, and software provenance.
 
 The DPI is calculated from PDB-REDO reflection and R-free metadata, the
 asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen and

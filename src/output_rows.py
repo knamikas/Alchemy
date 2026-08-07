@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import Any, ClassVar, override
 from collections.abc import Iterator, Mapping, Sequence
@@ -100,3 +101,11 @@ def csv_value(value: object) -> CsvValue:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError(f"output value is not a CSV scalar: {type(value).__name__}")
+
+
+def scientific_csv_value(value: object) -> object:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
+    return value
