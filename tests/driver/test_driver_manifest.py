@@ -522,7 +522,12 @@ def _write_manifest(
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
         for row in rows:
-            writer.writerow({column: row.get(column, "") for column in columns})
+            values = {
+                "no_metals": "false",
+                "metal_site_limit_exceeded": "false",
+                **row,
+            }
+            writer.writerow({column: values.get(column, "") for column in columns})
     return str(path)
 
 
@@ -1301,6 +1306,25 @@ class TestInitialResult:
         result = worker.initial_result("109m", CFG, manual_inputs)
         assert result.refinement_state == expected
 
+    def test_mirror_source_paths_are_portable_but_manual_paths_are_preserved(
+        self,
+    ) -> None:
+        mirror_path = "/srv/pdb-redo/09/109m/109m_final.cif"
+        manual_path = "/research/inputs/custom.cif"
+
+        assert (
+            worker.source_coordinate_provenance_path(CFG, "109m", mirror_path)
+            == "09/109m/109m_final.cif"
+        )
+        assert (
+            worker.source_coordinate_provenance_path(
+                _cfg(manual_inputs={"cif_file": manual_path}),
+                "109m",
+                manual_path,
+            )
+            == manual_path
+        )
+
     def test_row_lists_are_independent_between_entries(self) -> None:
         first = worker.initial_result("109m", CFG, None)
         second = worker.initial_result("1cll", CFG, None)
@@ -1354,11 +1378,27 @@ class TestManifestRow:
         )
         row = manifest_row(result, False, True, {}, {})
         assert row["n_metals"] == 3
-        assert row["runtime_s"] == 12.5
+        assert row["runtime_s"] == "12.500"
         assert row["n_bonds"] == 7
         assert row["n_candidates"] == 11
         assert row["reason_codes"] == "a|b"
         assert row["warning_codes"] == "w"
+
+    def test_booleans_and_status_detail_have_stable_csv_text(self) -> None:
+        result = _result(
+            retryable=False,
+            no_metals=True,
+            metal_site_limit_exceeded=False,
+            error="analysis was incomplete",
+        )
+
+        row = manifest_row(result, False, True, {}, {})
+
+        assert row["retryable"] == "false"
+        assert row["no_metals"] == "true"
+        assert row["metal_site_limit_exceeded"] == "false"
+        assert row["status_detail"] == "analysis was incomplete"
+        assert "error" not in row
 
     def test_empty_code_lists_render_blank(self) -> None:
         """No codes must not become a spurious separator or literal '[]'."""
@@ -2586,6 +2626,7 @@ class TestRunLog:
                 timings={"density_total_s": 2.5, "cleanup_s": 0.125},
                 reason_codes=["missing_first_sphere_reference"],
                 warning_codes=["multi_model_structure"],
+                error="first-sphere reference unavailable for ZN-N",
                 density_map_scope_used="model-envelope",
                 density_full_map_bytes=2048,
                 density_edstats_map_bytes=1024,
@@ -2615,6 +2656,10 @@ class TestRunLog:
         assert rows[1]["memory_estimate_bytes"] == str(3 * 1024**3)
         assert rows[1]["reason_codes"] == "missing_first_sphere_reference"
         assert rows[1]["warning_codes"] == "multi_model_structure"
+        assert rows[1]["status_detail"] == (
+            "first-sphere reference unavailable for ZN-N"
+        )
+        assert "error" not in rows[1]
 
         text = Path(log_path).read_text(encoding="utf-8")
         assert f"Entry diagnostics: {diagnostics_path}" in text

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+from dataclasses import dataclass
 from http.client import HTTPException
 from typing import Any, Protocol, cast
 from urllib.error import HTTPError
@@ -28,6 +29,13 @@ from run_logging import logger_for
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 
 logger = logger_for(__name__)
+
+
+@dataclass(frozen=True)
+class PdbRedoMetadata:
+    is_twin: bool = False
+    version: str = ""
+    date: str = ""
 
 
 class _MtzColumnArray(Protocol):
@@ -184,10 +192,10 @@ def read_resolution(
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
-def read_pdb_redo_is_twin(
+def read_pdb_redo_metadata(
     data_json_path: str | None, *, required: bool = False
-) -> bool:
-    """Return only an explicit boolean PDB-REDO ``properties.ISTWIN`` value.
+) -> PdbRedoMetadata:
+    """Read the PDB-REDO fields that affect analysis or source provenance.
 
     Automatically discovered missing or malformed metadata, and string-valued
     flags, are false: the twin coefficient fallback must not be inferred from
@@ -197,14 +205,31 @@ def read_pdb_redo_is_twin(
     if not data_json_path:
         if required:
             raise ValueError("an explicit data.json path is required")
-        return False
+        return PdbRedoMetadata()
     try:
-        value = read_data_json_properties(data_json_path).get("ISTWIN")
+        properties = read_data_json_properties(data_json_path)
     except ValueError:
         if required:
             raise
-        return False
-    return value is True
+        return PdbRedoMetadata()
+
+    def text(name: str) -> str:
+        value = properties.get(name)
+        if value is None or isinstance(value, (bool, dict, list)):
+            return ""
+        return str(value).strip()
+
+    return PdbRedoMetadata(
+        is_twin=properties.get("ISTWIN") is True,
+        version=text("VERSION"),
+        date=text("TIME"),
+    )
+
+
+def read_pdb_redo_is_twin(
+    data_json_path: str | None, *, required: bool = False
+) -> bool:
+    return read_pdb_redo_metadata(data_json_path, required=required).is_twin
 
 
 def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:

@@ -102,6 +102,8 @@ def _append_terminal_manifest(
     n_bonds: str | int = 0,
     n_candidates: str | int = 0,
     reason_codes: str = "",
+    no_metals: str = "false",
+    metal_site_limit_exceeded: str | None = None,
 ) -> None:
     _append_csv_row(
         outputs["manifest_path"],
@@ -113,6 +115,14 @@ def _append_terminal_manifest(
         n_bonds=n_bonds,
         n_candidates=n_candidates,
         reason_codes=reason_codes,
+        no_metals=no_metals,
+        metal_site_limit_exceeded=(
+            metal_site_limit_exceeded
+            if metal_site_limit_exceeded is not None
+            else "true"
+            if reason_codes == "metal_site_limit_exceeded"
+            else "false"
+        ),
     )
 
 
@@ -174,6 +184,34 @@ def test_a_policy_excluded_entry_rejects_stray_site_rows(
     _append_selected_stats(resume_outputs)
 
     with pytest.raises(ValueError, match="policy-excluded rows"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+@pytest.mark.parametrize(
+    ("reason_codes", "flag"),
+    [("metal_site_limit_exceeded", "false"), ("", "true")],
+)
+def test_policy_exclusion_flag_and_reason_must_agree(
+    resume_outputs: _ResumeOutputs, reason_codes: str, flag: str
+) -> None:
+    _append_terminal_manifest(
+        resume_outputs,
+        n_metals=101,
+        reason_codes=reason_codes,
+        metal_site_limit_exceeded=flag,
+    )
+
+    with pytest.raises(ValueError, match="inconsistent metal-site exclusion"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
+def test_metal_free_flag_requires_a_successful_zero_site_result(
+    resume_outputs: _ResumeOutputs,
+) -> None:
+    _append_terminal_manifest(resume_outputs, n_metals=1, no_metals="true")
+    _append_selected_stats(resume_outputs)
+
+    with pytest.raises(ValueError, match="invalid no_metals fields"):
         resume.validate_resume_schemas(**resume_outputs)
 
 

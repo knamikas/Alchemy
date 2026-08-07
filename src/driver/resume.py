@@ -21,7 +21,7 @@ from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
-from worker_contracts import EntryResult
+from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult
 
 
 # A row read back is not ``dict[str, str]``: DictReader fills a short row's
@@ -196,6 +196,18 @@ def _manifest_count(
     return count
 
 
+def _manifest_bool(row: _CsvRow, column: str, pdb_id: str) -> bool:
+    value = _csv_text(row, column).strip().lower()
+    if value in ("true", "1", "yes"):
+        return True
+    if value in ("false", "0", "no"):
+        return False
+    raise ValueError(
+        f"Existing manifest has invalid {column}={value!r} for {pdb_id}; "
+        "resume requires a boolean value."
+    )
+
+
 def _rows_for_ids(path: str, terminal_ids: Set[str]) -> Iterator[tuple[str, _CsvRow]]:
     """Yield complete output rows owned by protected manifest entries.
 
@@ -227,10 +239,19 @@ def _validate_terminal_artifacts(
 ) -> None:
     terminal_ids = set(terminal_rows)
 
-    def metal_site_limit_exceeded(row: _CsvRow) -> bool:
-        return ReasonCode.METAL_SITE_LIMIT_EXCEEDED in {
+    def metal_site_limit_exceeded(row: _CsvRow, pdb_id: str) -> bool:
+        reason_present = ReasonCode.METAL_SITE_LIMIT_EXCEEDED in {
             code for code in _csv_text(row, "reason_codes").split("|") if code
         }
+        flag = _manifest_bool(row, "metal_site_limit_exceeded", pdb_id)
+        if flag != reason_present:
+            raise ValueError(
+                f"Existing manifest has inconsistent metal-site exclusion "
+                f"fields for {pdb_id}; "
+                f"metal_site_limit_exceeded={str(flag).lower()} "
+                f"and reason_codes={_csv_text(row, 'reason_codes')!r}."
+            )
+        return flag
 
     selected_stats: Counter[str] = Counter()
     selected_sites: set[tuple[str, tuple[str, ...]]] = set()
@@ -258,7 +279,21 @@ def _validate_terminal_artifacts(
         expected = _manifest_count(row, "n_metals", pdb_id)
         actual = selected_stats[pdb_id]
         status = _csv_text(row, "status").strip().lower()
-        excluded = metal_site_limit_exceeded(row)
+        excluded = metal_site_limit_exceeded(row, pdb_id)
+        no_metals = _manifest_bool(row, "no_metals", pdb_id)
+        if excluded and (
+            no_metals or expected <= MAX_ANALYZED_METAL_SITES or status != "ok"
+        ):
+            raise ValueError(
+                f"Existing manifest has invalid policy-exclusion fields for "
+                f"{pdb_id}; excluded entries must be ok, not metal-free, and "
+                f"have more than {MAX_ANALYZED_METAL_SITES} detected sites."
+            )
+        if no_metals and (expected != 0 or status != "ok"):
+            raise ValueError(
+                f"Existing manifest has invalid no_metals fields for {pdb_id}; "
+                "metal-free entries must be ok with n_metals=0."
+            )
         if excluded:
             stats_match = actual == 0
             relation = "exactly 0 policy-excluded rows"
@@ -295,7 +330,7 @@ def _validate_terminal_artifacts(
                 pdb_id,
                 blank_is_zero=manifest_column != "n_metals",
             )
-            if manifest_column == "n_metals" and metal_site_limit_exceeded(row):
+            if manifest_column == "n_metals" and metal_site_limit_exceeded(row, pdb_id):
                 expected = 0
             actual = counts[pdb_id]
             if actual != expected:

@@ -68,7 +68,7 @@ ENTRY_DIAGNOSTIC_TRAILING_COLUMNS = (
     "memory_estimate_bytes",
     "reason_codes",
     "warning_codes",
-    "error",
+    "status_detail",
 )
 
 PROVENANCE_DETAIL_KEYS = (
@@ -283,7 +283,7 @@ class RunLog:
                 ),
                 "reason_codes": "|".join(entry["reason_codes"]),
                 "warning_codes": "|".join(entry["warning_codes"]),
-                "error": self._clean(entry["error"]),
+                "status_detail": self._clean(entry["error"]),
             }
             row.update(
                 {
@@ -545,7 +545,7 @@ class RunLog:
             lines.append("Other partial, skipped, failed, or retryable entries: none")
         else:
             lines.append("Other partial, skipped, failed, or retryable entries:")
-            lines.append("pdbID | status | retryable | reasons | error")
+            lines.append("pdbID | status | retryable | reasons | status_detail")
             for entry in sorted(
                 notable_entries, key=lambda item: item["pdbID"].lower()
             ):
@@ -576,7 +576,7 @@ class RunLog:
         lines.extend(["", "Entry diagnostics", "-----------------"])
         lines.append(
             "Complete per-entry outcomes, timings, map sizes, memory estimates, "
-            f"reasons, warnings, and errors: {diagnostics_path}"
+            f"reasons, warnings, and status details: {diagnostics_path}"
         )
         lines.append("")
         return "\n".join(lines)

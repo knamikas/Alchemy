@@ -30,24 +30,27 @@ MANIFEST_COLUMNS = [
     "pdbID",
     "status",
     "retryable",
+    "no_metals",
+    "metal_site_limit_exceeded",
     "n_metals",
     "n_bonds",
     "n_candidates",
     "runtime_s",
     "reason_codes",
     "warning_codes",
-    "error",
+    "status_detail",
     "alchemy_version",
     "alchemy_commit",
     "gemmi_version",
     "ccp4_version",
     "reference_data_id",
     "refinement_state",
+    "pdb_redo_version",
+    "pdb_redo_date",
     "source_coordinate_format",
     "analysis_coordinate_format",
     "coordinate_conversion_performed",
     "source_coordinate_path",
-    "analysis_coordinate_path",
     "model_policy",
     "input_model_count",
     "model_analyzed",
@@ -67,9 +70,20 @@ STATS_COLUMNS = (
 )
 
 
-# ``pdbID`` is the one manifest column whose name differs from its
-# ``EntryResult`` field.
-MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {"pdbID": "pdb_id"}
+# ``status_detail`` avoids classifying expected partial-result explanations as
+# errors in the public CSV while preserving the worker's internal exception
+# field used by logging and recovery paths.
+MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {
+    "pdbID": "pdb_id",
+    "status_detail": "error",
+}
+
+
+def _manifest_value(value: object) -> object:
+    value = blank_if_unmeasured(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value
 
 
 def manifest_row(
@@ -81,7 +95,7 @@ def manifest_row(
 ) -> dict[str, Any]:
     """Project one worker result onto the manifest schema."""
     row = {
-        column: blank_if_unmeasured(getattr(result, field))
+        column: _manifest_value(getattr(result, field))
         for column, field in MANIFEST_FIELDS.items()
     }
     n_bonds = blank_if_unmeasured(result.n_bonds)
@@ -94,6 +108,7 @@ def manifest_row(
     row.update(
         n_bonds=n_bonds,
         n_candidates=n_candidates,
+        runtime_s=f"{result.runtime_s:.3f}",
         reason_codes="|".join(result.reason_codes),
         warning_codes="|".join(result.warning_codes),
     )

@@ -98,9 +98,10 @@ Running batches, resuming them, and reading what a run wrote. See
   `n_metals=0` without
   running `mtzfix`, either FFT, or `edstats`. These stages cannot produce
   metal-site output for such entries. Progress and completion summaries report
-  these successful negative results as `no_metals`; valid zero-occupancy metal
-  records remain visible through the `zero_occupancy_atoms` warning but are not
-  counted as sites. `no_metals` is an informational subset of `ok`, whereas
+  these successful negative results as `no_metals`; the manifest records them
+  explicitly as `no_metals=true`. Valid zero-occupancy metal records remain
+  visible through the `zero_occupancy_atoms` warning but are not counted as
+  sites. `no_metals` is an informational subset of `ok`, whereas
   `skip` remains reserved for entries that could not be processed
   operationally. If any atom has a missing or invalid deposited
   element, metal absence cannot be established under the no-inference policy;
@@ -108,9 +109,10 @@ Running batches, resuming them, and reading what a run wrote. See
   `metal_presence_indeterminate` and is not counted as `no_metals`.
 - Structures with more than 100 selected canonical metal sites finish
   immediately after the same coordinate inspection, before `mtzfix`, either
-  FFT, or `edstats`. Their manifest rows retain the detected `n_metals`, carry
-  `metal_site_limit_exceeded`, and contribute no site, bond, candidate, or
-  confidence rows. This is a successful policy exclusion: metal-dense
+  FFT, or `edstats`. Their manifest rows retain the detected `n_metals`, set
+  `metal_site_limit_exceeded=true`, carry the matching reason code, and
+  contribute no site, bond, candidate, or confidence rows. This is a successful
+  policy exclusion: metal-dense
   assemblies contain highly correlated sites that would otherwise dominate the
   standard database cohort and its runtime. Progress and completion summaries
   report the excluded-entry count separately.
@@ -160,10 +162,13 @@ Running batches, resuming them, and reading what a run wrote. See
   resumed run may have been given a repaired input file or a re-downloaded
   mirror entry, and Alchemy does not checksum its inputs to tell. Skipping an
   entry the operator had just fixed would be worse than repeating one.
-- The manifest's `error` column holds one truncated line naming the exception.
-  The traceback is written to the debug log, so `--log-file`, or `-v` on the
-  console, is what locates an unanticipated failure without rerunning the entry
-  by hand under `--keep-intermediates`.
+- The manifest's `status_detail` column gives a bounded human-readable
+  explanation of the machine-readable reason codes. It covers expected partial
+  limitations as well as failures; `warning_codes` remains reserved for
+  observations that did not determine the entry's status. For an unanticipated
+  exception, the full traceback is written to the debug log, so `--log-file`,
+  or `-v` on the console, is what locates it without rerunning the entry by hand
+  under `--keep-intermediates`.
 - The candidate-output migration expands all four CSV schemas. `--resume`
   refuses to mix new rows with incompatible pre-migration headers; use a new `--output-dir`
   for the first run. All four headers are compared in full,

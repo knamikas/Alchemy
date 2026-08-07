@@ -319,7 +319,7 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(
     )
     assert set(row) == set(MANIFEST_COLUMNS)
     assert row["status"] == "error"
-    assert row["retryable"] is True
+    assert row["retryable"] == "true"
     assert row["reason_codes"] == "worker_process_died"
     assert row["n_metals"] == 0
 
@@ -645,9 +645,9 @@ def test_driver_recovers_from_a_sigkilled_worker(
     by_id = {row["pdbID"]: row for row in rows}
     lost = by_id[victim]
     assert lost["status"] == "error"
-    assert lost["retryable"] == "True"
+    assert lost["retryable"] == "true"
     assert lost["reason_codes"] == "worker_process_died"
-    assert victim in lost["error"]
+    assert victim in lost["status_detail"]
     # Blank, not "0": the bond stage never ran for this entry.
     assert lost["n_bonds"] == ""
     assert lost["n_candidates"] == ""
@@ -845,7 +845,7 @@ def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
 
     lost = batch["by_id"]["aaaa"]
     assert lost["status"] == "error"
-    assert lost["retryable"] == "True"
+    assert lost["retryable"] == "true"
     assert lost["reason_codes"] == "worker_process_died", (
         "the real result overwrote the synthesized lost-entry row"
     )

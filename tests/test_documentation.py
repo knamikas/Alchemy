@@ -484,9 +484,7 @@ def test_every_cli_flag_appears_in_the_prose() -> None:
 # output field or a status code: a formula symbol, an mmCIF item, a function,
 # and the informational subset of ``ok``. Listed so the check below can be
 # strict about everything else.
-_NON_FIELD_TERMS = frozenset(
-    ("sigma_lit", "label_seq_id", "extract_metal_statistics", "no_metals")
-)
+_NON_FIELD_TERMS = frozenset(("sigma_lit", "label_seq_id", "extract_metal_statistics"))
 
 
 def test_every_field_name_in_the_prose_still_exists() -> None:

@@ -254,8 +254,8 @@ def _decoded_stderr(error_file: IO[bytes]) -> str:
     """Read a CCP4 program's captured stderr, tolerating any byte it wrote.
 
     Replacement decoding is deliberate: this text only ever reaches a log line
-    or a manifest error string, so an undecodable byte should cost a character
-    rather than the entry.
+    or the manifest's status detail, so an undecodable byte should cost a
+    character rather than the entry.
     """
     try:
         error_file.seek(0)

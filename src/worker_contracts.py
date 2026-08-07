@@ -109,11 +109,12 @@ class EntryResult:
     ccp4_timeout_log_path: str = ""
 
     alchemy_version: str = __version__
+    pdb_redo_version: str = ""
+    pdb_redo_date: str = ""
     source_coordinate_format: str = ""
     analysis_coordinate_format: str = "pdb"
     coordinate_conversion_performed: bool = False
     source_coordinate_path: str = ""
-    analysis_coordinate_path: str = ""
 
     model_policy: str = MODEL_POLICY
     altloc_policy: str = ALTLOC_POLICY

@@ -62,8 +62,14 @@ Results are written to (the column lists and row builders live in
   `output/confidence_reference/`. Later small runs write confidence scores
   directly when a compatible frozen database reference is installed.
 
-- `output/manifest.csv` — per-entry status and reason, runtime, input
-  provenance, and relevant software and analysis-policy versions.
+- `output/manifest.csv` — per-entry status, machine-readable reasons, a bounded
+  `status_detail`, millisecond runtime, counts, input provenance, and relevant
+  software and analysis-policy versions. Explicit `no_metals` and
+  `metal_site_limit_exceeded` fields keep successful negative results and
+  policy exclusions distinguishable from ordinary analyzed entries without
+  parsing `reason_codes`. PDB-REDO inputs record the source-relative coordinate
+  path plus the `VERSION` and `TIME` values from `data.json`; manual inputs
+  retain the path supplied by the user.
   `reference_data_id` identifies the bundled catalog and distance table the row
   was measured against; rows are comparable only if it matches, and the run log
   records the two file checksums it is composed from. Adding this column means
@@ -73,10 +79,11 @@ Results are written to (the column lists and row builders live in
   diagnostic or repeated EDSTATS rows; `n_bonds` and `n_candidates` distinguish
   assigned-output size from candidate-evidence size.
 
-Entries with more than 100 selected canonical metal sites are recorded
-in the manifest and excluded before CCP4 processing. This keeps exceptionally
-metal-dense, highly correlated assemblies from dominating the standard database
-cohort; their detected `n_metals` count remains available for audit.
+Entries with more than 100 selected canonical metal sites are recorded in the
+manifest with `metal_site_limit_exceeded=true` and excluded before CCP4
+processing. This keeps exceptionally metal-dense, highly correlated assemblies
+from dominating the standard database cohort; their detected `n_metals` count
+remains available for audit.
 
 - `output/logs/alchemy_run_YYYYMMDD.log` — one concise, immutable run report
   for each invocation, or `--log-dir` when one is given. It records the

@@ -139,6 +139,28 @@ def test_twin_routing_requires_explicit_boolean_metadata(
     assert inputs.read_pdb_redo_is_twin(str(path)) is expected
 
 
+def test_pdb_redo_metadata_includes_the_source_revision(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    path.write_text(
+        json.dumps(
+            {
+                "properties": {
+                    "ISTWIN": True,
+                    "VERSION": 8.04,
+                    "TIME": "2024-02-08",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    metadata = inputs.read_pdb_redo_metadata(str(path))
+
+    assert metadata.is_twin is True
+    assert metadata.version == "8.04"
+    assert metadata.date == "2024-02-08"
+
+
 @pytest.mark.parametrize("payload", [None, "{not valid json", "[]", "{}"])
 def test_explicit_twin_metadata_read_failures_are_not_non_twin(
     tmp_path: Path, payload: str | None

@@ -531,14 +531,26 @@ def test_single_entry_run_writes_documented_outputs(
         "assignment_reference_kind",
     } <= set(CANDIDATE_COLUMNS)
     assert {
+        "no_metals",
+        "metal_site_limit_exceeded",
         "n_metals",
         "n_bonds",
         "n_candidates",
         "status",
         "retryable",
         "reason_codes",
+        "status_detail",
         "runtime_s",
+        "pdb_redo_version",
+        "pdb_redo_date",
+        "source_coordinate_path",
     } <= set(MANIFEST_COLUMNS)
+    assert "analysis_coordinate_path" not in MANIFEST_COLUMNS
+
+    manifest = manifest_by_id(output_dir)["9myr"]
+    assert manifest["source_coordinate_path"] == "my/9myr/9myr_final.cif"
+    assert manifest["pdb_redo_version"]
+    assert manifest["pdb_redo_date"]
 
 
 @_requires_entry_data
@@ -751,9 +763,11 @@ def test_no_metal_entry_is_reported_not_dropped(batch: Batch) -> None:
     """
     row = batch.manifest["9nxl"]
     assert row["status"] == "ok"
-    assert row["retryable"] == "False"
+    assert row["retryable"] == "false"
+    assert row["no_metals"] == "true"
+    assert row["metal_site_limit_exceeded"] == "false"
     assert row["reason_codes"] == ""
-    assert row["error"] == ""
+    assert row["status_detail"] == ""
     assert row["n_metals"] == "0"
     assert row["n_bonds"] == "0"
     assert row["n_candidates"] == "0"
@@ -765,14 +779,15 @@ def test_no_metal_entry_is_reported_not_dropped(batch: Batch) -> None:
     # Headers survive even when an entry contributes no rows.
     assert read_header(batch.output_dir, "metal_stats_all.csv") == STATS_COLUMNS
 
-    log_text = read_text(log_paths(batch.output_dir)[0])
-    entry_line = next(
-        line for line in log_text.splitlines() if line.startswith("9nxl | status=")
-    )
-    assert "no_metals=true" in entry_line
-    assert "density_map_scope=-" in entry_line
-    assert "edstats_s" not in entry_line
-    assert "mtzfix_s" not in entry_line
+    log_path = log_paths(batch.output_dir)[0]
+    diagnostics_path = log_path.removesuffix(".log") + "_entries.csv"
+    with open(diagnostics_path, newline="", encoding="utf-8") as handle:
+        entry = next(row for row in csv.DictReader(handle) if row["pdbID"] == "9nxl")
+    assert entry["no_metals"] == "true"
+    assert entry["density_map_scope"] == ""
+    assert entry["edstats_s"] == ""
+    assert entry["mtzfix_s"] == ""
+    log_text = read_text(log_path)
     assert "Metal-free entries: 1" in log_text
 
 
@@ -1088,7 +1103,7 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
     assert row["status"] == "ok"
     assert row["refinement_state"] == "manual"
     assert row["source_coordinate_format"] == "mmcif"
-    assert row["coordinate_conversion_performed"] == "True"
+    assert row["coordinate_conversion_performed"] == "true"
 
     manual_bonds = read_rows(output_dir, "metal_bonds_all.csv")
     reference_bonds = rows_for(batch.bonds, "9myr")
@@ -1141,7 +1156,7 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
 
     row = manifest_by_id(output_dir)["9myr"]
     assert row["status"] == "partial"
-    assert row["retryable"] == "False"
+    assert row["retryable"] == "false"
     assert row["reason_codes"] == "missing_dpi_metadata_source"
     assert row["n_metals"] == "2"
     assert row["n_bonds"] == "8"
@@ -1329,10 +1344,10 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
 
     row = manifest_by_id(output_dir)["9myr"]
     assert row["status"] == "error"
-    assert row["retryable"] == "True"
+    assert row["retryable"] == "true"
     assert row["reason_codes"] == "deterministic_processing_error"
     for column in inputs.MAP_COEFFICIENT_COLUMNS:
-        assert column in row["error"], row["error"]
+        assert column in row["status_detail"], row["status_detail"]
     assert row["n_bonds"] == "" and row["n_candidates"] == ""
 
     assert read_rows(output_dir, "metal_stats_all.csv") == []

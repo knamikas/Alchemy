@@ -45,7 +45,7 @@ from inputs import (
     first_existing,
     prepare_inputs,
     read_map_column_resolution,
-    read_pdb_redo_is_twin,
+    read_pdb_redo_metadata,
     read_resolution,
     resolve_manual_inputs,
 )
@@ -59,7 +59,7 @@ from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult, WorkerConfig
 
 METALS_SET = set(METAL_ELEMENTS)
 
-# Reported alongside the machine-readable code in the manifest's error column.
+# Reported alongside the machine-readable code in ``status_detail``.
 IDENTIFICATION_REASON_MESSAGES = {
     ReasonCode.COFACTOR_COORDINATE_JOIN_FAILED: (
         "cofactor EDSTATS row did not match a coordinate residue"
@@ -75,8 +75,8 @@ IDENTIFICATION_REASON_MESSAGES = {
     ),
 }
 
-# The manifest's ``error`` column is a summary; the full message is logged.
-MAX_MANIFEST_ERROR_CHARS = 300
+# The manifest keeps a bounded summary; the full message is logged.
+MAX_MANIFEST_STATUS_DETAIL_CHARS = 300
 
 TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
 
@@ -225,6 +225,15 @@ def _source_coordinate_path(
     )
 
 
+def source_coordinate_provenance_path(
+    cfg: WorkerConfig, pdb_id: str, source_path: str
+) -> str:
+    """Keep mirror provenance portable while preserving a manual input path."""
+    if cfg.manual_inputs:
+        return source_path
+    return f"{pdb_id[1:3]}/{pdb_id}/{os.path.basename(source_path)}"
+
+
 def _resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
     if cfg.allow_download:
@@ -296,7 +305,9 @@ def _run_density_stage(
         kept_log = _preserve_timeout_log(exc, result.pdb_id, cfg.output_dir)
         result.retryable = True
         result.reason_codes = [ReasonCode.CCP4_TOOL_TIMEOUT]
-        result.error = truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS)
+        result.error = truncate(
+            f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
+        )
         result.confidence_inputs_missing_reason = ReasonCode.CCP4_TOOL_TIMEOUT
         result.ccp4_timeout_log_path = kept_log
         result.timings.update(exc.timings)
@@ -307,7 +318,9 @@ def _run_density_stage(
         rows, header = [], []
         result.retryable = False
         result.reason_codes = [ReasonCode.MTZFIX_VALIDATION_FAILURE]
-        result.error = truncate(f"density unavailable: {exc}", MAX_MANIFEST_ERROR_CHARS)
+        result.error = truncate(
+            f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
+        )
         result.confidence_inputs_missing_reason = ReasonCode.MTZFIX_VALIDATION_FAILURE
         result.timings.update(exc.timings)
     else:
@@ -477,7 +490,7 @@ def run_bond_stage(
         )
     except Exception as e:  # noqa: BLE001
         result.error = truncate(
-            f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS
+            f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
         result.reason_codes = list(
             dict.fromkeys(result.reason_codes + [ReasonCode.BOND_STAGE_FAILURE])
@@ -512,7 +525,7 @@ def _finalize_result(
         result.error = "; ".join(
             ([existing_error] if existing_error else []) + messages
         )
-        result.error = truncate(result.error, MAX_MANIFEST_ERROR_CHARS)
+        result.error = truncate(result.error, MAX_MANIFEST_STATUS_DETAIL_CHARS)
     if bond_meta.retryable:
         result.retryable = True
     result.warning_codes = list(
@@ -556,7 +569,7 @@ def _prepare_analysis_inputs(
         data_reshi = read_resolution(entry, mtz)
 
     density_data_json = data_json if manual_inputs else os.path.join(entry, "data.json")
-    pdb_redo_is_twin = read_pdb_redo_is_twin(
+    pdb_redo_metadata = read_pdb_redo_metadata(
         density_data_json,
         required=bool(manual_inputs and data_json),
     )
@@ -573,8 +586,11 @@ def _prepare_analysis_inputs(
     result.source_coordinate_format = source_format
     result.analysis_coordinate_format = analysis_format
     result.coordinate_conversion_performed = converted
-    result.source_coordinate_path = source_coordinate_path
-    result.analysis_coordinate_path = pdb
+    result.pdb_redo_version = pdb_redo_metadata.version
+    result.pdb_redo_date = pdb_redo_metadata.date
+    result.source_coordinate_path = source_coordinate_provenance_path(
+        cfg, pdb_id, source_coordinate_path
+    )
     inputs = EntryInputs(
         work_dir=work_dir,
         mtz=mtz,
@@ -583,7 +599,7 @@ def _prepare_analysis_inputs(
         data_reshi=data_reshi,
         map_reslo=map_reslo,
         map_reshi=map_reshi,
-        pdb_redo_is_twin=pdb_redo_is_twin,
+        pdb_redo_is_twin=pdb_redo_metadata.is_twin,
         source_coordinate_path=source_coordinate_path,
     )
     structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
@@ -607,7 +623,7 @@ def _finish_if_no_analyzable_metals(
         result.error = truncate(
             "cannot establish metal absence: "
             f"{unknown_count} atom(s) have missing or invalid element symbols",
-            MAX_MANIFEST_ERROR_CHARS,
+            MAX_MANIFEST_STATUS_DETAIL_CHARS,
         )
         result.n_metals = 0
         result.confidence_inputs_missing_reason = (
@@ -737,7 +753,7 @@ def process(pdb_id: str) -> EntryResult:
         result.status = EntryStatus.SKIP
         result.retryable = True
         result.reason_codes = [ReasonCode.MISSING_INPUT]
-        result.error = truncate(f"missing input: {e}", MAX_MANIFEST_ERROR_CHARS)
+        result.error = truncate(f"missing input: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS)
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = EntryStatus.ERROR
@@ -752,7 +768,9 @@ def process(pdb_id: str) -> EntryResult:
             if deterministic
             else ReasonCode.UNEXPECTED_PROCESSING_ERROR
         ]
-        result.error = truncate(f"{type(e).__name__}: {e}", MAX_MANIFEST_ERROR_CHARS)
+        result.error = truncate(
+            f"{type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
+        )
         # The manifest keeps one truncated line, which names the exception but
         # not where it came from. Without this the only way to locate an
         # unanticipated failure is to rerun the entry by hand with
@@ -770,6 +788,6 @@ def process(pdb_id: str) -> EntryResult:
             cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
             result.timings["cleanup_s"] = round(time.monotonic() - cleanup_started, 3)
-        result.runtime_s = round(time.monotonic() - t0, 2)
+        result.runtime_s = round(time.monotonic() - t0, 3)
         announce_inflight("end", pdb_id)
     return result
