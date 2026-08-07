@@ -9,12 +9,14 @@ Running batches, resuming them, and reading what a run wrote. See
 - Alchemy separates three kinds of output. The progress line and the final
   result summary go to **stdout**, so a redirected stdout remains a usable
   record of what was produced. Diagnostics go to **stderr** as log records,
-  controlled by `-v`/`--quiet`/`--log-file`. The per-run report in
-  `<log-dir>/alchemy_run_*.log` -- `<output-dir>/logs/` unless `--log-dir`
-  says otherwise -- is written separately and is unaffected by
-  verbosity: it is a structured artifact, not a transcript. Worker processes
-  emit records through a queue that the driver re-emits, so per-entry
-  diagnostics from parallel workers never interleave mid-line.
+  controlled by `-v`/`--quiet`/`--log-file`. The concise per-run report in
+  `<log-dir>/alchemy_run_*.log` and its complete
+  `<log-dir>/alchemy_run_*_entries.csv` diagnostics table -- under
+  `<output-dir>/logs/` unless `--log-dir` says otherwise -- are written
+  separately and are unaffected by verbosity. They are structured artifacts,
+  not transcripts. Worker processes emit records through a queue that the
+  driver re-emits, so per-entry diagnostics from parallel workers never
+  interleave mid-line.
 - Interactive runs redraw a single progress line after every completed
   structure. While waiting on a slow structure, the elapsed time refreshes
   approximately once per second. Redirected output is limited to one progress
@@ -40,8 +42,9 @@ Running batches, resuming them, and reading what a run wrote. See
   budget. The dispatcher skips a blocked large entry to keep fitting small
   entries active, then starts the large entry after active work drains. It also
   pauses new admission whenever measured headroom falls into the protected
-  reserve. The detailed run log records the budget, estimate sources, peak
-  reservation, pressure pauses, and every entry's estimate.
+  reserve. The run report records the budget, estimate sources, peak
+  reservation, and pressure pauses; its companion entry table records every
+  entry's estimate.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis

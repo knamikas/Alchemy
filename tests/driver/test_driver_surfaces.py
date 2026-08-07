@@ -1622,83 +1622,24 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
     assert any("/tmp/reference" in message for message in messages)
 
 
-def test_concurrent_run_logs_claim_distinct_names(tmp_path: Path) -> None:
-    """Two runs sharing a --log-dir must not overwrite each other's record.
+def test_concurrent_run_reports_reserve_distinct_file_pairs(tmp_path: Path) -> None:
+    """A shared --log-dir cannot mix the two artifacts from separate runs."""
+    run_count = 8
+    ready = threading.Barrier(run_count)
 
-    The name was chosen with ``lexists`` and then renamed onto, and a run log
-    is written outside the output-directory lease, so nothing prevented two
-    runs from selecting the same suffix.
-    """
-    claimed: list[str] = []
-    for index in range(3):
-        source = tmp_path / f"source-{index}"
-        source.write_text(f"run {index}\n", encoding="utf-8")
-        claimed.append(
-            runlog.claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
-        )
-
-    assert len({os.path.basename(path) for path in claimed}) == 3
-    assert sorted(os.path.basename(p) for p in claimed) == [
-        "alchemy_run_20260805.log",
-        "alchemy_run_20260805_2.log",
-        "alchemy_run_20260805_3.log",
-    ]
-    assert [open(p).read() for p in claimed] == ["run 0\n", "run 1\n", "run 2\n"]
-
-
-def test_run_log_fallback_never_overwrites_same_day_logs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def hard_links_unavailable(*args: object) -> None:
-        raise OSError("hard links unavailable")
-
-    monkeypatch.setattr("driver.runlog.os.link", hard_links_unavailable)
-    claimed: list[str] = []
-    for index in range(3):
-        source = tmp_path / f"fallback-source-{index}"
-        source.write_text(f"fallback run {index}\n", encoding="utf-8")
-        claimed.append(
-            runlog.claim_log_path(str(tmp_path), "alchemy_run_20260805", str(source))
-        )
-
-    assert [os.path.basename(path) for path in claimed] == [
-        "alchemy_run_20260805.log",
-        "alchemy_run_20260805_2.log",
-        "alchemy_run_20260805_3.log",
-    ]
-    assert [open(path).read() for path in claimed] == [
-        "fallback run 0\n",
-        "fallback run 1\n",
-        "fallback run 2\n",
-    ]
-
-
-def test_concurrent_run_log_fallback_claims_are_distinct(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def hard_links_unavailable(*args: object) -> None:
-        raise OSError("hard links unavailable")
-
-    monkeypatch.setattr("driver.runlog.os.link", hard_links_unavailable)
-    sources: list[Path] = []
-    for index in range(8):
-        source = tmp_path / f"concurrent-source-{index}"
-        source.write_text(f"concurrent run {index}\n", encoding="utf-8")
-        sources.append(source)
-    ready = threading.Barrier(len(sources))
-
-    def claim(index: int) -> tuple[int, str]:
+    def claim(_index: int) -> tuple[str, str, str]:
         ready.wait()
-        path = runlog.claim_log_path(
-            str(tmp_path), "alchemy_run_20260805", str(sources[index])
-        )
-        return index, path
+        return runlog.claim_report_paths(str(tmp_path), "alchemy_run_20260805")
 
-    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
-        claimed = list(executor.map(claim, range(len(sources))))
+    with ThreadPoolExecutor(max_workers=run_count) as executor:
+        claimed = list(executor.map(claim, range(run_count)))
 
-    paths = [path for _index, path in claimed]
-    assert len(set(paths)) == len(sources)
-    for index, path in claimed:
-        with open(path, encoding="utf-8") as handle:
-            assert handle.read() == f"concurrent run {index}\n"
+    log_paths = [log_path for log_path, _diagnostics, _claim in claimed]
+    diagnostics_paths = [diagnostics for _log_path, diagnostics, _claim in claimed]
+    assert len(set(log_paths)) == run_count
+    assert len(set(diagnostics_paths)) == run_count
+    assert {Path(path).stem.removesuffix("_entries") for path in diagnostics_paths} == {
+        Path(path).stem for path in log_paths
+    }
+    for _log_path, _diagnostics, claim_path in claimed:
+        os.unlink(claim_path)

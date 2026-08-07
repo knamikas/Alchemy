@@ -981,6 +981,7 @@ def worker_config_from_args(
     )
     run_log.details.update(
         alchemy_version=ALCHEMY_VERSION,
+        alchemy_commit=cfg.alchemy_commit,
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
         confidence_mode=plan.mode or "disabled",

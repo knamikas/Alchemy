@@ -78,16 +78,16 @@ in the manifest and excluded before CCP4 processing. This keeps exceptionally
 metal-dense, highly correlated assemblies from dominating the standard database
 cohort; their detected `n_metals` count remains available for audit.
 
-- `output/logs/alchemy_run_YYYYMMDD.log` — one detailed, immutable log for
-  each invocation, or `--log-dir` when one is given. Additional runs on the
-  same UTC date receive a numeric suffix.
-  The log records the command, configuration, software and system provenance,
-  worker limits, output and confidence summaries, grouped reasons and warnings,
-  slowest entries, every per-entry outcome, and timings for input preparation,
-  `mtzfix`, both FFT calculations, model-envelope cropping, `edstats`,
-  statistics extraction, bond analysis, and cleanup. It also records the
-  full-map and EDSTATS-map sizes for each density-scored entry. Resume runs
-  create another log rather than replacing the original run record.
+- `output/logs/alchemy_run_YYYYMMDD.log` — one concise, immutable run report
+  for each invocation, or `--log-dir` when one is given. It records the
+  command, configuration, software and reference-data provenance, analysis
+  policies, worker limits, output and confidence summaries, grouped exceptions,
+  stage aggregates, and slowest entries.
+- `output/logs/alchemy_run_YYYYMMDD_entries.csv` — the report's machine-readable
+  companion, containing every per-entry outcome, reason, warning, runtime,
+  stage timing, map size, and memory estimate. The two files receive the same
+  numeric suffix when there are additional runs on a UTC date. Resume runs
+  create a new pair rather than replacing the original record.
 
 ## Dependencies
 

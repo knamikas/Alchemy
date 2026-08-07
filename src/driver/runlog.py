@@ -1,30 +1,85 @@
-"""The detailed run log written once, at the end of every run.
+"""The run report written once, at the end of every run.
 
 ``RunLog`` accumulates compact per-entry diagnostics during the batch and
-renders them into one complete temporary file before publishing it under a
-name that cannot overwrite an earlier run.
+publishes a concise human-readable log alongside a complete CSV diagnostics
+table. Matching names are reserved together so concurrent runs cannot split a
+report across different suffixes or overwrite an earlier run.
 """
 
+import csv
 import os
 import platform
 import shutil
 import tempfile
 import time
 from collections import Counter
-from dataclasses import fields
-from datetime import datetime, UTC
-from typing import Any
 from collections.abc import Mapping
+from dataclasses import fields
+from datetime import UTC, datetime
+from typing import Any, TextIO, cast
 
+from codes import ReasonCode
 from driver.resources import available_cpu_count, available_memory_bytes
 from run_config import RunConfig
-
-
-from worker_contracts import EntryResult, blank_if_unmeasured
+from worker_contracts import (
+    ALTLOC_POLICY,
+    MAX_ANALYZED_METAL_SITES,
+    MODEL_POLICY,
+    SYMMETRY_POLICY,
+    EntryResult,
+    blank_if_unmeasured,
+)
 
 # A subdirectory rather than the output directory itself: one log accumulates
 # per invocation, and the startup sweep never sees them beside the result CSVs.
 DEFAULT_LOG_DIRNAME = "logs"
+
+ENTRY_DIAGNOSTIC_BASE_COLUMNS = (
+    "pdbID",
+    "status",
+    "retryable",
+    "no_metals",
+    "metal_site_limit_exceeded",
+    "runtime_s",
+    "n_metals",
+    "n_bonds",
+    "n_candidates",
+)
+
+PREFERRED_TIMING_COLUMNS = (
+    "input_structure_s",
+    "mtzfix_s",
+    "twin_coefficient_normalization_s",
+    "fft_2fofc_s",
+    "mapmask_2fofc_s",
+    "fft_fofc_s",
+    "mapmask_fofc_s",
+    "edstats_s",
+    "density_total_s",
+    "statistics_extraction_s",
+    "bond_analysis_s",
+    "cleanup_s",
+)
+
+ENTRY_DIAGNOSTIC_TRAILING_COLUMNS = (
+    "density_map_scope",
+    "full_map_bytes",
+    "edstats_map_bytes",
+    "memory_estimate_bytes",
+    "reason_codes",
+    "warning_codes",
+    "error",
+)
+
+PROVENANCE_DETAIL_KEYS = (
+    "alchemy_version",
+    "alchemy_commit",
+    "gemmi_version",
+    "ccp4_version",
+    "reference_data_id",
+    "metal_distances_info_sha256",
+    "metallocofactors_id_sha256",
+)
 
 
 def log_dir_for(args: RunConfig) -> str:
@@ -35,7 +90,7 @@ def log_dir_for(args: RunConfig) -> str:
 
 
 def _copy_log_exclusively(source_path: str, destination_path: str) -> None:
-    """Copy a complete log into a newly claimed path without overwriting."""
+    """Copy a complete report artifact without overwriting an existing file."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_CLOEXEC", 0)
     descriptor = os.open(destination_path, flags, 0o600)
@@ -60,42 +115,63 @@ def _copy_log_exclusively(source_path: str, destination_path: str) -> None:
     os.unlink(source_path)
 
 
-def claim_log_path(directory: str, stem: str, source_path: str) -> str:
-    """Publish a finished log under the first free numbered name.
+def claim_report_paths(directory: str, stem: str) -> tuple[str, str, str]:
+    """Reserve matching names for a log and its entry-diagnostics table.
 
-    ``os.link`` fails rather than overwrites when the name is taken, so two
-    runs cannot select the same suffix and have one silently replace the
-    other's record. Choosing the name with ``lexists`` and renaming onto it
-    left exactly that window open, and a run log is written outside the
-    output-directory lease -- a run that failed to acquire the lease still
-    writes one -- so concurrent writers sharing a ``--log-dir`` are expected
-    rather than prevented.
+    The hidden claim prevents concurrent runs from choosing the same suffix
+    before either finished artifact exists. Existing files are checked while
+    the claim is held so an older standalone log or orphaned diagnostics table
+    is never overwritten.
     """
     suffix = 1
     while True:
-        name = f"{stem}.log" if suffix == 1 else f"{stem}_{suffix}.log"
-        path = os.path.join(directory, name)
+        base = stem if suffix == 1 else f"{stem}_{suffix}"
+        log_path = os.path.join(directory, f"{base}.log")
+        diagnostics_path = os.path.join(directory, f"{base}_entries.csv")
+        claim_path = os.path.join(directory, f".{base}.claim")
         try:
-            os.link(source_path, path)
+            descriptor = os.open(
+                claim_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
         except FileExistsError:
             suffix += 1
             continue
-        except OSError:
-            # Some filesystems do not support hard links. Claiming the name
-            # with exclusive creation preserves the no-overwrite guarantee;
-            # os.replace would silently destroy an earlier same-day log.
-            try:
-                _copy_log_exclusively(source_path, path)
-            except FileExistsError:
-                suffix += 1
-                continue
-            return path
-        os.unlink(source_path)
-        return path
+        os.close(descriptor)
+        if os.path.lexists(log_path) or os.path.lexists(diagnostics_path):
+            os.unlink(claim_path)
+            suffix += 1
+            continue
+        return log_path, diagnostics_path, claim_path
+
+
+def _format_duration(seconds: float) -> str:
+    exact = f"{seconds:.3f} s"
+    if seconds < 60:
+        return exact
+    rounded = int(round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, whole_seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d} ({exact})"
+
+
+def _format_bytes(value: int) -> str:
+    units = ("bytes", "KiB", "MiB", "GiB", "TiB")
+    amount = float(value)
+    unit = units[0]
+    for candidate in units[1:]:
+        if abs(amount) < 1024.0:
+            break
+        amount /= 1024.0
+        unit = candidate
+    if unit == "bytes":
+        return f"{value} bytes"
+    return f"{amount:.2f} {unit} ({value} bytes)"
 
 
 class RunLog:
-    """Collect compact run diagnostics and write one human-readable log."""
+    """Collect run diagnostics and publish the report pair at completion."""
 
     def __init__(self, args: RunConfig, command: str) -> None:
         self.args = args
@@ -156,15 +232,87 @@ class RunLog:
             )
         )
 
-    def _render(self, exit_code: int, finished_at: datetime, elapsed_s: float) -> str:
+    @staticmethod
+    def _detail_value(name: str, value: object) -> str:
+        if name.endswith("_bytes") and isinstance(value, int):
+            return _format_bytes(value)
+        if isinstance(value, Mapping):
+            mapping = cast(Mapping[object, object], value)
+            counter: dict[str, int] = {}
+            for key, count in mapping.items():
+                if not isinstance(key, str) or not isinstance(count, int):
+                    return RunLog._clean(mapping)
+                counter[key] = count
+            return RunLog._counter_text(counter)
+        return RunLog._clean(value)
+
+    def _timing_columns(self) -> tuple[str, ...]:
+        present = {name for entry in self.entries for name in entry["timings"].keys()}
+        preferred = tuple(name for name in PREFERRED_TIMING_COLUMNS if name in present)
+        return (*preferred, *sorted(present - set(preferred)))
+
+    def _write_entry_diagnostics(self, handle: TextIO) -> None:
+        timing_columns = self._timing_columns()
+        columns = (
+            *ENTRY_DIAGNOSTIC_BASE_COLUMNS,
+            *timing_columns,
+            *ENTRY_DIAGNOSTIC_TRAILING_COLUMNS,
+        )
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for entry in sorted(self.entries, key=lambda item: item["pdbID"].lower()):
+            row: dict[str, object] = {
+                "pdbID": entry["pdbID"],
+                "status": entry["status"],
+                "retryable": self._clean(entry["retryable"]),
+                "no_metals": self._clean(entry["no_metals"]),
+                "metal_site_limit_exceeded": self._clean(
+                    entry["metal_site_limit_exceeded"]
+                ),
+                "runtime_s": f"{entry['runtime_s']:.3f}",
+                "n_metals": entry["n_metals"],
+                "n_bonds": entry["n_bonds"],
+                "n_candidates": entry["n_candidates"],
+                "density_map_scope": entry["density_map_scope_used"],
+                "full_map_bytes": entry["density_full_map_bytes"],
+                "edstats_map_bytes": entry["density_edstats_map_bytes"],
+                "memory_estimate_bytes": (
+                    ""
+                    if entry["memory_estimate_bytes"] is None
+                    else entry["memory_estimate_bytes"]
+                ),
+                "reason_codes": "|".join(entry["reason_codes"]),
+                "warning_codes": "|".join(entry["warning_codes"]),
+                "error": self._clean(entry["error"]),
+            }
+            row.update(
+                {
+                    name: (
+                        f"{float(entry['timings'][name]):.3f}"
+                        if name in entry["timings"]
+                        else ""
+                    )
+                    for name in timing_columns
+                }
+            )
+            writer.writerow(row)
+
+    def _render(
+        self,
+        exit_code: int,
+        finished_at: datetime,
+        elapsed_s: float,
+        diagnostics_path: str,
+    ) -> str:
         lines = [
-            "Alchemy detailed run log",
-            "========================",
+            "Alchemy run report",
+            "==================",
             f"Started (UTC): {self.started_at.isoformat()}",
             f"Finished (UTC): {finished_at.isoformat()}",
-            f"Wall time: {elapsed_s:.3f} s",
+            f"Elapsed: {_format_duration(elapsed_s)}",
             f"Exit code: {exit_code}",
             f"Command: {self.command}",
+            f"Entry diagnostics: {diagnostics_path}",
             "",
             "System",
             "------",
@@ -189,16 +337,57 @@ class RunLog:
             )
         )
 
-        lines.extend(["", "Configuration", "-------------"])
+        lines.extend(
+            ["", "Provenance and analysis policy", "------------------------------"]
+        )
+        provenance_labels = {
+            "alchemy_version": "Alchemy version",
+            "alchemy_commit": "Alchemy commit",
+            "gemmi_version": "Gemmi version",
+            "ccp4_version": "CCP4 version",
+            "reference_data_id": "Reference data ID",
+            "metal_distances_info_sha256": "Metal-distance table SHA-256",
+            "metallocofactors_id_sha256": "Metal-cofactor catalog SHA-256",
+        }
+        for name in PROVENANCE_DETAIL_KEYS:
+            lines.append(
+                f"{provenance_labels[name]}: "
+                f"{self._clean(self.details.get(name, 'unknown'))}"
+            )
+        lines.extend(
+            [
+                f"Maximum selected metal sites per entry: {MAX_ANALYZED_METAL_SITES}",
+                f"Model policy: {MODEL_POLICY}",
+                f"Alternate-conformer policy: {ALTLOC_POLICY}",
+                f"Symmetry-contact policy: {SYMMETRY_POLICY}",
+                f"Bond analysis enabled: {self._clean(self.args.bonds)}",
+                f"Density-map scope requested: {self.args.density_map_scope}",
+            ]
+        )
+
+        lines.extend(
+            [
+                "",
+                "Input and execution configuration",
+                "---------------------------------",
+                "Invocation options:",
+            ]
+        )
         configuration = (
-            (field.name, getattr(self.args, field.name)) for field in fields(self.args)
+            (field.name, getattr(self.args, field.name))
+            for field in fields(self.args)
+            if field.name not in {"bonds", "density_map_scope"}
         )
         for name, value in sorted(configuration):
-            lines.append(f"{name}: {self._clean(value)}")
+            lines.append(f"  {name}: {self._clean(value)}")
+        lines.append("Resolved execution:")
         for name, value in sorted(self.details.items()):
-            if name == "initial_available_memory_bytes":
+            if (
+                name == "initial_available_memory_bytes"
+                or name in PROVENANCE_DETAIL_KEYS
+            ):
                 continue
-            lines.append(f"{name}: {self._clean(value)}")
+            lines.append(f"  {name}: {self._detail_value(name, value)}")
 
         status_counts = Counter(entry["status"] for entry in self.entries)
         reason_counts = Counter(
@@ -223,25 +412,70 @@ class RunLog:
         lines.extend(
             [
                 "",
-                "Summary",
-                "-------",
-                f"Entries returned: {len(self.entries)}",
-                f"Status counts: {self._counter_text(status_counts)}",
+                "Outcome summary",
+                "---------------",
+                f"Entries completed: {len(self.entries)}",
+                "Status counts: "
+                + " ".join(
+                    f"{name}={status_counts[name]}"
+                    for name in ("ok", "partial", "skip", "error")
+                ),
                 f"Retryable entries: {retryable_count}",
                 f"Metal-free entries: {no_metal_count}",
-                "Entries above the metal-site limit: "
-                f"{metal_site_limit_exceeded_count}",
-                f"Summed entry runtime: {total_entry_s:.3f} s",
+                f"Policy-excluded entries: {metal_site_limit_exceeded_count}",
+                f"Summed entry runtime: {_format_duration(total_entry_s)}",
                 f"Throughput: {throughput:.2f} entries/minute",
                 f"Reason codes: {self._counter_text(reason_counts)}",
                 f"Warning codes: {self._counter_text(warning_counts)}",
                 f"Density map scopes used: {self._counter_text(map_scope_counts)}",
             ]
         )
-        for name, value in sorted(self.summary.items()):
-            lines.append(f"{name}: {self._clean(value)}")
         if self.driver_error:
             lines.append(f"Driver error: {self._clean(self.driver_error)}")
+
+        summary = dict(self.summary)
+        if "confidence_rows" not in summary and "confidence_rows_written" in summary:
+            summary["confidence_rows"] = summary.pop("confidence_rows_written")
+        if summary.get("confidence_rows") == summary.get("confidence_rows_written"):
+            summary.pop("confidence_rows_written", None)
+        lines.extend(["", "Output files", "------------"])
+        output_specs = (
+            ("Manifest", "manifest_path", None),
+            ("Metal statistics", "metal_stats_path", "metal_rows_written"),
+            ("Bonds", "metal_bonds_path", "bond_rows_written"),
+            ("Candidates", "metal_candidates_path", "candidate_rows_written"),
+            ("Confidence scores", "confidence_scores_path", "confidence_rows"),
+            ("Confidence reference", "confidence_reference_path", None),
+        )
+        any_output = False
+        for label, path_key, count_key in output_specs:
+            if path_key not in summary:
+                continue
+            any_output = True
+            path = summary.pop(path_key)
+            count = summary.pop(count_key, None) if count_key else None
+            count_text = f" ({count} rows)" if count is not None else ""
+            lines.append(f"{label}: {self._clean(path)}{count_text}")
+        if not any_output:
+            lines.append("No output files were completed.")
+        if "confidence_status" in summary:
+            lines.append(
+                f"Confidence status: {self._clean(summary.pop('confidence_status'))}"
+            )
+        if "confidence_scored_rows" in summary:
+            lines.append(
+                "Confidence rows scored: "
+                f"{self._clean(summary.pop('confidence_scored_rows'))}"
+            )
+        if "confidence_reference_cohort" in summary:
+            lines.append(
+                "Confidence reference cohort: "
+                f"{self._clean(summary.pop('confidence_reference_cohort'))}"
+            )
+        if summary:
+            lines.append("Additional completion details:")
+            for name, value in sorted(summary.items()):
+                lines.append(f"  {name}: {self._detail_value(name, value)}")
 
         stage_values: dict[str, list[float]] = {}
         for entry in self.entries:
@@ -273,15 +507,48 @@ class RunLog:
                     f"{max_entry['pdbID']}"
                 )
 
-        incomplete_entries = [
-            entry for entry in self.entries if entry["status"] != "ok"
+        lines.extend(["", "Exceptions and exclusions", "-------------------------"])
+        excluded_entries = [
+            entry for entry in self.entries if entry["metal_site_limit_exceeded"]
         ]
-        lines.extend(["", "Incomplete entries", "------------------"])
-        if not incomplete_entries:
-            lines.append("None.")
+        lines.append(
+            f"Policy exclusions above {MAX_ANALYZED_METAL_SITES} metal sites: "
+            f"{len(excluded_entries)}"
+        )
+        if excluded_entries:
+            lines.append("pdbID | detected_metal_sites")
+            for entry in sorted(
+                excluded_entries,
+                key=lambda item: (-int(item["n_metals"]), item["pdbID"].lower()),
+            ):
+                lines.append(f"{entry['pdbID']} | {entry['n_metals']}")
+
+        non_ok_entries = [entry for entry in self.entries if entry["status"] != "ok"]
+        lines.append(f"Partial, skipped, or failed entries: {len(non_ok_entries)}")
+        common_partial_entries = [
+            entry
+            for entry in non_ok_entries
+            if entry["status"] == "partial"
+            and not entry["retryable"]
+            and set(entry["reason_codes"])
+            == {ReasonCode.MISSING_FIRST_SPHERE_REFERENCE}
+        ]
+        if common_partial_entries:
+            lines.append(
+                "Terminal partials caused only by missing first-sphere references: "
+                f"{len(common_partial_entries)} (IDs are in the entry diagnostics)"
+            )
+        notable_entries = [
+            entry for entry in non_ok_entries if entry not in common_partial_entries
+        ]
+        if not notable_entries:
+            lines.append("Other partial, skipped, failed, or retryable entries: none")
         else:
+            lines.append("Other partial, skipped, failed, or retryable entries:")
             lines.append("pdbID | status | retryable | reasons | error")
-            for entry in incomplete_entries:
+            for entry in sorted(
+                notable_entries, key=lambda item: item["pdbID"].lower()
+            ):
                 lines.append(
                     f"{entry['pdbID']} | {entry['status']} | "
                     f"{self._clean(entry['retryable'])} | "
@@ -306,56 +573,73 @@ class RunLog:
                     f"{'|'.join(entry['reason_codes']) or '-'}"
                 )
 
-        lines.extend(["", "Per-entry results", "-----------------"])
-        if not self.entries:
-            lines.append("No entries were processed.")
-        for entry in self.entries:
-            timing_text = (
-                ",".join(
-                    f"{name}={float(value):.3f}"
-                    for name, value in sorted(entry["timings"].items())
-                )
-                or "-"
-            )
-            lines.append(
-                f"{entry['pdbID']} | status={entry['status']} | "
-                f"retryable={self._clean(entry['retryable'])} | "
-                f"no_metals={self._clean(entry['no_metals'])} | "
-                "metal_site_limit_exceeded="
-                f"{self._clean(entry['metal_site_limit_exceeded'])} | "
-                f"runtime_s={entry['runtime_s']:.2f} | "
-                f"metals={entry['n_metals']} | bonds={entry['n_bonds']} | "
-                f"candidates={entry['n_candidates']} | timings={timing_text} | "
-                f"density_map_scope={entry['density_map_scope_used'] or '-'} | "
-                f"full_map_bytes={entry['density_full_map_bytes']} | "
-                f"edstats_map_bytes={entry['density_edstats_map_bytes']} | "
-                f"memory_estimate_bytes={entry['memory_estimate_bytes']} | "
-                f"reasons={'|'.join(entry['reason_codes']) or '-'} | "
-                f"warnings={'|'.join(entry['warning_codes']) or '-'} | "
-                f"error={self._clean(entry['error']) or '-'}"
-            )
+        lines.extend(["", "Entry diagnostics", "-----------------"])
+        lines.append(
+            "Complete per-entry outcomes, timings, map sizes, memory estimates, "
+            f"reasons, warnings, and errors: {diagnostics_path}"
+        )
         lines.append("")
         return "\n".join(lines)
 
     def write(self, exit_code: int) -> str:
-        """Write the final timestamped log without overwriting and return its path."""
+        """Write the timestamped run report without overwriting either artifact."""
         directory = log_dir_for(self.args)
         os.makedirs(directory, exist_ok=True)
         finished_at = datetime.now(UTC)
         elapsed_s = time.monotonic() - self.started_monotonic
         run_date = self.started_at.strftime("%Y%m%d")
         log_stem = f"alchemy_run_{run_date}"
-        handle, temporary_path = tempfile.mkstemp(
-            prefix=".alchemy-run-log-", dir=directory, text=True
-        )
+        log_path, diagnostics_path, claim_path = claim_report_paths(directory, log_stem)
+        temporary_log = ""
+        temporary_diagnostics = ""
+        diagnostics_published = False
         try:
-            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as log:
-                log.write(self._render(exit_code, finished_at, elapsed_s))
-            path = claim_log_path(directory, log_stem, temporary_path)
-        except BaseException:
+            diagnostics_handle, temporary_diagnostics = tempfile.mkstemp(
+                prefix=".alchemy-run-entries-", dir=directory, text=True
+            )
+            with os.fdopen(
+                diagnostics_handle, "w", encoding="utf-8", newline=""
+            ) as diagnostics:
+                self._write_entry_diagnostics(diagnostics)
+
+            log_handle, temporary_log = tempfile.mkstemp(
+                prefix=".alchemy-run-log-", dir=directory, text=True
+            )
+            with os.fdopen(log_handle, "w", encoding="utf-8", newline="\n") as log:
+                log.write(
+                    self._render(exit_code, finished_at, elapsed_s, diagnostics_path)
+                )
+
+            # Publishing the diagnostics first ensures a visible log never
+            # points readers at a companion table that has not been written.
+            _copy_log_exclusively(temporary_diagnostics, diagnostics_path)
+            temporary_diagnostics = ""
+            diagnostics_published = True
             try:
-                os.unlink(temporary_path)
+                _copy_log_exclusively(temporary_log, log_path)
+                temporary_log = ""
+            except BaseException:
+                try:
+                    os.unlink(diagnostics_path)
+                except OSError:
+                    pass
+                diagnostics_published = False
+                raise
+            return log_path
+        finally:
+            for temporary_path in (temporary_log, temporary_diagnostics):
+                if not temporary_path:
+                    continue
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+            if diagnostics_published and not os.path.lexists(log_path):
+                try:
+                    os.unlink(diagnostics_path)
+                except OSError:
+                    pass
+            try:
+                os.unlink(claim_path)
             except OSError:
                 pass
-            raise
-        return path

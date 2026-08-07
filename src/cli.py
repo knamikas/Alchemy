@@ -1,7 +1,7 @@
 """The command line: arguments in, exit code out.
 
 Argument parsing and its validation, plus the two things that bracket every
-run: the detailed run log, written whatever happens, and the SIGTERM handler
+run: the run report, written whatever happens, and the SIGTERM handler
 that makes a scheduler stop unwind the same way Ctrl-C does.
 """
 
@@ -126,8 +126,8 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         "--log-dir",
         default=None,
         help=(
-            "directory for run logs (default: <output-dir>/logs/). Each "
-            "invocation writes one immutable, timestamped log there"
+            "directory for run reports (default: <output-dir>/logs/). Each "
+            "invocation writes an immutable log and entry-diagnostics CSV there"
         ),
     )
     ap.add_argument(
@@ -324,6 +324,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             log_path = run_log.write(exit_code)
         except OSError as exc:
-            logger.error("could not write detailed run log: %s", exc)
+            logger.error("could not write run report: %s", exc)
         else:
-            logger.info("detailed run log -> %s", log_path)
+            logger.info("run report -> %s", log_path)

@@ -2516,13 +2516,15 @@ class TestRunLog:
     def test_the_log_goes_to_a_subdirectory_of_the_output_by_default(
         self, tmp_path: Path
     ) -> None:
-        """One log per invocation accumulates; the four result CSVs do not."""
+        """Run diagnostics stay separate from the scientific result CSVs."""
         args = _run_config(output_dir=str(tmp_path), log_dir=None, workers=1)
 
         path = RunLog(args, "pytest").write(0)
 
         assert os.path.dirname(path) == str(tmp_path / runlog.DEFAULT_LOG_DIRNAME)
         assert sorted(os.listdir(tmp_path)) == [runlog.DEFAULT_LOG_DIRNAME]
+        diagnostics = Path(path.removesuffix(".log") + "_entries.csv")
+        assert diagnostics.is_file()
 
     def test_an_explicit_log_dir_is_used_as_given(self, tmp_path: Path) -> None:
         elsewhere = tmp_path / "shared-logs"
@@ -2561,7 +2563,7 @@ class TestRunLog:
         that mattered least.
         """
         text = open(self._log(tmp_path, [0.5, 9.0, 3.0]).write(0)).read()
-        section = text.split("Slowest entries")[1].split("Per-entry results")[0]
+        section = text.split("Slowest entries")[1].split("Entry diagnostics")[0]
         listed = [
             line.split(" | ")[0]
             for line in section.splitlines()
@@ -2569,11 +2571,108 @@ class TestRunLog:
         ]
         assert listed == ["e1", "e2", "e0"]
 
+    def test_entry_diagnostics_are_a_sorted_machine_readable_companion(
+        self, tmp_path: Path
+    ) -> None:
+        run_log = self._log(tmp_path, [])
+        run_log.record_entry(
+            _result(
+                "2xyz",
+                status="partial",
+                runtime_s=3.25,
+                n_metals=2,
+                n_bonds=4,
+                n_candidates=5,
+                timings={"density_total_s": 2.5, "cleanup_s": 0.125},
+                reason_codes=["missing_first_sphere_reference"],
+                warning_codes=["multi_model_structure"],
+                density_map_scope_used="model-envelope",
+                density_full_map_bytes=2048,
+                density_edstats_map_bytes=1024,
+            ),
+            memory_estimate_bytes=3 * 1024**3,
+        )
+        run_log.record_entry(
+            _result(
+                "1abc",
+                status="ok",
+                runtime_s=1.0,
+                n_metals=1,
+                n_bonds=2,
+                n_candidates=3,
+                timings={"density_total_s": 0.75},
+            )
+        )
+
+        log_path = run_log.write(0)
+        diagnostics_path = Path(log_path.removesuffix(".log") + "_entries.csv")
+        with diagnostics_path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        assert [row["pdbID"] for row in rows] == ["1abc", "2xyz"]
+        assert rows[1]["density_total_s"] == "2.500"
+        assert rows[1]["cleanup_s"] == "0.125"
+        assert rows[1]["memory_estimate_bytes"] == str(3 * 1024**3)
+        assert rows[1]["reason_codes"] == "missing_first_sphere_reference"
+        assert rows[1]["warning_codes"] == "multi_model_structure"
+
+        text = Path(log_path).read_text(encoding="utf-8")
+        assert f"Entry diagnostics: {diagnostics_path}" in text
+        assert "Per-entry results" not in text
+
+    def test_log_records_policy_provenance_and_groups_routine_partials(
+        self, tmp_path: Path
+    ) -> None:
+        run_log = self._log(tmp_path, [])
+        run_log.details.update(
+            alchemy_version="1.2.3",
+            alchemy_commit="deadbeef1234",
+            gemmi_version="0.7.3",
+            ccp4_version="9.0",
+            reference_data_id="test-reference",
+        )
+        run_log.record_entry(
+            _result(
+                "routine",
+                status="partial",
+                retryable=False,
+                reason_codes=["missing_first_sphere_reference"],
+            )
+        )
+        run_log.record_entry(
+            _result(
+                "dense",
+                status="ok",
+                retryable=False,
+                n_metals=101,
+                metal_site_limit_exceeded=True,
+                reason_codes=["metal_site_limit_exceeded"],
+            )
+        )
+
+        text = Path(run_log.write(0)).read_text(encoding="utf-8")
+
+        assert "Alchemy commit: deadbeef1234" in text
+        assert "Maximum selected metal sites per entry: 100" in text
+        assert "Status counts: ok=1 partial=1 skip=0 error=0" in text
+        assert "Policy exclusions above 100 metal sites: 1" in text
+        assert "dense | 101" in text
+        assert (
+            "Terminal partials caused only by missing first-sphere references: 1"
+            in text
+        )
+        exceptions = text.split("Exceptions and exclusions")[1].split(
+            "Slowest entries"
+        )[0]
+        assert "routine | partial" not in exceptions
+
     def test_an_existing_log_is_never_overwritten(self, tmp_path: Path) -> None:
         first = self._log(tmp_path, [1.0]).write(0)
         second = self._log(tmp_path, [2.0]).write(1)
         assert first != second
         assert os.path.isfile(first) and os.path.isfile(second)
+        assert Path(first.removesuffix(".log") + "_entries.csv").is_file()
+        assert Path(second.removesuffix(".log") + "_entries.csv").is_file()
         assert "Exit code: 0" in open(first).read()
         assert "Exit code: 1" in open(second).read()
 
