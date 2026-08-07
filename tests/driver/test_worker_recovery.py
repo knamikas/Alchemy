@@ -503,6 +503,7 @@ def _driver_child(
             max(1, len(script)),
             None,
         )
+        driver_pool.available_memory_bytes = lambda: None  # type: ignore[attr-defined]
         # The stub has to replace ``process`` as driver.pool sees it, and that
         # module imported the name from worker; strict's no-implicit-reexport
         # objects to reaching it there, not to the patch.
@@ -747,6 +748,34 @@ def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(
     # The kill lands after both entries are done, so the work itself completed.
     assert by_id["aaaa"]["status"] == "ok"
     assert by_id["bbbb"]["status"] == "ok"
+    assert exit_code == 0
+
+
+@_POSIX_KILL
+def test_stale_death_attribution_cannot_duplicate_a_completed_entry(
+    tmp_path: Path,
+) -> None:
+    """A delayed death notice cannot replace an outcome already written.
+
+    Queue and pool-roster notifications arrive independently. A stale start can
+    therefore survive until after the genuine result, especially when coverage
+    instrumentation changes scheduling. Counting the later synthesized loss
+    would end the batch before another submitted entry is written.
+    """
+    script: dict[str, dict[str, Any]] = {
+        "aaaa": {
+            "runtime": 0.05,
+            "claim": "aaaa",
+            "die_after": 0.3,
+        },
+        "bbbb": {"runtime": 1.5},
+    }
+    exit_code, output_dir, _ = _run_driver(tmp_path, script, stall_grace=0.1, workers=2)
+
+    rows = _read_manifest(output_dir)
+    assert [row["pdbID"] for row in rows].count("aaaa") == 1
+    assert {row["pdbID"] for row in rows} == set(script)
+    assert all(row["status"] == "ok" for row in rows)
     assert exit_code == 0
 
 

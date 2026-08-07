@@ -1196,8 +1196,10 @@ class _WorkerDeathWatch:
                 break
         return losses or None
 
-    def superseded(self, result: EntryResult) -> bool:
-        """True when a synthesized loss row already stands for this entry."""
+    def superseded(self, result: EntryResult, completed_ids: Collection[str]) -> bool:
+        """Ignore delayed real or death results rather than write an entry twice."""
+        if result.pdb_id in completed_ids:
+            return True
         died = result.reason_codes == ["worker_process_died"]
         return result.pdb_id in self._lost_ids and not died
 
@@ -1394,7 +1396,7 @@ def _dispatch_entries(
                         reserved_bytes -= active_item[1].bytes
             last_progress = time.monotonic()
             for r in batch:
-                if deaths.superseded(r):
+                if deaths.superseded(r, completed_ids):
                     continue
                 completed += 1
                 completed_ids.add(r.pdb_id)
