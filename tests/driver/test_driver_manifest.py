@@ -312,7 +312,7 @@ def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
     assert "metal_site_without_density" in result.reason_codes
     assert result.status == "partial"
     assert result.retryable is False
-    # The manifest counts the coordinate-model site while metal_stats_all.csv
+    # The manifest counts the coordinate-model site while metal_sites_all.csv
     # carries no row for it, so a join on statistics would silently lose it.
     # When requested, bond analysis still retains the site's contact evidence.
     assert result.n_metals == 1
@@ -1571,9 +1571,9 @@ class TestResumeStaging:
 
     TARGET_NAMES = (
         "manifest.csv",
-        "metal_stats_all.csv",
+        "metal_sites_all.csv",
         "metal_bonds_all.csv",
-        "metal_candidates_all.csv",
+        "metal_contact_candidates_all.csv",
     )
 
     def _outputs(self, output_dir: Path, confidence: bool = False) -> tuple[str, ...]:
@@ -2133,6 +2133,29 @@ class TestOutputWriters:
         written = _read_csv(tmp_path / "bonds.csv")[1]
         assert written == [f"v-{column}" for column in coordination_schema.BOND_COLUMNS]
 
+    def test_scientific_csv_scalars_use_portable_missing_and_boolean_values(
+        self, tmp_path: Path
+    ) -> None:
+        handles = self._handles(tmp_path)
+        writers = OutputWriters(*handles)
+        bond: dict[str, object] = dict.fromkeys(coordination_schema.BOND_COLUMNS, "")
+        bond["declared_connection"] = True
+        bond["geometry_outlier"] = False
+        bond["zscore"] = float("nan")
+        writers.write_bond_rows([coordination_schema.BondRow(bond)])
+        self._close(handles)
+
+        written = dict(
+            zip(
+                coordination_schema.BOND_COLUMNS,
+                _read_csv(tmp_path / "bonds.csv")[1],
+                strict=True,
+            )
+        )
+        assert written["declared_connection"] == "true"
+        assert written["geometry_outlier"] == "false"
+        assert written["zscore"] == ""
+
     def test_disabled_bond_outputs_are_a_no_op_not_a_crash(
         self, tmp_path: Path
     ) -> None:
@@ -2199,7 +2222,7 @@ class TestOutputWriters:
         row["bogus"] = ""
         with pytest.raises(RuntimeError) as excinfo:
             coordination_schema.CandidateRow(row)
-        assert "metal_candidates_all.csv" in str(excinfo.value)
+        assert "metal_contact_candidates_all.csv" in str(excinfo.value)
         assert "unexpected bogus" in str(excinfo.value)
 
     def test_confidence_output_requires_its_columns(self, tmp_path: Path) -> None:
@@ -2415,7 +2438,7 @@ class TestScheduleEntries:
         all_ids = ["1abc", "2abc", "3abc", "4abc", "5abc"]
         self._manifest(tmp_path, ["1abc", "2abc"])
         (tmp_path / "metal_bonds_all.csv").write_text("", encoding="utf-8")
-        (tmp_path / "metal_candidates_all.csv").write_text("", encoding="utf-8")
+        (tmp_path / "metal_contact_candidates_all.csv").write_text("", encoding="utf-8")
         args = self._args(tmp_path, all_ids, resume=True, max_pdbs=2)
 
         ids, run_log = self._schedule(tmp_path, args)

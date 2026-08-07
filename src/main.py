@@ -7,9 +7,9 @@ CCP4 `mtzfix`, computes 2mFo-DFc and mFo-DFc maps with `fft`, and runs
 metal-containing cofactors. Core results are streamed to four CSVs under
 --output-dir:
 
-  metal_stats_all.csv  -- one row per selected metal site
+  metal_sites_all.csv  -- one row per selected metal site
   metal_bonds_all.csv  -- one row per inferred or declared contact
-  metal_candidates_all.csv -- one row per discovered or declared candidate
+  metal_contact_candidates_all.csv -- one row per contact candidate
   manifest.csv         -- one row per entry with status and provenance
 
 An uncapped database run additionally streams compact confidence inputs and,

@@ -154,7 +154,7 @@ for direct PDB input it requires a complete `SEQRES` sequence matching the
 modeled polymer. A first or last modeled residue is not by itself treated as a
 terminus, so missing or disordered endpoint residues cannot create terminal
 donors. Other proximal N/O/S atoms are
-retained in `metal_candidates_all.csv`, marked
+retained in `metal_contact_candidates_all.csv`, marked
 `inferred_donor_allowed=false`, and cannot become geometry-inferred bonds.
 This includes internal peptide N, ASN/GLN amide N, TRP pyrrole N, and ARG
 guanidinium N. A declaration can still establish such an atom as a declared
@@ -185,7 +185,7 @@ cover every donor Alchemy will infer:
   coordination, but no bundled distance can assess it.
 
 A declared contact to a donor class with no reference is retained in
-`metal_candidates_all.csv` with its measured distance and full connection
+`metal_contact_candidates_all.csv` with its measured distance and full connection
 provenance, and the entry records
 `declared_donor_outside_supported_classes`. It is deliberately **not** promoted
 to a bond row: doing so would raise the site's coordination count and enlarge
@@ -337,7 +337,7 @@ disabled.
 
 `src/confidence_score.py` retains `finalize` and `score` subcommands for recovery
 and reproducibility using already compact confidence-input CSVs; neither command
-reconstructs inputs by rescanning `metal_stats_all.csv` or
+reconstructs inputs by rescanning `metal_sites_all.csv` or
 `metal_bonds_all.csv`.
 
 The DPI is calculated from PDB-REDO reflection and R-free metadata, the
@@ -380,7 +380,7 @@ change which conformer is measured — selection takes the highest mean valid
 occupancy either way — so this field is reported rather than acted on, and an
 overfull donor is never discarded as contact evidence. Zero occupancy is valid for `Ni` but is not
 accepted as evidence for a metal site or assigned contact. A source-declared
-contact to a zero-occupancy donor remains in `metal_candidates_all.csv` for
+contact to a zero-occupancy donor remains in `metal_contact_candidates_all.csv` for
 audit, with `eligibility_status=zero_occupancy`, but cannot become a bond. A
 metal record excluded the same way leaves no site to annotate, so the entry
 instead carries the `zero_occupancy_metal_excluded` warning: without it a

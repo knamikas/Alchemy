@@ -80,7 +80,7 @@ Running batches, resuming them, and reading what a run wrote. See
   `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
   together so their per-entry evidence cannot diverge.
 - A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
-  `metal_candidates_all.csv` files before replacing the manifest and
+  `metal_contact_candidates_all.csv` files before replacing the manifest and
   statistics, so old bond-stage rows cannot be mistaken for current output.
 - A failure in bond analysis does not discard real-space-statistics rows already
   calculated for that entry; the manifest records the entry as `partial` with
@@ -172,7 +172,7 @@ Running batches, resuming them, and reading what a run wrote. See
 - The candidate-output migration expands all four CSV schemas. `--resume`
   refuses to mix new rows with incompatible pre-migration headers; use a new `--output-dir`
   for the first run. All four headers are compared in full,
-  including the EDSTATS block of `metal_stats_all.csv`, so appended rows cannot
+  including the EDSTATS block of `metal_sites_all.csv`, so appended rows cannot
   be silently misaligned by output from a different EDSTATS build.
 
 ## Manifest reason codes

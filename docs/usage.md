@@ -56,7 +56,7 @@ an input error rather than a request to use the no-metadata fallbacks.
 | `--resume` | Skip `ok` and terminal `partial` outcomes; retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |
 | `--retry-partials` | With `--resume`, retry all `partial` entries recorded in the manifest. Successful `ok` entries remain skipped; `--id` or `--id-file` may restrict the retry set. |
 | `--log-dir` | Directory for run reports and their companion entry-diagnostics tables. Defaults to `<output-dir>/logs/`, keeping one immutable report pair per invocation out of the directory holding the scientific result CSVs. |
-| `--no-bonds` | Skip bond-distance analysis. A fresh run removes previous `metal_bonds_all.csv` and `metal_candidates_all.csv` files in the output directory. |
+| `--no-bonds` | Skip bond-distance analysis. A fresh run removes previous `metal_bonds_all.csv` and `metal_contact_candidates_all.csv` files in the output directory. |
 | `--confidence-reference-dir <path>` | Score confidence against an existing frozen reference instead of the one in the output directory. Applies to single, ID-file, manual, and capped runs; an uncapped full-database run builds its own reference and ignores this. See [method.md](method.md) for what the score claims. |
 | `-v`, `--verbose` | Increase diagnostic detail. The default reports the run narrative; `-v` adds per-entry and per-CCP4-program records from inside the worker processes. |
 | `--quiet` | Report warnings and errors only. |

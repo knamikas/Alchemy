@@ -353,7 +353,7 @@ def validate_resume_schemas(
     """Refuse to resume into incompatible or internally inconsistent output.
 
     Whole headers are compared, including the EDSTATS block of
-    metal_stats_all.csv: a header from a different EDSTATS build would misalign
+    metal_sites_all.csv: a header from a different EDSTATS build would misalign
     every density column with no other symptom. Once the manifest contains a
     terminal result, every enabled output is required and its per-entry rows
     must agree with the manifest. Orphan rows without a complete manifest row

@@ -420,9 +420,9 @@ def append_site_fields(
         coverage = summary.get("geometry_coverage_image_inclusive", NAN)
         if isinstance(coverage, float) and not math.isfinite(coverage):
             coverage = summary.get("geometry_coverage_explicit", NAN)
-        extra = stats_extra_values(structure, row.site, summary)
+        extra = stats_extra_values(row.pdb_id, structure, row.site, summary)
         if index == 0:
-            check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_stats_all.csv")
+            check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_sites_all.csv")
         rows[index] = row.with_fields(
             (
                 *row.fields,

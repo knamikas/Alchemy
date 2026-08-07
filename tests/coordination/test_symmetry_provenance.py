@@ -480,6 +480,8 @@ def test_candidate_rows_carry_the_same_image_geometry(
     assert len(matching) == 1
     candidate = matching[0]
 
+    assert candidate["assigned_as_bond"] is True
+    assert candidate["contact_id"] == analysis.rows[0]["contact_id"]
     assert candidate["symmetry_operation"] == code
     assert candidate["contact_scope"] == scope
     assert _transformed_position(candidate) == approx(

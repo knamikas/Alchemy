@@ -509,12 +509,16 @@ class OutputLayout:
     def __init__(self, output_dir: str) -> None:
         self.output_dir = output_dir
         self.manifest = os.path.join(output_dir, "manifest.csv")
-        self.stats = os.path.join(output_dir, "metal_stats_all.csv")
+        self.stats = os.path.join(output_dir, "metal_sites_all.csv")
         self.bonds = os.path.join(output_dir, "metal_bonds_all.csv")
-        self.candidates = os.path.join(output_dir, "metal_candidates_all.csv")
+        self.candidates = os.path.join(output_dir, "metal_contact_candidates_all.csv")
         self.confidence_inputs = os.path.join(output_dir, "confidence_inputs_all.csv")
         self.confidence_scores = os.path.join(output_dir, "confidence_scores_all.csv")
         self.reference_dir = os.path.join(output_dir, "confidence_reference")
+        self.legacy_scientific_outputs = (
+            os.path.join(output_dir, "metal_stats_all.csv"),
+            os.path.join(output_dir, "metal_candidates_all.csv"),
+        )
 
     @property
     def core(self) -> tuple[str, str, str, str]:
@@ -888,7 +892,7 @@ def _clear_stale_outputs(
     else:
         stale = (layout.confidence_inputs, layout.confidence_scores, reference_marker)
     try:
-        for path in stale:
+        for path in (*stale, *layout.legacy_scientific_outputs):
             if os.path.isfile(path):
                 os.unlink(path)
     except OSError as exc:
@@ -1541,9 +1545,9 @@ def process_entries(
         candidate_rows_written=opened_writers.n_candidates,
         confidence_rows_written=opened_writers.n_confidence,
         manifest_path=layout.manifest,
-        metal_stats_path=layout.stats,
+        metal_sites_path=layout.stats,
         metal_bonds_path=layout.bonds if args.bonds else "disabled",
-        metal_candidates_path=layout.candidates if args.bonds else "disabled",
+        metal_contact_candidates_path=(layout.candidates if args.bonds else "disabled"),
     )
     if staging is not None:
         try:

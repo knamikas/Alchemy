@@ -33,7 +33,7 @@ maintained Python entry point used by the launcher.
 Results are written to (the column lists and row builders live in
 `src/coordination/schema.py`):
 
-- `output/metal_stats_all.csv` — one row per selected metal site, with
+- `output/metal_sites_all.csv` — one row per selected metal site, with
   real-space statistics, DPI and validation provenance, and explicit-only
   versus image-inclusive contact summaries. A cofactor containing multiple
   selected metal sites repeats its residue-level EDSTATS values once per site.
@@ -50,7 +50,7 @@ Results are written to (the column lists and row builders live in
 - `output/metal_bonds_all.csv` — one row per inferred or declared contact,
   including distance, reference-based z-score, conformer selection, and
   separate crystallographic-symmetry and strict-NCS provenance.
-- `output/metal_candidates_all.csv` — one row per donor-like atom found by the
+- `output/metal_contact_candidates_all.csv` — one row per donor-like atom found by the
   broad 4 Å search or supplied by a source `_struct_conn`/`LINK` declaration.
   Each row records whether it is first-sphere eligible, outside the applicable
   cutoff, or missing an assignment reference, together with connection, cutoff,
@@ -129,6 +129,8 @@ The README is the overview and the quick start. Everything else lives in
 - [docs/method.md](docs/method.md) — what each stage computes, which contacts
   become bonds, which donors the reference table covers, and what the
   confidence score claims.
+- [docs/output-schema.md](docs/output-schema.md) — row grain, join identifiers,
+  serialization conventions, units, and the scientific CSV data dictionary.
 - [docs/operations.md](docs/operations.md) — batch runs, resuming, retries, and
   reading the outputs.
 - [docs/maintenance.md](docs/maintenance.md) — the bundled cofactor catalog and

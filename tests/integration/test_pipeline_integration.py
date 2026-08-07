@@ -431,9 +431,9 @@ def run_batch(
         output_dir=output_dir,
         manifest_rows=manifest_rows,
         manifest={row["pdbID"]: row for row in manifest_rows},
-        stats=read_rows(output_dir, "metal_stats_all.csv"),
+        stats=read_rows(output_dir, "metal_sites_all.csv"),
         bonds=read_rows(output_dir, "metal_bonds_all.csv"),
-        candidates=read_rows(output_dir, "metal_candidates_all.csv"),
+        candidates=read_rows(output_dir, "metal_contact_candidates_all.csv"),
     )
 
 
@@ -475,9 +475,9 @@ def test_single_entry_run_writes_documented_outputs(
     written = set(os.listdir(output_dir))
     assert {
         "manifest.csv",
-        "metal_stats_all.csv",
+        "metal_sites_all.csv",
         "metal_bonds_all.csv",
-        "metal_candidates_all.csv",
+        "metal_contact_candidates_all.csv",
     } <= written
     assert len(log_paths(output_dir)) == 1
 
@@ -489,15 +489,18 @@ def test_single_entry_run_writes_documented_outputs(
     assert [name for name in written if name.startswith(".alchemy-")] == []
 
     assert read_header(output_dir, "manifest.csv") == MANIFEST_COLUMNS
-    assert read_header(output_dir, "metal_stats_all.csv") == STATS_COLUMNS
+    assert read_header(output_dir, "metal_sites_all.csv") == STATS_COLUMNS
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
-    assert read_header(output_dir, "metal_candidates_all.csv") == CANDIDATE_COLUMNS
+    assert (
+        read_header(output_dir, "metal_contact_candidates_all.csv") == CANDIDATE_COLUMNS
+    )
 
     # Columns the README names must be present, not merely equal to the code's
     # own constant, which would drift away from the documentation unnoticed.
-    stats_header = read_header(output_dir, "metal_stats_all.csv")
+    stats_header = read_header(output_dir, "metal_sites_all.csv")
     assert set(helpers.EDSTATS_HEADER) <= set(stats_header)
     assert {
+        "metal_site_id",
         "density_observation_id",
         "density_scope",
         "density_shared_site_count",
@@ -508,6 +511,8 @@ def test_single_entry_run_writes_documented_outputs(
         "resolution",
     } <= set(stats_header)
     assert {
+        "metal_site_id",
+        "contact_id",
         "distance",
         "zscore",
         "geometry_outlier",
@@ -522,6 +527,9 @@ def test_single_entry_run_writes_documented_outputs(
         "context_warning_reasons",
     } <= set(BOND_COLUMNS)
     assert {
+        "metal_site_id",
+        "contact_id",
+        "assigned_as_bond",
         "first_sphere_eligible",
         "eligibility_status",
         "eligibility_reason",
@@ -602,7 +610,7 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
             (row["neighbor_resname"], row["neighbor_atom"], row["neighbor_resnum"])
             for row in site_bonds
         } == expected_donors
-        assert all(row["declared_connection"] == "True" for row in site_bonds)
+        assert all(row["declared_connection"] == "true" for row in site_bonds)
 
         for bond in site_bonds:
             distance = float(bond["distance"])
@@ -623,8 +631,8 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
             tolerance = 0.0005 / denominator + 5e-5
             assert float(bond["zscore"]) == approx(expected_z, abs=tolerance)
             assert abs(expected_z) < float(bond["zscore_outlier_cutoff"])
-            assert bond["geometry_outlier"] == "False"
-            assert bond["geometry_consistent"] == "True"
+            assert bond["geometry_outlier"] == "false"
+            assert bond["geometry_consistent"] == "true"
             assert float(bond["sigma_mag"]) == approx(rszd)
             assert float(bond["sigma_neg"]) == approx(float(site["ZD-m"]))
             assert float(bond["sigma_pos"]) == approx(float(site["ZD+m"]))
@@ -688,7 +696,7 @@ def test_declared_connections_measure_their_own_reported_distance(
     distance the depositor measured, so a misbound declaration disagrees with
     its own number.
     """
-    declared = [row for row in batch.bonds if row["declared_connection"] == "True"]
+    declared = [row for row in batch.bonds if row["declared_connection"] == "true"]
     assert declared, "the batch must contain declared metal connections"
 
     for row in declared:
@@ -747,7 +755,7 @@ def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(
         } == expected
         assert {row["neighbor_chain"] for row in rows} == {chain}
         assert all(row["neighbor_class"] == "amino_acid" for row in rows)
-        assert all(row["declared_connection"] == "True" for row in rows)
+        assert all(row["declared_connection"] == "true" for row in rows)
 
 
 @_requires_entry_data
@@ -777,7 +785,7 @@ def test_no_metal_entry_is_reported_not_dropped(batch: Batch) -> None:
     assert rows_for(batch.candidates, "9nxl") == []
 
     # Headers survive even when an entry contributes no rows.
-    assert read_header(batch.output_dir, "metal_stats_all.csv") == STATS_COLUMNS
+    assert read_header(batch.output_dir, "metal_sites_all.csv") == STATS_COLUMNS
 
     log_path = log_paths(batch.output_dir)[0]
     diagnostics_path = log_path.removesuffix(".log") + "_entries.csv"
@@ -912,9 +920,9 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
 
     names = (
         "manifest.csv",
-        "metal_stats_all.csv",
+        "metal_sites_all.csv",
         "metal_bonds_all.csv",
-        "metal_candidates_all.csv",
+        "metal_contact_candidates_all.csv",
     )
     before = {name: Path(str(output_dir), name).read_bytes() for name in names}
 
@@ -963,7 +971,9 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
     assert disabled.exit_code == 0, disabled.text
     assert "removed stale bond-stage output" in disabled.text
     assert not os.path.exists(os.path.join(str(output_dir), "metal_bonds_all.csv"))
-    assert not os.path.exists(os.path.join(str(output_dir), "metal_candidates_all.csv"))
+    assert not os.path.exists(
+        os.path.join(str(output_dir), "metal_contact_candidates_all.csv")
+    )
 
     blank = manifest_by_id(output_dir)
     assert set(blank) == set(ENTRY_IDS)
@@ -971,7 +981,7 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
         assert row["status"] == "ok", pdb_id
         assert row["n_bonds"] == "", pdb_id
         assert row["n_candidates"] == "", pdb_id
-    assert read_rows(output_dir, "metal_stats_all.csv")
+    assert read_rows(output_dir, "metal_sites_all.csv")
 
     restored = run_batch(
         output_dir, entry_cache, ccp4_env, extra=("--resume",), tmp_root=tmp_path
@@ -1161,9 +1171,9 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     assert row["n_metals"] == "2"
     assert row["n_bonds"] == "8"
 
-    site = read_rows(output_dir, "metal_stats_all.csv")[0]
+    site = read_rows(output_dir, "metal_sites_all.csv")[0]
     assert site["dpi_unavailable_reason"] == "missing_dpi_metadata_source"
-    assert not math.isfinite(float(site["dpi"]))
+    assert site["dpi"] == ""
     # Only the DPI-derived numbers are lost; density is unaffected.
     assert float(site["ZDm"]) == approx(float(rows_for(batch.stats, "9myr")[0]["ZDm"]))
 
@@ -1171,10 +1181,10 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
     reference = rows_for(batch.bonds, "9myr")[0]
     assert float(bond["distance"]) == approx(float(reference["distance"]))
     assert bond["neighbor_atom"] == "SG"
-    assert not math.isfinite(float(bond["dpi"]))
-    assert not math.isfinite(float(bond["zscore"]))
+    assert bond["dpi"] == ""
+    assert bond["zscore"] == ""
     assert float(bond["literature_distance"]) > 0.0
-    assert bond["geometry_outlier"] in ("", "False")
+    assert bond["geometry_outlier"] == ""
 
 
 @_requires_entry_data
@@ -1350,7 +1360,7 @@ def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
         assert column in row["status_detail"], row["status_detail"]
     assert row["n_bonds"] == "" and row["n_candidates"] == ""
 
-    assert read_rows(output_dir, "metal_stats_all.csv") == []
+    assert read_rows(output_dir, "metal_sites_all.csv") == []
     assert read_header(output_dir, "metal_bonds_all.csv") == BOND_COLUMNS
     assert [
         name for name in os.listdir(str(output_dir)) if name.startswith(".alchemy-")

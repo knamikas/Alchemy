@@ -449,9 +449,12 @@ def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path: Path) -
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "O")
+    row = _only(rows, "O")
+    assert candidate["assigned_as_bond"] is True
+    assert candidate["metal_site_id"] == row["metal_site_id"]
+    assert candidate["contact_id"] == row["contact_id"]
     assert candidate["inferred_donor_allowed"] is True
     assert candidate["inferred_donor_rule"] == "water_oxygen"
-    row = _only(rows, "O")
     assert row["neighbor_class"] == "water"
     assert row["bonded_to"] == "HOH"
 
@@ -487,6 +490,9 @@ def test_excluded_nitrogen_donors_never_become_inferred_bonds(
     rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
+    assert candidate["assigned_as_bond"] is False
+    assert candidate["metal_site_id"].startswith("test:m")
+    assert candidate["contact_id"].startswith(candidate["metal_site_id"] + ":c")
     assert candidate["inferred_donor_allowed"] is False
     assert candidate["inferred_donor_rule"] == "outside_typical_donor_list"
     # Proximity alone still satisfies the distance rule; only the donor table

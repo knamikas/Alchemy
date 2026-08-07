@@ -1,8 +1,9 @@
 """The three CSV schemas Alchemy publishes, and the rows written against them.
 
 This is the output contract: ``metal_bonds_all.csv`` carries assigned
-metal-donor contacts, ``metal_candidates_all.csv`` the evidence behind them,
-and ``metal_stats_all.csv`` the EDSTATS table with per-site columns appended.
+metal-donor contacts, ``metal_contact_candidates_all.csv`` the evidence behind
+them, and ``metal_sites_all.csv`` the EDSTATS table with per-site columns
+appended.
 Rows are written by projecting them onto their column list, so a key a builder
 gained without a matching column would be dropped in silence and one it lost
 would surface downstream as a bare ``KeyError``. ``check_row_schema`` catches
@@ -12,6 +13,7 @@ The builders are serialization only: every decision they report was made in
 ``coordination.analysis`` before the row is built.
 """
 
+import hashlib
 from typing import Any, ClassVar, override
 from collections.abc import Iterable, Iterator, Mapping
 
@@ -33,6 +35,8 @@ ZSCORE_OUTLIER_CUTOFF = 6.0
 # compatibility and describe inferred first-sphere or source-declared contacts.
 BOND_COLUMNS = [
     "pdbID",
+    "metal_site_id",
+    "contact_id",
     "metal_resname",
     "metal_chain",
     "metal_resnum",
@@ -95,7 +99,6 @@ BOND_COLUMNS = [
     "alternative_conformers_present",
     "altloc_selection_fallback",
     "neighbor_class",
-    "candidate_contact",
     "reference_covered",
     "geometry_outlier",
     "geometry_consistent",
@@ -127,6 +130,9 @@ BOND_COLUMNS = [
 # declaration may supersede the proximity-only result.
 CANDIDATE_COLUMNS = [
     "pdbID",
+    "metal_site_id",
+    "contact_id",
+    "assigned_as_bond",
     "candidate_source",
     "eligibility_status",
     "eligibility_reason",
@@ -193,8 +199,9 @@ CANDIDATE_COLUMNS = [
 ]
 
 
-# Appended after the dynamic EDSTATS header in metal_stats_all.csv.
+# Appended after the dynamic EDSTATS header in metal_sites_all.csv.
 STATS_EXTRA_COLUMNS = [
+    "metal_site_id",
     "model_policy",
     "input_model_count",
     "model_analyzed",
@@ -348,7 +355,34 @@ class BondRow(_CsvRow):
 class CandidateRow(_CsvRow):
     columns = tuple(CANDIDATE_COLUMNS)
     indices = {column: index for index, column in enumerate(columns)}
-    schema_name = "metal_candidates_all.csv"
+    schema_name = "metal_contact_candidates_all.csv"
+
+
+def metal_site_identifier(pdb_id: str, metal: AtomSite) -> str:
+    return (
+        f"{pdb_id.lower()}:m{metal.model_index}:c{metal.output_chain_index}:"
+        f"r{metal.output_residue_index}:a{metal.atom_index}"
+    )
+
+
+def contact_identifier(pdb_id: str, metal: AtomSite, contact: Candidate) -> str:
+    neighbor = contact.neighbor
+    identity = (
+        neighbor.model_index,
+        neighbor.output_chain_index,
+        neighbor.output_residue_index,
+        neighbor.atom_index,
+        contact.contact_scope,
+        contact.strict_ncs_operation_id,
+        contact.symmetry_image_index,
+        contact.symmetry_operation,
+        *contact.translation,
+    )
+    # A fixed-width digest keeps joins manageable while retaining every field
+    # that distinguishes generated images of the same deposited donor atom.
+    payload = "\x1f".join(str(value) for value in identity).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()[:24]
+    return f"{metal_site_identifier(pdb_id, metal)}:c{digest}"
 
 
 def _bonded_to(is_water: bool = False) -> str:
@@ -435,6 +469,7 @@ def context_warning_values(
 
 
 def stats_extra_values(
+    pdb_id: str,
     structure: StructureContext,
     metal: AtomSite | None = None,
     summary: Mapping[str, Any] | None = None,
@@ -443,6 +478,7 @@ def stats_extra_values(
     summary = summary or {}
     residue = structure.residue_for_atom(metal) if metal is not None else None
     values: dict[str, Any] = {
+        "metal_site_id": metal_site_identifier(pdb_id, metal) if metal else "",
         "model_policy": structure.model_policy,
         "input_model_count": structure.input_model_count,
         "model_analyzed": structure.model_analyzed,
@@ -538,6 +574,8 @@ def bond_row(
     return BondRow(
         {
             "pdbID": pdb_id,
+            "metal_site_id": metal_site_identifier(pdb_id, metal),
+            "contact_id": contact_identifier(pdb_id, metal, contact),
             "metal_resname": metal.residue_name,
             "metal_chain": metal.chain_id,
             "metal_resnum": metal.resnum,
@@ -604,7 +642,6 @@ def bond_row(
                 or neighbor_residue.altloc_selection_fallback
             ),
             "neighbor_class": _neighbor_class(neighbor),
-            "candidate_contact": True,
             "reference_covered": geometry.reference_covered,
             "geometry_outlier": geometry.outlier,
             "geometry_consistent": geometry.consistent,
@@ -633,7 +670,12 @@ def bond_row(
 
 
 def candidate_row(
-    pdb_id: str, structure: StructureContext, metal: AtomSite, candidate: Candidate
+    pdb_id: str,
+    structure: StructureContext,
+    metal: AtomSite,
+    candidate: Candidate,
+    *,
+    assigned_as_bond: bool,
 ) -> CandidateRow:
     """Return one discovered or declared candidate as a candidate CSV row."""
     neighbor = candidate.neighbor
@@ -646,6 +688,9 @@ def candidate_row(
     return CandidateRow(
         {
             "pdbID": pdb_id,
+            "metal_site_id": metal_site_identifier(pdb_id, metal),
+            "contact_id": contact_identifier(pdb_id, metal, candidate),
+            "assigned_as_bond": assigned_as_bond,
             "candidate_source": "|".join(sorted(candidate.candidate_sources)),
             "eligibility_status": eligibility.status,
             "eligibility_reason": eligibility.reason,

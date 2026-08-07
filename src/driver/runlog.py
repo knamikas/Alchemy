@@ -441,9 +441,13 @@ class RunLog:
         lines.extend(["", "Output files", "------------"])
         output_specs = (
             ("Manifest", "manifest_path", None),
-            ("Metal statistics", "metal_stats_path", "metal_rows_written"),
+            ("Metal sites", "metal_sites_path", "metal_rows_written"),
             ("Bonds", "metal_bonds_path", "bond_rows_written"),
-            ("Candidates", "metal_candidates_path", "candidate_rows_written"),
+            (
+                "Contact candidates",
+                "metal_contact_candidates_path",
+                "candidate_rows_written",
+            ),
             ("Confidence scores", "confidence_scores_path", "confidence_rows"),
             ("Confidence reference", "confidence_reference_path", None),
         )

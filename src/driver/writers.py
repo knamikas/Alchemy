@@ -7,6 +7,7 @@ back to decide what still needs running.
 """
 
 import csv
+import math
 from typing import Any, TextIO
 from collections.abc import Mapping, Sequence
 
@@ -83,6 +84,14 @@ def _manifest_value(value: object) -> object:
     value = blank_if_unmeasured(value)
     if isinstance(value, bool):
         return "true" if value else "false"
+    return value
+
+
+def _scientific_csv_value(value: object) -> object:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and not math.isfinite(value):
+        return ""
     return value
 
 
@@ -177,7 +186,9 @@ class OutputWriters:
             return
         output_rows = [row.as_output_dict(STATS_COLUMNS) for row in rows]
         for row in output_rows:
-            self._stats.writerow([row[column] for column in STATS_COLUMNS])
+            self._stats.writerow(
+                [_scientific_csv_value(row[column]) for column in STATS_COLUMNS]
+            )
             self.n_rows += 1
         self._stats_fh.flush()
 
@@ -186,7 +197,9 @@ class OutputWriters:
             return
         for bond in bond_rows:
             values = bond.as_dict()
-            self._bonds.writerow([values[column] for column in BOND_COLUMNS])
+            self._bonds.writerow(
+                [_scientific_csv_value(values[column]) for column in BOND_COLUMNS]
+            )
             self.n_bonds += 1
         self._bonds_fh.flush()
 
@@ -199,7 +212,9 @@ class OutputWriters:
             return
         for candidate in candidate_rows:
             values = candidate.as_dict()
-            self._candidates.writerow([values[column] for column in CANDIDATE_COLUMNS])
+            self._candidates.writerow(
+                [_scientific_csv_value(values[column]) for column in CANDIDATE_COLUMNS]
+            )
             self.n_candidates += 1
         self._candidates_fh.flush()
 

@@ -31,6 +31,7 @@ from coordination.schema import (
     ZSCORE_OUTLIER_CUTOFF,
     bond_row,
     candidate_row,
+    contact_identifier,
     context_warning_values,
 )
 from codes import (
@@ -1039,6 +1040,9 @@ def _analyze_metal_site(
         site_key=metal.source_key,
     )
     parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
+    assigned_contact_ids = {
+        contact_identifier(pdb_id, metal, contact) for contact in primary_contacts
+    }
     return _MetalAnalysisResult(
         bond_rows=[
             bond_row(
@@ -1054,7 +1058,15 @@ def _analyze_metal_site(
             for contact in primary_contacts
         ],
         candidate_rows=[
-            candidate_row(pdb_id, structure, metal, candidate)
+            candidate_row(
+                pdb_id,
+                structure,
+                metal,
+                candidate,
+                assigned_as_bond=(
+                    contact_identifier(pdb_id, metal, candidate) in assigned_contact_ids
+                ),
+            )
             for candidate in primary_candidates
         ],
         summary=summary,
