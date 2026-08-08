@@ -1,8 +1,9 @@
 # Scientific CSV schema
 
 This document defines the row grain, identifiers, serialization, and columns
-of Alchemy's three scientific CSV outputs. The ordered machine-enforced schemas
-live in `src/driver/writers.py` and `src/coordination/schema.py`.
+of Alchemy's scientific CSV outputs. The ordered machine-enforced schemas live
+in `src/driver/writers.py`, `src/coordination/schema.py`,
+`src/confidence_score.py`, and `src/crystallization_conditions.py`.
 
 ## Shared conventions
 
@@ -181,6 +182,42 @@ declaration. Candidate discovery does not itself assign a bond.
 `coordination_status` describes the candidate's evidence before all final bond
 filters. It is deliberately not an alias for `assigned_as_bond`.
 
+## `crystallization_conditions_all.csv`
+
+Grain: one row per deposited crystallization-condition record. Conditions are
+entry-level experimental context and join to site, bond, and confidence rows by
+`pdbID`. They are not confidence inputs.
+
+| Columns | Meaning |
+| --- | --- |
+| `pdbID`, `crystallization_condition_id` | Entry join key and stable within-entry condition identifier. |
+| `source_format` | `mmcif` for `_exptl_crystal_grow` or `pdb` for legacy `REMARK 280`. |
+| `crystal_id` | Deposited crystal identifier when reported. |
+| `method` | Reported method; for legacy PDB it is conservatively recognized from the remark text. |
+| `pH`, `pH_range` | Deposited pH value or range, preserved separately. |
+| `temperature_K`, `temperature_details` | Deposited temperature and its free-text qualification. mmCIF temperatures are in kelvin. |
+| `raw_details` | Original deposited condition details: the auditable source for normalized summary flags. |
+
+## `crystallization_summary_all.csv`
+
+Grain: exactly one contextual row per processed manifest entry. A status of
+`available` means a condition record was found, `not_reported` means the source
+contained no condition record, `unparseable` means extraction failed, and
+`input_unavailable` means entry preparation supplied no source file.
+
+| Columns | Meaning |
+| --- | --- |
+| `pdbID`, `crystallization_data_status`, `crystallization_condition_count`, `crystallization_source_format`, `crystallization_condition_ids` | Join key, availability/provenance, and links to canonical condition rows. |
+| `crystallization_pH_min`, `crystallization_pH_max`, `crystallization_temperature_min_K`, `crystallization_temperature_max_K` | Entry ranges across reported records. |
+| `crystallization_raw_text` | Distinct raw descriptions joined with ` || `. |
+| `crystallization_detected_metals`, `crystallization_any_metal` | Sorted pipe-separated explicit metal detections and their summary flag. |
+| `crystallization_promiscuous_transition_metal`, `crystallization_ni_co_like_metal`, `crystallization_buffer_light_metal`, `crystallization_heavy_additive_phasing_metal` | Positive-evidence chemical-class flags used for contextual analysis. |
+| `crystallization_sulfate`, `crystallization_cacodylate`, `crystallization_acetate` | Positive-evidence ingredient flags discussed in the manuscript. |
+
+When `crystallization_data_status` is not `available`, detection flags are
+blank rather than `false`. A missing deposited record must not be interpreted
+as proof that a reagent was experimentally absent.
+
 ## `confidence_inputs_all.csv`
 
 Grain: one compact evidence row per manifest-counted selected metal site during
@@ -240,6 +277,22 @@ a PASS/REVIEW/SUSPECT boundary.
 Each component cohort is weighted per assessable metal site, not per structure.
 This is the appropriate interpretation for a site-level empirical rank, but it
 must not be mistaken for a structure-weighted statistic.
+
+## `review_queue_all.csv`
+
+Grain: one row per confidence row whose authoritative `alchemy_level` is
+`REVIEW` or `SUSPECT`. All confidence-score columns are preserved, followed by
+the crystallization-summary columns except the repeated `pdbID`, plus:
+
+| Columns | Meaning |
+| --- | --- |
+| `crystallization_contains_modeled_metal` | Whether the row's `metal_element` was detected in the entry condition. Blank when condition data are unavailable. |
+| `crystallization_contains_different_promiscuous_transition_metal` | Whether another Mn, Fe, Co, Ni, Cu, Zn, or Cd was detected. Blank when condition data are unavailable. |
+| `crystallization_context_flags` | Pipe-separated positive findings for rapid review. |
+
+The queue is a derived convenience view. Its membership is determined before
+the crystallization join, and none of its condition columns changes a
+confidence component, score, level, evidence basis, or verdict reason.
 
 ## `confidence_reference/`
 

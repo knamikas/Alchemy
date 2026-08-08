@@ -448,8 +448,19 @@ class RunLog:
                 "metal_contact_candidates_path",
                 "candidate_rows_written",
             ),
+            (
+                "Crystallization conditions",
+                "crystallization_conditions_path",
+                "crystallization_condition_rows_written",
+            ),
+            (
+                "Crystallization summary",
+                "crystallization_summary_path",
+                "crystallization_summary_rows_written",
+            ),
             ("Confidence scores", "confidence_scores_path", "confidence_rows"),
             ("Confidence reference", "confidence_reference_path", None),
+            ("Review queue", "review_queue_path", "review_queue_rows"),
         )
         any_output = False
         for label, path_key, count_key in output_specs:

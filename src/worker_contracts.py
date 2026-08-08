@@ -73,6 +73,14 @@ def _empty_candidate_rows() -> list[CandidateRow]:
     return []
 
 
+def _empty_csv_rows() -> list[dict[str, Any]]:
+    return []
+
+
+def _empty_csv_row() -> dict[str, Any]:
+    return {}
+
+
 @dataclass(slots=True)
 class EntryResult:
     """Keep an unrun stage distinguishable from one that measured zero."""
@@ -95,6 +103,10 @@ class EntryResult:
     rows: list[MetalStatsRow] = field(default_factory=_empty_metal_stats_rows)
     bond_rows: list[BondRow] = field(default_factory=_empty_bond_rows)
     candidate_rows: list[CandidateRow] = field(default_factory=_empty_candidate_rows)
+    crystallization_condition_rows: list[dict[str, Any]] = field(
+        default_factory=_empty_csv_rows
+    )
+    crystallization_summary_row: dict[str, Any] = field(default_factory=_empty_csv_row)
     n_bonds: int | None = None
     n_candidates: int | None = None
 

@@ -2504,6 +2504,7 @@ class TestWriteEntry:
             "write_stats_rows",
             "write_bond_rows",
             "write_candidate_rows",
+            "write_crystallization_rows",
         }
 
     def test_a_staged_entry_is_registered_for_replacement(self) -> None:

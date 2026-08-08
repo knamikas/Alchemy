@@ -100,6 +100,11 @@ from confidence_score import (
     score_against_reference,
     validate_scored_reference,
 )
+from crystallization_conditions import (
+    CONDITION_COLUMNS,
+    SUMMARY_COLUMNS,
+    write_review_queue,
+)
 
 if TYPE_CHECKING:
     # ``multiprocessing.Pool`` and its queues are bound methods of the default
@@ -515,6 +520,13 @@ class OutputLayout:
         self.candidates = os.path.join(output_dir, "metal_contact_candidates_all.csv")
         self.confidence_inputs = os.path.join(output_dir, "confidence_inputs_all.csv")
         self.confidence_scores = os.path.join(output_dir, "confidence_scores_all.csv")
+        self.crystallization_conditions = os.path.join(
+            output_dir, "crystallization_conditions_all.csv"
+        )
+        self.crystallization_summary = os.path.join(
+            output_dir, "crystallization_summary_all.csv"
+        )
+        self.review_queue = os.path.join(output_dir, "review_queue_all.csv")
         self.reference_dir = os.path.join(output_dir, "confidence_reference")
         self.legacy_scientific_outputs = (
             os.path.join(output_dir, "metal_stats_all.csv"),
@@ -757,6 +769,10 @@ def _check_resume_is_compatible(
             bonds_enabled=args.bonds,
             confidence_path=plan.stream_path,
             confidence_columns=plan.columns,
+            additional_outputs=(
+                (layout.crystallization_conditions, CONDITION_COLUMNS),
+                (layout.crystallization_summary, SUMMARY_COLUMNS),
+            ),
         )
         plan.synchronize_inputs = plan.mode == "reference" and os.path.isfile(
             layout.confidence_inputs
@@ -868,7 +884,10 @@ def _finish_without_entries(
             layout.confidence_scores,
         )
         logger.info("confidence reference -> %s", layout.reference_dir)
+        _finalize_review_queue(layout)
         return 0
+    if plan.enabled:
+        _finalize_review_queue(layout)
     logger.info("no entries to process")
     return 0
 
@@ -887,6 +906,11 @@ def _clear_stale_outputs(
         raise DriverError(f"Could not remove stale bond-stage output: {exc}") from None
     for removed_path in removed:
         logger.info("removed stale bond-stage output: %s", removed_path)
+    try:
+        if os.path.isfile(layout.review_queue):
+            os.unlink(layout.review_queue)
+    except OSError as exc:
+        raise DriverError(f"Could not clear stale review queue: {exc}") from None
     if args.resume:
         return
     # The reference metadata file is the reference's completion marker.
@@ -1009,7 +1033,11 @@ def worker_config_from_args(
 
 def _output_targets(layout: OutputLayout, plan: ConfidencePlan) -> tuple[str, ...]:
     """The output files this run writes, in the order staging expects them."""
-    paths = [*layout.core]
+    paths = [
+        *layout.core,
+        layout.crystallization_conditions,
+        layout.crystallization_summary,
+    ]
     if plan.enabled:
         if plan.stream_path is None:
             raise RuntimeError("confidence output path is not configured")
@@ -1027,8 +1055,10 @@ def _open_writers(
 ) -> OutputWriters:
     """Open every output stream this run writes and give them their headers."""
     manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
-    confidence_path = write_paths[4] if plan.enabled else None
-    confidence_inputs_path = write_paths[5] if plan.synchronize_inputs else None
+    crystallization_conditions_path = write_paths[4]
+    crystallization_summary_path = write_paths[5]
+    confidence_path = write_paths[6] if plan.enabled else None
+    confidence_inputs_path = write_paths[7] if plan.synchronize_inputs else None
 
     def opened(path: str) -> TextIO:
         return handles.enter_context(open(path, "w", newline=""))
@@ -1041,6 +1071,8 @@ def _open_writers(
         opened(confidence_path) if confidence_path is not None else None,
         plan.columns,
         opened(confidence_inputs_path) if confidence_inputs_path is not None else None,
+        opened(crystallization_conditions_path),
+        opened(crystallization_summary_path),
     )
 
 
@@ -1102,6 +1134,7 @@ def write_entry(
     writers.write_stats_rows(result.rows)
     writers.write_bond_rows(result.bond_rows)
     writers.write_candidate_rows(result.candidate_rows)
+    writers.write_crystallization_rows(result)
     if plan.enabled:
         writers.write_confidence_rows(confidence_rows_for(result, plan))
     writers.write_manifest_row(
@@ -1522,7 +1555,11 @@ def process_entries(
         set(manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
     output_paths = _output_targets(layout, plan)
-    staging = ResumeStaging(args.output_dir, output_paths) if args.resume else None
+    staging = (
+        ResumeStaging(args.output_dir, output_paths, always_extra_count=2)
+        if args.resume
+        else None
+    )
     write_paths = staging.staged if staging is not None else output_paths
 
     writers: OutputWriters | None = None
@@ -1555,10 +1592,18 @@ def process_entries(
         bond_rows_written=opened_writers.n_bonds,
         candidate_rows_written=opened_writers.n_candidates,
         confidence_rows_written=opened_writers.n_confidence,
+        crystallization_condition_rows_written=(
+            opened_writers.n_crystallization_conditions
+        ),
+        crystallization_summary_rows_written=(
+            opened_writers.n_crystallization_summaries
+        ),
         manifest_path=layout.manifest,
         metal_sites_path=layout.stats,
         metal_bonds_path=layout.bonds if args.bonds else "disabled",
         metal_contact_candidates_path=(layout.candidates if args.bonds else "disabled"),
+        crystallization_conditions_path=layout.crystallization_conditions,
+        crystallization_summary_path=layout.crystallization_summary,
     )
     if staging is not None:
         try:
@@ -1566,6 +1611,19 @@ def process_entries(
         finally:
             staging.discard()
     return tally, opened_writers
+
+
+def _finalize_review_queue(layout: OutputLayout) -> int:
+    """Regenerate the derived triage view from canonical completed outputs."""
+    try:
+        return write_review_queue(
+            layout.confidence_scores,
+            layout.crystallization_summary,
+            layout.review_queue,
+            (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS),
+        )
+    except (OSError, ValueError) as exc:
+        raise DriverError(f"Review queue finalization failed: {exc}") from None
 
 
 def _report_batch(
@@ -1595,6 +1653,16 @@ def _report_batch(
             f"      {writers.n_candidates} candidate rows -> {layout.candidates}",
             flush=True,
         )
+    print(
+        f"      {writers.n_crystallization_conditions} crystallization condition "
+        f"rows -> {layout.crystallization_conditions}",
+        flush=True,
+    )
+    print(
+        f"      {writers.n_crystallization_summaries} crystallization summary "
+        f"rows -> {layout.crystallization_summary}",
+        flush=True,
+    )
     exit_code = tally.exit_code()
     if plan.mode == "database":
         if exit_code == 0:
@@ -1644,6 +1712,16 @@ def _report_batch(
             confidence_status="classified_without_reference",
             confidence_rows=writers.n_confidence,
             confidence_scores_path=layout.confidence_scores,
+        )
+    if plan.enabled and os.path.isfile(layout.confidence_scores):
+        review_rows = _finalize_review_queue(layout)
+        run_log.summary.update(
+            review_queue_rows=review_rows,
+            review_queue_path=layout.review_queue,
+        )
+        print(
+            f"      {review_rows} REVIEW/SUSPECT rows -> {layout.review_queue}",
+            flush=True,
         )
     if exit_code:
         logger.warning(

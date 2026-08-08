@@ -298,6 +298,27 @@ analysis outputs—to write `confidence_scores_all.csv` and a reusable
 score distribution. An interrupted run retains its compact inputs for
 `--resume` but does not publish a completed reference.
 
+### Crystallization conditions as non-scoring context
+
+Alchemy extracts deposited crystallization metadata once per entry from the
+mmCIF `_exptl_crystal_grow` category or, for legacy PDB input, `REMARK 280`.
+The original condition description is retained in
+`crystallization_conditions_all.csv`. A separate one-row-per-entry summary
+reports availability, pH and temperature ranges, explicitly detected metals,
+the manuscript's metal-class flags, and sulfate, cacodylate, and acetate.
+
+These annotations are positive evidence only. `not_reported`, `unparseable`,
+and `input_unavailable` produce blank detection flags rather than negative
+claims because deposited condition records are heterogeneous and incomplete.
+The conditions do not enter either raw confidence threshold, empirical support
+distribution, the overall verdict matrix, or `alchemy_score`.
+
+After confidence finalization, Alchemy joins the entry summary to only REVIEW
+and SUSPECT sites in `review_queue_all.csv`. This places experimental context
+beside the sites most likely to need inspection while retaining canonical
+conditions for every processed entry and avoiding repeated condition text in
+the primary site and confidence outputs.
+
 The standard database cohort excludes an entry when coordinate inspection
 finds more than 100 selected canonical metal sites. These exceptionally
 metal-dense assemblies contain strongly correlated sites and would otherwise

@@ -512,6 +512,12 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         REFERENCE_METADATA_FIELDS,
         VERDICT_REASONS,
     )
+    from crystallization_conditions import (
+        CONDITION_COLUMNS,
+        CRYSTALLIZATION_DATA_STATUSES,
+        REVIEW_CONTEXT_COLUMNS,
+        SUMMARY_COLUMNS,
+    )
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
 
@@ -523,10 +529,14 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         CANDIDATE_COLUMNS,
         CONFIDENCE_INPUT_COLUMNS,
         ANALYSIS_COLUMNS,
+        CONDITION_COLUMNS,
+        SUMMARY_COLUMNS,
+        REVIEW_CONTEXT_COLUMNS,
     ):
         known |= set(columns)
     known |= CONFIDENCE_INPUT_STATUSES | REFERENCE_METADATA_FIELDS
     known |= EVIDENCE_BASES | VERDICT_REASONS
+    known |= CRYSTALLIZATION_DATA_STATUSES
     for name in dir(codes_module):
         candidate = getattr(codes_module, name)
         if (

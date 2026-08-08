@@ -78,7 +78,10 @@ Running batches, resuming them, and reading what a run wrote. See
   attempt does not discard the previous terminal result. When a frozen
   reference scores a targeted resume inside an existing database output,
   `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
-  together so their per-entry evidence cannot diverge.
+  together so their per-entry evidence cannot diverge. Crystallization
+  condition and summary rows use the same staged per-entry replacement. The
+  derived review queue is regenerated from the completed confidence and
+  summary files rather than merged independently.
 - A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
   `metal_contact_candidates_all.csv` files before replacing the manifest and
   statistics, so old bond-stage rows cannot be mistaken for current output.
@@ -169,11 +172,12 @@ Running batches, resuming them, and reading what a run wrote. See
   exception, the full traceback is written to the debug log, so `--log-file`,
   or `-v` on the console, is what locates it without rerunning the entry by hand
   under `--keep-intermediates`.
-- The candidate-output migration expands all four CSV schemas. `--resume`
-  refuses to mix new rows with incompatible pre-migration headers; use a new `--output-dir`
-  for the first run. All four headers are compared in full,
-  including the EDSTATS block of `metal_sites_all.csv`, so appended rows cannot
-  be silently misaligned by output from a different EDSTATS build.
+- Output-schema migrations are not appended onto older artifacts. `--resume`
+  refuses to mix rows with incompatible headers or with missing
+  crystallization outputs; use a new `--output-dir` for the first run after
+  this migration. Headers are compared in full, including the EDSTATS block of
+  `metal_sites_all.csv`, so appended rows cannot be silently misaligned by
+  output from a different build.
 
 ## Manifest reason codes
 

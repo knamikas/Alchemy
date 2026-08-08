@@ -349,6 +349,7 @@ def validate_resume_schemas(
     bonds_enabled: bool = True,
     confidence_path: str | None = None,
     confidence_columns: Sequence[str] | None = None,
+    additional_outputs: Sequence[tuple[str, Sequence[str]]] = (),
 ) -> None:
     """Refuse to resume into incompatible or internally inconsistent output.
 
@@ -369,6 +370,7 @@ def validate_resume_schemas(
         if confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
         checks.append((confidence_path, list(confidence_columns)))
+    checks.extend((path, list(columns)) for path, columns in additional_outputs)
     for path, expected in checks:
         expected = list(expected)
         header = _csv_header(path)
@@ -510,8 +512,15 @@ class ResumeStaging:
     and silently leaves behind any entry that was still being written.
     """
 
-    def __init__(self, output_dir: str, targets: Sequence[str]) -> None:
+    def __init__(
+        self,
+        output_dir: str,
+        targets: Sequence[str],
+        *,
+        always_extra_count: int = 0,
+    ) -> None:
         self.targets = targets
+        self.always_extra_count = always_extra_count
         self.dir = create_owned_scratch_directory(
             output_dir,
             prefix=".alchemy-resume-",
@@ -538,8 +547,13 @@ class ResumeStaging:
             _merge_csv_replacements(
                 candidates_path, staged_candidates, self.replacement_ids
             )
+        extra_end = 4 + self.always_extra_count
+        for target, staged in zip(self.targets[4:extra_end], self.staged[4:extra_end]):
+            _merge_csv_replacements(target, staged, self.replacement_ids)
         if confidence_enabled:
-            for target, staged in zip(self.targets[4:], self.staged[4:]):
+            for target, staged in zip(
+                self.targets[extra_end:], self.staged[extra_end:]
+            ):
                 _merge_csv_replacements(target, staged, self.replacement_ids)
         _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
 

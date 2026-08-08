@@ -40,6 +40,7 @@ from collections.abc import Callable, Generator, Sequence
 import pytest
 
 import confidence_score
+import crystallization_conditions
 import helpers
 import inputs
 import main
@@ -478,6 +479,9 @@ def test_single_entry_run_writes_documented_outputs(
         "metal_sites_all.csv",
         "metal_bonds_all.csv",
         "metal_contact_candidates_all.csv",
+        "crystallization_conditions_all.csv",
+        "crystallization_summary_all.csv",
+        "review_queue_all.csv",
     } <= written
     assert len(log_paths(output_dir)) == 1
 
@@ -501,6 +505,16 @@ def test_single_entry_run_writes_documented_outputs(
     assert (
         read_header(output_dir, "metal_contact_candidates_all.csv") == CANDIDATE_COLUMNS
     )
+    assert read_header(output_dir, "crystallization_conditions_all.csv") == list(
+        crystallization_conditions.CONDITION_COLUMNS
+    )
+    assert read_header(output_dir, "crystallization_summary_all.csv") == list(
+        crystallization_conditions.SUMMARY_COLUMNS
+    )
+    assert read_header(output_dir, "review_queue_all.csv") == [
+        *CONFIDENCE_COLUMNS,
+        *crystallization_conditions.REVIEW_CONTEXT_COLUMNS,
+    ]
 
     # Columns the README names must be present, not merely equal to the code's
     # own constant, which would drift away from the documentation unnoticed.
@@ -930,6 +944,9 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
         "metal_sites_all.csv",
         "metal_bonds_all.csv",
         "metal_contact_candidates_all.csv",
+        "crystallization_conditions_all.csv",
+        "crystallization_summary_all.csv",
+        "review_queue_all.csv",
     )
     before = {name: Path(str(output_dir), name).read_bytes() for name in names}
 

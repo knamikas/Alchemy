@@ -31,7 +31,8 @@ maintained Python entry point used by the launcher.
 ```
 
 Results are written to (the column lists and row builders live in
-`src/coordination/schema.py`):
+`src/coordination/schema.py`, `src/confidence_score.py`, and
+`src/crystallization_conditions.py`):
 
 - `output/metal_sites_all.csv` — one row per selected metal site, with
   real-space statistics, DPI and validation provenance, and explicit-only
@@ -56,6 +57,14 @@ Results are written to (the column lists and row builders live in
   cutoff, or missing an assignment reference, together with connection, cutoff,
   and reference provenance. These rows are retained for audit and are not all
   treated as bonds.
+- `output/crystallization_conditions_all.csv` — deposited crystallization
+  records extracted once per PDB entry from mmCIF `_exptl_crystal_grow` data or
+  legacy PDB `REMARK 280`. Raw text is preserved alongside reported pH,
+  temperature, method, and source provenance.
+- `output/crystallization_summary_all.csv` — one row per processed PDB entry
+  with data-availability status, pH and temperature ranges, detected metals,
+  and contextual chemical flags. Blank flags mean the condition was
+  unavailable; they do not mean experimental absence.
 - `output/confidence_inputs_all.csv` — compact site-level confidence evidence
   streamed only during an uncapped full-database run. On successful completion
   it is finalized into `confidence_scores_all.csv` and
@@ -63,6 +72,10 @@ Results are written to (the column lists and row builders live in
   directly. PASS/REVIEW/SUSPECT classifications use the raw final thresholds;
   a compatible frozen database reference adds optional empirical ranking
   scores.
+- `output/review_queue_all.csv` — only REVIEW and SUSPECT confidence rows,
+  joined to their entry-level crystallization summary. This is a triage view:
+  crystallization metadata never changes a component level, `alchemy_level`,
+  or any empirical support score.
 
 - `output/manifest.csv` — per-entry status, machine-readable reasons, a bounded
   `status_detail`, millisecond runtime, counts, input provenance, and relevant

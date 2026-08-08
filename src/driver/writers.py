@@ -1,4 +1,4 @@
-"""The four streamed CSV outputs and the schemas they are written against.
+"""The streamed CSV outputs and the schemas they are written against.
 
 Every entry's rows are appended and flushed as soon as the worker returns, so
 an interrupted batch keeps the results it already has. The column lists are an
@@ -18,6 +18,11 @@ from coordination.schema import (
     CandidateRow,
 )
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
+from crystallization_conditions import (
+    CONDITION_COLUMNS,
+    SUMMARY_COLUMNS,
+    unavailable_summary,
+)
 from metal_identification import EDSTATS_COLUMNS
 from worker_contracts import EntryResult, blank_if_unmeasured
 from output_rows import MetalStatsRow, scientific_csv_value
@@ -127,6 +132,8 @@ class OutputWriters:
         confidence_fh: TextIO | None = None,
         confidence_columns: Sequence[str] | None = None,
         confidence_inputs_fh: TextIO | None = None,
+        crystallization_conditions_fh: TextIO | None = None,
+        crystallization_summary_fh: TextIO | None = None,
     ) -> None:
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
@@ -134,6 +141,8 @@ class OutputWriters:
         self._candidates_fh = candidates_fh
         self._confidence_fh = confidence_fh
         self._confidence_inputs_fh = confidence_inputs_fh
+        self._crystallization_conditions_fh = crystallization_conditions_fh
+        self._crystallization_summary_fh = crystallization_summary_fh
         self._manifest = csv.DictWriter(manifest_fh, fieldnames=MANIFEST_COLUMNS)
         self._stats = csv.writer(stats_fh)
         self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
@@ -144,6 +153,16 @@ class OutputWriters:
             raise ValueError("confidence columns are required with a confidence output")
         self._confidence: csv.DictWriter[str] | None = None
         self._confidence_inputs: csv.DictWriter[str] | None = None
+        self._crystallization_conditions = (
+            csv.DictWriter(crystallization_conditions_fh, fieldnames=CONDITION_COLUMNS)
+            if crystallization_conditions_fh is not None
+            else None
+        )
+        self._crystallization_summary = (
+            csv.DictWriter(crystallization_summary_fh, fieldnames=SUMMARY_COLUMNS)
+            if crystallization_summary_fh is not None
+            else None
+        )
         if confidence_fh is not None and confidence_columns is not None:
             self._confidence = csv.DictWriter(
                 confidence_fh, fieldnames=confidence_columns
@@ -161,6 +180,8 @@ class OutputWriters:
         self.n_bonds = 0
         self.n_candidates = 0
         self.n_confidence = 0
+        self.n_crystallization_conditions = 0
+        self.n_crystallization_summaries = 0
         self._manifest.writeheader()
         self._stats.writerow(STATS_COLUMNS)
         if self._bonds is not None:
@@ -171,6 +192,10 @@ class OutputWriters:
             self._confidence.writeheader()
         if self._confidence_inputs is not None:
             self._confidence_inputs.writeheader()
+        if self._crystallization_conditions is not None:
+            self._crystallization_conditions.writeheader()
+        if self._crystallization_summary is not None:
+            self._crystallization_summary.writeheader()
 
     def write_stats_rows(self, rows: Sequence[MetalStatsRow]) -> None:
         if not rows:
@@ -212,6 +237,35 @@ class OutputWriters:
     def write_manifest_row(self, row: Mapping[str, Any]) -> None:
         self._manifest.writerow(row)
         self._manifest_fh.flush()
+
+    def write_crystallization_rows(self, result: EntryResult) -> None:
+        if (
+            self._crystallization_conditions is None
+            or self._crystallization_summary is None
+            or self._crystallization_conditions_fh is None
+            or self._crystallization_summary_fh is None
+        ):
+            return
+        for row in result.crystallization_condition_rows:
+            self._crystallization_conditions.writerow(
+                {
+                    column: scientific_csv_value(row[column])
+                    for column in CONDITION_COLUMNS
+                }
+            )
+            self.n_crystallization_conditions += 1
+        summary = result.crystallization_summary_row or unavailable_summary(
+            result.pdb_id
+        )
+        self._crystallization_summary.writerow(
+            {
+                column: scientific_csv_value(summary[column])
+                for column in SUMMARY_COLUMNS
+            }
+        )
+        self.n_crystallization_summaries += 1
+        self._crystallization_conditions_fh.flush()
+        self._crystallization_summary_fh.flush()
 
     def write_confidence_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if self._confidence is None or not rows:
