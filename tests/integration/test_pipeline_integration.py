@@ -481,10 +481,17 @@ def test_single_entry_run_writes_documented_outputs(
     } <= written
     assert len(log_paths(output_dir)) == 1
 
-    # No frozen reference is installed for this run.
-    assert "confidence_scores_all.csv" not in written
+    # No frozen reference is installed, so classifications are emitted without
+    # empirical component rankings.
+    assert "confidence_scores_all.csv" in written
     assert "confidence_inputs_all.csv" not in written
-    assert "no frozen reference is distributed with Alchemy" in result.text
+    assert "no frozen confidence reference is installed" in result.text
+    confidence_rows = read_rows(output_dir, "confidence_scores_all.csv")
+    assert read_header(output_dir, "confidence_scores_all.csv") == CONFIDENCE_COLUMNS
+    assert all(
+        row["alchemy_level"] in {"PASS", "REVIEW", "SUSPECT"} for row in confidence_rows
+    )
+    assert all(row["alchemy_score"] == "" for row in confidence_rows)
 
     assert [name for name in written if name.startswith(".alchemy-")] == []
 
@@ -1391,74 +1398,44 @@ def test_workers_below_one_is_rejected_before_any_work(
     assert not os.path.exists(output_dir)
 
 
-# The published severity anchors and weights are restated here rather than
-# imported, so this module scores sites independently of the code it checks;
-# ``test_the_scoring_policy_under_test_is_the_shipped_one`` keeps the two copies
-# honest, and the policy is frozen into every ``confidence_reference_id``.
-_DENSITY_ANCHORS = ((2.0, 0.0), (3.0, 0.25), (6.0, 0.65), (12.0, 1.0))
-_GEOMETRY_ANCHORS = ((2.0, 0.0), (3.0, 0.35), (6.0, 0.70), (12.0, 1.0))
-_WEIGHTS = {"density": 0.50, "geometry": 0.35, "interaction": 0.15}
+# The final raw thresholds are restated here so this module remains an
+# independent oracle. The policy test below keeps this copy aligned with the
+# implementation and the same values are frozen into every reference version.
+_DENSITY_THRESHOLDS = (3.0, 6.0)
+_GEOMETRY_THRESHOLDS = (1.0, 2.0)
 
-# Evidence grid the frozen test reference is built from: RSZD values spread over
-# every density-anchor interval crossed with maximum ``|Zbond|`` values, so the
-# cohort exercises the geometry and interaction terms too and spans nearly the
-# whole 0-100 range.
+# Evidence grid used to build a small frozen test reference. It crosses all
+# three levels in both components and includes missing-evidence rows.
 _COHORT_RSZD = (0.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.5, 8.0)
-_COHORT_ZBOND = (1.0, 2.5, 4.0, 7.0, 10.0)
+_COHORT_RMS_ZBOND = (0.25, 0.75, 1.0, 1.5, 2.5)
 
 # A second cohort: same policy, a different database snapshot.
 _ALTERNATE_RSZD = (1.0, 2.2, 3.3, 4.4, 5.5, 7.7)
-_ALTERNATE_ZBOND = (0.5, 3.5, 6.0, 9.0)
-
-# 9myr chain B: RSZD 2.1 is one tenth through the 2.0-3.0 density interval, so
-# SR = 0.025, and every |Zbond| is below the 2.0 geometry floor, leaving
-# ``100 * (1 - 0.50 * 0.025)``.
-_9MYR_B_CONFIDENCE = 98.75
-# ``_RSZD_TOLERANCE`` inside that interval is ``0.3 * 0.25 * 0.50 * 100`` points.
-_9MYR_B_CONFIDENCE_TOLERANCE = 3.75
+_ALTERNATE_RMS_ZBOND = (0.5, 1.2, 2.0, 3.0)
 
 
-def _severity(value: float, anchors: Sequence[tuple[float, float]]) -> float:
-    """Piecewise-linear bounded severity, re-derived from ``anchors``."""
-    if not math.isfinite(value) or value < 0.0:
-        return math.nan
-    if value <= anchors[0][0]:
-        return anchors[0][1]
-    for (low_x, low_y), (high_x, high_y) in zip(anchors, anchors[1:]):
-        if value <= high_x:
-            fraction = (value - low_x) / (high_x - low_x)
-            return low_y + fraction * (high_y - low_y)
-    return anchors[-1][1]
+def raw_level(value: float, thresholds: tuple[float, float]) -> str:
+    if not math.isfinite(value) or value < 0:
+        return "INCOMPLETE"
+    if value < thresholds[0]:
+        return "PASS"
+    if value < thresholds[1]:
+        return "REVIEW"
+    return "SUSPECT"
 
 
-def readme_confidence(rszd: float, max_abs_zbond: float, coverage: float) -> float:
-    """The README score ``100 * (1 - 0.50*SR - 0.35*QG*SG - 0.15*QG*sqrt(SR*SG))``.
-
-    Computed from the site's own recorded evidence, so a run is checked against
-    the documentation rather than against the implementation that produced it.
-    """
-    coverage = min(1.0, max(0.0, coverage))
-    density = _severity(rszd, _DENSITY_ANCHORS)
-    geometry = _severity(max_abs_zbond, _GEOMETRY_ANCHORS) if coverage else 0.0
-    score = 100.0 * (
-        1.0
-        - _WEIGHTS["density"] * density
-        - _WEIGHTS["geometry"] * coverage * geometry
-        - _WEIGHTS["interaction"] * coverage * math.sqrt(density * geometry)
-    )
-    return min(100.0, max(0.0, score))
-
-
-def frozen_cohort(reference_dir: _StrPath) -> list[tuple[float, int]]:
-    """``[(score, count)]`` read straight from a published distribution file."""
+def frozen_cohort(
+    reference_dir: _StrPath,
+) -> dict[str, list[tuple[float, int]]]:
+    """Read both raw component distributions from a published reference."""
     path = os.path.join(
         str(reference_dir), confidence_score.REFERENCE_DISTRIBUTION_FILE
     )
+    result: dict[str, list[tuple[float, int]]] = {"density": [], "geometry": []}
     with open(path, newline="", encoding="utf-8") as handle:
-        return [
-            (float(row["confidence_score"]), int(row["count"]))
-            for row in csv.DictReader(handle)
-        ]
+        for row in csv.DictReader(handle):
+            result[row["component"]].append((float(row["value"]), int(row["count"])))
+    return result
 
 
 def reference_metadata(reference_dir: _StrPath) -> dict[str, object]:
@@ -1469,49 +1446,46 @@ def reference_metadata(reference_dir: _StrPath) -> dict[str, object]:
     return metadata
 
 
-def average_rank_percentile(
-    cohort: Sequence[tuple[float, int]], score: float, tolerance: float = 1e-6
+def reverse_average_rank_support(
+    cohort: Sequence[tuple[float, int]], value: float, tolerance: float = 1e-9
 ) -> float:
-    """Average-rank ECDF of ``score`` in ``cohort``, computed independently.
-
-    ``tolerance`` groups a CSV score, rounded to six decimals, with the
-    full-precision cohort value it came from; distinct cohort scores are three
-    orders of magnitude further apart, so nothing else can be merged by it.
-    """
+    """Reverse average-rank ECDF, computed independently of production code."""
     total = sum(count for _, count in cohort)
-    below = sum(count for value, count in cohort if value < score - tolerance)
-    equal = sum(count for value, count in cohort if abs(value - score) <= tolerance)
-    return 100.0 * (below + 0.5 * equal) / total
+    below = sum(count for item, count in cohort if item < value - tolerance)
+    equal = sum(count for item, count in cohort if abs(item - value) <= tolerance)
+    return 100.0 * (total - below - 0.5 * equal) / total
 
 
 def frozen_reference(
     directory: _StrPath,
     rszd_values: Sequence[float] = _COHORT_RSZD,
-    zbond_values: Sequence[float] = _COHORT_ZBOND,
+    rms_zbond_values: Sequence[float] = _COHORT_RMS_ZBOND,
 ) -> str:
     """Publish a frozen confidence reference and return its directory.
 
     Built the way a real one is, through the documented
-    ``src/confidence_score.py finalize`` entry point. Two rows carry no RSZD, so
-    the scorable cohort is smaller than the input row count and the two cannot
-    be confused.
+    ``src/confidence_score.py finalize`` entry point. Two rows carry no
+    assessable component, so component sizes and total input size cannot be
+    confused.
     """
     directory = str(directory)
     os.makedirs(directory, exist_ok=True)
     rows: list[dict[str, str]] = []
-    for index, (rszd, zbond) in enumerate(itertools.product(rszd_values, zbond_values)):
+    for index, (rszd, rms) in enumerate(
+        itertools.product(rszd_values, rms_zbond_values)
+    ):
         row = {column: "" for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
         row.update(
             pdbID=f"c{index:03d}",
             category="ion",
             selected_metal_site_status="selected",
             metal_element="ZN",
-            rszd_magnitude=repr(rszd),
-            max_abs_zbond=repr(zbond),
+            rszd_abs=repr(rszd),
+            geometry_rms_zbond=repr(rms),
             geometry_coverage="1",
             assigned_contact_count="4",
             reference_covered_contact_count="4",
-            zbond_available_contact_count="4",
+            geometry_bond_count="4",
             confidence_inputs_status="complete",
         )
         rows.append(row)
@@ -1558,15 +1532,13 @@ CONFIDENCE_COLUMNS = list(confidence_score.CONFIDENCE_INPUT_COLUMNS) + list(
 def assert_policy_was_applied(
     rows: Sequence[dict[str, str]], reference_dir: _StrPath
 ) -> int:
-    """Every scored row obeys the README formula and the frozen cohort's ECDF.
-
-    The percentile must place the score in the frozen database cohort, not in
-    the handful of sites this run happened to look at.
-    """
+    """Every row obeys the raw decision matrix and frozen component ranks."""
     metadata = reference_metadata(reference_dir)
-    cohort = frozen_cohort(reference_dir)
-    cohort_size = sum(count for _, count in cohort)
-    assert cohort_size == metadata["scorable_cohort_size"]
+    cohorts = frozen_cohort(reference_dir)
+    density_size = sum(count for _, count in cohorts["density"])
+    geometry_size = sum(count for _, count in cohorts["geometry"])
+    assert density_size == metadata["density_reference_size"]
+    assert geometry_size == metadata["geometry_reference_size"]
 
     scored = 0
     for row in rows:
@@ -1574,45 +1546,74 @@ def assert_policy_was_applied(
             f"{row['pdbID']} {row['metal_resname']}"
             f"{row['metal_resnum']}/{row['metal_atom']}"
         )
-        assert row["confidence_reference_id"] == metadata["reference_id"], where
-        assert int(row["confidence_cohort_size"]) == cohort_size, where
-        if row["confidence_scoring_status"] == "unscorable":
-            assert row["confidence_score"] == "", where
-            assert row["confidence_percentile"] == "", where
-            continue
-
-        score = float(row["confidence_score"])
-        assert 0.0 <= score <= 100.0, where
-        expected = readme_confidence(
-            float(row["rszd_magnitude"]),
-            float(row["max_abs_zbond"]) if row["max_abs_zbond"] else math.nan,
-            float(row["geometry_coverage"]),
+        assert row["confidence_reference_version"] == metadata["reference_id"], where
+        assert int(row["confidence_cohort_size"]) == metadata["input_row_count"], where
+        rszd = float(row["rszd_abs"]) if row["rszd_abs"] else math.nan
+        rms = (
+            float(row["geometry_rms_zbond"]) if row["geometry_rms_zbond"] else math.nan
         )
-        # 1e-3 absorbs the six-decimal rounding of geometry_coverage in the CSV.
-        assert score == approx(expected, abs=1e-3), where
-        assert float(row["confidence_percentile"]) == approx(
-            average_rank_percentile(cohort, expected), abs=1e-6
-        ), where
-        scored += 1
+        density_level = raw_level(rszd, _DENSITY_THRESHOLDS)
+        geometry_level = raw_level(rms, _GEOMETRY_THRESHOLDS)
+        available = [
+            level for level in (density_level, geometry_level) if level != "INCOMPLETE"
+        ]
+        overall = (
+            "INCOMPLETE"
+            if not available
+            else "SUSPECT"
+            if "SUSPECT" in available or available.count("REVIEW") == 2
+            else "REVIEW"
+            if "REVIEW" in available
+            else "PASS"
+        )
+        assert row["density_level"] == density_level, where
+        assert row["geometry_level"] == geometry_level, where
+        assert row["alchemy_level"] == overall, where
+
+        component_scores: list[float] = []
+        for component, value in (("density", rszd), ("geometry", rms)):
+            score_text = row[f"{component}_score"]
+            if not math.isfinite(value):
+                assert score_text == "", where
+                continue
+            expected = (
+                0.0
+                if component == "density" and value >= 99.9
+                else reverse_average_rank_support(cohorts[component], value)
+            )
+            assert float(score_text) == approx(expected, abs=1e-6), where
+            component_scores.append(expected)
+        if component_scores:
+            assert float(row["alchemy_score"]) == approx(
+                min(component_scores), abs=1e-6
+            ), where
+            scored += 1
+        else:
+            assert row["alchemy_score"] == "", where
     return scored
 
 
 def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> None:
-    """The anchors and weights this module re-implements are Alchemy's own.
+    """The raw thresholds this module re-implements are Alchemy's own.
 
     ``assert_policy_was_applied`` is an independent oracle only while the two
     copies agree.
     """
-    assert _DENSITY_ANCHORS == confidence_score.DENSITY_ANCHORS
-    assert _GEOMETRY_ANCHORS == confidence_score.GEOMETRY_ANCHORS
+    assert _DENSITY_THRESHOLDS == (
+        confidence_score.DENSITY_REVIEW_THRESHOLD,
+        confidence_score.DENSITY_SUSPECT_THRESHOLD,
+    )
+    assert _GEOMETRY_THRESHOLDS == (
+        confidence_score.GEOMETRY_REVIEW_THRESHOLD,
+        confidence_score.GEOMETRY_SUSPECT_THRESHOLD,
+    )
 
     published = reference_metadata(frozen_reference(tmp_path / "policy"))
-    assert published["density_anchors"] == [list(anchor) for anchor in _DENSITY_ANCHORS]
-    assert published["geometry_anchors"] == [
-        list(anchor) for anchor in _GEOMETRY_ANCHORS
-    ]
-    assert published["weights"] == _WEIGHTS
-    assert published["percentile_method"] == "average_rank_empirical_cdf"
+    assert published["density_thresholds"] == {"review": 3.0, "suspect": 6.0}
+    assert published["geometry_thresholds"] == {"review": 1.0, "suspect": 2.0}
+    assert published["geometry_statistic"] == "rms_finite_score_eligible_zbond"
+    assert published["overall_rule"] == "any_suspect_or_review_plus_review"
+    assert published["support_score_method"] == ("reverse_average_rank_empirical_cdf")
 
 
 @_requires_entry_data
@@ -1623,10 +1624,9 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 ) -> None:
     """``--confidence-reference-dir`` makes a run emit its confidence scores.
 
-    README: such runs load the reference once, derive each new site's compact
-    inputs while its normal result is still in memory, write
-    `confidence_scores_all.csv` directly, and "never generate percentiles from
-    their own small cohort".
+    Such runs load the reference once, derive each new site's compact inputs
+    while its normal result is still in memory, and never generate empirical
+    rankings from their own small cohort.
     """
     reference_dir = frozen_reference(tmp_path / "installed")
     output_dir = tmp_path / "output"
@@ -1655,34 +1655,30 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     assert rows_for(rows, "9nxl") == []
 
     metadata = reference_metadata(reference_dir)
-    cohort_size = metadata["scorable_cohort_size"]
+    cohort_size = metadata["input_row_count"]
     assert isinstance(cohort_size, int)
-    assert cohort_size == len(_COHORT_RSZD) * len(_COHORT_ZBOND)
-    assert metadata["input_row_count"] == cohort_size + 2
+    assessable_size = len(_COHORT_RSZD) * len(_COHORT_RMS_ZBOND)
+    assert cohort_size == assessable_size + 2
+    assert metadata["density_reference_size"] == assessable_size
+    assert metadata["geometry_reference_size"] == assessable_size
     assert assert_policy_was_applied(rows, reference_dir) == len(rows)
 
     # The cohort is the frozen database, not this run's thirteen sites.
-    ranked = sorted(
-        (float(row["confidence_score"]), float(row["confidence_percentile"]))
-        for row in rows
-    )
-    percentiles = [percentile for _, percentile in ranked]
-    assert all(0.0 < value < 100.0 for value in percentiles)
-    assert len(set(percentiles)) > 1
-    assert percentiles == sorted(percentiles)
+    rankings = [float(row["alchemy_score"]) for row in rows]
+    assert all(0.0 <= value <= 100.0 for value in rankings)
+    assert len(set(rankings)) > 1
 
-    # 9myr chain B zinc: its confidence follows from the density term alone.
+    # 9myr chain B zinc: raw density and RMS geometry both pass.
     zinc = next(
         row for row in rows if row["pdbID"] == "9myr" and row["metal_chain"] == "B"
     )
     site = next(row for row in rows_for(batch.stats, "9myr") if row["CI"] == "B")
-    assert float(zinc["rszd_magnitude"]) == approx(abs(float(site["ZDm"])), abs=1e-6)
-    assert float(zinc["max_abs_zbond"]) < _GEOMETRY_ANCHORS[0][0]
+    assert float(zinc["rszd_abs"]) == approx(abs(float(site["ZDm"])), abs=1e-6)
+    assert float(zinc["geometry_rms_zbond"]) < _GEOMETRY_THRESHOLDS[0]
     assert float(zinc["geometry_coverage"]) == 1.0
-    assert zinc["confidence_scoring_status"] == "complete"
-    assert float(zinc["confidence_score"]) == approx(
-        _9MYR_B_CONFIDENCE, abs=_9MYR_B_CONFIDENCE_TOLERANCE
-    )
+    assert zinc["density_level"] == "PASS"
+    assert zinc["geometry_level"] == "PASS"
+    assert zinc["alchemy_level"] == "PASS"
 
     assert (
         f"13 confidence rows compared with database cohort {cohort_size}"
@@ -1765,10 +1761,16 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     metadata = reference_metadata(reference_dir)
     assert metadata["input_row_count"] == len(rows)
     assert assert_policy_was_applied(rows, reference_dir) == len(rows)
-    # These sites are the cohort, so their average empirical rank is 50 even
-    # when tied scores share a percentile.
-    percentiles = [float(row["confidence_percentile"]) for row in rows]
-    assert sum(percentiles) / len(percentiles) == approx(50.0)
+    # These sites are each component cohort, so each component's average
+    # reverse empirical rank is 50 even when tied values share a score.
+    density_scores = [
+        float(row["density_score"]) for row in rows if row["density_score"]
+    ]
+    geometry_scores = [
+        float(row["geometry_score"]) for row in rows if row["geometry_score"]
+    ]
+    assert sum(density_scores) / len(density_scores) == approx(50.0)
+    assert sum(geometry_scores) / len(geometry_scores) == approx(50.0)
 
     assert (
         f"13 confidence rows (13 scored; reference cohort 13) -> "
@@ -1795,8 +1797,8 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     reused_rows = read_rows(reused, "confidence_scores_all.csv")
     assert len(reused_rows) == 2
     assert assert_policy_was_applied(reused_rows, reference_dir) == 2
-    assert [row["confidence_score"] for row in reused_rows] == [
-        row["confidence_score"] for row in rows_for(rows, "9myr")
+    assert [row["alchemy_score"] for row in reused_rows] == [
+        row["alchemy_score"] for row in rows_for(rows, "9myr")
     ]
 
 
@@ -1808,13 +1810,12 @@ def test_resume_refuses_to_mix_two_database_snapshots(
 ) -> None:
     """Resuming against a different frozen reference is refused, not blended.
 
-    A percentile is meaningful only relative to one cohort, so half a file
-    scored against another database reads as a comparable column and is not
-    one. The same-reference resume is asserted first, so a failure of the
-    mismatch case cannot be an unrelated break in resume.
+    A ranking is meaningful only relative to one cohort, so half a file scored
+    against another database would be misleading. The same-reference resume is
+    asserted first, so the mismatch cannot be an unrelated resume failure.
     """
     installed = frozen_reference(tmp_path / "installed")
-    other = frozen_reference(tmp_path / "other", _ALTERNATE_RSZD, _ALTERNATE_ZBOND)
+    other = frozen_reference(tmp_path / "other", _ALTERNATE_RSZD, _ALTERNATE_RMS_ZBOND)
     assert (
         reference_metadata(installed)["reference_id"]
         != reference_metadata(other)["reference_id"]
@@ -1870,8 +1871,8 @@ def test_resume_refuses_to_mix_two_database_snapshots(
     # Refused before anything was rewritten.
     assert Path(scores_path).read_bytes() == original
 
-    # The converse gap: resuming a run with no confidence output at all would
-    # silently score only the entries the resume happens to touch.
+    # Classification-only output cannot be silently upgraded to a referenced
+    # ranking during resume, because untouched rows would remain unranked.
     unscored = tmp_path / "unscored"
     seed = run_alchemy(
         unscored,
@@ -1884,7 +1885,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(
         tmp_root=tmp_path / "unscored-tmp",
     )
     assert seed.exit_code == 0, seed.text
-    assert not os.path.exists(os.path.join(str(unscored), "confidence_scores_all.csv"))
+    assert os.path.exists(os.path.join(str(unscored), "confidence_scores_all.csv"))
     upgraded = run_alchemy(
         unscored,
         "--id",
@@ -1898,8 +1899,8 @@ def test_resume_refuses_to_mix_two_database_snapshots(
         tmp_root=tmp_path / "unscored-tmp",
     )
     assert upgraded.exit_code == 1
-    assert "Cannot resume confidence-aware output" in upgraded.text
-    assert "use a fresh output directory" in upgraded.text
+    assert "Cannot resume confidence output" in upgraded.text
+    assert "blank reference or cohort identifier" in upgraded.text
 
 
 @_requires_entry_data
@@ -1908,7 +1909,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(
 @pytest.mark.parametrize(
     "damage,message",
     [
-        ("weights", "weights is incompatible with this code"),
+        ("thresholds", "geometry_thresholds is incompatible with this code"),
         ("distribution", "identifier does not match data"),
     ],
 )
@@ -1929,23 +1930,30 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
     metadata_path = os.path.join(
         reference_dir, confidence_score.REFERENCE_METADATA_FILE
     )
-    if damage == "weights":
+    if damage == "thresholds":
         metadata = reference_metadata(reference_dir)
-        weights = metadata.get("weights")
-        assert isinstance(weights, dict)
-        weights["density"] = 0.6
+        thresholds = metadata.get("geometry_thresholds")
+        assert isinstance(thresholds, dict)
+        thresholds["suspect"] = 6.0
         with open(metadata_path, "w", encoding="utf-8") as handle:
             json.dump(metadata, handle)
     else:
         distribution_path = os.path.join(
             reference_dir, confidence_score.REFERENCE_DISTRIBUTION_FILE
         )
-        cohort = frozen_cohort(reference_dir)
+        cohorts = frozen_cohort(reference_dir)
         with open(distribution_path, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(("confidence_score", "count"))
-            for index, (score, count) in enumerate(cohort):
-                writer.writerow((repr(score), count + (1 if index == 0 else 0)))
+            writer.writerow(("component", "value", "count"))
+            for component, cohort in cohorts.items():
+                for index, (value, count) in enumerate(cohort):
+                    writer.writerow(
+                        (
+                            component,
+                            repr(value),
+                            count + (1 if component == "density" and index == 0 else 0),
+                        )
+                    )
 
     output_dir = tmp_path / "output"
     result = run_alchemy(

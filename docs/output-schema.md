@@ -197,18 +197,22 @@ are embedded directly in `confidence_scores_all.csv`.
 | `coordinate_mapping_status`, `selected_metal_site_status` | Whether density and coordinate evidence were resolved for the selected site. |
 | `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited metal-site identity. |
-| `rszd_magnitude`, `rszd_negative`, `rszd_positive` | Absolute metal-site RSZD and the signed negative/positive difference-density statistics used for audit. |
-| `assigned_contact_count`, `reference_covered_contact_count`, `zbond_available_contact_count` | Assigned contacts, contacts covered by the literature reference, and contacts with a finite Zbond. |
-| `geometry_coverage` | Literature-reference-covered contacts divided by all assigned contacts; the score's `QG`. |
-| `max_abs_zbond`, `max_abs_zbond_contact_id` | Largest usable absolute Zbond and its supported join key to `metal_bonds_all.csv`. |
-| `max_abs_zbond_neighbor_resname`, `max_abs_zbond_neighbor_chain`, `max_abs_zbond_neighbor_resnum`, `max_abs_zbond_neighbor_atom` | Human-readable identity of the contact supplying `max_abs_zbond`. |
-| `declared_contact_count`, `inferred_contact_count`, `multi_donor_contact_count`, `suspect_multi_donor_residue_group_count` | Coordination provenance and chelation context. |
+| `rszd`, `rszd_abs`, `rszd_negative`, `rszd_positive`, `density_saturated` | Raw metal-site RSZD, its absolute magnitude, signed negative/positive difference-density statistics, and the EDSTATS saturation flag. |
+| `assigned_contact_count`, `reference_covered_contact_count`, `geometry_bond_count` | Assigned contacts, contacts covered by the literature reference, and finite score-eligible contacts used for RMS geometry. |
+| `geometry_coverage` | Literature-reference-covered contacts divided by all assigned contacts. This is a coverage annotation and does not modify the score or level. |
+| `geometry_rms_zbond`, `geometry_max_abs_zbond`, `geometry_mean_abs_zbond`, `geometry_mean_signed_zbond` | Primary RMS geometry statistic and supporting Zbond diagnostics. |
+| `worst_bond`, `worst_bond_source` | Contact ID and declared/inferred source of the largest absolute scored Zbond. |
+| `worst_bond_neighbor_resname`, `worst_bond_neighbor_chain`, `worst_bond_neighbor_resnum`, `worst_bond_neighbor_atom` | Human-readable donor identity for `worst_bond`. |
+| `declared_contact_count`, `inferred_contact_count`, `declared_scored_bond_count`, `inferred_scored_bond_count`, `geometry_contact_basis` | Coordination provenance before and after score eligibility. |
+| `multi_donor_contact_count`, `suspect_multi_donor_residue_group_count` | Chelation context retained as a non-scoring diagnostic. |
 | `context_warning`, `context_warning_reasons` | Interpretive warning carried into the score output without changing the score. |
 | `confidence_inputs_status`, `confidence_inputs_missing_reasons` | Evidence completeness and pipe-separated reasons for missing or partial evidence. |
 
-`confidence_inputs_status` is `complete`, `partial_geometry`, `density_only`, or
-`unscorable`. A site with reference-covered contacts but no finite Zbond is
-`unscorable`; it is not silently treated as density-only.
+`confidence_inputs_status` is `complete`, `density_only`, `geometry_only`, or
+`unscorable`. Density and geometry are independently available: one missing
+component never prevents the other from determining the site level. Partial
+geometry coverage remains explicit in `confidence_inputs_missing_reasons`, but
+does not weaken or strengthen finite geometry evidence.
 
 ## `confidence_scores_all.csv`
 
@@ -217,22 +221,25 @@ preserved as the leading block, followed by these analysis columns:
 
 | Columns | Meaning |
 | --- | --- |
-| `density_severity`, `geometry_severity` | Piecewise-linear `SR` and `SG` values on the unit interval. |
-| `density_penalty_fraction`, `geometry_penalty_fraction`, `interaction_penalty_fraction` | The three unitless terms subtracted inside the confidence formula. They sum to at most one and are fractions, not percentage points. |
-| `confidence_score` | Fixed-formula confidence from 0 to 100; higher is better. |
-| `confidence_percentile` | Average-rank empirical percentile within the frozen scorable cohort; higher is better. Large ties can keep the best tied score below the 100th percentile. |
-| `confidence_scoring_status`, `confidence_scoring_reason` | Whether the score is complete, partial-geometry, density-only, or unscorable and why. |
-| `confidence_reference_id` | Identity of the compatible scoring policy plus canonical score distribution. |
+| `density_level`, `geometry_level` | Raw-threshold component verdicts: `PASS`, `REVIEW`, `SUSPECT`, or `INCOMPLETE`. |
+| `density_score`, `geometry_score` | Reverse average-rank empirical support scores from 0 to 100; higher means more ordinary relative to the frozen component cohort. Blank when no compatible reference or component measurement is available. |
+| `alchemy_level` | Authoritative non-compensatory site verdict. Any SUSPECT component, or REVIEW in both components, makes the site SUSPECT. |
+| `alchemy_score` | Minimum available component support score for ranking only. It does not define `alchemy_level`. |
+| `evidence_basis` | `density_and_geometry`, `density_only`, `geometry_only`, or `no_assessable_evidence`. |
+| `verdict_reason` | Machine-readable decision route, including `density_suspect`, `geometry_suspect`, `density_and_geometry_suspect`, and `review_plus_review`. |
+| `score_policy_version` | Version of the raw-threshold and verdict-matrix policy. |
+| `confidence_reference_version` | Identity of the compatible pair of frozen component distributions; blank for classification-only output. |
 | `confidence_cohort_id` | Identity of the exact confidence-input artifact that produced the reference cohort. |
-| `confidence_cohort_size` | Number of scorable metal sites in the frozen distribution. |
+| `confidence_cohort_size` | Number of site rows in the frozen input cohort. |
+| `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution. |
 
-Scores are canonicalized to six decimal places before the reference distribution
-is counted. Consequently, identical published scores always receive identical
-percentiles and floating-point residue cannot create artificial rank differences.
+Support scores are published to six decimal places. Raw component values define
+the levels; neither a score nor a population percentile can move a site across
+a PASS/REVIEW/SUSPECT boundary.
 
-The cohort is weighted per scorable metal site, not per structure. This is the
-appropriate interpretation for a site-level percentile, but it must not be
-mistaken for a structure-weighted statistic.
+Each component cohort is weighted per assessable metal site, not per structure.
+This is the appropriate interpretation for a site-level empirical rank, but it
+must not be mistaken for a structure-weighted statistic.
 
 ## `confidence_reference/`
 
@@ -240,24 +247,28 @@ The frozen reference is portable only as the pair of files below. The metadata
 is its completion marker; Alchemy removes it before rebuilding so a failed
 finalization cannot leave an older reference looking current.
 
-### `score_distribution.csv`
+### `component_distributions.csv`
 
 | Columns | Meaning |
 | --- | --- |
-| `confidence_score` | Canonical six-decimal score value. |
-| `count` | Scorable cohort sites with exactly that published score. |
+| `component` | `density` or `geometry`. |
+| `value` | Raw absolute RSZD or site-level RMS Zbond value. |
+| `count` | Assessable cohort sites with that component value. |
 
 ### `metadata.json`
 
 The scoring contract is recorded by `confidence_method_version`,
-`confidence_schema_version`, `score_decimal_places`, `density_anchors`,
-`geometry_anchors`, `weights`, `coverage_policy`, `input_status_policy`,
-`percentile_method`, `cohort_weighting`, `maximum_entry_metal_sites`, and
+`confidence_schema_version`, `score_decimal_places`, `metric_decimal_places`,
+`density_thresholds`, `density_saturation_value`,
+`density_saturation_policy`, `geometry_thresholds`, `geometry_statistic`,
+`overall_rule`, `support_score_method`, `coverage_policy`,
+`input_status_policy`, `cohort_weighting`, `maximum_entry_metal_sites`, and
 `reference_data_id`. Alchemy refuses to load a reference whose contract differs
 from the running code.
 
-The distribution is described by `reference_id`, `distribution_file`,
-`distinct_score_count`, and `scorable_cohort_size`. The source cohort is
+The distributions are described by `reference_id`, `distribution_file`,
+`density_distinct_value_count`, `geometry_distinct_value_count`,
+`density_reference_size`, and `geometry_reference_size`. The source cohort is
 described separately by `cohort_id`, `confidence_inputs_file`,
 `confidence_inputs_sha256`, `input_row_count`, `input_entry_count`,
 `scorable_entry_count`, and `input_status_counts`.

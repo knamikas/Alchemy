@@ -508,7 +508,9 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         ANALYSIS_COLUMNS,
         CONFIDENCE_INPUT_COLUMNS,
         CONFIDENCE_INPUT_STATUSES,
+        EVIDENCE_BASES,
         REFERENCE_METADATA_FIELDS,
+        VERDICT_REASONS,
     )
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
@@ -524,6 +526,7 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
     ):
         known |= set(columns)
     known |= CONFIDENCE_INPUT_STATUSES | REFERENCE_METADATA_FIELDS
+    known |= EVIDENCE_BASES | VERDICT_REASONS
     for name in dir(codes_module):
         candidate = getattr(codes_module, name)
         if (

@@ -1660,6 +1660,25 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
     assert any("/tmp/reference" in message for message in messages)
 
 
+def test_targeted_run_without_reference_still_plans_classifications(
+    tmp_path: Path,
+) -> None:
+    args = cli.parse_args(["--id", "1abc", "--output-dir", str(tmp_path)])
+    plan = pool.plan_confidence(
+        args,
+        pool.OutputLayout(str(tmp_path)),
+        False,
+        cast("runlog.RunLog", None),
+    )
+    assert plan.mode == "classification"
+    assert plan.reference is None
+    assert plan.stream_path == str(tmp_path / "confidence_scores_all.csv")
+    assert plan.columns == (
+        *confidence_score.CONFIDENCE_INPUT_COLUMNS,
+        *confidence_score.ANALYSIS_COLUMNS,
+    )
+
+
 def test_concurrent_run_reports_reserve_distinct_file_pairs(tmp_path: Path) -> None:
     """A shared --log-dir cannot mix the two artifacts from separate runs."""
     run_count = 8

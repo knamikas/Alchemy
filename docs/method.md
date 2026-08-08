@@ -188,9 +188,9 @@ A declared contact to a donor class with no reference is retained in
 `metal_contact_candidates_all.csv` with its measured distance and full connection
 provenance, and the entry records
 `declared_donor_outside_supported_classes`. It is deliberately **not** promoted
-to a bond row: doing so would raise the site's coordination count and enlarge
-the confidence geometry-coverage (`QG`) denominator on the strength of a
-contact that nothing in the reference data can evaluate. The distinction that
+to a bond row: doing so would raise the site's coordination count and apparent
+geometry coverage on the strength of a contact that nothing in the reference
+data can evaluate. The distinction that
 matters for a consumer is that "no reference for this donor class" and "this
 metal has no coordination" are now different, visibly, in the output.
 
@@ -273,14 +273,18 @@ and assigned-bond evidence and streams one compact row per selected metal site
 to `confidence_inputs_all.csv`. It never rereads the complete statistics and
 bond tables to reconstruct those inputs.
 
-The compact row records the magnitude of metal-site `ZDm` as `rszd_magnitude`,
-the largest absolute Zbond among assigned contacts, the responsible
-`max_abs_zbond_contact_id`, and geometry coverage. `metal_site_id` joins the
-row directly to the site, bond, and candidate tables. Geometry coverage is the number of assigned contacts
-with an exact reference distance divided by the total number of assigned
-contacts, matching the manuscript definition of `QG`. The finite-Zbond count is
-recorded separately so missing DPI cannot be mistaken for usable geometry
-evidence. Rejected broad-search candidates do not enter the denominator.
+The compact row records metal-site `ZDm` as `rszd`, its magnitude as
+`rszd_abs`, its signed negative and positive density diagnostics, and whether EDSTATS reported
+its 99.9 saturation value. For geometry, every finite `score_eligible` Zbond
+contributes with equal weight to `geometry_rms_zbond`; declared and inferred
+contacts are not numerically reweighted. The row also retains maximum, mean
+absolute, and mean signed Zbond diagnostics, scored-contact counts, and the
+responsible `worst_bond`. `metal_site_id` joins the row directly to the site,
+bond, and candidate tables. Geometry coverage is the number of assigned
+contacts with an exact reference distance divided by the total number of
+assigned contacts. It is an annotation only: it never multiplies or otherwise
+modifies the geometry statistic or verdict. Rejected broad-search candidates
+do not enter the denominator.
 Missing density, absent bonds, partial coverage, diagnostic EDSTATS rows, and
 shared-cofactor density provenance remain explicit. The streamed file retains
 exactly one row per manifest-counted selected metal; a site with no recoverable
@@ -301,34 +305,50 @@ have disproportionate influence on the empirical distribution. They are
 recorded in the manifest with their detected site count but do not contribute
 confidence inputs.
 
-The provisional June 2026 fixed score transforms absolute RSZD and maximum
-absolute Zbond through piecewise-linear severity anchors and calculates:
+The final density level uses absolute RSZD directly:
 
 ```text
-confidence = 100 * (1 - 0.50*SR - 0.35*QG*SG
-                       - 0.15*QG*sqrt(SR*SG))
+|RSZD| < 3       -> PASS
+3 <= |RSZD| < 6  -> REVIEW
+|RSZD| >= 6      -> SUSPECT
 ```
 
-Alchemy also reports an average-rank percentile relative to the scorable full
-database cohort, its size, and a policy identifier. The fixed-formula score and
-database percentile are visibly distinct. A deterministic
-`confidence_reference_id` identifies the compatible scoring method and
-canonical score distribution. A separate `confidence_cohort_id` identifies the
-exact compact-input artifact, and resume validation prevents either identity
-from being mixed. Scores are canonicalized to six decimal places before
-ranking, so two identically published scores cannot receive different
-percentiles. Reference metadata records per-metal-site weighting, input and
-manifest hashes, cohort counts, input statuses, and software provenance.
-`context_warning` is carried into the result as an interpretive annotation and
-does not subtract points.
+The final geometry statistic and levels are:
 
-**No confidence reference is distributed with Alchemy, and the score is not
-finalized.** A fresh clone therefore produces every other output but reports
-that confidence scoring is not enabled; this is expected behaviour, not a
-misconfiguration. Enabling it requires either completing an uncapped
-full-database run, which writes a reference of your own, or supplying one
-explicitly with `--confidence-reference-dir`. Treat the score described in this
-section as provisional and subject to change until it is released.
+```text
+geometry_rms_zbond = sqrt(sum(Zbond^2) / scored_bond_count)
+
+RMS < 1       -> PASS
+1 <= RMS < 2  -> REVIEW
+RMS >= 2      -> SUSPECT
+```
+
+The overall decision is non-compensatory. Any SUSPECT component makes the site
+SUSPECT; REVIEW plus REVIEW also becomes SUSPECT; one REVIEW becomes REVIEW;
+all available PASS components produce PASS; and no assessable evidence produces
+INCOMPLETE. When one component is unavailable, the other is used directly and
+`evidence_basis` records the limitation.
+
+A frozen database reference adds separate `density_score` and `geometry_score`
+values. Each is a reverse average-rank empirical score from 0 to 100, so higher
+means more ordinary behavior in that component's assessable cohort.
+`alchemy_score` is their minimum using whichever scores are available. These
+numbers rank sites only: the raw measurements and decision matrix always define
+`alchemy_level`, including the REVIEW-plus-REVIEW escalation that no single
+ranking cutoff can represent. A deterministic `confidence_reference_version`
+identifies the compatible pair of component distributions. A separate
+`confidence_cohort_id` identifies the exact compact-input artifact, and resume
+validation prevents either identity from being mixed. Reference metadata
+records per-metal-site weighting, component cohort counts, input and manifest
+hashes, input statuses, and software provenance. `context_warning` is carried
+into the result as an interpretive annotation and does not change a level or
+score.
+
+No empirical confidence reference is distributed with Alchemy. A fresh clone
+still writes the authoritative classifications, but leaves the three numerical
+ranking fields and reference provenance blank. Completing an uncapped
+full-database run writes a reference of your own; supplying a compatible one
+with `--confidence-reference-dir` adds empirical rankings to later runs.
 
 For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
 the reference produced under the current output directory's
@@ -336,10 +356,9 @@ the reference produced under the current output directory's
 `--confidence-reference-dir` selects an explicit copy instead. Alchemy loads
 that reference once, derives each new site's compact inputs while its normal
 result is still in memory, and writes `confidence_scores_all.csv` directly. These runs
-are compared with the frozen database and never generate percentiles from their
-own small cohort. If no compatible reference is installed, the ordinary
-Alchemy outputs are still produced and confidence scoring is explicitly
-disabled.
+are compared with the frozen database and never generate rankings from their
+own small cohort. If no compatible reference is installed, classifications are
+still produced from the raw thresholds.
 
 `src/confidence_score.py` retains `finalize` and `score` subcommands for recovery
 and reproducibility using already compact confidence-input CSVs; neither command

@@ -60,7 +60,9 @@ Results are written to (the column lists and row builders live in
   streamed only during an uncapped full-database run. On successful completion
   it is finalized into `confidence_scores_all.csv` and
   `output/confidence_reference/`. Later small runs write confidence scores
-  directly when a compatible frozen database reference is installed.
+  directly. PASS/REVIEW/SUSPECT classifications use the raw final thresholds;
+  a compatible frozen database reference adds optional empirical ranking
+  scores.
 
 - `output/manifest.csv` — per-entry status, machine-readable reasons, a bounded
   `status_detail`, millisecond runtime, counts, input provenance, and relevant

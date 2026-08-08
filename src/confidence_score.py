@@ -1,8 +1,9 @@
-"""Collect, finalize, and apply confidence scores for Alchemy metal sites.
+"""Collect, classify, and rank Alchemy metal sites.
 
-A complete database run streams prepared rows to disk and, on success, freezes
-them into a reference distribution. Single-entry and small-batch runs load that
-reference and score against the database cohort, never against themselves.
+The authoritative PASS/REVIEW/SUSPECT verdict is determined from raw density
+and geometry thresholds.  A complete database run also freezes independent
+density and geometry distributions so later runs can receive empirical support
+scores without ever defining their verdicts from the reference population.
 """
 
 import argparse
@@ -24,13 +25,17 @@ from worker_contracts import MAX_ANALYZED_METAL_SITES
 
 
 REFERENCE_METADATA_FILE = "metadata.json"
-REFERENCE_DISTRIBUTION_FILE = "score_distribution.csv"
-DENSITY_ANCHORS = ((2.0, 0.0), (3.0, 0.25), (6.0, 0.65), (12.0, 1.0))
-GEOMETRY_ANCHORS = ((2.0, 0.0), (3.0, 0.35), (6.0, 0.70), (12.0, 1.0))
-CONFIDENCE_METHOD_VERSION = "provisional_june_2026_v2"
-CONFIDENCE_SCHEMA_VERSION = 2
+REFERENCE_DISTRIBUTION_FILE = "component_distributions.csv"
+CONFIDENCE_METHOD_VERSION = "three_level_rms_2026_v1"
+CONFIDENCE_SCHEMA_VERSION = 3
 COHORT_WEIGHTING = "per_metal_site"
 SCORE_DECIMAL_PLACES = 6
+METRIC_DECIMAL_PLACES = 12
+DENSITY_REVIEW_THRESHOLD = 3.0
+DENSITY_SUSPECT_THRESHOLD = 6.0
+GEOMETRY_REVIEW_THRESHOLD = 1.0
+GEOMETRY_SUSPECT_THRESHOLD = 2.0
+EDSTATS_SATURATION_MAGNITUDE = 99.9
 
 SITE_KEY_COLUMNS = (
     "pdbID",
@@ -69,21 +74,30 @@ IDENTITY_COLUMNS = (
 
 CONFIDENCE_INPUT_COLUMNS = (
     *IDENTITY_COLUMNS,
-    "rszd_magnitude",
+    "rszd",
+    "rszd_abs",
     "rszd_negative",
     "rszd_positive",
+    "density_saturated",
     "assigned_contact_count",
     "reference_covered_contact_count",
-    "zbond_available_contact_count",
+    "geometry_bond_count",
     "geometry_coverage",
-    "max_abs_zbond",
-    "max_abs_zbond_contact_id",
-    "max_abs_zbond_neighbor_resname",
-    "max_abs_zbond_neighbor_chain",
-    "max_abs_zbond_neighbor_resnum",
-    "max_abs_zbond_neighbor_atom",
+    "geometry_rms_zbond",
+    "geometry_max_abs_zbond",
+    "geometry_mean_abs_zbond",
+    "geometry_mean_signed_zbond",
+    "worst_bond",
+    "worst_bond_source",
+    "worst_bond_neighbor_resname",
+    "worst_bond_neighbor_chain",
+    "worst_bond_neighbor_resnum",
+    "worst_bond_neighbor_atom",
     "declared_contact_count",
     "inferred_contact_count",
+    "declared_scored_bond_count",
+    "inferred_scored_bond_count",
+    "geometry_contact_basis",
     "multi_donor_contact_count",
     "suspect_multi_donor_residue_group_count",
     "context_warning",
@@ -93,42 +107,73 @@ CONFIDENCE_INPUT_COLUMNS = (
 )
 
 ANALYSIS_COLUMNS = (
-    "density_severity",
-    "geometry_severity",
-    "density_penalty_fraction",
-    "geometry_penalty_fraction",
-    "interaction_penalty_fraction",
-    "confidence_score",
-    "confidence_percentile",
-    "confidence_scoring_status",
-    "confidence_scoring_reason",
-    "confidence_reference_id",
+    "density_level",
+    "density_score",
+    "geometry_level",
+    "geometry_score",
+    "alchemy_level",
+    "alchemy_score",
+    "evidence_basis",
+    "verdict_reason",
+    "score_policy_version",
+    "confidence_reference_version",
     "confidence_cohort_id",
     "confidence_cohort_size",
+    "density_reference_size",
+    "geometry_reference_size",
 )
 
-SCORABLE_INPUT_STATUSES = frozenset({"complete", "partial_geometry", "density_only"})
-CONFIDENCE_INPUT_STATUSES = SCORABLE_INPUT_STATUSES | {"unscorable"}
-INPUT_STATUS_POLICY = "explicit_scorable_statuses_v2"
-CONFIDENCE_BOOLEAN_COLUMNS = frozenset({"density_is_shared", "context_warning"})
+CONFIDENCE_INPUT_STATUSES = frozenset(
+    {"complete", "density_only", "geometry_only", "unscorable"}
+)
+EVIDENCE_BASES = frozenset(
+    {
+        "density_and_geometry",
+        "density_only",
+        "geometry_only",
+        "no_assessable_evidence",
+    }
+)
+VERDICT_REASONS = frozenset(
+    {
+        "no_assessable_evidence",
+        "density_and_geometry_suspect",
+        "density_suspect",
+        "geometry_suspect",
+        "review_plus_review",
+        "density_review",
+        "geometry_review",
+        "all_available_components_pass",
+    }
+)
+INPUT_STATUS_POLICY = "independent_component_availability_v1"
+CONFIDENCE_BOOLEAN_COLUMNS = frozenset(
+    {"density_is_shared", "density_saturated", "context_warning"}
+)
 REFERENCE_METADATA_FIELDS = frozenset(
     {
         "confidence_method_version",
         "confidence_schema_version",
         "cohort_weighting",
         "score_decimal_places",
-        "density_anchors",
-        "geometry_anchors",
-        "weights",
-        "percentile_method",
+        "metric_decimal_places",
+        "density_thresholds",
+        "density_saturation_value",
+        "density_saturation_policy",
+        "geometry_thresholds",
+        "support_score_method",
+        "geometry_statistic",
+        "overall_rule",
         "coverage_policy",
         "input_status_policy",
         "maximum_entry_metal_sites",
         "reference_data_id",
         "reference_id",
         "distribution_file",
-        "distinct_score_count",
-        "scorable_cohort_size",
+        "density_distinct_value_count",
+        "geometry_distinct_value_count",
+        "density_reference_size",
+        "geometry_reference_size",
         "cohort_id",
         "confidence_inputs_file",
         "confidence_inputs_sha256",
@@ -174,13 +219,6 @@ def _true(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
 
 
-def _confidence_inputs_are_scorable(row: Mapping[str, Any]) -> bool:
-    """Return whether upstream evidence collection authorized scoring."""
-    return (
-        str(row.get("confidence_inputs_status", "")).strip() in SCORABLE_INPUT_STATUSES
-    )
-
-
 def _format_decimal(value: float, decimal_places: int = 6) -> str:
     """Render a confidence number without trailing zeros, blanking non-finite.
 
@@ -193,8 +231,12 @@ def _format_decimal(value: float, decimal_places: int = 6) -> str:
     return f"{value:.{decimal_places}f}".rstrip("0").rstrip(".")
 
 
-def canonical_confidence_score(value: float) -> float:
+def canonical_support_score(value: float) -> float:
     return float(f"{value:.{SCORE_DECIMAL_PLACES}f}")
+
+
+def canonical_metric(value: float) -> float:
+    return float(f"{value:.{METRIC_DECIMAL_PLACES}f}")
 
 
 def _confidence_csv_value(column: str, value: object) -> object:
@@ -253,37 +295,87 @@ def _manifest_provenance(path: str) -> dict[str, Any]:
 
 
 def _bond_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    finite_bonds: list[tuple[float, Mapping[str, Any]]] = []
+    scored_bonds: list[tuple[float, Mapping[str, Any]]] = []
     reference_covered = 0
     declared = 0
     inferred = 0
+    declared_scored = 0
+    inferred_scored = 0
     multi_donor = 0
     for row in rows:
         reference_covered += _true(row.get("reference_covered", ""))
-        declared += _true(row.get("declared_connection", ""))
-        inferred += row.get("coordination_status", "").strip() == "inferred"
+        is_declared = _true(row.get("declared_connection", ""))
+        is_inferred = row.get("coordination_status", "").strip() == "inferred"
+        declared += is_declared
+        inferred += is_inferred
         multi_donor += _true(row.get("multi_donor_detected", ""))
         zscore = _finite_float(row.get("zscore", ""))
-        if math.isfinite(zscore):
-            finite_bonds.append((abs(zscore), row))
+        if _true(row.get("score_eligible", "")) and math.isfinite(zscore):
+            scored_bonds.append((zscore, row))
+            declared_scored += is_declared
+            inferred_scored += is_inferred
 
     assigned = len(rows)
     coverage = reference_covered / assigned if assigned else 0.0
-    largest = max(finite_bonds, key=lambda item: item[0]) if finite_bonds else None
+    largest = max(scored_bonds, key=lambda item: abs(item[0])) if scored_bonds else None
     largest_row: Mapping[str, Any] = largest[1] if largest else {}
+    zscores = [item[0] for item in scored_bonds]
+    geometry_contact_basis = (
+        "declared_and_inferred"
+        if declared_scored and inferred_scored
+        else "declared_only"
+        if declared_scored
+        else "inferred_only"
+        if inferred_scored
+        else "none"
+    )
     return {
         "assigned_contact_count": assigned,
         "reference_covered_contact_count": reference_covered,
-        "zbond_available_contact_count": len(finite_bonds),
+        "geometry_bond_count": len(zscores),
         "geometry_coverage": _format_decimal(coverage),
-        "max_abs_zbond": _format_decimal(largest[0]) if largest else "",
-        "max_abs_zbond_contact_id": largest_row.get("contact_id", ""),
-        "max_abs_zbond_neighbor_resname": largest_row.get("neighbor_resname", ""),
-        "max_abs_zbond_neighbor_chain": largest_row.get("neighbor_chain", ""),
-        "max_abs_zbond_neighbor_resnum": largest_row.get("neighbor_resnum", ""),
-        "max_abs_zbond_neighbor_atom": largest_row.get("neighbor_atom", ""),
+        "geometry_rms_zbond": (
+            _format_decimal(
+                math.sqrt(sum(value * value for value in zscores) / len(zscores)),
+                METRIC_DECIMAL_PLACES,
+            )
+            if zscores
+            else ""
+        ),
+        "geometry_max_abs_zbond": (
+            _format_decimal(abs(largest[0]), METRIC_DECIMAL_PLACES) if largest else ""
+        ),
+        "geometry_mean_abs_zbond": (
+            _format_decimal(
+                sum(abs(value) for value in zscores) / len(zscores),
+                METRIC_DECIMAL_PLACES,
+            )
+            if zscores
+            else ""
+        ),
+        "geometry_mean_signed_zbond": (
+            _format_decimal(sum(zscores) / len(zscores), METRIC_DECIMAL_PLACES)
+            if zscores
+            else ""
+        ),
+        "worst_bond": largest_row.get("contact_id", ""),
+        "worst_bond_source": (
+            "declared"
+            if largest and _true(largest_row.get("declared_connection", ""))
+            else "inferred"
+            if largest
+            and largest_row.get("coordination_status", "").strip() == "inferred"
+            else ""
+        ),
+        "worst_bond_neighbor_resname": largest_row.get("neighbor_resname", ""),
+        "worst_bond_neighbor_chain": largest_row.get("neighbor_chain", ""),
+        "worst_bond_neighbor_resnum": largest_row.get("neighbor_resnum", ""),
+        "worst_bond_neighbor_atom": largest_row.get("neighbor_atom", ""),
         "declared_contact_count": declared,
         "inferred_contact_count": inferred,
+        "declared_scored_bond_count": declared_scored,
+        "inferred_scored_bond_count": inferred_scored,
+        "geometry_contact_basis": geometry_contact_basis,
         "multi_donor_contact_count": multi_donor,
     }
 
@@ -304,10 +396,7 @@ def _orphan_bond_site_input(
     missing_reasons = ["rszd_unavailable", "density_row_unavailable"]
     if summary["reference_covered_contact_count"] == 0:
         missing_reasons.append("no_geometry_reference")
-    elif (
-        summary["zbond_available_contact_count"]
-        < summary["reference_covered_contact_count"]
-    ):
+    elif summary["geometry_bond_count"] < summary["reference_covered_contact_count"]:
         missing_reasons.append("zbond_unavailable_for_reference")
     if summary["reference_covered_contact_count"] < summary["assigned_contact_count"]:
         missing_reasons.append("partial_geometry_coverage")
@@ -341,7 +430,9 @@ def _orphan_bond_site_input(
                 _true(row.get("context_warning", "")) for row in rows
             ),
             "context_warning_reasons": "|".join(dict.fromkeys(warning_reasons)),
-            "confidence_inputs_status": "unscorable",
+            "confidence_inputs_status": (
+                "geometry_only" if summary["geometry_bond_count"] else "unscorable"
+            ),
             "confidence_inputs_missing_reasons": "|".join(missing_reasons),
         }
     )
@@ -371,14 +462,15 @@ def prepare_confidence_inputs(
             )
         seen_sites.add(key)
 
-        rszd = abs(_finite_float(stats.get("ZDm", "")))
+        rszd = _finite_float(stats.get("ZDm", ""))
+        rszd_abs = abs(rszd)
         negative = _finite_float(stats.get("ZD-m", ""))
         positive = _finite_float(stats.get("ZD+m", ""))
         summary = _bond_summary(bonds_by_site.pop(key, ()))
         missing_reasons: list[str] = []
         if str(stats.get("metal_coordinates_valid", "")).strip().lower() == "false":
             missing_reasons.append("non_finite_metal_coordinates")
-        if not math.isfinite(rszd):
+        if not math.isfinite(rszd_abs):
             missing_reasons.append("rszd_unavailable")
         if summary["assigned_contact_count"] == 0:
             missing_reasons.append("no_assigned_contacts")
@@ -386,7 +478,7 @@ def prepare_confidence_inputs(
             if summary["reference_covered_contact_count"] == 0:
                 missing_reasons.append("no_geometry_reference")
             elif (
-                summary["zbond_available_contact_count"]
+                summary["geometry_bond_count"]
                 < summary["reference_covered_contact_count"]
             ):
                 missing_reasons.append("zbond_unavailable_for_reference")
@@ -396,32 +488,29 @@ def prepare_confidence_inputs(
             ):
                 missing_reasons.append("partial_geometry_coverage")
 
-        if (
-            "non_finite_metal_coordinates" in missing_reasons
-            or "rszd_unavailable" in missing_reasons
-        ):
-            status = "unscorable"
-        elif (
-            summary["reference_covered_contact_count"] > 0
-            and summary["zbond_available_contact_count"] == 0
-        ):
-            status = "unscorable"
-        elif summary["reference_covered_contact_count"] == 0:
-            status = "density_only"
-        elif (
-            "partial_geometry_coverage" in missing_reasons
-            or "zbond_unavailable_for_reference" in missing_reasons
-        ):
-            status = "partial_geometry"
-        else:
-            status = "complete"
+        density_available = math.isfinite(rszd_abs)
+        geometry_available = summary["geometry_bond_count"] > 0
+        status = (
+            "complete"
+            if density_available and geometry_available
+            else "density_only"
+            if density_available
+            else "geometry_only"
+            if geometry_available
+            else "unscorable"
+        )
 
         output = {column: stats.get(column, "") for column in IDENTITY_COLUMNS}
         output.update(
             {
-                "rszd_magnitude": _format_decimal(rszd),
+                "rszd": _format_decimal(rszd, METRIC_DECIMAL_PLACES),
+                "rszd_abs": _format_decimal(rszd_abs, METRIC_DECIMAL_PLACES),
                 "rszd_negative": _format_decimal(negative),
                 "rszd_positive": _format_decimal(positive),
+                "density_saturated": (
+                    math.isfinite(rszd_abs)
+                    and math.isclose(rszd_abs, EDSTATS_SATURATION_MAGNITUDE)
+                ),
                 **summary,
                 "suspect_multi_donor_residue_group_count": stats.get(
                     "suspect_multi_donor_residue_group_count", ""
@@ -470,7 +559,6 @@ def complete_confidence_site_count(
             ]
             if missing_reason not in reasons:
                 reasons.append(missing_reason)
-            row["confidence_inputs_status"] = "unscorable"
             row["confidence_inputs_missing_reasons"] = "|".join(reasons)
     for index in range(len(rows), selected_site_count):
         values: dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
@@ -493,67 +581,90 @@ def complete_confidence_site_count(
     return completed
 
 
-def severity(value: float, anchors: Sequence[tuple[float, float]]) -> float:
-    """Piecewise-linear bounded severity for a non-negative magnitude."""
+def component_level(value: float, review: float, suspect: float) -> str:
+    """Classify one non-negative measurement at the final raw thresholds."""
     if not math.isfinite(value) or value < 0:
-        return math.nan
-    if value <= anchors[0][0]:
-        return anchors[0][1]
-    for (low_x, low_y), (high_x, high_y) in zip(anchors, anchors[1:]):
-        if value <= high_x:
-            fraction = (value - low_x) / (high_x - low_x)
-            return low_y + fraction * (high_y - low_y)
-    return anchors[-1][1]
+        return "INCOMPLETE"
+    if value < review:
+        return "PASS"
+    if value < suspect:
+        return "REVIEW"
+    return "SUSPECT"
 
 
-def score_site(
-    rszd_magnitude: float, max_abs_zbond: float, geometry_coverage: float
-) -> dict[str, float] | None:
-    """Return the provisional score and its auditable weighted components."""
-    density_severity = severity(rszd_magnitude, DENSITY_ANCHORS)
-    if not math.isfinite(density_severity):
-        return None
-    coverage = min(1.0, max(0.0, geometry_coverage))
-    if coverage == 0.0:
-        geometry_severity = 0.0
+def density_level(rszd_abs: float) -> str:
+    return component_level(
+        rszd_abs, DENSITY_REVIEW_THRESHOLD, DENSITY_SUSPECT_THRESHOLD
+    )
+
+
+def geometry_level(geometry_rms_zbond: float) -> str:
+    return component_level(
+        geometry_rms_zbond, GEOMETRY_REVIEW_THRESHOLD, GEOMETRY_SUSPECT_THRESHOLD
+    )
+
+
+def classify_site(rszd_abs: float, geometry_rms_zbond: float) -> dict[str, str]:
+    """Apply the non-compensatory final decision matrix to one site."""
+    density = density_level(rszd_abs)
+    geometry = geometry_level(geometry_rms_zbond)
+    available = [level for level in (density, geometry) if level != "INCOMPLETE"]
+    evidence_basis = (
+        "density_and_geometry"
+        if len(available) == 2
+        else "density_only"
+        if density != "INCOMPLETE"
+        else "geometry_only"
+        if geometry != "INCOMPLETE"
+        else "no_assessable_evidence"
+    )
+
+    if not available:
+        overall = "INCOMPLETE"
+        reason = "no_assessable_evidence"
+    elif density == "SUSPECT" and geometry == "SUSPECT":
+        overall = "SUSPECT"
+        reason = "density_and_geometry_suspect"
+    elif density == "SUSPECT":
+        overall = "SUSPECT"
+        reason = "density_suspect"
+    elif geometry == "SUSPECT":
+        overall = "SUSPECT"
+        reason = "geometry_suspect"
+    elif density == "REVIEW" and geometry == "REVIEW":
+        overall = "SUSPECT"
+        reason = "review_plus_review"
+    elif density == "REVIEW":
+        overall = "REVIEW"
+        reason = "density_review"
+    elif geometry == "REVIEW":
+        overall = "REVIEW"
+        reason = "geometry_review"
     else:
-        geometry_severity = severity(max_abs_zbond, GEOMETRY_ANCHORS)
-        if not math.isfinite(geometry_severity):
-            return None
+        overall = "PASS"
+        reason = "all_available_components_pass"
 
-    density_component = 0.50 * density_severity
-    geometry_component = 0.35 * coverage * geometry_severity
-    interaction_component = (
-        0.15 * coverage * math.sqrt(density_severity * geometry_severity)
-    )
-    confidence = 100.0 * (
-        1.0 - density_component - geometry_component - interaction_component
-    )
     return {
-        "density_severity": density_severity,
-        "geometry_severity": geometry_severity,
-        "density_penalty_fraction": density_component,
-        "geometry_penalty_fraction": geometry_component,
-        "interaction_penalty_fraction": interaction_component,
-        "confidence_score": min(100.0, max(0.0, confidence)),
+        "density_level": density,
+        "geometry_level": geometry,
+        "alchemy_level": overall,
+        "evidence_basis": evidence_basis,
+        "verdict_reason": reason,
     }
 
 
-class ConfidenceReference:
-    """Frozen empirical confidence-score distribution from a database run."""
+class _EmpiricalDistribution:
+    """A compact average-rank survival distribution for one raw metric."""
 
-    def __init__(
-        self,
-        values: Sequence[float],
-        counts: Sequence[int],
-        metadata: Mapping[str, Any],
-    ) -> None:
-        if len(values) != len(counts) or not values:
-            raise ValueError("confidence reference distribution is empty")
-        if any(count < 1 for count in counts):
+    def __init__(self, values: Sequence[float], counts: Sequence[int]) -> None:
+        if len(values) != len(counts):
+            raise ValueError("confidence reference values and counts differ in size")
+        if any(not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("confidence reference contains an invalid value")
+        if any(isinstance(count, bool) or count < 1 for count in counts):
             raise ValueError("confidence reference contains an invalid count")
         if any(right <= left for left, right in zip(values, values[1:])):
-            raise ValueError("confidence reference scores are not increasing")
+            raise ValueError("confidence reference values are not increasing")
         self.values = tuple(values)
         self.counts = tuple(counts)
         cumulative: list[int] = []
@@ -562,44 +673,83 @@ class ConfidenceReference:
             cumulative.append(running)
             running += count
         self.cumulative_below = tuple(cumulative)
-        self.cohort_size = running
-        self.metadata = dict(metadata)
-        self.reference_id: str = self.metadata.get("reference_id", "")
-        self.cohort_id: str = self.metadata.get("cohort_id", "")
+        self.size = running
 
-    def percentile(self, score: float) -> float:
-        """Average-rank ECDF percentile against the frozen database cohort."""
-        score = canonical_confidence_score(score)
-        index = bisect.bisect_left(self.values, score)
-        if index < len(self.values) and self.values[index] == score:
+    def support_score(self, value: float) -> float:
+        """Return reverse average-rank ECDF support; ordinary values rank high."""
+        if not math.isfinite(value) or value < 0 or not self.values:
+            return math.nan
+        index = bisect.bisect_left(self.values, value)
+        if index < len(self.values) and self.values[index] == value:
             below = self.cumulative_below[index]
             equal = self.counts[index]
         else:
             below = (
-                self.cumulative_below[index]
-                if index < len(self.values)
-                else self.cohort_size
+                self.cumulative_below[index] if index < len(self.values) else self.size
             )
             equal = 0
-        return 100.0 * (below + 0.5 * equal) / self.cohort_size
+        return 100.0 * (self.size - below - 0.5 * equal) / self.size
 
 
-# Part of ``reference_id``, because nothing else in a stored reference records
-# whether corrupt sites entered its cohort. Bump it to make ``load_reference``
-# refuse references built under an earlier policy.
-COVERAGE_POLICY = "invalid_coverage_excluded_v1"
+class ConfidenceReference:
+    """Frozen empirical density and RMS-Zbond distributions."""
+
+    def __init__(
+        self,
+        density_values: Sequence[float],
+        density_counts: Sequence[int],
+        geometry_values: Sequence[float],
+        geometry_counts: Sequence[int],
+        metadata: Mapping[str, Any],
+    ) -> None:
+        self.density = _EmpiricalDistribution(density_values, density_counts)
+        self.geometry = _EmpiricalDistribution(geometry_values, geometry_counts)
+        if self.density.size == 0 and self.geometry.size == 0:
+            raise ValueError("confidence reference has no assessable evidence")
+        self.metadata = dict(metadata)
+        self.reference_id: str = self.metadata.get("reference_id", "")
+        self.cohort_id: str = self.metadata.get("cohort_id", "")
+        self.cohort_size = int(self.metadata.get("input_row_count", 0))
+
+    @property
+    def density_reference_size(self) -> int:
+        return self.density.size
+
+    @property
+    def geometry_reference_size(self) -> int:
+        return self.geometry.size
 
 
-def coverage_is_valid(coverage: float) -> bool:
-    """Whether ``coverage`` is usable geometry evidence.
-
-    A blank, non-numeric or out-of-range coverage is damaged input, not
-    evidence that geometry is irrelevant: coercing it to zero drops both
-    geometry terms and scores the site higher than real evidence would. Both
-    scoring and reference building apply this test, so the cohort can never
-    contain a site that scoring itself refuses.
-    """
-    return math.isfinite(coverage) and 0.0 <= coverage <= 1.0
+def score_site(
+    rszd_abs: float,
+    geometry_rms_zbond: float,
+    reference: ConfidenceReference | None = None,
+) -> dict[str, str | float]:
+    """Return authoritative levels plus secondary empirical ranking scores."""
+    result: dict[str, str | float] = {
+        key: value for key, value in classify_site(rszd_abs, geometry_rms_zbond).items()
+    }
+    density_score = (
+        0.0
+        if reference and rszd_abs >= EDSTATS_SATURATION_MAGNITUDE
+        else reference.density.support_score(rszd_abs)
+        if reference
+        else math.nan
+    )
+    geometry_score = (
+        reference.geometry.support_score(geometry_rms_zbond) if reference else math.nan
+    )
+    available_scores = [
+        score for score in (density_score, geometry_score) if math.isfinite(score)
+    ]
+    result.update(
+        {
+            "density_score": density_score,
+            "geometry_score": geometry_score,
+            "alchemy_score": min(available_scores) if available_scores else math.nan,
+        }
+    )
+    return result
 
 
 def _scoring_metadata() -> dict[str, Any]:
@@ -607,57 +757,77 @@ def _scoring_metadata() -> dict[str, Any]:
 
     ``reference_data_id`` counts: every score in a distribution was measured
     against one catalog and one distance table, so a changed table must produce
-    a different reference id rather than a quietly wrong percentile.
+    a different reference id rather than a quietly wrong empirical rank.
     """
     return {
         "confidence_method_version": CONFIDENCE_METHOD_VERSION,
         "confidence_schema_version": CONFIDENCE_SCHEMA_VERSION,
         "cohort_weighting": COHORT_WEIGHTING,
         "score_decimal_places": SCORE_DECIMAL_PLACES,
-        "density_anchors": [list(anchor) for anchor in DENSITY_ANCHORS],
-        "geometry_anchors": [list(anchor) for anchor in GEOMETRY_ANCHORS],
-        "weights": {
-            "density": 0.50,
-            "geometry": 0.35,
-            "interaction": 0.15,
+        "metric_decimal_places": METRIC_DECIMAL_PLACES,
+        "density_thresholds": {
+            "review": DENSITY_REVIEW_THRESHOLD,
+            "suspect": DENSITY_SUSPECT_THRESHOLD,
         },
-        "percentile_method": "average_rank_empirical_cdf",
-        "coverage_policy": COVERAGE_POLICY,
+        "density_saturation_value": EDSTATS_SATURATION_MAGNITUDE,
+        "density_saturation_policy": "suspect_with_zero_support",
+        "geometry_thresholds": {
+            "review": GEOMETRY_REVIEW_THRESHOLD,
+            "suspect": GEOMETRY_SUSPECT_THRESHOLD,
+        },
+        "support_score_method": "reverse_average_rank_empirical_cdf",
+        "geometry_statistic": "rms_finite_score_eligible_zbond",
+        "overall_rule": "any_suspect_or_review_plus_review",
+        "coverage_policy": "annotation_only_v1",
         "input_status_policy": INPUT_STATUS_POLICY,
         "maximum_entry_metal_sites": MAX_ANALYZED_METAL_SITES,
         "reference_data_id": reference_data_id(),
     }
 
 
-def _reference_identifier(score_counts: Mapping[float, int]) -> str:
+def _reference_identifier(
+    density_counts: Mapping[float, int], geometry_counts: Mapping[float, int]
+) -> str:
     digest = hashlib.sha256()
     scoring_parameters = json.dumps(
         _scoring_metadata(), sort_keys=True, separators=(",", ":")
     )
     digest.update(scoring_parameters.encode("utf-8"))
     digest.update(b"\n")
-    for score in sorted(score_counts):
-        digest.update(f"{repr(score)},{score_counts[score]}\n".encode("ascii"))
+    for component, counts in (
+        ("density", density_counts),
+        ("geometry", geometry_counts),
+    ):
+        for value in sorted(counts):
+            digest.update(
+                f"{component},{repr(value)},{counts[value]}\n".encode("ascii")
+            )
     return "alchemy-confidence-" + digest.hexdigest()[:20]
 
 
-def _normalized_score_counts(score_counts: Mapping[float, int]) -> Counter[float]:
+def _normalized_metric_counts(counts: Mapping[float, int]) -> Counter[float]:
     normalized: Counter[float] = Counter()
-    for score, count in score_counts.items():
-        normalized[canonical_confidence_score(score)] += count
+    for value, count in counts.items():
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("confidence reference contains an invalid value")
+        if isinstance(count, bool) or count < 1:
+            raise ValueError("confidence reference contains an invalid count")
+        normalized[canonical_metric(value)] += count
     return normalized
 
 
 def write_reference(
     reference_dir: str,
-    score_counts: Mapping[float, int],
+    density_counts: Mapping[float, int],
+    geometry_counts: Mapping[float, int],
     input_row_count: int,
     cohort_provenance: Mapping[str, Any] | None = None,
 ) -> "ConfidenceReference":
-    """Write a reusable database confidence distribution and its metadata."""
-    score_counts = _normalized_score_counts(score_counts)
-    if not score_counts:
-        raise ValueError("cannot build a confidence reference with no scores")
+    """Write reusable component distributions and their policy metadata."""
+    density_counts = _normalized_metric_counts(density_counts)
+    geometry_counts = _normalized_metric_counts(geometry_counts)
+    if not density_counts and not geometry_counts:
+        raise ValueError("cannot build a confidence reference with no evidence")
     os.makedirs(reference_dir, exist_ok=True)
     distribution_path = os.path.join(reference_dir, REFERENCE_DISTRIBUTION_FILE)
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
@@ -665,27 +835,40 @@ def write_reference(
     distribution_tmp = distribution_path + ".tmp"
     with open(distribution_tmp, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(("confidence_score", "count"))
-        for score in sorted(score_counts):
-            writer.writerow((_format_decimal(score), score_counts[score]))
+        writer.writerow(("component", "value", "count"))
+        for component, counts in (
+            ("density", density_counts),
+            ("geometry", geometry_counts),
+        ):
+            for value in sorted(counts):
+                writer.writerow(
+                    (
+                        component,
+                        _format_decimal(value, METRIC_DECIMAL_PLACES),
+                        counts[value],
+                    )
+                )
     os.replace(distribution_tmp, distribution_path)
 
     metadata = _scoring_metadata()
     metadata.update(
         {
-            "reference_id": _reference_identifier(score_counts),
+            "reference_id": _reference_identifier(density_counts, geometry_counts),
             "input_row_count": input_row_count,
-            "scorable_cohort_size": sum(score_counts.values()),
-            "distinct_score_count": len(score_counts),
+            "density_reference_size": sum(density_counts.values()),
+            "geometry_reference_size": sum(geometry_counts.values()),
+            "density_distinct_value_count": len(density_counts),
+            "geometry_distinct_value_count": len(geometry_counts),
             "distribution_file": REFERENCE_DISTRIBUTION_FILE,
         }
     )
     provenance = dict(cohort_provenance or {})
     if "cohort_id" not in provenance:
         fallback_identity = hashlib.sha256(
-            f"{_reference_identifier(score_counts)}\n{input_row_count}\n".encode(
-                "ascii"
-            )
+            (
+                f"{_reference_identifier(density_counts, geometry_counts)}\n"
+                f"{input_row_count}\n"
+            ).encode("ascii")
         ).hexdigest()
         provenance["cohort_id"] = "alchemy-cohort-" + fallback_identity[:20]
     metadata.update(provenance)
@@ -695,8 +878,10 @@ def write_reference(
         handle.write("\n")
     os.replace(metadata_tmp, metadata_path)
     return ConfidenceReference(
-        sorted(score_counts),
-        [score_counts[value] for value in sorted(score_counts)],
+        sorted(density_counts),
+        [density_counts[value] for value in sorted(density_counts)],
+        sorted(geometry_counts),
+        [geometry_counts[value] for value in sorted(geometry_counts)],
         metadata,
     )
 
@@ -712,10 +897,14 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         "confidence_schema_version",
         "cohort_weighting",
         "score_decimal_places",
-        "density_anchors",
-        "geometry_anchors",
-        "weights",
-        "percentile_method",
+        "metric_decimal_places",
+        "density_thresholds",
+        "density_saturation_value",
+        "density_saturation_policy",
+        "geometry_thresholds",
+        "support_score_method",
+        "geometry_statistic",
+        "overall_rule",
         "coverage_policy",
         "input_status_policy",
         "maximum_entry_metal_sites",
@@ -747,111 +936,88 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE),
     )
     header, rows = _read_csv(distribution_path, "confidence reference distribution")
-    if header != ("confidence_score", "count"):
+    if header != ("component", "value", "count"):
         raise ValueError("confidence reference distribution has invalid columns")
-    values: list[float] = []
-    counts: list[int] = []
-    score_counts: Counter[float] = Counter()
+    component_counts: dict[str, Counter[float]] = {
+        "density": Counter(),
+        "geometry": Counter(),
+    }
     for row in rows:
-        score = _finite_float(row["confidence_score"])
+        component = row["component"]
+        value = _finite_float(row["value"])
         try:
             count = int(row["count"])
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "confidence reference contains a non-integer count"
             ) from exc
-        if not math.isfinite(score):
-            raise ValueError("confidence reference contains a non-finite score")
-        values.append(score)
-        counts.append(count)
-        score_counts[score] = count
-    if metadata.get("reference_id") != _reference_identifier(score_counts):
+        if component not in component_counts:
+            raise ValueError("confidence reference contains an unknown component")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("confidence reference contains an invalid value")
+        if value in component_counts[component]:
+            raise ValueError("confidence reference contains a duplicate value")
+        component_counts[component][value] = count
+    density_counts = component_counts["density"]
+    geometry_counts = component_counts["geometry"]
+    if metadata.get("reference_id") != _reference_identifier(
+        density_counts, geometry_counts
+    ):
         raise ValueError("confidence reference identifier does not match data")
-    reference = ConfidenceReference(values, counts, metadata)
-    if reference.cohort_size != metadata.get("scorable_cohort_size"):
-        raise ValueError("confidence reference cohort size does not match metadata")
-    if len(reference.values) != metadata.get("distinct_score_count"):
-        raise ValueError(
-            "confidence reference distinct score count does not match data"
-        )
+    reference = ConfidenceReference(
+        sorted(density_counts),
+        [density_counts[value] for value in sorted(density_counts)],
+        sorted(geometry_counts),
+        [geometry_counts[value] for value in sorted(geometry_counts)],
+        metadata,
+    )
+    if reference.density_reference_size != metadata.get("density_reference_size"):
+        raise ValueError("density reference size does not match metadata")
+    if reference.geometry_reference_size != metadata.get("geometry_reference_size"):
+        raise ValueError("geometry reference size does not match metadata")
+    if len(reference.density.values) != metadata.get("density_distinct_value_count"):
+        raise ValueError("density distinct-value count does not match metadata")
+    if len(reference.geometry.values) != metadata.get("geometry_distinct_value_count"):
+        raise ValueError("geometry distinct-value count does not match metadata")
     input_row_count = metadata.get("input_row_count")
-    if not isinstance(input_row_count, int) or input_row_count < reference.cohort_size:
+    if (
+        not isinstance(input_row_count, int)
+        or input_row_count < reference.density_reference_size
+        or input_row_count < reference.geometry_reference_size
+    ):
         raise ValueError("confidence reference input row count is invalid")
     return reference
 
 
 def _score_prepared_row(
-    row: Mapping[str, Any], reference: "ConfidenceReference"
+    row: Mapping[str, Any], reference: "ConfidenceReference | None"
 ) -> tuple[dict[str, Any], float | None]:
-    rszd = _finite_float(row.get("rszd_magnitude", ""))
-    zbond = _finite_float(row.get("max_abs_zbond", ""))
-    coverage = _finite_float(row.get("geometry_coverage", ""))
-    coverage_valid = coverage_is_valid(coverage)
-    inputs_scorable = _confidence_inputs_are_scorable(row)
-    result = (
-        score_site(rszd, zbond, coverage)
-        if inputs_scorable and coverage_valid
-        else None
-    )
+    rszd = _finite_float(row.get("rszd_abs", ""))
+    geometry_rms = _finite_float(row.get("geometry_rms_zbond", ""))
+    result = score_site(rszd, geometry_rms, reference)
     output = dict(row)
-    if result is None:
-        input_status = str(row.get("confidence_inputs_status", "")).strip()
-        missing_reasons = {
-            reason
-            for reason in str(row.get("confidence_inputs_missing_reasons", "")).split(
-                "|"
-            )
-            if reason
-        }
-        output.update({column: "" for column in ANALYSIS_COLUMNS})
-        output.update(
-            {
-                "confidence_scoring_status": "unscorable",
-                "confidence_scoring_reason": (
-                    "zbond_unavailable_with_nonzero_coverage"
-                    if "zbond_unavailable_for_reference" in missing_reasons
-                    and coverage_valid
-                    and coverage > 0.0
-                    and not math.isfinite(zbond)
-                    else "confidence_inputs_unscorable"
-                    if input_status == "unscorable"
-                    else "confidence_inputs_status_invalid"
-                    if not inputs_scorable
-                    else "geometry_coverage_invalid"
-                    if not coverage_valid
-                    else "rszd_unavailable"
-                    if not math.isfinite(rszd)
-                    else "zbond_unavailable_with_nonzero_coverage"
-                ),
-                "confidence_reference_id": reference.reference_id,
-                "confidence_cohort_id": reference.cohort_id,
-                "confidence_cohort_size": reference.cohort_size,
-            }
+    for key, value in result.items():
+        output[key] = (
+            _format_decimal(canonical_support_score(value))
+            if isinstance(value, float)
+            else value
         )
-        return output, None
-
-    output.update({key: _format_decimal(value) for key, value in result.items()})
-    score = canonical_confidence_score(result["confidence_score"])
-    output["confidence_score"] = _format_decimal(score)
     output.update(
         {
-            "confidence_percentile": _format_decimal(reference.percentile(score)),
-            "confidence_scoring_status": (
-                "density_only"
-                if coverage == 0.0
-                else ("partial_geometry" if coverage < 1.0 else "complete")
+            "score_policy_version": CONFIDENCE_METHOD_VERSION,
+            "confidence_reference_version": reference.reference_id if reference else "",
+            "confidence_cohort_id": reference.cohort_id if reference else "",
+            "confidence_cohort_size": reference.cohort_size if reference else "",
+            "density_reference_size": (
+                reference.density_reference_size if reference else ""
             ),
-            "confidence_scoring_reason": (
-                "no_usable_geometry"
-                if coverage == 0.0
-                else ("geometry_coverage_below_one" if coverage < 1.0 else "")
+            "geometry_reference_size": (
+                reference.geometry_reference_size if reference else ""
             ),
-            "confidence_reference_id": reference.reference_id,
-            "confidence_cohort_id": reference.cohort_id,
-            "confidence_cohort_size": reference.cohort_size,
         }
     )
-    return output, score
+    alchemy_score = _finite_float(output.get("alchemy_score", ""))
+    return output, alchemy_score if math.isfinite(alchemy_score) else None
 
 
 def score_against_reference(
@@ -859,6 +1025,13 @@ def score_against_reference(
 ) -> list[dict[str, Any]]:
     """Score prepared rows against a frozen database reference."""
     return [_score_prepared_row(row, reference)[0] for row in rows]
+
+
+def classify_without_reference(
+    rows: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Classify prepared rows when no empirical ranking reference is installed."""
+    return [_score_prepared_row(row, None)[0] for row in rows]
 
 
 def _validated_input_reader(
@@ -870,9 +1043,8 @@ def _validated_input_reader(
         input_columns,
         (
             "metal_site_id",
-            "rszd_magnitude",
-            "max_abs_zbond",
-            "geometry_coverage",
+            "rszd_abs",
+            "geometry_rms_zbond",
             "context_warning",
             "context_warning_reasons",
             "confidence_inputs_status",
@@ -896,7 +1068,8 @@ def finalize_database_confidence(
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     if os.path.isfile(metadata_path):
         os.unlink(metadata_path)
-    score_counts: Counter[float] = Counter()
+    density_counts: Counter[float] = Counter()
+    geometry_counts: Counter[float] = Counter()
     input_row_count = 0
     input_entry_ids: set[str] = set()
     scorable_entry_ids: set[str] = set()
@@ -909,20 +1082,13 @@ def finalize_database_confidence(
             if pdb_id:
                 input_entry_ids.add(pdb_id)
             input_status_counts[str(row.get("confidence_inputs_status", ""))] += 1
-            if not _confidence_inputs_are_scorable(row):
-                continue
-            rszd = _finite_float(row.get("rszd_magnitude", ""))
-            zbond = _finite_float(row.get("max_abs_zbond", ""))
-            coverage = _finite_float(row.get("geometry_coverage", ""))
-            result = (
-                score_site(rszd, zbond, coverage)
-                if coverage_is_valid(coverage)
-                else None
-            )
-            if result is not None:
-                score_counts[
-                    canonical_confidence_score(result["confidence_score"])
-                ] += 1
+            rszd = _finite_float(row.get("rszd_abs", ""))
+            geometry_rms = _finite_float(row.get("geometry_rms_zbond", ""))
+            if math.isfinite(rszd) and rszd >= 0:
+                density_counts[rszd] += 1
+            if math.isfinite(geometry_rms) and geometry_rms >= 0:
+                geometry_counts[geometry_rms] += 1
+            if math.isfinite(rszd) or math.isfinite(geometry_rms):
                 if pdb_id:
                     scorable_entry_ids.add(pdb_id)
     inputs_sha256 = _file_sha256(input_path)
@@ -938,7 +1104,8 @@ def finalize_database_confidence(
         provenance.update(_manifest_provenance(manifest_path))
     reference = write_reference(
         reference_dir,
-        score_counts,
+        density_counts,
+        geometry_counts,
         input_row_count,
         cohort_provenance=provenance,
     )
@@ -989,7 +1156,7 @@ def validate_scored_reference(path: str, reference: "ConfidenceReference") -> No
     """Refuse resume output containing rows from another frozen reference."""
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        required = {"confidence_reference_id", "confidence_cohort_id"}
+        required = {"confidence_reference_version", "confidence_cohort_id"}
         if not required.issubset(reader.fieldnames or ()):
             raise ValueError(
                 "existing confidence output has no reference or cohort identifier"
@@ -997,7 +1164,7 @@ def validate_scored_reference(path: str, reference: "ConfidenceReference") -> No
         identifiers: set[str] = set()
         cohort_identifiers: set[str] = set()
         for row in reader:
-            identifier = (row.get("confidence_reference_id") or "").strip()
+            identifier = (row.get("confidence_reference_version") or "").strip()
             cohort_id = (row.get("confidence_cohort_id") or "").strip()
             if not identifier or not cohort_id:
                 raise ValueError(

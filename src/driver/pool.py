@@ -92,6 +92,7 @@ from confidence_score import (
     CONFIDENCE_INPUT_COLUMNS,
     REFERENCE_METADATA_FILE,
     ConfidenceReference,
+    classify_without_reference,
     finalize_database_confidence,
     complete_confidence_site_count,
     load_reference as load_confidence_reference,
@@ -531,7 +532,8 @@ class ConfidencePlan:
 
     ``database`` streams the inputs an uncapped full-database run finalizes
     into a new reference; ``reference`` scores against one that already exists;
-    ``None`` means scoring is off.
+    ``classification`` emits raw-threshold verdicts without empirical ranking;
+    ``None`` means confidence analysis is off because bonds are disabled.
     """
 
     def __init__(self) -> None:
@@ -711,13 +713,15 @@ def plan_confidence(
     )
     if reference_dir is None:
         logger.info(
-            "confidence scoring is not enabled: no frozen reference is "
-            "distributed with Alchemy, because the score is not yet "
-            "finalized. All other outputs are unaffected. To enable it, "
-            "complete an uncapped full-database run or pass "
-            "--confidence-reference-dir. (searched: %s)",
+            "no frozen confidence reference is installed, so Alchemy will "
+            "emit authoritative PASS/REVIEW/SUSPECT classifications without "
+            "empirical ranking scores. Complete an uncapped full-database run "
+            "or pass --confidence-reference-dir to add rankings. (searched: %s)",
             ", ".join(searched_dirs),
         )
+        plan.mode = "classification"
+        plan.stream_path = layout.confidence_scores
+        plan.columns = (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
         return plan
 
     try:
@@ -1057,6 +1061,8 @@ def confidence_rows_for(
     )
     if plan.reference is not None:
         rows = score_against_reference(rows, plan.reference)
+    elif plan.mode == "classification":
+        rows = classify_without_reference(rows)
     return rows
 
 
@@ -1626,6 +1632,17 @@ def _report_batch(
         run_log.summary.update(
             confidence_status="scored_against_reference",
             confidence_reference_cohort=plan.reference.cohort_size,
+            confidence_scores_path=layout.confidence_scores,
+        )
+    elif plan.mode == "classification":
+        print(
+            f"      {writers.n_confidence} confidence classifications "
+            f"(empirical ranking unavailable) -> {layout.confidence_scores}",
+            flush=True,
+        )
+        run_log.summary.update(
+            confidence_status="classified_without_reference",
+            confidence_rows=writers.n_confidence,
             confidence_scores_path=layout.confidence_scores,
         )
     if exit_code:
