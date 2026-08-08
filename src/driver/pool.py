@@ -103,6 +103,8 @@ from confidence_score import (
 from crystallization_conditions import (
     CONDITION_COLUMNS,
     SUMMARY_COLUMNS,
+    CrystallizationMetadataError,
+    prefetch_rcsb_crystallization_metadata,
     write_review_queue,
 )
 
@@ -1013,6 +1015,7 @@ def worker_config_from_args(
         gemmi_version=gemmi_version(),
         ccp4_version=ccp4_version(env),
         reference_data_id=reference_data_id(),
+        pdb_metadata_cache=args.pdb_metadata_cache,
     )
     run_log.details.update(
         alchemy_version=ALCHEMY_VERSION,
@@ -1029,6 +1032,50 @@ def worker_config_from_args(
         },
     )
     return cfg
+
+
+def prepare_crystallization_metadata(
+    args: RunConfig,
+    ids: Sequence[str],
+    run_log: RunLog,
+    *,
+    allow_download: bool | None = None,
+) -> None:
+    """Warm the original-PDB metadata cache before costly worker execution."""
+    try:
+        stats = prefetch_rcsb_crystallization_metadata(
+            ids,
+            args.pdb_metadata_cache,
+            allow_download=(
+                args.crystallization_download
+                if allow_download is None
+                else allow_download
+            ),
+        )
+    except CrystallizationMetadataError as exc:
+        raise DriverError(
+            "Could not prepare original-PDB crystallization metadata: "
+            f"{exc}. Re-run with --no-crystallization-download to use only "
+            "cached and coordinate-file metadata."
+        ) from None
+    run_log.details.update(
+        crystallization_metadata_cache=args.pdb_metadata_cache,
+        crystallization_metadata_requested=stats.requested,
+        crystallization_metadata_cache_hits=stats.cache_hits,
+        crystallization_metadata_fetched=stats.fetched,
+        crystallization_metadata_available=stats.available,
+        crystallization_metadata_not_reported=stats.not_reported,
+        crystallization_metadata_entry_unavailable=stats.entry_unavailable,
+    )
+    logger.info(
+        "crystallization metadata: %d cached, %d fetched, %d with conditions, "
+        "%d without reported conditions, %d unavailable",
+        stats.cache_hits,
+        stats.fetched,
+        stats.available,
+        stats.not_reported,
+        stats.entry_unavailable,
+    )
 
 
 def _output_targets(layout: OutputLayout, plan: ConfidencePlan) -> tuple[str, ...]:
@@ -1765,6 +1812,13 @@ def _execute_with_output_lock(
     if not ids:
         return _finish_without_entries(args, layout, plan)
 
+    # A manual structure may use an arbitrary four-character label rather than
+    # a deposited PDB ID. Its coordinate file is authoritative, so consult an
+    # existing cache entry but do not turn local analysis into a network
+    # prerequisite.
+    prepare_crystallization_metadata(
+        args, ids, run_log, allow_download=False if manual_inputs else None
+    )
     _clear_stale_outputs(args, layout, plan)
     cfg = worker_config_from_args(
         args, env, root, args.pdb_redo_cache, cofactors, manual_inputs, plan, run_log

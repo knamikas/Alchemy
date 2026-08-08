@@ -191,7 +191,8 @@ entry-level experimental context and join to site, bond, and confidence rows by
 | Columns | Meaning |
 | --- | --- |
 | `pdbID`, `crystallization_condition_id` | Entry join key and stable within-entry condition identifier. |
-| `source_format` | `mmcif` for `_exptl_crystal_grow` or `pdb` for legacy `REMARK 280`. |
+| `source_format` | `json` for a cached RCSB Data API record, `mmcif` for coordinate-file `_exptl_crystal_grow`, or `pdb` for legacy `REMARK 280`. |
+| `metadata_source`, `metadata_retrieved_at_utc`, `entry_revision_date` | The selected source (`rcsb_data_api`, `pdb_redo_coordinate_file`, or `manual_coordinate_file`), API retrieval time when applicable, and deposited entry revision date supplied by RCSB. |
 | `crystal_id` | Deposited crystal identifier when reported. |
 | `method` | Reported method; for legacy PDB it is conservatively recognized from the remark text. |
 | `pH`, `pH_range` | Deposited pH value or range, preserved separately. |
@@ -207,7 +208,8 @@ contained no condition record, `unparseable` means extraction failed, and
 
 | Columns | Meaning |
 | --- | --- |
-| `pdbID`, `crystallization_data_status`, `crystallization_condition_count`, `crystallization_source_format`, `crystallization_condition_ids` | Join key, availability/provenance, and links to canonical condition rows. |
+| `pdbID`, `crystallization_data_status`, `crystallization_condition_count`, `crystallization_source_format`, `crystallization_condition_ids` | Join key, availability, serialization format, and links to canonical condition rows. |
+| `crystallization_metadata_source`, `crystallization_metadata_retrieved_at_utc`, `crystallization_entry_revision_date` | Selected metadata source and its API retrieval/revision provenance. These remain populated for a valid cached record whose condition list is empty. |
 | `crystallization_pH_min`, `crystallization_pH_max`, `crystallization_temperature_min_K`, `crystallization_temperature_max_K` | Entry ranges across reported records. |
 | `crystallization_raw_text` | Distinct raw descriptions joined with ` || `. |
 | `crystallization_detected_metals`, `crystallization_any_metal` | Sorted pipe-separated explicit metal detections and their summary flag. |

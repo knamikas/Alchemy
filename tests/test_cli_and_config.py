@@ -51,6 +51,22 @@ def test_help_does_not_claim_that_no_bonds_defaults_to_true() -> None:
     assert "bonds=True" in paragraph, paragraph
 
 
+def test_crystallization_metadata_download_can_be_disabled() -> None:
+    default = cli.parse_args([])
+    offline = cli.parse_args(
+        [
+            "--pdb-metadata-cache",
+            "/tmp/alchemy-metadata",
+            "--no-crystallization-download",
+        ]
+    )
+
+    assert default.crystallization_download is True
+    assert default.pdb_metadata_cache.endswith("pdb-metadata-cache")
+    assert offline.crystallization_download is False
+    assert offline.pdb_metadata_cache == "/tmp/alchemy-metadata"
+
+
 @pytest.mark.parametrize("value", ["0", "-5"])
 def test_max_pdbs_rejects_non_positive_caps(value: str) -> None:
     """``--max-pdbs`` is a count, so zero and negatives are rejected by name."""

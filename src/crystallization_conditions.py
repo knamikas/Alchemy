@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import csv
 import gzip
+import json
 import math
 import os
 import re
+import time
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
 from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Protocol, cast
 
 import gemmi
 
@@ -25,6 +30,9 @@ CONDITION_COLUMNS = (
     "pdbID",
     "crystallization_condition_id",
     "source_format",
+    "metadata_source",
+    "metadata_retrieved_at_utc",
+    "entry_revision_date",
     "crystal_id",
     "method",
     "pH",
@@ -39,6 +47,9 @@ SUMMARY_COLUMNS = (
     "crystallization_data_status",
     "crystallization_condition_count",
     "crystallization_source_format",
+    "crystallization_metadata_source",
+    "crystallization_metadata_retrieved_at_utc",
+    "crystallization_entry_revision_date",
     "crystallization_condition_ids",
     "crystallization_pH_min",
     "crystallization_pH_max",
@@ -174,11 +185,46 @@ _TEMP_RE = re.compile(
     r"(?i)\b(?:temperature|temp\.?)\s*(?:=|:)?\s*(\d+(?:\.\d+)?)\s*(?:k|kelvin)?"
 )
 
+RCSB_GRAPHQL_URL = "https://data.rcsb.org/graphql"
+RCSB_CACHE_SCHEMA_VERSION = 1
+RCSB_BATCH_SIZE = 200
+RCSB_GRAPHQL_QUERY = """
+query CrystallizationConditions($ids: [String!]!) {
+  entries(entry_ids: $ids) {
+    rcsb_id
+    rcsb_accession_info { revision_date }
+    exptl_crystal_grow {
+      crystal_id
+      method
+      temp
+      pH
+      pdbx_pH_range
+      pdbx_details
+      temp_details
+    }
+  }
+}
+""".strip()
+
 
 @dataclass(frozen=True, slots=True)
 class CrystallizationExtraction:
     conditions: tuple[dict[str, CsvValue], ...]
     summary: dict[str, CsvValue]
+
+
+@dataclass(frozen=True, slots=True)
+class CrystallizationPrefetchStats:
+    requested: int
+    cache_hits: int
+    fetched: int
+    available: int
+    not_reported: int
+    entry_unavailable: int
+
+
+class CrystallizationMetadataError(RuntimeError):
+    """Original-PDB condition metadata could not be fetched or cached safely."""
 
 
 class _MmcifCategoryBlock(Protocol):
@@ -190,6 +236,8 @@ class _MmcifCategoryBlock(Protocol):
 
 
 def _clean_cif_value(value: object) -> str:
+    if value is None:
+        return ""
     text = str(value).strip()
     return "" if text in {".", "?"} else text
 
@@ -259,7 +307,21 @@ def _parse_text_measurements(text: str) -> tuple[str, str, str]:
     return pH, pH_range, temperature
 
 
-def _mmcif_conditions(pdb_id: str, path: str) -> list[dict[str, CsvValue]]:
+def _provenance(
+    metadata_source: str,
+    retrieved_at_utc: str = "",
+    entry_revision_date: str = "",
+) -> dict[str, CsvValue]:
+    return {
+        "metadata_source": metadata_source,
+        "metadata_retrieved_at_utc": retrieved_at_utc,
+        "entry_revision_date": entry_revision_date,
+    }
+
+
+def _mmcif_conditions(
+    pdb_id: str, path: str, metadata_source: str
+) -> list[dict[str, CsvValue]]:
     document = gemmi.cif.read(path)
     rows: list[dict[str, CsvValue]] = []
     for block in document:
@@ -276,6 +338,7 @@ def _mmcif_conditions(pdb_id: str, path: str) -> list[dict[str, CsvValue]]:
                 "pdbID": pdb_id,
                 "crystallization_condition_id": (f"{pdb_id}:condition:{len(rows) + 1}"),
                 "source_format": "mmcif",
+                **_provenance(metadata_source),
                 "crystal_id": crystal_id,
                 "method": _category_value(category, "method", index),
                 "pH": _category_value(category, "pH", index),
@@ -284,12 +347,14 @@ def _mmcif_conditions(pdb_id: str, path: str) -> list[dict[str, CsvValue]]:
                 "temperature_details": _category_value(category, "temp_details", index),
                 "raw_details": _category_value(category, "pdbx_details", index),
             }
-            if any(str(row[column]).strip() for column in CONDITION_COLUMNS[4:]):
+            if any(str(row[column]).strip() for column in CONDITION_COLUMNS[7:]):
                 rows.append(row)
     return rows
 
 
-def _pdb_conditions(pdb_id: str, path: str) -> list[dict[str, CsvValue]]:
+def _pdb_conditions(
+    pdb_id: str, path: str, metadata_source: str
+) -> list[dict[str, CsvValue]]:
     opener = gzip.open if path.lower().endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
         pieces = [line[10:].strip() for line in handle if line.startswith("REMARK 280")]
@@ -305,6 +370,7 @@ def _pdb_conditions(pdb_id: str, path: str) -> list[dict[str, CsvValue]]:
             "pdbID": pdb_id,
             "crystallization_condition_id": f"{pdb_id}:condition:1",
             "source_format": "pdb",
+            **_provenance(metadata_source),
             "crystal_id": "",
             "method": _method_from_text(details),
             "pH": pH,
@@ -342,13 +408,23 @@ def detected_metals(text: str) -> frozenset[str]:
 
 
 def unavailable_summary(
-    pdb_id: str, status: str = "input_unavailable"
+    pdb_id: str,
+    status: str = "input_unavailable",
+    *,
+    source_format: str = "",
+    metadata_source: str = "",
+    retrieved_at_utc: str = "",
+    entry_revision_date: str = "",
 ) -> dict[str, CsvValue]:
     row: dict[str, CsvValue] = {column: "" for column in SUMMARY_COLUMNS}
     row.update(
         pdbID=pdb_id,
         crystallization_data_status=status,
         crystallization_condition_count=0,
+        crystallization_source_format=source_format,
+        crystallization_metadata_source=metadata_source,
+        crystallization_metadata_retrieved_at_utc=retrieved_at_utc,
+        crystallization_entry_revision_date=entry_revision_date,
     )
     return row
 
@@ -358,15 +434,32 @@ def _summary(
     rows: Sequence[Mapping[str, CsvValue]],
     source_format: str,
 ) -> dict[str, CsvValue]:
+    first: Mapping[str, CsvValue] = rows[0] if rows else {}
+    provenance = {
+        "crystallization_source_format": source_format,
+        "crystallization_metadata_source": str(first.get("metadata_source", "")),
+        "crystallization_metadata_retrieved_at_utc": str(
+            first.get("metadata_retrieved_at_utc", "")
+        ),
+        "crystallization_entry_revision_date": str(
+            first.get("entry_revision_date", "")
+        ),
+    }
     if not rows:
-        return unavailable_summary(pdb_id, "not_reported") | {
-            "crystallization_source_format": source_format
-        }
+        return unavailable_summary(pdb_id, "not_reported") | provenance
     raw_text = " || ".join(
         dict.fromkeys(str(row.get("raw_details", "")).strip() for row in rows)
     ).strip(" |")
     searchable = " ".join(
-        " ".join(str(row.get(column, "")) for column in CONDITION_COLUMNS[3:])
+        " ".join(
+            str(row.get(column, ""))
+            for column in (
+                "method",
+                "pH_range",
+                "temperature_details",
+                "raw_details",
+            )
+        )
         for row in rows
     )
     metals = detected_metals(searchable)
@@ -381,7 +474,7 @@ def _summary(
         "pdbID": pdb_id,
         "crystallization_data_status": "available",
         "crystallization_condition_count": len(rows),
-        "crystallization_source_format": source_format,
+        **provenance,
         "crystallization_condition_ids": "|".join(
             str(row["crystallization_condition_id"]) for row in rows
         ),
@@ -407,7 +500,10 @@ def _summary(
 
 
 def extract_crystallization_conditions(
-    pdb_id: str, path: str
+    pdb_id: str,
+    path: str,
+    *,
+    metadata_source: str = "coordinate_file",
 ) -> CrystallizationExtraction:
     """Extract deposited conditions without making their absence an error."""
     pdb_id = pdb_id.strip().lower()
@@ -421,17 +517,318 @@ def extract_crystallization_conditions(
     )
     try:
         rows = (
-            _mmcif_conditions(pdb_id, path)
+            _mmcif_conditions(pdb_id, path, metadata_source)
             if source_format == "mmcif"
-            else _pdb_conditions(pdb_id, path)
+            else _pdb_conditions(pdb_id, path, metadata_source)
         )
     except (OSError, RuntimeError, ValueError):
         return CrystallizationExtraction(
             (),
-            unavailable_summary(pdb_id, "unparseable")
-            | {"crystallization_source_format": source_format},
+            unavailable_summary(
+                pdb_id,
+                "unparseable",
+                source_format=source_format,
+                metadata_source=metadata_source,
+            ),
         )
     return CrystallizationExtraction(tuple(rows), _summary(pdb_id, rows, source_format))
+
+
+def _cache_path(cache_root: str, pdb_id: str) -> str:
+    pdb_id = pdb_id.strip().lower()
+    return os.path.join(cache_root, pdb_id[1:3], f"{pdb_id}.json")
+
+
+def _validated_cache_payload(pdb_id: str, value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    payload = cast(dict[str, Any], value)
+    if payload.get("schema_version") != RCSB_CACHE_SCHEMA_VERSION:
+        return None
+    if str(payload.get("pdb_id", "")).lower() != pdb_id:
+        return None
+    if not isinstance(payload.get("entry_available"), bool):
+        return None
+    if not isinstance(payload.get("conditions"), list):
+        return None
+    if not all(isinstance(condition, dict) for condition in payload["conditions"]):
+        return None
+    for key in ("metadata_source", "retrieved_at_utc", "entry_revision_date"):
+        if not isinstance(payload.get(key), str):
+            return None
+    return payload
+
+
+def _read_cache_payload(cache_root: str, pdb_id: str) -> dict[str, Any] | None:
+    path = _cache_path(cache_root, pdb_id)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return _validated_cache_payload(pdb_id, json.load(handle))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _write_cache_payload(cache_root: str, payload: Mapping[str, Any]) -> None:
+    pdb_id = str(payload["pdb_id"])
+    path = _cache_path(cache_root, pdb_id)
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    temporary = f"{path}.tmp-{os.getpid()}"
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _condition_rows_from_cache(
+    pdb_id: str, payload: Mapping[str, Any]
+) -> list[dict[str, CsvValue]]:
+    provenance = _provenance(
+        str(payload["metadata_source"]),
+        str(payload["retrieved_at_utc"]),
+        str(payload["entry_revision_date"]),
+    )
+    rows: list[dict[str, CsvValue]] = []
+    conditions = cast(list[dict[str, Any]], payload["conditions"])
+    for condition in conditions:
+        row: dict[str, CsvValue] = {
+            "pdbID": pdb_id,
+            "crystallization_condition_id": f"{pdb_id}:condition:{len(rows) + 1}",
+            "source_format": "json",
+            **provenance,
+            "crystal_id": _clean_cif_value(condition.get("crystal_id", "")),
+            "method": _clean_cif_value(condition.get("method", "")),
+            "pH": _clean_cif_value(condition.get("pH", "")),
+            "pH_range": _clean_cif_value(condition.get("pdbx_pH_range", "")),
+            "temperature_K": _clean_cif_value(condition.get("temp", "")),
+            "temperature_details": _clean_cif_value(condition.get("temp_details", "")),
+            "raw_details": _clean_cif_value(condition.get("pdbx_details", "")),
+        }
+        if any(str(row[column]).strip() for column in CONDITION_COLUMNS[7:]):
+            rows.append(row)
+    return rows
+
+
+def cached_rcsb_crystallization_conditions(
+    pdb_id: str, cache_root: str
+) -> CrystallizationExtraction | None:
+    """Return a validated cached RCSB extraction, or ``None`` on a cache miss."""
+    pdb_id = pdb_id.strip().lower()
+    if not cache_root or len(pdb_id) != 4:
+        return None
+    payload = _read_cache_payload(cache_root, pdb_id)
+    if payload is None:
+        return None
+    rows = _condition_rows_from_cache(pdb_id, payload)
+    if rows:
+        return CrystallizationExtraction(tuple(rows), _summary(pdb_id, rows, "json"))
+    status = "not_reported" if payload["entry_available"] else "input_unavailable"
+    summary = unavailable_summary(
+        pdb_id,
+        status,
+        source_format="json",
+        metadata_source=str(payload["metadata_source"]),
+        retrieved_at_utc=str(payload["retrieved_at_utc"]),
+        entry_revision_date=str(payload["entry_revision_date"]),
+    )
+    return CrystallizationExtraction((), summary)
+
+
+def extract_crystallization_context(
+    pdb_id: str,
+    coordinate_path: str,
+    cache_root: str,
+    *,
+    prefer_coordinate_file: bool = False,
+) -> CrystallizationExtraction:
+    """Choose deposited or coordinate-file conditions with an explicit fallback."""
+    local_source = (
+        "manual_coordinate_file"
+        if prefer_coordinate_file
+        else "pdb_redo_coordinate_file"
+    )
+    local = extract_crystallization_conditions(
+        pdb_id, coordinate_path, metadata_source=local_source
+    )
+    deposited = cached_rcsb_crystallization_conditions(pdb_id, cache_root)
+    if deposited is None:
+        return local
+    local_available = local.summary["crystallization_data_status"] == "available"
+    deposited_available = (
+        deposited.summary["crystallization_data_status"] == "available"
+    )
+    if prefer_coordinate_file and local_available:
+        return local
+    if deposited_available:
+        return deposited
+    if local_available:
+        return local
+    return local if prefer_coordinate_file else deposited
+
+
+def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> dict[str, object]:
+    body = json.dumps(
+        {
+            "query": RCSB_GRAPHQL_QUERY,
+            "variables": {"ids": [pdb_id.upper() for pdb_id in pdb_ids]},
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        RCSB_GRAPHQL_URL,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Alchemy crystallization metadata cache",
+        },
+        method="POST",
+    )
+    last_error: BaseException | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                loaded: object = json.load(response)
+            if not isinstance(loaded, dict):
+                raise ValueError("response is not a JSON object")
+            result = cast(dict[str, object], loaded)
+            if result.get("errors"):
+                raise ValueError(f"GraphQL errors: {result['errors']!r}")
+            data_value = result.get("data")
+            if not isinstance(data_value, dict):
+                raise ValueError("response has no data object")
+            data = cast(dict[str, object], data_value)
+            if not isinstance(data.get("entries"), list):
+                raise ValueError("response has no data.entries list")
+            return result
+        except (
+            OSError,
+            ValueError,
+            json.JSONDecodeError,
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+        ) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(2**attempt)
+    raise CrystallizationMetadataError(
+        f"RCSB Data API request failed after 3 attempts: {last_error}"
+    )
+
+
+def _payloads_from_graphql(
+    pdb_ids: Sequence[str], response: Mapping[str, object], retrieved_at_utc: str
+) -> list[dict[str, object]]:
+    data_value = response["data"]
+    if not isinstance(data_value, dict):
+        raise CrystallizationMetadataError("RCSB Data API returned invalid data")
+    data = cast(dict[str, object], data_value)
+    entries_value = data.get("entries")
+    if not isinstance(entries_value, list):
+        raise CrystallizationMetadataError(
+            "RCSB Data API returned an invalid entries list"
+        )
+    entries = cast(list[object], entries_value)
+    by_id: dict[str, Mapping[str, object]] = {}
+    for value in entries:
+        if not isinstance(value, dict):
+            continue
+        entry = cast(Mapping[str, object], value)
+        pdb_id = str(entry.get("rcsb_id", "")).strip().lower()
+        if pdb_id:
+            by_id[pdb_id] = entry
+    payloads: list[dict[str, object]] = []
+    for pdb_id in pdb_ids:
+        matching_entry = by_id.get(pdb_id)
+        accession_value = (
+            matching_entry.get("rcsb_accession_info") if matching_entry else None
+        )
+        accession = (
+            cast(dict[str, object], accession_value)
+            if isinstance(accession_value, dict)
+            else {}
+        )
+        revision_value = accession.get("revision_date")
+        revision = str(revision_value) if revision_value is not None else ""
+        conditions_value: object = (
+            matching_entry.get("exptl_crystal_grow") if matching_entry else None
+        )
+        if conditions_value is None:
+            condition_values: list[object] = []
+        elif isinstance(conditions_value, list):
+            condition_values = cast(list[object], conditions_value)
+        else:
+            raise CrystallizationMetadataError(
+                f"RCSB Data API returned invalid conditions for {pdb_id}"
+            )
+        if not all(isinstance(condition, dict) for condition in condition_values):
+            raise CrystallizationMetadataError(
+                f"RCSB Data API returned invalid conditions for {pdb_id}"
+            )
+        conditions = [
+            cast(dict[str, object], condition) for condition in condition_values
+        ]
+        payloads.append(
+            {
+                "schema_version": RCSB_CACHE_SCHEMA_VERSION,
+                "pdb_id": pdb_id,
+                "metadata_source": "rcsb_data_api",
+                "retrieved_at_utc": retrieved_at_utc,
+                "entry_revision_date": revision,
+                "entry_available": matching_entry is not None,
+                "conditions": conditions,
+            }
+        )
+    return payloads
+
+
+def prefetch_rcsb_crystallization_metadata(
+    pdb_ids: Iterable[str], cache_root: str, *, allow_download: bool
+) -> CrystallizationPrefetchStats:
+    """Populate the persistent RCSB cache before worker processes start."""
+    ids = tuple(dict.fromkeys(pdb_id.strip().lower() for pdb_id in pdb_ids))
+    missing = [
+        pdb_id for pdb_id in ids if _read_cache_payload(cache_root, pdb_id) is None
+    ]
+    fetched = 0
+    if allow_download:
+        for start in range(0, len(missing), RCSB_BATCH_SIZE):
+            batch = missing[start : start + RCSB_BATCH_SIZE]
+            response = _fetch_graphql_batch(batch)
+            retrieved_at = datetime.now(UTC).isoformat(timespec="seconds")
+            for payload in _payloads_from_graphql(batch, response, retrieved_at):
+                try:
+                    _write_cache_payload(cache_root, payload)
+                except OSError as exc:
+                    raise CrystallizationMetadataError(
+                        f"could not write crystallization metadata cache: {exc}"
+                    ) from None
+                fetched += 1
+    available = 0
+    not_reported = 0
+    unavailable = 0
+    for pdb_id in ids:
+        cached_payload = _read_cache_payload(cache_root, pdb_id)
+        if cached_payload is None or not cached_payload["entry_available"]:
+            unavailable += 1
+        elif cached_payload["conditions"]:
+            available += 1
+        else:
+            not_reported += 1
+    return CrystallizationPrefetchStats(
+        requested=len(ids),
+        cache_hits=len(ids) - len(missing),
+        fetched=fetched,
+        available=available,
+        not_reported=not_reported,
+        entry_unavailable=unavailable,
+    )
 
 
 def write_review_queue(

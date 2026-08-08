@@ -296,7 +296,7 @@ def run_alchemy(
     forces cache-only input and leaves confidence scoring off.
     """
     output_dir = str(output_dir)
-    argv = ["--output-dir", output_dir]
+    argv = ["--output-dir", output_dir, "--no-crystallization-download"]
     if cache is not None:
         argv += ["--pdb-redo-cache", str(cache)]
     root = (

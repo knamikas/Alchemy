@@ -46,6 +46,7 @@ class WorkerConfig:
     gemmi_version: str
     ccp4_version: str
     reference_data_id: str
+    pdb_metadata_cache: str = ""
 
 
 def blank_if_unmeasured(value: Any) -> Any:

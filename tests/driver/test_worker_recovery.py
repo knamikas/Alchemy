@@ -564,6 +564,7 @@ def _run_driver(
         str(tmp_path / "mirror"),
         "--pdb-redo-cache",
         str(tmp_path / "cache"),
+        "--no-crystallization-download",
         "--workers",
         str(workers if workers is not None else len(ids)),
     ]
@@ -1088,6 +1089,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
     )
     assert cfg.root == str(tmp_path / "root")
     assert cfg.cache_root == str(tmp_path / "cache")
+    assert cfg.pdb_metadata_cache == args.pdb_metadata_cache
     assert cfg.output_dir == str(tmp_path)
     assert cfg.env == env
     assert cfg.cofactors == frozenset({"HEM"})
@@ -1188,6 +1190,7 @@ def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(
         str(tmp_path / "absent-mirror"),
         "--pdb-redo-cache",
         str(tmp_path / "cache"),
+        "--no-crystallization-download",
     ]
 
     ctx = multiprocessing.get_context("fork")

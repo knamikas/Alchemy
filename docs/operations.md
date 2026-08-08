@@ -178,6 +178,15 @@ Running batches, resuming them, and reading what a run wrote. See
   this migration. Headers are compared in full, including the EDSTATS block of
   `metal_sites_all.csv`, so appended rows cannot be silently misaligned by
   output from a different build.
+- Original-PDB crystallization metadata for normal PDB-REDO runs are fetched
+  before worker processes start and retained under `--pdb-metadata-cache`.
+  Manual-input runs use the supplied coordinate file and any existing cache
+  entry without adding a network prerequisite. A network or cache-write
+  failure stops the run before stale outputs are cleared, avoiding a silently
+  low-coverage condition report. For a deliberately offline run,
+  `--no-crystallization-download` uses valid cached records and coordinate-file
+  fallbacks only. Delete selected cache JSON files (or use a fresh cache path)
+  when a newer deposited revision must be retrieved.
 
 ## Manifest reason codes
 

@@ -1,5 +1,7 @@
 # Alchemy runtime results
 /output/
+/pdb-redo-cache/
+/pdb-metadata-cache/
 
 # Python bytecode
 __pycache__/

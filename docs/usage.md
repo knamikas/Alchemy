@@ -48,6 +48,8 @@ an input error rather than a request to use the no-metadata fallbacks.
 | `--pdb-file`, `--cif-file`, `--mtz-file` | Process manually supplied structure data. |
 | `--pdb-redo-root <path>` | Set the local mirror root. |
 | `--pdb-redo-cache <path>` | Set the cache for downloaded entries. |
+| `--pdb-metadata-cache <path>` | Set the persistent per-entry cache for original-PDB crystallization records retrieved from the RCSB Data API. |
+| `--no-crystallization-download` | Run without fetching missing original-PDB metadata; valid cache entries and coordinate-file fallbacks are still used. |
 | `--output-dir <path>` | Set the result directory. |
 | `--density-map-scope {model-envelope,full}` | Set the map extent passed to EDSTATS. The default model envelope retains every coordinate plus a 10 Angstrom border; `full` selects the legacy complete-map path. |
 | `--ccp4-timeout <s>` | Per-program wall-clock budget for each CCP4 step (`mtzfix`, `fft`, `mapmask`, `edstats`), in seconds; default 900. The budget applies to each program separately, not to the entry as a whole. A program that exceeds it is killed and the entry becomes a retryable `partial` with reason `ccp4_tool_timeout`; its partial log is copied to `<output-dir>/ccp4_timeout_logs/`. Raise it for exceptionally large structures. |

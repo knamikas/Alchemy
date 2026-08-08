@@ -11,6 +11,8 @@ class RunConfig:
     data_json: str | None
     pdb_redo_root: str
     pdb_redo_cache: str
+    pdb_metadata_cache: str
+    crystallization_download: bool
     max_pdbs: int | None
     workers: int | None
     output_dir: str

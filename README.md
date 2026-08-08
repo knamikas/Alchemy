@@ -58,9 +58,11 @@ Results are written to (the column lists and row builders live in
   and reference provenance. These rows are retained for audit and are not all
   treated as bonds.
 - `output/crystallization_conditions_all.csv` — deposited crystallization
-  records extracted once per PDB entry from mmCIF `_exptl_crystal_grow` data or
-  legacy PDB `REMARK 280`. Raw text is preserved alongside reported pH,
-  temperature, method, and source provenance.
+  records extracted once per PDB entry. Normal runs prefer original-PDB
+  `_exptl_crystal_grow` records cached from the RCSB Data API and fall back to
+  the PDB-REDO coordinate file; manual runs prefer their supplied coordinate
+  file. Raw text is preserved alongside reported pH, temperature, method, and
+  retrieval/revision provenance.
 - `output/crystallization_summary_all.csv` — one row per processed PDB entry
   with data-availability status, pH and temperature ranges, detected metals,
   and contextual chemical flags. Blank flags mean the condition was

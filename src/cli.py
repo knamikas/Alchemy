@@ -81,6 +81,24 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         help="root of local cache for auto-downloaded PDB-REDO entries",
     )
     ap.add_argument(
+        "--pdb-metadata-cache",
+        default=os.path.join(REPO_DIR, "pdb-metadata-cache"),
+        help=(
+            "persistent cache for original-PDB crystallization metadata "
+            "retrieved from the RCSB Data API"
+        ),
+    )
+    ap.add_argument(
+        "--no-crystallization-download",
+        dest="crystallization_download",
+        action="store_false",
+        help=(
+            "do not fetch missing original-PDB crystallization metadata; use "
+            "only the metadata cache and coordinate-file records"
+        ),
+    )
+    ap.set_defaults(crystallization_download=True)
+    ap.add_argument(
         "--max-pdbs",
         type=positive_int,
         default=None,
@@ -236,6 +254,8 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         data_json=args.data_json,
         pdb_redo_root=args.pdb_redo_root,
         pdb_redo_cache=args.pdb_redo_cache,
+        pdb_metadata_cache=args.pdb_metadata_cache,
+        crystallization_download=args.crystallization_download,
         max_pdbs=args.max_pdbs,
         workers=args.workers,
         output_dir=args.output_dir,

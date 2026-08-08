@@ -300,12 +300,19 @@ score distribution. An interrupted run retains its compact inputs for
 
 ### Crystallization conditions as non-scoring context
 
-Alchemy extracts deposited crystallization metadata once per entry from the
-mmCIF `_exptl_crystal_grow` category or, for legacy PDB input, `REMARK 280`.
-The original condition description is retained in
+Alchemy extracts deposited crystallization metadata once per entry. For a
+normal PDB-REDO run it prefers the original PDB entry's
+`exptl_crystal_grow` records, retrieved in batches from the RCSB Data API and
+stored in a persistent per-entry cache. It falls back to the PDB-REDO
+coordinate file's mmCIF `_exptl_crystal_grow` category or legacy PDB
+`REMARK 280` when the deposited API record has no condition. Manual-input runs
+reverse that precedence so an explicitly supplied coordinate file remains the
+authority. The original condition description is retained in
 `crystallization_conditions_all.csv`. A separate one-row-per-entry summary
 reports availability, pH and temperature ranges, explicitly detected metals,
-the manuscript's metal-class flags, and sulfate, cacodylate, and acetate.
+the manuscript's metal-class flags, and sulfate, cacodylate, and acetate. Both
+outputs identify the selected metadata source; API-derived rows also record
+retrieval time and the deposited entry revision date.
 
 These annotations are positive evidence only. `not_reported`, `unparseable`,
 and `input_unavailable` produce blank detection flags rather than negative

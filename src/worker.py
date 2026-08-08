@@ -32,7 +32,7 @@ from coordination.schema import (
     check_row_schema,
     stats_extra_values,
 )
-from crystallization_conditions import extract_crystallization_conditions
+from crystallization_conditions import extract_crystallization_context
 from coordinate_conversion import first_model_pdb
 from density_analysis import (
     Ccp4ToolTimeoutError,
@@ -710,8 +710,11 @@ def process(pdb_id: str) -> EntryResult:
         result.model_analyzed = structure.model_analyzed
         result.multi_model_structure = structure.multi_model_structure
         result.warning_codes = list(structure.warning_codes)
-        crystallization = extract_crystallization_conditions(
-            pdb_id, inputs.source_coordinate_path
+        crystallization = extract_crystallization_context(
+            pdb_id,
+            inputs.source_coordinate_path,
+            cfg.pdb_metadata_cache,
+            prefer_coordinate_file=manual_inputs is not None,
         )
         result.crystallization_condition_rows = list(crystallization.conditions)
         result.crystallization_summary_row = crystallization.summary
