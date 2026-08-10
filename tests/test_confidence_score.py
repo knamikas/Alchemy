@@ -14,8 +14,10 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
+import analysis_config
 import confidence_score as cs
 import helpers
+import reference_data
 from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
 
@@ -42,6 +44,9 @@ STATS_FIELD_COLUMNS = (
     list(helpers.EDSTATS_HEADER) + ["aa_geometry_coverage"] + list(STATS_EXTRA_COLUMNS)
 )
 STATS_COLUMNS = STATS_ID_COLUMNS + STATS_FIELD_COLUMNS
+ANALYSIS_CONFIG_ID = analysis_config.analysis_config_id(
+    reference_data_id=reference_data.reference_data_id()
+)
 
 SITE = {
     "metal_model_index": "0",
@@ -696,6 +701,7 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
                 "no_metals",
                 "metal_site_limit_exceeded",
                 "n_metals",
+                "analysis_config_id",
                 "alchemy_version",
                 "alchemy_commit",
                 "gemmi_version",
@@ -714,6 +720,7 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
                 "alchemy_commit": "abc",
                 "gemmi_version": "0.7",
                 "ccp4_version": "9",
+                "analysis_config_id": ANALYSIS_CONFIG_ID,
             }
         )
     reference_dir = tmp_path / "reference"
@@ -733,6 +740,7 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
     assert metadata["scorable_entry_count"] == 1
     assert metadata["source_entry_count"] == 1
     assert metadata["software_versions"]["alchemy_version"] == ["1.0"]
+    assert metadata["analysis_config_id"] == ANALYSIS_CONFIG_ID
 
 
 def test_finalize_removes_stale_completion_marker_on_failure(tmp_path: Path) -> None:
@@ -852,6 +860,20 @@ def test_reference_data_identity_is_part_of_reference_policy(tmp_path: Path) -> 
     assert reference.metadata["reference_data_id"]
 
 
+def test_analysis_configuration_identity_is_part_of_reference_policy(
+    tmp_path: Path,
+) -> None:
+    reference_dir = tmp_path / "reference"
+    cs.write_reference(str(reference_dir), {1.0: 1}, {1.0: 1}, 1)
+    metadata_path = reference_dir / cs.REFERENCE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["analysis_config_id"] = "alchemy-analysis-config-incompatible"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="analysis_config_id"):
+        cs.load_reference(str(reference_dir))
+
+
 def test_distribution_file_has_no_nonfinite_values(tmp_path: Path) -> None:
     cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
     text = (tmp_path / cs.REFERENCE_DISTRIBUTION_FILE).read_text(encoding="utf-8")
@@ -931,6 +953,7 @@ def test_manifest_provenance_counts_no_metal_and_limited_entries(
                 "no_metals",
                 "metal_site_limit_exceeded",
                 "n_metals",
+                "analysis_config_id",
             ],
         )
         writer.writeheader()
@@ -942,6 +965,7 @@ def test_manifest_provenance_counts_no_metal_and_limited_entries(
                     "no_metals": "true",
                     "metal_site_limit_exceeded": "false",
                     "n_metals": "0",
+                    "analysis_config_id": ANALYSIS_CONFIG_ID,
                 },
                 {
                     "pdbID": "2bbb",
@@ -949,6 +973,7 @@ def test_manifest_provenance_counts_no_metal_and_limited_entries(
                     "no_metals": "false",
                     "metal_site_limit_exceeded": "true",
                     "n_metals": "101",
+                    "analysis_config_id": ANALYSIS_CONFIG_ID,
                 },
             ]
         )

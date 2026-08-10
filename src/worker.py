@@ -180,6 +180,7 @@ def initial_result(
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
         reference_data_id=cfg.reference_data_id,
+        analysis_config_id=cfg.analysis_config_id,
         refinement_state="manual" if manual_inputs else "final",
     )
 

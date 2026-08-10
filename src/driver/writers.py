@@ -49,6 +49,7 @@ MANIFEST_COLUMNS = [
     "gemmi_version",
     "ccp4_version",
     "reference_data_id",
+    "analysis_config_id",
     "refinement_state",
     "pdb_redo_is_twin",
     "pdb_redo_version",

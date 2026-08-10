@@ -360,8 +360,10 @@ The scoring contract is recorded by `confidence_method_version`,
 `density_saturation_policy`, `geometry_thresholds`, `geometry_statistic`,
 `overall_rule`, `support_score_method`, `coverage_policy`,
 `input_status_policy`, `cohort_weighting`, `maximum_entry_metal_sites`, and
-`reference_data_id`. Alchemy refuses to load a reference whose contract differs
-from the running code.
+`reference_data_id`. `analysis_config_id` additionally binds the model,
+alternate-conformer, symmetry, cohort-limit, and bundled-reference policies.
+Alchemy refuses to load a reference whose contract differs from the running
+code.
 
 The distributions are described by `reference_id`, `distribution_file`,
 `density_distinct_value_count`, `geometry_distinct_value_count`,
@@ -374,5 +376,9 @@ When database finalization receives the run manifest, metadata additionally
 contains `source_manifest_file`, `source_manifest_sha256`, `source_entry_count`,
 `manifest_status_counts`, `no_metals_entry_count`,
 `metal_site_limit_exceeded_entry_count`, `metal_bearing_entry_count`, and
-`software_versions`. Hashes identify exact artifacts; the reference ID and
-cohort ID deliberately answer different questions.
+`software_versions`. `analysis_config_id` is copied from the manifest and
+identifies the model, alternate-conformer, symmetry, cohort-limit, and
+bundled-reference policies. Execution-only choices such as paths, worker count,
+optional stage selection, map-cropping scope, logging, caching, and timeouts are
+excluded from that identity. Hashes identify exact artifacts; the reference ID
+and cohort ID deliberately answer different questions.

@@ -77,6 +77,7 @@ PROVENANCE_DETAIL_KEYS = (
     "gemmi_version",
     "ccp4_version",
     "reference_data_id",
+    "analysis_config_id",
     "metal_distances_info_sha256",
     "metallocofactors_id_sha256",
 )
@@ -346,6 +347,7 @@ class RunLog:
             "gemmi_version": "Gemmi version",
             "ccp4_version": "CCP4 version",
             "reference_data_id": "Reference data ID",
+            "analysis_config_id": "Analysis configuration ID",
             "metal_distances_info_sha256": "Metal-distance table SHA-256",
             "metallocofactors_id_sha256": "Metal-cofactor catalog SHA-256",
         }

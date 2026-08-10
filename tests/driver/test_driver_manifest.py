@@ -123,6 +123,7 @@ def _cfg(**overrides: Any) -> worker_contracts.WorkerConfig:
         "gemmi_version": "0.7.5",
         "ccp4_version": "9.0",
         "reference_data_id": "0123456789ab",
+        "analysis_config_id": "alchemy-analysis-config-test",
     }
     fields.update(overrides)
     return worker_contracts.WorkerConfig(**fields)
@@ -1305,6 +1306,13 @@ class TestInitialResult:
 
         assert result.reference_data_id == CFG.reference_data_id
         assert row["reference_data_id"] == CFG.reference_data_id
+
+    def test_carries_the_analysis_configuration_identity(self) -> None:
+        result = worker.initial_result("109m", CFG, None)
+        row = manifest_row(result, False, True, {}, {})
+
+        assert result.analysis_config_id == CFG.analysis_config_id
+        assert row["analysis_config_id"] == CFG.analysis_config_id
 
     def test_carries_run_provenance_from_the_config(self) -> None:
         result = worker.initial_result("109m", CFG, None)

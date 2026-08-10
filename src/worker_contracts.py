@@ -46,6 +46,7 @@ class WorkerConfig:
     gemmi_version: str
     ccp4_version: str
     reference_data_id: str
+    analysis_config_id: str
     pdb_metadata_cache: str = ""
 
 
@@ -91,6 +92,7 @@ class EntryResult:
     gemmi_version: str
     ccp4_version: str
     reference_data_id: str
+    analysis_config_id: str
     refinement_state: str
 
     status: EntryStatus = EntryStatus.ERROR

@@ -258,6 +258,18 @@ def test_a_manifest_without_the_reference_data_column_is_refused(
         resume.validate_resume_schemas(**resume_outputs)
 
 
+def test_a_manifest_without_the_analysis_config_column_is_refused(
+    resume_outputs: _ResumeOutputs, tmp_path: Path
+) -> None:
+    older = [
+        column for column in writers.MANIFEST_COLUMNS if column != "analysis_config_id"
+    ]
+    _write_header(tmp_path / "manifest.csv", older)
+
+    with pytest.raises(ValueError, match="missing analysis_config_id"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
 def test_the_refusal_names_the_columns_that_differ(
     resume_outputs: _ResumeOutputs, tmp_path: Path
 ) -> None:

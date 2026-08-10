@@ -100,7 +100,11 @@ Results are written to (the column lists and row builders live in
   was measured against; rows are comparable only if it matches, and the run log
   records the two file checksums it is composed from. Adding this column means
   a manifest written by an earlier build cannot be resumed into — start a new
-  `--output-dir`. Its
+  `--output-dir`. `analysis_config_id` identifies the model,
+  alternate-conformer, symmetry, cohort-limit, and bundled-reference policies
+  while deliberately excluding paths, worker count, optional stage selection,
+  map-cropping scope, logging, caching, and timeouts. Resume refuses to mix
+  different identities. The manifest's
   `n_metals` value counts distinct selected coordinate-model sites, not
   diagnostic or repeated EDSTATS rows; `n_bonds` and `n_candidates` distinguish
   assigned-output size from candidate-evidence size.

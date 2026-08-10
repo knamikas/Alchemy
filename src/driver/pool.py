@@ -30,6 +30,7 @@ from typing import (
 from collections.abc import Collection, Mapping, Sequence
 
 from _version import __version__
+from analysis_config import analysis_config_id, analysis_configs_are_compatible
 from codes import EntryStatus
 from reference_data import (
     cofactor_ids,
@@ -752,7 +753,10 @@ def plan_confidence(
 
 
 def _check_resume_is_compatible(
-    args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
+    args: RunConfig,
+    layout: OutputLayout,
+    plan: ConfidencePlan,
+    current_analysis_config_id: str,
 ) -> None:
     """Refuse to resume onto output this run cannot safely extend.
 
@@ -791,6 +795,14 @@ def _check_resume_is_compatible(
             )
     except ValueError as exc:
         raise DriverError(str(exc)) from None
+    prior_config_values = manifest_values_by_id(layout.manifest, "analysis_config_id")
+    if not analysis_configs_are_compatible(
+        prior_config_values.values(), current_analysis_config_id
+    ):
+        raise DriverError(
+            "Cannot resume output produced with a different analysis "
+            "configuration identity; use a fresh output directory."
+        )
     if plan.mode == "reference":
         try:
             # ``plan_confidence`` sets the mode only once both of these are
@@ -998,6 +1010,10 @@ def worker_config_from_args(
     run_log: RunLog,
 ) -> WorkerConfig:
     """Build the config every worker is initialized with, once per run."""
+    current_reference_data_id = reference_data_id()
+    current_analysis_config_id = analysis_config_id(
+        reference_data_id=current_reference_data_id,
+    )
     cfg = WorkerConfig(
         root=root,
         mirror_root=args.pdb_redo_root,
@@ -1017,7 +1033,8 @@ def worker_config_from_args(
         alchemy_commit=alchemy_commit(),
         gemmi_version=gemmi_version(),
         ccp4_version=ccp4_version(env),
-        reference_data_id=reference_data_id(),
+        reference_data_id=current_reference_data_id,
+        analysis_config_id=current_analysis_config_id,
         pdb_metadata_cache=args.pdb_metadata_cache,
     )
     run_log.details.update(
@@ -1027,6 +1044,7 @@ def worker_config_from_args(
         ccp4_version=cfg.ccp4_version,
         confidence_mode=plan.mode or "disabled",
         reference_data_id=cfg.reference_data_id,
+        analysis_config_id=cfg.analysis_config_id,
         # The manifest carries one combined id; the per-file digests here are
         # what attributes a change in it to a file.
         **{
@@ -1818,7 +1836,11 @@ def _execute_with_output_lock(
     run_log.details["run_mode"] = run_mode
 
     plan = plan_confidence(args, layout, database_run, run_log)
-    _check_resume_is_compatible(args, layout, plan)
+    current_analysis_config_id = analysis_config_id(
+        reference_data_id=reference_data_id(),
+    )
+    run_log.details["analysis_config_id"] = current_analysis_config_id
+    _check_resume_is_compatible(args, layout, plan, current_analysis_config_id)
 
     ids, root, manual_inputs = schedule_entries(
         args, layout, args.pdb_redo_cache, run_log

@@ -18,6 +18,7 @@ from collections import Counter, defaultdict
 from typing import Any, TextIO
 from collections.abc import Iterable, Mapping, Sequence
 
+from analysis_config import analysis_config_id
 from output_rows import MetalStatsRow, scientific_csv_value
 
 from reference_data import cofactor_ids, reference_data_id
@@ -189,6 +190,7 @@ REFERENCE_METADATA_FIELDS = frozenset(
         "metal_site_limit_exceeded_entry_count",
         "metal_bearing_entry_count",
         "software_versions",
+        "analysis_config_id",
     }
 )
 
@@ -265,7 +267,20 @@ def _file_sha256(path: str) -> str:
 
 def _manifest_provenance(path: str) -> dict[str, Any]:
     with open(path, newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        _required_columns(reader.fieldnames, ("analysis_config_id",), "source manifest")
+        rows = list(reader)
+
+    manifest_config_ids = [row.get("analysis_config_id", "").strip() for row in rows]
+    analysis_config_ids = set(manifest_config_ids)
+    if (
+        not manifest_config_ids
+        or "" in analysis_config_ids
+        or len(analysis_config_ids) != 1
+    ):
+        raise ValueError(
+            "source manifest must contain exactly one analysis configuration identity"
+        )
 
     status_counts = Counter(row.get("status", "") for row in rows)
     software_columns = (
@@ -291,6 +306,7 @@ def _manifest_provenance(path: str) -> dict[str, Any]:
             (_finite_float(row.get("n_metals", "")) > 0) for row in rows
         ),
         "software_versions": software,
+        "analysis_config_id": next(iter(analysis_config_ids)),
     }
 
 
@@ -782,6 +798,7 @@ def _scoring_metadata() -> dict[str, Any]:
         "input_status_policy": INPUT_STATUS_POLICY,
         "maximum_entry_metal_sites": MAX_ANALYZED_METAL_SITES,
         "reference_data_id": reference_data_id(),
+        "analysis_config_id": analysis_config_id(reference_data_id=reference_data_id()),
     }
 
 
@@ -908,6 +925,7 @@ def load_reference(reference_dir: str) -> "ConfidenceReference":
         "coverage_policy",
         "input_status_policy",
         "maximum_entry_metal_sites",
+        "analysis_config_id",
     ):
         if metadata.get(key) != expected[key]:
             raise ValueError(
@@ -1101,7 +1119,16 @@ def finalize_database_confidence(
         "input_status_counts": dict(sorted(input_status_counts.items())),
     }
     if manifest_path is not None:
-        provenance.update(_manifest_provenance(manifest_path))
+        manifest_provenance = _manifest_provenance(manifest_path)
+        if (
+            manifest_provenance["analysis_config_id"]
+            != _scoring_metadata()["analysis_config_id"]
+        ):
+            raise ValueError(
+                "source manifest analysis configuration identity is "
+                "incompatible with this code"
+            )
+        provenance.update(manifest_provenance)
     reference = write_reference(
         reference_dir,
         density_counts,

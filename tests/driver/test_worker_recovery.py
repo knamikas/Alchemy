@@ -34,6 +34,7 @@ from collections.abc import Iterable
 
 import pytest
 
+import analysis_config
 import density_analysis as density
 import main
 import worker
@@ -119,6 +120,9 @@ def _reference_cfg(
         gemmi_version=driver_pool.gemmi_version(),
         ccp4_version=driver_pool.ccp4_version(env),
         reference_data_id=reference_data.reference_data_id(),
+        analysis_config_id=analysis_config.analysis_config_id(
+            reference_data_id=reference_data.reference_data_id(),
+        ),
     )
 
 
@@ -1079,6 +1083,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
     # be attributed to a file.
     assert cfg.reference_data_id == reference_data.reference_data_id()
     assert run_log.details["reference_data_id"] == cfg.reference_data_id
+    assert run_log.details["analysis_config_id"] == cfg.analysis_config_id
     assert (
         run_log.details["metallocofactors_id_sha256"]
         == reference_data.reference_data_checksums()["metallocofactors_id.txt"]
