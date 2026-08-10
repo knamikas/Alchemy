@@ -24,7 +24,7 @@ in `src/driver/writers.py`, `src/coordination/schema.py`,
   block preserves EDSTATS' own `n/a` marker.
 - Distances and coordinate values are in ångströms. Occupancies and coverage
   values are unitless. `resolution` and `dpi` are in ångströms, and
-  `asu_volume` is in cubic ångströms.
+  `asu_volume` is in cubic ångströms. B-factor values are in square ångströms.
 - `*_model_index`, `*_chain_index`, `*_residue_index`, and `*_atom_index` are
   zero-based coordinate-model indices. Author-facing chain, residue, insertion,
   atom, and alternate-location labels are retained separately.
@@ -106,6 +106,10 @@ The concrete metric columns are:
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited identity of the selected metal atom. |
 | `metal_occupancy`, `metal_occupancy_valid`, `metal_occupancy_status`, `metal_coordinates_valid` | Selected atom occupancy and coordinate validation. |
 | `metal_x`, `metal_y`, `metal_z` | Selected metal's Cartesian coordinates in the same frame as bond and candidate `transformed_neighbor_*` coordinates. |
+| `metal_b_iso`, `entry_nonwater_median_b_iso` | Coordinate-model B factor of the selected metal and the entry median across canonical, non-water, non-hydrogen, non-zero-occupancy atoms. Unlike EDSTATS `BAa`, `metal_b_iso` remains atom-specific for a multi-atom cofactor. |
+| `donor_b_iso_count`, `donor_median_b_iso` | Number of assigned contacts with a finite donor B factor and their median. These use the primary contact scope, image-inclusive when symmetry search is available. |
+| `metal_donor_b_ratio`, `metal_minus_donor_b_iso` | Directional metal-to-donor-median ratio and metal minus donor-median difference. Ratio is blank unless both values are positive. |
+| `metal_donor_b_similarity` | Symmetric local agreement, `exp(-abs(ln(metal_b_iso / donor_median_b_iso)))`; 1 means equal. This median-based Alchemy measure is not CheckMyMetal's bond-valence-weighted environmental B score. |
 | `nearest_metal_distance`, `nearest_metal_element`, `nearest_metal_site_id` | Nearest other canonical metal in the analyzed coordinate model. Distance is blank when none is assessable; the ID can name a coordinate metal without its own mapped density row. |
 | `nearby_metal_count_6a` | Other canonical metals within 6 Å in the analyzed coordinate model. This is proximity context, not a metal-metal bond or multinuclear-site assignment. Crystallographic symmetry images are excluded. |
 | `metal_conformer_mean_occupancy`, `metal_altloc_options`, `alternative_conformers_present`, `altloc_selection_fallback` | Residue conformer evidence and whether selection required a fallback. |
@@ -164,6 +168,7 @@ Grain: one assigned inferred or source-declared metal–donor contact. Every
 | `pdbID`, `metal_site_id`, `contact_id` | Entry, metal-site join key, and contact join key. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_element`, `metal_atom`, `metal_icode`, `metal_altloc` | Human-readable metal identity. |
 | `neighbor_resname`, `neighbor_chain`, `neighbor_resnum`, `neighbor_atom`, `neighbor_element`, `neighbor_icode`, `neighbor_altloc` | Human-readable donor identity. |
+| `neighbor_b_iso` | Coordinate-model isotropic or equivalent-isotropic B factor of the assigned donor atom. |
 | `distance` | Measured metal–donor distance. |
 | `coordination_status`, `coordination_source`, `declared_connection` | Whether assignment came from a declaration or inference and its source. |
 | `connection_id`, `connection_type`, `connection_link_id`, `connection_asu`, `connection_reported_distance` | Pipe-aligned source-declaration records; blank for inference-only contacts. |
@@ -208,6 +213,7 @@ declaration. Candidate discovery does not itself assign a bond.
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_element`, `metal_atom`, `metal_icode`, `metal_altloc`, `metal_occupancy` | Human-readable metal identity and occupancy. |
 | `model_id`, `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Selected model and unambiguous metal location. |
 | `neighbor_resname`, `neighbor_chain`, `neighbor_resnum`, `neighbor_atom`, `neighbor_element`, `neighbor_icode`, `neighbor_altloc`, `neighbor_occupancy`, `neighbor_class` | Human-readable candidate identity, occupancy, and broad class. |
+| `neighbor_b_iso` | Coordinate-model isotropic or equivalent-isotropic B factor of the candidate atom. |
 | `neighbor_model_index`, `neighbor_chain_index`, `neighbor_residue_index`, `neighbor_atom_index` | Unambiguous deposited candidate location. |
 | `contact_scope`, `symmetry_contact`, `crystallographic_contact`, `strict_ncs_contact`, `strict_ncs_operation_id` | Explicit/generated-image classification and strict-NCS provenance. |
 | `symmetry_image_index`, `symmetry_operation`, `cell_translation_x`, `cell_translation_y`, `cell_translation_z` | Crystallographic image provenance. |

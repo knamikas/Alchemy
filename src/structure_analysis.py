@@ -230,6 +230,11 @@ class AtomSite:
         return self.x, self.y, self.z
 
     @property
+    def b_iso(self) -> float:
+        """Coordinate-model isotropic or equivalent-isotropic B factor."""
+        return float(self.gemmi_atom.b_iso)
+
+    @property
     def coordinates_valid(self) -> bool:
         """Whether this atom can safely participate in spatial analysis."""
         return all(math.isfinite(value) for value in self.xyz)

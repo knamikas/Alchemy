@@ -215,6 +215,77 @@ def test_site_summaries_report_modeled_metal_proximity(tmp_path: Path) -> None:
     assert summaries["MG"]["nearby_metal_count_6a"] == 1
 
 
+def test_site_and_contact_rows_report_local_b_factor_context(tmp_path: Path) -> None:
+    """Metal/donor B agreement is reconstructible without entering site scoring."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", b_iso=40.0)
+    builder.add_water(101, (2.09, 0.0, 0.0), chain="B", b_iso=10.0)
+    builder.add_water(102, (0.0, 2.09, 0.0), chain="B", b_iso=20.0)
+    builder.add_water(103, (0.0, 0.0, 2.09), chain="B", b_iso=30.0)
+    path = builder.write_cif(tmp_path / "b_factors.cif")
+    context = load_structure("test", path)
+    metal = context.metal_atoms(["ZN"])[0]
+
+    analysis = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+    )
+
+    summary = analysis.site_summaries[metal.source_key]
+    assert summary["donor_b_iso_count"] == 3
+    assert summary["donor_median_b_iso"] == approx(20.0)
+    assert summary["metal_donor_b_ratio"] == approx(2.0)
+    assert summary["metal_minus_donor_b_iso"] == approx(20.0)
+    assert summary["metal_donor_b_similarity"] == approx(0.5)
+    assert summary["entry_nonwater_median_b_iso"] == approx(40.0)
+    assert {row["neighbor_b_iso"] for row in analysis.bond_rows} == {
+        10.0,
+        20.0,
+        30.0,
+    }
+    assert {row["neighbor_b_iso"] for row in analysis.candidate_rows} == {
+        10.0,
+        20.0,
+        30.0,
+    }
+    site_values = coordination_schema.stats_extra_values(
+        "test", context, metal, summary
+    )
+    assert site_values["metal_b_iso"] == approx(40.0)
+
+
+def test_nonpositive_b_factor_leaves_ratio_and_similarity_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A zero B supports a difference but cannot enter a logarithmic ratio."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", b_iso=0.0)
+    builder.add_water(101, (2.09, 0.0, 0.0), chain="B", b_iso=10.0)
+    path = builder.write_cif(tmp_path / "zero_b_factor.cif")
+    context = load_structure("test", path)
+    metal = context.metal_atoms(["ZN"])[0]
+
+    analysis = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+    )
+
+    summary = analysis.site_summaries[metal.source_key]
+    assert summary["donor_b_iso_count"] == 1
+    assert summary["donor_median_b_iso"] == approx(10.0)
+    assert summary["metal_minus_donor_b_iso"] == approx(-10.0)
+    assert math.isnan(summary["metal_donor_b_ratio"])
+    assert math.isnan(summary["metal_donor_b_similarity"])
+
+
 def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

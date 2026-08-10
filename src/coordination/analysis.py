@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
+from statistics import median
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -156,6 +157,56 @@ def _metal_proximity_summaries(
                 }
             )
     return summaries
+
+
+def _entry_nonwater_median_b_iso(structure: StructureContext) -> float:
+    """Median B for canonical, non-water, non-H modeled atoms in this entry."""
+    values = [
+        atom.b_iso
+        for atom in structure.contact_atoms
+        if not atom.is_water
+        and not atom.is_hydrogen
+        and not (atom.occupancy_valid and atom.occupancy == 0.0)
+        and math.isfinite(atom.b_iso)
+    ]
+    return round(float(median(values)), 3) if values else NAN
+
+
+def _donor_b_factor_summary(
+    metal: AtomSite, contacts: Sequence[Candidate]
+) -> dict[str, Any]:
+    """Compare one metal B factor with the median of its assigned donors."""
+    donor_values = [
+        contact.neighbor.b_iso
+        for contact in contacts
+        if math.isfinite(contact.neighbor.b_iso)
+    ]
+    result: dict[str, Any] = {
+        "donor_b_iso_count": len(donor_values),
+        "donor_median_b_iso": NAN,
+        "metal_donor_b_ratio": NAN,
+        "metal_minus_donor_b_iso": NAN,
+        "metal_donor_b_similarity": NAN,
+    }
+    if not donor_values:
+        return result
+
+    donor_median = float(median(donor_values))
+    metal_b = metal.b_iso
+    result["donor_median_b_iso"] = round(donor_median, 3)
+    if not math.isfinite(metal_b):
+        return result
+
+    result["metal_minus_donor_b_iso"] = round(metal_b - donor_median, 3)
+    if metal_b <= 0.0 or donor_median <= 0.0:
+        return result
+
+    ratio = metal_b / donor_median
+    if not math.isfinite(ratio):
+        return result
+    result["metal_donor_b_ratio"] = round(ratio, 4)
+    result["metal_donor_b_similarity"] = round(math.exp(-abs(math.log(ratio))), 4)
+    return result
 
 
 def _bonding_key(
@@ -1080,6 +1131,7 @@ def _analyze_metal_site(
         structure,
     )
     summary.update(_site_context_values(primary_contacts, primary_candidates))
+    summary.update(_donor_b_factor_summary(metal, primary_contacts))
 
     sigma = sigma_for(
         sig,
@@ -1204,6 +1256,7 @@ def run_bond_analysis(
         ).append(candidate)
 
     dpi_components = calculate_dpi_components(structure, dpi_inputs)
+    entry_nonwater_median_b_iso = _entry_nonwater_median_b_iso(structure)
     ni = count_ni(structure)
     deposited_ni = count_deposited_ni(structure)
     if dpi_components.reason_code:
@@ -1249,6 +1302,8 @@ def run_bond_analysis(
                 ReasonCode.NON_FINITE_METAL_COORDINATES
             )
             summary.update(_site_context_values([], []))
+            summary.update(_donor_b_factor_summary(metal, []))
+            summary["entry_nonwater_median_b_iso"] = entry_nonwater_median_b_iso
             summary.update(metal_proximity[metal.source_key])
             summaries[metal.source_key] = summary
             continue
@@ -1277,6 +1332,7 @@ def run_bond_analysis(
             )
             metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
         site_result.summary.update(metal_proximity[metal.source_key])
+        site_result.summary["entry_nonwater_median_b_iso"] = entry_nonwater_median_b_iso
         summaries[metal.source_key] = site_result.summary
         rows.extend(site_result.bond_rows)
         candidate_rows.extend(site_result.candidate_rows)
