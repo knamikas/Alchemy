@@ -33,6 +33,7 @@ from coordination.schema import (
     candidate_row,
     contact_identifier,
     context_warning_values,
+    metal_site_identifier,
 )
 from codes import (
     CandidateSource,
@@ -81,6 +82,9 @@ if TYPE_CHECKING:
 
 
 CANDIDATE_SEARCH_RADIUS = 4.0
+# Context-only radius for nearby modeled metals. This does not assert a
+# metal-metal bond or define a multinuclear active site.
+NEARBY_METAL_RADIUS = 6.0
 SEARCH_EPSILON = 1e-6
 
 # First-sphere definition: donor distance <= target distance + 0.75 A.
@@ -103,6 +107,55 @@ _CandidateIdentity = tuple[AtomKey, str, tuple[int, int, int], tuple[float, ...]
 _ResidueImageKey = tuple[
     tuple[int, int, int], ContactScope, str, int, str, tuple[int, int, int]
 ]
+
+
+def _metal_proximity_summaries(
+    pdb_id: str, metals: Sequence[AtomSite]
+) -> dict[AtomKey, dict[str, Any]]:
+    """Summarize other modeled metals without crystallographic expansion.
+
+    ``metals`` is the canonical analyzed-model selection, which already omits
+    explicitly zero-occupancy sites. Non-finite coordinates remain in the result
+    with unavailable proximity fields so their site rows keep a fixed schema.
+    """
+    unavailable: dict[str, Any] = {
+        "nearest_metal_distance": NAN,
+        "nearest_metal_element": "",
+        "nearest_metal_site_id": "",
+        "nearby_metal_count_6a": NAN,
+    }
+    summaries: dict[AtomKey, dict[str, Any]] = {
+        metal.source_key: dict(unavailable) for metal in metals
+    }
+    spatial = [metal for metal in metals if metal.coordinates_valid]
+    for metal in spatial:
+        neighbors = sorted(
+            (
+                (
+                    position_distance(metal.xyz, neighbor.xyz),
+                    neighbor.source_key,
+                    neighbor,
+                )
+                for neighbor in spatial
+                if neighbor.source_key != metal.source_key
+            ),
+            key=lambda item: (item[0], item[1]),
+        )
+        summary = summaries[metal.source_key]
+        summary["nearby_metal_count_6a"] = sum(
+            distance <= NEARBY_METAL_RADIUS + SEARCH_EPSILON
+            for distance, _, _ in neighbors
+        )
+        if neighbors:
+            distance, _, nearest = neighbors[0]
+            summary.update(
+                {
+                    "nearest_metal_distance": round(distance, 3),
+                    "nearest_metal_element": nearest.element,
+                    "nearest_metal_site_id": metal_site_identifier(pdb_id, nearest),
+                }
+            )
+    return summaries
 
 
 def _bonding_key(
@@ -1107,6 +1160,7 @@ def run_bond_analysis(
         structure = load_structure(pdb_id, pdb_path)
 
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
+    metal_proximity = _metal_proximity_summaries(pdb_id, metals_in_model)
     spatial_metals = [metal for metal in metals_in_model if metal.coordinates_valid]
     non_finite_metals = [
         metal for metal in metals_in_model if not metal.coordinates_valid
@@ -1195,6 +1249,7 @@ def run_bond_analysis(
                 ReasonCode.NON_FINITE_METAL_COORDINATES
             )
             summary.update(_site_context_values([], []))
+            summary.update(metal_proximity[metal.source_key])
             summaries[metal.source_key] = summary
             continue
         site_result = _analyze_metal_site(
@@ -1221,6 +1276,7 @@ def run_bond_analysis(
                 )
             )
             metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
+        site_result.summary.update(metal_proximity[metal.source_key])
         summaries[metal.source_key] = site_result.summary
         rows.extend(site_result.bond_rows)
         candidate_rows.extend(site_result.candidate_rows)

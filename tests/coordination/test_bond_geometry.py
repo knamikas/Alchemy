@@ -177,6 +177,44 @@ def _analyze(
     )
 
 
+def test_site_summaries_report_modeled_metal_proximity(tmp_path: Path) -> None:
+    """Nearby metals are contextualized without entering the donor candidates."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
+    builder.add_metal("FE", 2, chain="B", pos=(3.0, 0.0, 0.0))
+    builder.add_metal("MG", 3, chain="B", pos=(8.0, 0.0, 0.0))
+    # Modeled absence is neither an analyzed site nor proximity evidence.
+    builder.add_metal("CO", 4, chain="B", pos=(1.0, 0.0, 0.0), occupancy=0.0)
+    path = builder.write_cif(tmp_path / "metal_proximity.cif")
+    context = load_structure("test", path)
+
+    analysis = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+    )
+
+    assert analysis.candidate_rows == []
+    metals = {metal.element: metal for metal in context.metal_atoms(METAL_ELEMENTS)}
+    summaries = {
+        element: analysis.site_summaries[metal.source_key]
+        for element, metal in metals.items()
+    }
+    assert summaries["ZN"]["nearest_metal_distance"] == approx(3.0)
+    assert summaries["ZN"]["nearest_metal_element"] == "FE"
+    assert summaries["ZN"]["nearest_metal_site_id"] == (
+        coordination_schema.metal_site_identifier("test", metals["FE"])
+    )
+    assert summaries["ZN"]["nearby_metal_count_6a"] == 1
+    assert summaries["FE"]["nearby_metal_count_6a"] == 2
+    assert summaries["MG"]["nearest_metal_element"] == "FE"
+    assert summaries["MG"]["nearest_metal_distance"] == approx(5.0)
+    assert summaries["MG"]["nearby_metal_count_6a"] == 1
+
+
 def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
