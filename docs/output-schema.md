@@ -105,6 +105,7 @@ The concrete metric columns are:
 | `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location used by `metal_site_id`. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited identity of the selected metal atom. |
 | `metal_occupancy`, `metal_occupancy_valid`, `metal_occupancy_status`, `metal_coordinates_valid` | Selected atom occupancy and coordinate validation. |
+| `metal_x`, `metal_y`, `metal_z` | Selected metal's Cartesian coordinates in the same frame as bond and candidate `transformed_neighbor_*` coordinates. |
 | `metal_conformer_mean_occupancy`, `metal_altloc_options`, `alternative_conformers_present`, `altloc_selection_fallback` | Residue conformer evidence and whether selection required a fallback. |
 | `density_observation_id` | Join key for the underlying EDSTATS observation; not a metal-site key. |
 | `density_scope`, `density_shared_site_count`, `density_is_shared` | Whether density describes an ion or whole cofactor residue and how many selected sites share it. |

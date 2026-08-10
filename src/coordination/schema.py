@@ -223,6 +223,9 @@ STATS_EXTRA_COLUMNS = [
     "metal_occupancy_valid",
     "metal_occupancy_status",
     "metal_coordinates_valid",
+    "metal_x",
+    "metal_y",
+    "metal_z",
     "metal_conformer_mean_occupancy",
     "metal_altloc_options",
     "alternative_conformers_present",
@@ -503,6 +506,9 @@ def stats_extra_values(
         "metal_occupancy_valid": metal.occupancy_valid if metal else "",
         "metal_occupancy_status": metal.occupancy_status if metal else "",
         "metal_coordinates_valid": metal.coordinates_valid if metal else "",
+        "metal_x": round(metal.x, 6) if metal else NAN,
+        "metal_y": round(metal.y, 6) if metal else NAN,
+        "metal_z": round(metal.z, 6) if metal else NAN,
         "metal_conformer_mean_occupancy": (
             residue.selected_conformer_mean_occupancy if residue else NAN
         ),

@@ -692,6 +692,25 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(
     assert math.isfinite(summary["asu_volume"])
 
 
+def test_metal_site_output_retains_cartesian_coordinates(tmp_path: Path) -> None:
+    """Metal and transformed-neighbor coordinates share a reconstructible frame."""
+    from coordination.schema import stats_extra_values
+    from structure_analysis import load_structure
+
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B", pos=(1.23456789, -2.34567891, 3.45678912))
+    path = builder.write_cif(tmp_path / "coordinates.cif")
+    context = load_structure("test", path)
+    metal = context.metal_atoms(["ZN"])[0]
+
+    values = stats_extra_values("test", context, metal)
+
+    assert values["metal_coordinates_valid"] is True
+    assert values["metal_x"] == approx(1.234568)
+    assert values["metal_y"] == approx(-2.345679)
+    assert values["metal_z"] == approx(3.456789)
+
+
 def test_ccp4_capability_probe_is_boolean_and_does_not_raise() -> None:
     """The local CCP4 probe answers with a bool instead of raising.
 
