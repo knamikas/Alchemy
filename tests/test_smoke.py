@@ -73,7 +73,7 @@ def test_src_modules_import() -> None:
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert analysis.CANDIDATE_SEARCH_RADIUS == 4.0
     assert callable(structure_analysis.load_structure)
-    assert callable(main.main), "src/main.py must keep working as the entry point"
+    assert callable(main.main), "src/main.py must keep delegating to the CLI"
     assert main.main is cli.main, "the entry point must delegate, not reimplement"
     assert callable(pool.run)
     assert callable(worker.process)

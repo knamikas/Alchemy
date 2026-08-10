@@ -1,10 +1,10 @@
 """Keep the setup instructions honest.
 
 Scope: the contract between three places that each describe the same
-environment -- ``pyproject.toml``, the README, and ``src/main.py``'s module
-docstring. The instructions are compared against the declaration, and the
-declaration against the code, since a correct declaration cannot catch
-instructions that install less than it declares.
+environment -- ``pyproject.toml``, the README, and the repository-root
+``alchemy`` launcher's module docstring. The instructions are compared against
+the declaration, and the declaration against the code, since a correct
+declaration cannot catch instructions that install less than it declares.
 
 Out of scope here (owned elsewhere): argument parsing (``test_cli_and_config``)
 and the pipeline itself (``test_pipeline_integration``).
@@ -44,6 +44,7 @@ DOC_PATHS = [README_PATH, os.path.join(REPO_ROOT, "tests", "README.md")] + [
     )
 ]
 PYPROJECT_PATH = os.path.join(REPO_ROOT, "pyproject.toml")
+LAUNCHER_PATH = os.path.join(REPO_ROOT, "alchemy")
 
 _STDLIB = set(sys.stdlib_module_names)
 
@@ -194,18 +195,16 @@ def test_declared_dependencies_cover_every_third_party_import() -> None:
     )
 
 
-def test_main_docstring_requirements_match_the_declaration() -> None:
-    """``src/main.py``'s Requirements section names every declared dependency.
+def test_launcher_docstring_requirements_match_the_declaration() -> None:
+    """The ``./alchemy`` Requirements section names every dependency.
 
     That docstring is the third copy of the list, and this is what holds it to
     the other two.
     """
-    import main
-
-    requirements = (main.__doc__ or "").lower()
+    requirements = _read(LAUNCHER_PATH).lower()
     missing = [name for name in _declared_dependencies() if name not in requirements]
     assert not missing, (
-        f"main.py's module docstring omits declared dependencies: {missing}"
+        f"the ./alchemy docstring omits declared dependencies: {missing}"
     )
 
 
@@ -272,12 +271,12 @@ def test_the_density_cli_does_not_default_its_output_into_the_source_tree() -> N
 
 @pytest.mark.parametrize(
     "path",
-    DOC_PATHS + [os.path.join(SRC_DIR, "main.py")],
+    DOC_PATHS + [LAUNCHER_PATH],
     ids=[
         os.path.basename(os.path.dirname(path)) + "/" + os.path.basename(path)
         for path in DOC_PATHS
     ]
-    + ["main-docstring"],
+    + ["launcher-docstring"],
 )
 def test_examples_do_not_assume_a_private_environment(path: str) -> None:
     """Documented commands run anywhere: Alchemy requires no named environment,
@@ -289,7 +288,7 @@ def test_examples_do_not_assume_a_private_environment(path: str) -> None:
     ]
     assert not offending, (
         f"{os.path.basename(path)} documents a specific conda environment: "
-        f"{offending}. Use a plain `python src/main.py` invocation instead."
+        f"{offending}. Use a plain `./alchemy` invocation instead."
     )
 
 

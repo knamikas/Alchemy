@@ -1,4 +1,4 @@
-"""End-to-end pipeline behaviour: ``src/main.py`` driven as a whole run.
+"""End-to-end pipeline behaviour: ``./alchemy`` driven as a whole run.
 
 Most tests here execute the real driver over a checksum-pinned PDB-REDO entry
 snapshot, so they need CCP4 and either a warm entry cache or network access.

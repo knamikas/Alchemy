@@ -1,5 +1,41 @@
 #!/usr/bin/env python3
-"""Run Alchemy here with ``./alchemy``"""
+"""Run the Alchemy metal-site validation pipeline from a source checkout.
+
+For each PDB entry Alchemy validates or corrects its Fourier map coefficients
+with CCP4 ``mtzfix``, calculates 2mFo-DFc and mFo-DFc maps with ``fft``, runs
+``edstats``, identifies metal ions and metal-containing cofactors, and evaluates
+their coordination geometry. Core results are streamed to seven CSVs under
+``--output-dir``:
+
+  metal_sites_all.csv  -- one row per selected metal site
+  metal_bonds_all.csv  -- one row per inferred or declared contact
+  metal_contact_candidates_all.csv -- one row per contact candidate
+  density_context_all.csv -- one per-entry non-target RSZD control summary
+  crystallization_conditions_all.csv -- deposited condition records
+  crystallization_summary_all.csv -- one contextual row per entry
+  manifest.csv         -- one row per entry with status and provenance
+
+An uncapped database run additionally streams compact confidence inputs and,
+after successful completion, writes final confidence scores plus a reusable
+database reference. Smaller runs use an installed frozen reference when one is
+available. Confidence-enabled runs also derive ``review_queue_all.csv`` by
+joining REVIEW/SUSPECT sites to the separate crystallization summary; those
+metadata do not participate in scoring.
+
+Requirements
+------------
+- CCP4 ``mtzfix``, ``fft``, ``mapmask``, and ``edstats`` on PATH, either
+  already sourced or via ``--ccp4-setup`` pointing to a CCP4 setup script.
+- Python 3.11+ with gemmi>=0.7.0, numpy>=1.17, and
+  typing_extensions>=4.6. Gemmi does not install NumPy.
+
+Examples
+--------
+  ./alchemy --id 109m \
+      --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
+  ./alchemy --max-pdbs 20 --workers 4 \
+      --ccp4-setup /opt/ccp4/bin/ccp4.setup-sh
+"""
 
 from __future__ import annotations
 
@@ -10,7 +46,7 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_DIR / "src"))
 
-from main import main
+from main import main  # noqa: E402 - src is resolved relative to this launcher
 
 
 if __name__ == "__main__":

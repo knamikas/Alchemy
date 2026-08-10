@@ -1,4 +1,4 @@
-"""Worker-death recovery in the batch driver (``src/main.py``).
+"""Worker-death recovery in the batch driver (invoked by ``./alchemy``).
 
 A worker felled by the OOM killer or by a segfault in a compiled extension runs
 no further Python, and ``multiprocessing.Pool`` never delivers a result for the

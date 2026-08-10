@@ -20,7 +20,7 @@ test = [
     "pytest-cov>=4.0",
 ]
 
-# Alchemy is run from a clone (`python src/main.py`), never imported as a
+# Alchemy is run from a clone (`./alchemy`), never imported as a
 # library, so it deliberately ships no importable modules. Declaring both lists
 # empty keeps `pip install .` a dependency-only operation: it records the
 # distribution metadata that resolves gemmi and numpy, and installs nothing

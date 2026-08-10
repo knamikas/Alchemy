@@ -12,7 +12,7 @@ by themselves establish that a metal or ligand is biologically functional.
 `./alchemy` is the command-line entry point for a source checkout. It can read a
 local PDB-REDO mirror, download explicitly requested entries into a local cache,
 or process manually supplied coordinate and MTZ files. `src/main.py` remains the
-maintained Python entry point used by the launcher.
+thin internal delegate used by the launcher.
 
 ## Quick start
 
