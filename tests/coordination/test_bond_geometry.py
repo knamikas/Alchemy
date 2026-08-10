@@ -215,6 +215,105 @@ def test_site_summaries_report_modeled_metal_proximity(tmp_path: Path) -> None:
     assert summaries["MG"]["nearby_metal_count_6a"] == 1
 
 
+def test_site_summaries_report_crystallographic_special_positions(
+    tmp_path: Path,
+) -> None:
+    """Site symmetry, not occupancy alone, determines the special-position flag."""
+    builder = StructureBuilder(
+        cell=(20.0, 20.0, 20.0, 90.0, 90.0, 90.0), spacegroup="P 2"
+    )
+    builder.add_metal("ZN", 1, pos=(0.0, 0.0, 0.0), occupancy=0.5)
+    builder.add_metal("FE", 2, pos=(2.0, 3.0, 4.0), occupancy=1.0)
+    builder.add_metal("MG", 3, pos=(10.0, 3.0, 10.0), occupancy=0.25)
+    path = builder.write_cif(tmp_path / "special_positions.cif")
+    context = load_structure("test", path)
+
+    analysis = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+    )
+
+    metals = {metal.element: metal for metal in context.metal_atoms(METAL_ELEMENTS)}
+    summaries = {
+        element: analysis.site_summaries[metal.source_key]
+        for element, metal in metals.items()
+    }
+    assert summaries["ZN"]["metal_special_position"] is True
+    assert summaries["ZN"]["metal_site_symmetry_order"] == 2
+    assert summaries["ZN"]["metal_expected_crystallographic_occupancy"] == approx(0.5)
+    assert summaries["ZN"]["metal_occupancy_matches_site_symmetry"] is True
+
+    assert summaries["FE"]["metal_special_position"] is False
+    assert summaries["FE"]["metal_site_symmetry_order"] == 1
+    assert summaries["FE"]["metal_expected_crystallographic_occupancy"] == approx(1.0)
+    assert summaries["FE"]["metal_occupancy_matches_site_symmetry"] is True
+
+    assert summaries["MG"]["metal_special_position"] is True
+    assert summaries["MG"]["metal_site_symmetry_order"] == 2
+    assert summaries["MG"]["metal_expected_crystallographic_occupancy"] == approx(0.5)
+    assert summaries["MG"]["metal_occupancy_matches_site_symmetry"] is False
+
+
+def test_special_position_fields_are_blank_without_symmetry(tmp_path: Path) -> None:
+    """Unavailable crystallographic metadata is not inferred from occupancy."""
+    builder = StructureBuilder(cell=None, spacegroup=None)
+    builder.add_metal("ZN", 1, occupancy=0.5)
+    path = builder.write_cif(tmp_path / "no_symmetry.cif")
+    context = load_structure("test", path)
+    metal = context.metal_atoms(METAL_ELEMENTS)[0]
+
+    analysis = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+    )
+
+    summary = analysis.site_summaries[metal.source_key]
+    assert summary["metal_special_position"] == ""
+    assert math.isnan(summary["metal_site_symmetry_order"])
+    assert math.isnan(summary["metal_expected_crystallographic_occupancy"])
+    assert summary["metal_occupancy_matches_site_symmetry"] == ""
+
+
+def test_special_position_detection_excludes_strict_ncs(tmp_path: Path) -> None:
+    """A near-coincident strict-NCS copy is not crystallographic site symmetry."""
+    builder = StructureBuilder(
+        cell=(20.0, 20.0, 20.0, 90.0, 90.0, 90.0), spacegroup="P 1"
+    )
+    builder.add_metal("ZN", 1, pos=(5.0, 5.0, 5.0))
+    structure = builder.to_gemmi()
+    transform = gemmi.Transform()
+    transform.mat.fromlist([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    transform.vec.fromlist([0.5, 0.0, 0.0])
+    structure.ncs.append(gemmi.NcsOp(transform, "1", False))
+    path = helpers.write_pdb(structure, tmp_path / "strict_ncs.pdb")
+    context = load_structure("test", path)
+    metal = context.metal_atoms(METAL_ELEMENTS)[0]
+    assert context.strict_ncs_operation_count == 1
+
+    analysis = ba.run_bond_analysis(
+        "test",
+        path,
+        [],
+        list(EDSTATS_HEADER),
+        helpers.dpi_inputs(),
+        structure=context,
+    )
+
+    summary = analysis.site_summaries[metal.source_key]
+    assert summary["metal_special_position"] is False
+    assert summary["metal_site_symmetry_order"] == 1
+    assert summary["metal_expected_crystallographic_occupancy"] == approx(1.0)
+    assert summary["metal_occupancy_matches_site_symmetry"] is True
+
+
 def test_site_and_contact_rows_report_local_b_factor_context(tmp_path: Path) -> None:
     """Metal/donor B agreement is reconstructible without entering site scoring."""
     builder = StructureBuilder()

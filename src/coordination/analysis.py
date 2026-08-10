@@ -98,6 +98,10 @@ FIRST_SPHERE_TOLERANCE = 0.75
 # NeighborSearch returns those images unfiltered, so apply the cutoff here.
 SPECIAL_POSITION_DEDUP_CUTOFF = 0.8
 
+# Coordinate occupancies are commonly rounded in PDB/mmCIF output, so allow a
+# small absolute tolerance when comparing them with 1 / site-symmetry order.
+SPECIAL_POSITION_OCCUPANCY_TOLERANCE = 0.015
+
 #: One deposited atom record, as ``AtomSite.source_key`` reports it.
 AtomKey = tuple[int, int, int, int]
 
@@ -156,6 +160,81 @@ def _metal_proximity_summaries(
                     "nearest_metal_site_id": metal_site_identifier(pdb_id, nearest),
                 }
             )
+    return summaries
+
+
+def _metal_special_position_summaries(
+    structure: StructureContext, metals: Sequence[AtomSite]
+) -> dict[AtomKey, dict[str, Any]]:
+    """Report crystallographic site symmetry and its occupancy expectation.
+
+    A fresh Gemmi cell is populated with space-group images only.  This keeps
+    strict-NCS transforms, which are also present in ``structure.cell`` after
+    ``setup_cell_images()``, from being mistaken for crystallographic site
+    symmetry.
+    """
+    unavailable: dict[str, Any] = {
+        "metal_special_position": "",
+        "metal_site_symmetry_order": NAN,
+        "metal_expected_crystallographic_occupancy": NAN,
+        "metal_occupancy_matches_site_symmetry": "",
+    }
+    summaries: dict[AtomKey, dict[str, Any]] = {
+        metal.source_key: dict(unavailable) for metal in metals
+    }
+    if not structure.symmetry_search_available:
+        return summaries
+
+    try:
+        import gemmi
+
+        spacegroup = cast(
+            "gemmi.SpaceGroup | None", structure.structure.find_spacegroup()
+        )
+        if spacegroup is None:
+            return summaries
+        source_cell = structure.structure.cell
+        crystallographic_structure = gemmi.Structure()
+        crystallographic_structure.cell = gemmi.UnitCell(
+            source_cell.a,
+            source_cell.b,
+            source_cell.c,
+            source_cell.alpha,
+            source_cell.beta,
+            source_cell.gamma,
+        )
+        crystallographic_structure.spacegroup_hm = spacegroup.xhm()
+        crystallographic_structure.setup_cell_images()
+    except Exception:
+        return summaries
+
+    for metal in metals:
+        if not metal.coordinates_valid:
+            continue
+        try:
+            coincident_nonidentity_images = int(
+                crystallographic_structure.cell.is_special_position(
+                    metal.pos, SPECIAL_POSITION_DEDUP_CUTOFF
+                )
+            )
+        except Exception:
+            continue
+        site_symmetry_order = coincident_nonidentity_images + 1
+        expected_occupancy = 1.0 / site_symmetry_order
+        occupancy_matches: bool | str = ""
+        if metal.occupancy_valid:
+            occupancy_matches = math.isclose(
+                metal.occupancy,
+                expected_occupancy,
+                rel_tol=0.0,
+                abs_tol=SPECIAL_POSITION_OCCUPANCY_TOLERANCE,
+            )
+        summaries[metal.source_key] = {
+            "metal_special_position": coincident_nonidentity_images > 0,
+            "metal_site_symmetry_order": site_symmetry_order,
+            "metal_expected_crystallographic_occupancy": round(expected_occupancy, 6),
+            "metal_occupancy_matches_site_symmetry": occupancy_matches,
+        }
     return summaries
 
 
@@ -1213,6 +1292,9 @@ def run_bond_analysis(
 
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
     metal_proximity = _metal_proximity_summaries(pdb_id, metals_in_model)
+    metal_special_positions = _metal_special_position_summaries(
+        structure, metals_in_model
+    )
     spatial_metals = [metal for metal in metals_in_model if metal.coordinates_valid]
     non_finite_metals = [
         metal for metal in metals_in_model if not metal.coordinates_valid
@@ -1305,6 +1387,7 @@ def run_bond_analysis(
             summary.update(_donor_b_factor_summary(metal, []))
             summary["entry_nonwater_median_b_iso"] = entry_nonwater_median_b_iso
             summary.update(metal_proximity[metal.source_key])
+            summary.update(metal_special_positions[metal.source_key])
             summaries[metal.source_key] = summary
             continue
         site_result = _analyze_metal_site(
@@ -1332,6 +1415,7 @@ def run_bond_analysis(
             )
             metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
         site_result.summary.update(metal_proximity[metal.source_key])
+        site_result.summary.update(metal_special_positions[metal.source_key])
         site_result.summary["entry_nonwater_median_b_iso"] = entry_nonwater_median_b_iso
         summaries[metal.source_key] = site_result.summary
         rows.extend(site_result.bond_rows)
