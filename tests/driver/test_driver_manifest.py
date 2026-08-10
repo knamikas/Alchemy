@@ -33,6 +33,7 @@ from coordination import declared_connections
 import density_analysis as density
 import main
 import metal_identification
+from inputs import PdbRedoMetadata
 import structure_analysis
 import worker
 import worker_contracts
@@ -275,6 +276,30 @@ def _real_stats_density_stage(
         full_map_bytes=8192,
         edstats_map_bytes=2048,
     )
+
+
+def test_manifest_twin_flag_uses_the_density_routing_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The manifest and map route consume one authoritative ISTWIN value."""
+
+    def twin_metadata(
+        data_json_path: str | None, *, required: bool = False
+    ) -> PdbRedoMetadata:
+        del data_json_path, required
+        return PdbRedoMetadata(is_twin=True, version="8.04", date="2024-02-08")
+
+    monkeypatch.setattr(
+        worker,
+        "read_pdb_redo_metadata",
+        twin_metadata,
+    )
+
+    result = _manual_entry(tmp_path, monkeypatch, _real_stats_density_stage)
+
+    assert result.pdb_redo_is_twin is True
+    assert result.pdb_redo_version == "8.04"
+    assert result.pdb_redo_date == "2024-02-08"
 
 
 @pytest.mark.parametrize("bonds", [True, False], ids=["bonds", "no-bonds"])
@@ -1389,6 +1414,7 @@ class TestManifestRow:
             retryable=False,
             no_metals=True,
             metal_site_limit_exceeded=False,
+            pdb_redo_is_twin=True,
             error="analysis was incomplete",
         )
 
@@ -1397,8 +1423,13 @@ class TestManifestRow:
         assert row["retryable"] == "false"
         assert row["no_metals"] == "true"
         assert row["metal_site_limit_exceeded"] == "false"
+        assert row["pdb_redo_is_twin"] == "true"
         assert row["status_detail"] == "analysis was incomplete"
         assert "error" not in row
+
+    def test_unmeasured_twin_status_is_blank(self) -> None:
+        row = manifest_row(_result(), False, True, {}, {})
+        assert row["pdb_redo_is_twin"] == ""
 
     def test_empty_code_lists_render_blank(self) -> None:
         """No codes must not become a spurious separator or literal '[]'."""

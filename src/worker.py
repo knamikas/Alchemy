@@ -588,6 +588,7 @@ def _prepare_analysis_inputs(
     result.source_coordinate_format = source_format
     result.analysis_coordinate_format = analysis_format
     result.coordinate_conversion_performed = converted
+    result.pdb_redo_is_twin = pdb_redo_metadata.is_twin
     result.pdb_redo_version = pdb_redo_metadata.version
     result.pdb_redo_date = pdb_redo_metadata.date
     result.source_coordinate_path = source_coordinate_provenance_path(

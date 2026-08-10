@@ -93,8 +93,9 @@ Results are written to (the column lists and row builders live in
   `metal_site_limit_exceeded` fields keep successful negative results and
   policy exclusions distinguishable from ordinary analyzed entries without
   parsing `reason_codes`. PDB-REDO inputs record the source-relative coordinate
-  path plus the `VERSION` and `TIME` values from `data.json`; manual inputs
-  retain the path supplied by the user.
+  path plus the `ISTWIN`, `VERSION`, and `TIME` values from `data.json`;
+  `pdb_redo_is_twin` records the same explicit Boolean that selects the guarded
+  twin map-coefficient route. Manual inputs retain the path supplied by the user.
   `reference_data_id` identifies the bundled catalog and distance table the row
   was measured against; rows are comparable only if it matches, and the run log
   records the two file checksums it is composed from. Adding this column means

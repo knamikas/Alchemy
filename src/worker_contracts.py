@@ -123,6 +123,7 @@ class EntryResult:
     ccp4_timeout_log_path: str = ""
 
     alchemy_version: str = __version__
+    pdb_redo_is_twin: bool | None = None
     pdb_redo_version: str = ""
     pdb_redo_date: str = ""
     source_coordinate_format: str = ""

@@ -575,6 +575,7 @@ def test_single_entry_run_writes_documented_outputs(
         "reason_codes",
         "status_detail",
         "runtime_s",
+        "pdb_redo_is_twin",
         "pdb_redo_version",
         "pdb_redo_date",
         "source_coordinate_path",

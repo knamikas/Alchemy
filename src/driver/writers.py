@@ -50,6 +50,7 @@ MANIFEST_COLUMNS = [
     "ccp4_version",
     "reference_data_id",
     "refinement_state",
+    "pdb_redo_is_twin",
     "pdb_redo_version",
     "pdb_redo_date",
     "source_coordinate_format",
