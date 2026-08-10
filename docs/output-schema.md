@@ -3,7 +3,8 @@
 This document defines the row grain, identifiers, serialization, and columns
 of Alchemy's scientific CSV outputs. The ordered machine-enforced schemas live
 in `src/driver/writers.py`, `src/coordination/schema.py`,
-`src/confidence_score.py`, and `src/crystallization_conditions.py`.
+`src/metal_identification.py`, `src/confidence_score.py`, and
+`src/crystallization_conditions.py`.
 
 ## Shared conventions
 
@@ -26,6 +27,34 @@ in `src/driver/writers.py`, `src/coordination/schema.py`,
 - `*_model_index`, `*_chain_index`, `*_residue_index`, and `*_atom_index` are
   zero-based coordinate-model indices. Author-facing chain, residue, insertion,
   atom, and alternate-location labels are retained separately.
+
+## `density_context_all.csv`
+
+Grain: exactly one row per processed entry. This is an entry-level calibration
+artifact, not a metal-site table and not an authoritative input to the current
+PASS/REVIEW/SUSPECT verdict.
+
+`density_context_status` is `available` when EDSTATS completed and
+`not_computed` otherwise. `edstats_residue_count` counts coherent residue
+observations retained after alternate-conformer selection;
+`target_residue_count` counts the metal and catalog-cofactor observations
+excluded from the control distribution.
+
+The prefixes ordinary_, ordinary_nonwater_, and water_ identify the full
+non-target control, its non-water subset, and its water subset. Each prefix has
+these fields:
+
+| Suffix | Meaning |
+| --- | --- |
+| residue_count | Residue observations in the group, including rows whose `ZDa` is `n/a`. |
+| rszd_count | Observations with a finite `ZDa`; this is the denominator of both fractions. |
+| median_abs_rszd | Median absolute all-atom `ZDa`, blank when no finite values exist. |
+| abs_rszd_ge_3_count, abs_rszd_ge_3_fraction | Count and fraction at the density REVIEW threshold. |
+| abs_rszd_ge_6_count, abs_rszd_ge_6_fraction | Count and fraction at the density SUSPECT threshold. |
+
+Waters provide a single-atom solvent-region comparison measured by the same
+EDSTATS calculation. They are a contextual control rather than known-negative
+examples; modeled-water selection and chemistry differ from metal sites.
 
 ## `metal_sites_all.csv`
 

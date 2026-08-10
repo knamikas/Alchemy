@@ -26,6 +26,7 @@ from helpers import AtomSpec, StructureBuilder, simple_metal_site
 from metal_elements import METAL_ELEMENTS
 from output_rows import MetalStatsRow
 from metal_identification import (
+    DENSITY_CONTEXT_COLUMNS,
     EDSTATS_COLUMNS,
     EDSTATS_METRIC_COLUMNS,
     classify_residue,
@@ -791,6 +792,54 @@ def test_only_metal_and_cofactor_residues_produce_rows(tmp_path: Path) -> None:
     assert row["residue_key"] == residue.key
     assert row["site"].atom_name == "ZN"
     assert row["site_key"] == residue.contact_atoms[0].source_key
+
+
+def test_discarded_residues_form_entry_and_water_rszd_controls(
+    tmp_path: Path,
+) -> None:
+    """Non-target ZDa values survive as compact, denominator-aware context."""
+    path = simple_metal_site().write_pdb(tmp_path / "site.pdb")
+    context = load_structure("test", path)
+    stats = helpers.write_edstats_for_structure(
+        tmp_path / "stats.out",
+        context,
+        metrics={"ZDa": "n/a"},
+        per_residue={
+            ("ZN", "B", "1"): {"ZDa": 99.9},
+            ("HIS", "A", "10"): {"ZDa": 3.0},
+            ("ASP", "A", "11"): {"ZDa": "n/a"},
+            ("HOH", "B", "100"): {"ZDa": -6.0},
+        },
+    )
+    density_context: dict[str, Any] = {}
+
+    extract_metal_statistics(
+        "test",
+        stats,
+        METAL_ELEMENTS,
+        (),
+        structure=context,
+        density_context_out=density_context,
+    )
+
+    assert set(density_context) == set(DENSITY_CONTEXT_COLUMNS)
+    assert density_context["density_context_status"] == "available"
+    assert density_context["edstats_residue_count"] == 4
+    assert density_context["target_residue_count"] == 1
+    assert density_context["ordinary_residue_count"] == 3
+    assert density_context["ordinary_rszd_count"] == 2
+    assert density_context["ordinary_median_abs_rszd"] == 4.5
+    assert density_context["ordinary_abs_rszd_ge_3_count"] == 2
+    assert density_context["ordinary_abs_rszd_ge_3_fraction"] == 1.0
+    assert density_context["ordinary_abs_rszd_ge_6_count"] == 1
+    assert density_context["ordinary_abs_rszd_ge_6_fraction"] == 0.5
+    assert density_context["ordinary_nonwater_residue_count"] == 2
+    assert density_context["ordinary_nonwater_rszd_count"] == 1
+    assert density_context["ordinary_nonwater_median_abs_rszd"] == 3.0
+    assert density_context["water_residue_count"] == 1
+    assert density_context["water_rszd_count"] == 1
+    assert density_context["water_median_abs_rszd"] == 6.0
+    assert density_context["water_abs_rszd_ge_6_fraction"] == 1.0
 
 
 def test_null_statistics_reach_the_emitted_row_unchanged(tmp_path: Path) -> None:

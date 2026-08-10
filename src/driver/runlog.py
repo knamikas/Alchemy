@@ -458,6 +458,11 @@ class RunLog:
                 "crystallization_summary_path",
                 "crystallization_summary_rows_written",
             ),
+            (
+                "Density context",
+                "density_context_path",
+                "density_context_rows_written",
+            ),
             ("Confidence scores", "confidence_scores_path", "confidence_rows"),
             ("Confidence reference", "confidence_reference_path", None),
             ("Review queue", "review_queue_path", "review_queue_rows"),

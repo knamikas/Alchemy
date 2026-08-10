@@ -2104,6 +2104,39 @@ class TestOutputWriters:
         assert rows[1] == ["109m", "cofactor"] + fields
         assert len(rows[1]) == len(STATS_COLUMNS)
 
+    def test_density_context_distinguishes_uncomputed_from_empty_groups(
+        self, tmp_path: Path
+    ) -> None:
+        """Every entry gets one row, while unavailable values remain blank."""
+        handles = self._handles(tmp_path)
+        context_handle = open(tmp_path / "density-context.csv", "w", newline="")
+        writers = OutputWriters(*handles, density_context_fh=context_handle)
+        writers.write_density_context_row(_result("109m"))
+        measured: dict[str, Any] = {
+            column: "" for column in metal_identification.DENSITY_CONTEXT_COLUMNS
+        }
+        measured.update(
+            pdbID="1cll",
+            density_context_status="available",
+            edstats_residue_count=12,
+            target_residue_count=1,
+            ordinary_residue_count=11,
+            ordinary_rszd_count=0,
+        )
+        writers.write_density_context_row(_result("1cll", density_context_row=measured))
+        self._close(handles)
+        context_handle.close()
+
+        with open(tmp_path / "density-context.csv", newline="") as context_input:
+            rows = list(csv.DictReader(context_input))
+        assert rows[0]["pdbID"] == "109m"
+        assert rows[0]["density_context_status"] == "not_computed"
+        assert rows[0]["ordinary_residue_count"] == ""
+        assert rows[1]["density_context_status"] == "available"
+        assert rows[1]["ordinary_residue_count"] == "11"
+        assert rows[1]["ordinary_rszd_count"] == "0"
+        assert writers.n_density_contexts == 2
+
     def test_stats_batch_is_validated_before_any_rows_are_written(
         self, tmp_path: Path
     ) -> None:
@@ -2505,6 +2538,7 @@ class TestWriteEntry:
             "write_bond_rows",
             "write_candidate_rows",
             "write_crystallization_rows",
+            "write_density_context_row",
         }
 
     def test_a_staged_entry_is_registered_for_replacement(self) -> None:

@@ -31,8 +31,8 @@ maintained Python entry point used by the launcher.
 ```
 
 Results are written to (the column lists and row builders live in
-`src/coordination/schema.py`, `src/confidence_score.py`, and
-`src/crystallization_conditions.py`):
+`src/coordination/schema.py`, `src/metal_identification.py`,
+`src/confidence_score.py`, and `src/crystallization_conditions.py`):
 
 - `output/metal_sites_all.csv` — one row per selected metal site, with
   real-space statistics, DPI and validation provenance, and explicit-only
@@ -57,6 +57,14 @@ Results are written to (the column lists and row builders live in
   cutoff, or missing an assignment reference, together with connection, cutoff,
   and reference provenance. These rows are retained for audit and are not all
   treated as bonds.
+- `output/density_context_all.csv` — one row per processed PDB entry containing
+  the non-target residue-level `|ZDa|` control distribution that EDSTATS already
+  calculated. It reports total and finite-value denominators, the median, and
+  counts and fractions at the 3 and 6 thresholds for all ordinary residues,
+  ordinary non-water residues, and waters. Metal and catalog-cofactor density
+  observations are excluded. `density_context_status=not_computed` distinguishes
+  an entry where density analysis did not run from a measured group with no
+  finite `ZDa` values.
 - `output/crystallization_conditions_all.csv` — deposited crystallization
   records extracted once per PDB entry. Normal runs prefer original-PDB
   `_exptl_crystal_grow` records cached from the RCSB Data API and fall back to

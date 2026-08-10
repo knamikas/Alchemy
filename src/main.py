@@ -4,12 +4,13 @@
 For each PDB entry this validates/corrects its Fourier map coefficients with
 CCP4 `mtzfix`, computes 2mFo-DFc and mFo-DFc maps with `fft`, and runs
 `edstats`, then extracts per-atom real-space statistics for metal ions and
-metal-containing cofactors. Core results are streamed to six CSVs under
+metal-containing cofactors. Core results are streamed to seven CSVs under
 --output-dir:
 
   metal_sites_all.csv  -- one row per selected metal site
   metal_bonds_all.csv  -- one row per inferred or declared contact
   metal_contact_candidates_all.csv -- one row per contact candidate
+  density_context_all.csv -- one per-entry non-target RSZD control summary
   crystallization_conditions_all.csv -- deposited condition records
   crystallization_summary_all.csv -- one contextual row per entry
   manifest.csv         -- one row per entry with status and provenance

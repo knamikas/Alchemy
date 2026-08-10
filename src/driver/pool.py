@@ -87,6 +87,7 @@ from driver.resume import (
 )
 from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS, OutputWriters, manifest_row
+from metal_identification import DENSITY_CONTEXT_COLUMNS
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
     CONFIDENCE_INPUT_COLUMNS,
@@ -518,6 +519,7 @@ class OutputLayout:
         self.output_dir = output_dir
         self.manifest = os.path.join(output_dir, "manifest.csv")
         self.stats = os.path.join(output_dir, "metal_sites_all.csv")
+        self.density_context = os.path.join(output_dir, "density_context_all.csv")
         self.bonds = os.path.join(output_dir, "metal_bonds_all.csv")
         self.candidates = os.path.join(output_dir, "metal_contact_candidates_all.csv")
         self.confidence_inputs = os.path.join(output_dir, "confidence_inputs_all.csv")
@@ -772,6 +774,7 @@ def _check_resume_is_compatible(
             confidence_path=plan.stream_path,
             confidence_columns=plan.columns,
             additional_outputs=(
+                (layout.density_context, DENSITY_CONTEXT_COLUMNS),
                 (layout.crystallization_conditions, CONDITION_COLUMNS),
                 (layout.crystallization_summary, SUMMARY_COLUMNS),
             ),
@@ -1084,6 +1087,7 @@ def _output_targets(layout: OutputLayout, plan: ConfidencePlan) -> tuple[str, ..
         *layout.core,
         layout.crystallization_conditions,
         layout.crystallization_summary,
+        layout.density_context,
     ]
     if plan.enabled:
         if plan.stream_path is None:
@@ -1104,8 +1108,9 @@ def _open_writers(
     manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
     crystallization_conditions_path = write_paths[4]
     crystallization_summary_path = write_paths[5]
-    confidence_path = write_paths[6] if plan.enabled else None
-    confidence_inputs_path = write_paths[7] if plan.synchronize_inputs else None
+    density_context_path = write_paths[6]
+    confidence_path = write_paths[7] if plan.enabled else None
+    confidence_inputs_path = write_paths[8] if plan.synchronize_inputs else None
 
     def opened(path: str) -> TextIO:
         return handles.enter_context(open(path, "w", newline=""))
@@ -1120,6 +1125,7 @@ def _open_writers(
         opened(confidence_inputs_path) if confidence_inputs_path is not None else None,
         opened(crystallization_conditions_path),
         opened(crystallization_summary_path),
+        opened(density_context_path),
     )
 
 
@@ -1182,6 +1188,7 @@ def write_entry(
     writers.write_bond_rows(result.bond_rows)
     writers.write_candidate_rows(result.candidate_rows)
     writers.write_crystallization_rows(result)
+    writers.write_density_context_row(result)
     if plan.enabled:
         writers.write_confidence_rows(confidence_rows_for(result, plan))
     writers.write_manifest_row(
@@ -1603,7 +1610,7 @@ def process_entries(
     )
     output_paths = _output_targets(layout, plan)
     staging = (
-        ResumeStaging(args.output_dir, output_paths, always_extra_count=2)
+        ResumeStaging(args.output_dir, output_paths, always_extra_count=3)
         if args.resume
         else None
     )
@@ -1645,12 +1652,14 @@ def process_entries(
         crystallization_summary_rows_written=(
             opened_writers.n_crystallization_summaries
         ),
+        density_context_rows_written=opened_writers.n_density_contexts,
         manifest_path=layout.manifest,
         metal_sites_path=layout.stats,
         metal_bonds_path=layout.bonds if args.bonds else "disabled",
         metal_contact_candidates_path=(layout.candidates if args.bonds else "disabled"),
         crystallization_conditions_path=layout.crystallization_conditions,
         crystallization_summary_path=layout.crystallization_summary,
+        density_context_path=layout.density_context,
     )
     if staging is not None:
         try:
@@ -1708,6 +1717,11 @@ def _report_batch(
     print(
         f"      {writers.n_crystallization_summaries} crystallization summary "
         f"rows -> {layout.crystallization_summary}",
+        flush=True,
+    )
+    print(
+        f"      {writers.n_density_contexts} density context rows -> "
+        f"{layout.density_context}",
         flush=True,
     )
     exit_code = tally.exit_code()

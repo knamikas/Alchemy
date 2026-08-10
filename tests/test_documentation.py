@@ -530,6 +530,10 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
     )
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
+    from metal_identification import (
+        DENSITY_CONTEXT_COLUMNS,
+        DENSITY_CONTEXT_STATUSES,
+    )
 
     known: set[str] = set()
     for columns in (
@@ -542,11 +546,13 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         CONDITION_COLUMNS,
         SUMMARY_COLUMNS,
         REVIEW_CONTEXT_COLUMNS,
+        DENSITY_CONTEXT_COLUMNS,
     ):
         known |= set(columns)
     known |= CONFIDENCE_INPUT_STATUSES | REFERENCE_METADATA_FIELDS
     known |= EVIDENCE_BASES | VERDICT_REASONS
     known |= CRYSTALLIZATION_DATA_STATUSES
+    known |= DENSITY_CONTEXT_STATUSES
     for name in dir(codes_module):
         candidate = getattr(codes_module, name)
         if (

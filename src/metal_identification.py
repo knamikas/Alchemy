@@ -5,8 +5,9 @@ line is the column header.
 """
 
 import math
+import statistics
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import Iterable, Mapping, Sequence
 
@@ -53,6 +54,120 @@ EDSTATS_COLUMNS = (
 # EDSTATS' documented marker for a statistic it could not calculate.
 EDSTATS_NULL_VALUE = "n/a"
 EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
+
+
+_DENSITY_CONTEXT_GROUPS = ("ordinary", "ordinary_nonwater", "water")
+_DENSITY_CONTEXT_GROUP_COLUMNS = (
+    "residue_count",
+    "rszd_count",
+    "median_abs_rszd",
+    "abs_rszd_ge_3_count",
+    "abs_rszd_ge_3_fraction",
+    "abs_rszd_ge_6_count",
+    "abs_rszd_ge_6_fraction",
+)
+DENSITY_CONTEXT_COLUMNS = (
+    "pdbID",
+    "density_context_status",
+    "edstats_residue_count",
+    "target_residue_count",
+    *(
+        f"{group}_{column}"
+        for group in _DENSITY_CONTEXT_GROUPS
+        for column in _DENSITY_CONTEXT_GROUP_COLUMNS
+    ),
+)
+DENSITY_CONTEXT_STATUSES = frozenset(("available", "not_computed"))
+
+
+def _empty_float_values() -> list[float]:
+    """Return a typed list for strict type checkers inspecting dataclass fields."""
+    return []
+
+
+@dataclass
+class _DensityContextAccumulator:
+    """Compact non-target RSZD distributions collected during table parsing."""
+
+    edstats_residue_count: int = 0
+    target_residue_count: int = 0
+    ordinary_residue_count: int = 0
+    ordinary_nonwater_residue_count: int = 0
+    water_residue_count: int = 0
+    ordinary_values: list[float] = field(default_factory=_empty_float_values)
+    ordinary_nonwater_values: list[float] = field(default_factory=_empty_float_values)
+    water_values: list[float] = field(default_factory=_empty_float_values)
+
+    def observe(
+        self,
+        resolved: "_ResolvedEdstatsRow",
+        metals_upper: set[str],
+        cofactors: frozenset[str],
+    ) -> None:
+        self.edstats_residue_count += 1
+        coordinate_resname, _chain, _resnum = resolved.coordinate_key
+        target = coordinate_resname in cofactors or any(
+            classify_residue(residue, metals_upper, cofactors)[0]
+            for residue in resolved.matched_residues
+        )
+        if target:
+            self.target_residue_count += 1
+            return
+
+        is_water = any(residue.is_water for residue in resolved.matched_residues)
+        self.ordinary_residue_count += 1
+        if is_water:
+            self.water_residue_count += 1
+        else:
+            self.ordinary_nonwater_residue_count += 1
+
+        value = resolved.fields[resolved.indices["ZDa"]]
+        if value.lower() == EDSTATS_NULL_VALUE:
+            return
+        magnitude = abs(float(value))
+        self.ordinary_values.append(magnitude)
+        (self.water_values if is_water else self.ordinary_nonwater_values).append(
+            magnitude
+        )
+
+    @staticmethod
+    def _group_values(residue_count: int, values: list[float]) -> dict[str, Any]:
+        finite_count = len(values)
+        ge_3 = sum(value >= 3.0 for value in values)
+        ge_6 = sum(value >= 6.0 for value in values)
+        return {
+            "residue_count": residue_count,
+            "rszd_count": finite_count,
+            "median_abs_rszd": statistics.median(values) if values else "",
+            "abs_rszd_ge_3_count": ge_3,
+            "abs_rszd_ge_3_fraction": ge_3 / finite_count if finite_count else "",
+            "abs_rszd_ge_6_count": ge_6,
+            "abs_rszd_ge_6_fraction": ge_6 / finite_count if finite_count else "",
+        }
+
+    def as_row(self, pdb_id: str) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "pdbID": pdb_id,
+            "density_context_status": "available",
+            "edstats_residue_count": self.edstats_residue_count,
+            "target_residue_count": self.target_residue_count,
+        }
+        groups = {
+            "ordinary": (self.ordinary_residue_count, self.ordinary_values),
+            "ordinary_nonwater": (
+                self.ordinary_nonwater_residue_count,
+                self.ordinary_nonwater_values,
+            ),
+            "water": (self.water_residue_count, self.water_values),
+        }
+        for group, (residue_count, values) in groups.items():
+            row.update(
+                {
+                    f"{group}_{name}": value
+                    for name, value in self._group_values(residue_count, values).items()
+                }
+            )
+        return row
 
 
 def is_edstats_separator(fields: list[str]) -> bool:
@@ -568,6 +683,8 @@ def extract_metal_statistics(
     metals_set: Iterable[str],
     cofactor_set: Iterable[str],
     structure: StructureContext,
+    *,
+    density_context_out: dict[str, Any] | None = None,
 ) -> tuple[list[MetalStatsRow], list[str]]:
     """Parse an EDSTATS ``stats.out``, returning ``(rows, header)``.
 
@@ -585,10 +702,18 @@ def extract_metal_statistics(
     coordinate residue or no selected metal site is retained once with
     ``site=None``, its row status distinguishing a failed identifier join from
     a matched cofactor that has no configured metal.
+
+    When ``density_context_out`` is supplied, it is cleared immediately and
+    populated only after the complete EDSTATS table passes validation. Its
+    entry-level aggregates retain the non-target residue observations that are
+    deliberately absent from the returned site-level rows.
     """
 
     metals_upper = {element.upper() for element in metals_set}
     cofactors = frozenset(cofactor_set)
+    density_context = _DensityContextAccumulator()
+    if density_context_out is not None:
+        density_context_out.clear()
 
     rows: list[MetalStatsRow] = []
     schema: tuple[list[str], dict[str, int]] | None = None
@@ -652,6 +777,7 @@ def extract_metal_statistics(
                     resolved.chain_part,
                     resolved.row_number,
                 )
+            density_context.observe(resolved, metals_upper, cofactors)
             _append_density_rows(pdb_id, resolved, metals_upper, cofactors, rows)
 
     if schema is None:
@@ -681,6 +807,8 @@ def extract_metal_statistics(
             f"{'s' if len(missing_residues) != 1 else ''}: "
             f"{preview}{suffix}"
         )
+    if density_context_out is not None:
+        density_context_out.update(density_context.as_row(pdb_id))
     return rows, header
 
 

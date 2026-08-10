@@ -44,6 +44,7 @@ import crystallization_conditions
 import helpers
 import inputs
 import main
+from metal_identification import DENSITY_CONTEXT_COLUMNS
 from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
@@ -479,6 +480,7 @@ def test_single_entry_run_writes_documented_outputs(
         "metal_sites_all.csv",
         "metal_bonds_all.csv",
         "metal_contact_candidates_all.csv",
+        "density_context_all.csv",
         "crystallization_conditions_all.csv",
         "crystallization_summary_all.csv",
         "review_queue_all.csv",
@@ -510,6 +512,9 @@ def test_single_entry_run_writes_documented_outputs(
     )
     assert read_header(output_dir, "crystallization_summary_all.csv") == list(
         crystallization_conditions.SUMMARY_COLUMNS
+    )
+    assert read_header(output_dir, "density_context_all.csv") == list(
+        DENSITY_CONTEXT_COLUMNS
     )
     assert read_header(output_dir, "review_queue_all.csv") == [
         *CONFIDENCE_COLUMNS,
@@ -944,6 +949,7 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
         "metal_sites_all.csv",
         "metal_bonds_all.csv",
         "metal_contact_candidates_all.csv",
+        "density_context_all.csv",
         "crystallization_conditions_all.csv",
         "crystallization_summary_all.csv",
         "review_queue_all.csv",

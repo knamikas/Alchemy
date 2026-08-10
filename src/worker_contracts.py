@@ -108,6 +108,7 @@ class EntryResult:
         default_factory=_empty_csv_rows
     )
     crystallization_summary_row: dict[str, Any] = field(default_factory=_empty_csv_row)
+    density_context_row: dict[str, Any] = field(default_factory=_empty_csv_row)
     n_bonds: int | None = None
     n_candidates: int | None = None
 

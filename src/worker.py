@@ -343,6 +343,7 @@ def _run_density_stage(
             METALS_SET,
             cfg.cofactors,
             structure=structure,
+            density_context_out=result.density_context_row,
         )
         result.timings["statistics_extraction_s"] = round(
             time.monotonic() - statistics_started, 3

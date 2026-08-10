@@ -23,7 +23,7 @@ from crystallization_conditions import (
     SUMMARY_COLUMNS,
     unavailable_summary,
 )
-from metal_identification import EDSTATS_COLUMNS
+from metal_identification import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
 from worker_contracts import EntryResult, blank_if_unmeasured
 from output_rows import MetalStatsRow, scientific_csv_value
 
@@ -134,6 +134,7 @@ class OutputWriters:
         confidence_inputs_fh: TextIO | None = None,
         crystallization_conditions_fh: TextIO | None = None,
         crystallization_summary_fh: TextIO | None = None,
+        density_context_fh: TextIO | None = None,
     ) -> None:
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
@@ -143,6 +144,7 @@ class OutputWriters:
         self._confidence_inputs_fh = confidence_inputs_fh
         self._crystallization_conditions_fh = crystallization_conditions_fh
         self._crystallization_summary_fh = crystallization_summary_fh
+        self._density_context_fh = density_context_fh
         self._manifest = csv.DictWriter(manifest_fh, fieldnames=MANIFEST_COLUMNS)
         self._stats = csv.writer(stats_fh)
         self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
@@ -161,6 +163,11 @@ class OutputWriters:
         self._crystallization_summary = (
             csv.DictWriter(crystallization_summary_fh, fieldnames=SUMMARY_COLUMNS)
             if crystallization_summary_fh is not None
+            else None
+        )
+        self._density_context = (
+            csv.DictWriter(density_context_fh, fieldnames=DENSITY_CONTEXT_COLUMNS)
+            if density_context_fh is not None
             else None
         )
         if confidence_fh is not None and confidence_columns is not None:
@@ -182,6 +189,7 @@ class OutputWriters:
         self.n_confidence = 0
         self.n_crystallization_conditions = 0
         self.n_crystallization_summaries = 0
+        self.n_density_contexts = 0
         self._manifest.writeheader()
         self._stats.writerow(STATS_COLUMNS)
         if self._bonds is not None:
@@ -196,6 +204,8 @@ class OutputWriters:
             self._crystallization_conditions.writeheader()
         if self._crystallization_summary is not None:
             self._crystallization_summary.writeheader()
+        if self._density_context is not None:
+            self._density_context.writeheader()
 
     def write_stats_rows(self, rows: Sequence[MetalStatsRow]) -> None:
         if not rows:
@@ -266,6 +276,32 @@ class OutputWriters:
         self.n_crystallization_summaries += 1
         self._crystallization_conditions_fh.flush()
         self._crystallization_summary_fh.flush()
+
+    def write_density_context_row(self, result: EntryResult) -> None:
+        """Write exactly one available or explicitly uncomputed entry row."""
+        if self._density_context is None or self._density_context_fh is None:
+            return
+        row = {column: "" for column in DENSITY_CONTEXT_COLUMNS}
+        row.update(
+            {
+                "pdbID": result.pdb_id,
+                "density_context_status": "not_computed",
+            }
+        )
+        if result.density_context_row:
+            if set(result.density_context_row) != set(DENSITY_CONTEXT_COLUMNS):
+                raise RuntimeError(
+                    "density context row does not match its output schema"
+                )
+            row.update(result.density_context_row)
+        self._density_context.writerow(
+            {
+                column: scientific_csv_value(row[column])
+                for column in DENSITY_CONTEXT_COLUMNS
+            }
+        )
+        self.n_density_contexts += 1
+        self._density_context_fh.flush()
 
     def write_confidence_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
         if self._confidence is None or not rows:
