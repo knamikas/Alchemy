@@ -23,7 +23,8 @@ in `src/driver/writers.py`, `src/coordination/schema.py`,
 - `nan` and infinities are never written for derived values. The raw EDSTATS
   block preserves EDSTATS' own `n/a` marker.
 - Distances and coordinate values are in ångströms. Occupancies and coverage
-  values are unitless. `resolution` and `dpi` are in ångströms.
+  values are unitless. `resolution` and `dpi` are in ångströms, and
+  `asu_volume` is in cubic ångströms.
 - `*_model_index`, `*_chain_index`, `*_residue_index`, and `*_atom_index` are
   zero-based coordinate-model indices. Author-facing chain, residue, insertion,
   atom, and alternate-location labels are retained separately.
@@ -114,6 +115,7 @@ The concrete metric columns are:
 | Columns | Meaning |
 | --- | --- |
 | `dpi`, `resolution`, `dpi_unavailable_reason` | Diffraction precision index, input resolution, and the reason DPI could not be calculated. |
+| `r_free`, `reflection_count`, `asu_volume` | Final free R factor, observed-reflection count, and asymmetric-unit volume used by the DPI calculation. Valid components remain available when another missing input prevents calculation of DPI. |
 | `occupancy_weighted_atom_count`, `deposited_occupancy_weighted_atom_count`, `dpi_atom_count_multiplier` | Atom-count inputs and multiplier used by the DPI calculation. |
 | `strict_ncs_operation_count`, `crystallographic_operation_count` | Numbers of generated operations available to the contact search. |
 | `candidate_contact_count`, `reference_covered_contact_count` | Assigned contacts and the subset covered by the distance reference. |

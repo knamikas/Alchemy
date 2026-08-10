@@ -56,7 +56,7 @@ from coordination.donor_chemistry import (
     INFERRED_DONOR_ATOMS,
     N_TERMINAL_DONOR_ATOMS,
 )
-from coordination.dpi import calculate_dpi_details
+from coordination.dpi import DpiComponents, calculate_dpi_components
 from metal_elements import METAL_ELEMENTS
 from metal_identification import sigma_for, sigma_index, zd_indices
 from reference_data import (
@@ -837,11 +837,9 @@ def _site_summary(
     metal: AtomSite,
     explicit_contacts: Sequence[Candidate],
     image_contacts: Sequence[Candidate] | None,
-    dpi: float,
-    resolution: float,
+    dpi_components: DpiComponents,
     ni: float,
     deposited_ni: float,
-    dpi_reason: str,
     structure: StructureContext,
 ) -> dict[str, Any]:
     explicit = _scope_summary(explicit_contacts)
@@ -904,15 +902,18 @@ def _site_summary(
         )
 
     reasons: list[str] = []
-    if dpi_reason:
-        reasons.append(dpi_reason)
+    if dpi_components.reason_code:
+        reasons.append(dpi_components.reason_code)
     if not image_search_available:
         reasons.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
     if primary["scored_consistent"] + primary["scored_outlier"] == 0:
         reasons.append("no_assessable_reference_contacts")
     return {
-        "dpi": dpi,
-        "resolution": resolution,
+        "dpi": dpi_components.dpi,
+        "resolution": dpi_components.resolution,
+        "r_free": dpi_components.r_free,
+        "reflection_count": dpi_components.reflection_count,
+        "asu_volume": dpi_components.asu_volume,
         "occupancy_weighted_atom_count": (round(ni, 6) if math.isfinite(ni) else NAN),
         "deposited_occupancy_weighted_atom_count": (
             round(deposited_ni, 6) if math.isfinite(deposited_ni) else NAN
@@ -922,7 +923,7 @@ def _site_summary(
         "crystallographic_operation_count": (
             structure.crystallographic_operation_count
         ),
-        "dpi_unavailable_reason": dpi_reason,
+        "dpi_unavailable_reason": dpi_components.reason_code,
         "candidate_contact_count": primary["candidate"],
         "reference_covered_contact_count": primary["covered"],
         "geometry_outlier_contact_count": primary["outlier"],
@@ -975,11 +976,9 @@ def _analyze_metal_site(
     metal_declarations: Sequence[Candidate],
     explicit_search: gemmi.NeighborSearch,
     image_search: gemmi.NeighborSearch | None,
-    dpi: float,
-    resolution: float,
+    dpi_components: DpiComponents,
     ni: float,
     deposited_ni: float,
-    dpi_reason: str,
     sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]],
     zd_idx: Sequence[int] | None,
 ) -> _MetalAnalysisResult:
@@ -994,7 +993,7 @@ def _analyze_metal_site(
     explicit_contacts, unsupported_pairs = _current_contacts_from_candidates(
         explicit_candidates, metal
     )
-    annotate_contacts(explicit_contacts, metal.element, dpi)
+    annotate_contacts(explicit_contacts, metal.element, dpi_components.dpi)
     _annotate_multi_donor_groups(explicit_contacts)
 
     image_candidates: list[Candidate] | None = None
@@ -1009,7 +1008,7 @@ def _analyze_metal_site(
             image_candidates, metal
         )
         unsupported_pairs.update(image_unsupported)
-        annotate_contacts(image_contacts, metal.element, dpi)
+        annotate_contacts(image_contacts, metal.element, dpi_components.dpi)
         _annotate_multi_donor_groups(image_contacts)
 
     primary_contacts = (
@@ -1022,11 +1021,9 @@ def _analyze_metal_site(
         metal,
         explicit_contacts,
         image_contacts,
-        dpi,
-        resolution,
+        dpi_components,
         ni,
         deposited_ni,
-        dpi_reason,
         structure,
     )
     summary.update(_site_context_values(primary_contacts, primary_candidates))
@@ -1050,8 +1047,8 @@ def _analyze_metal_site(
                 structure,
                 metal,
                 contact,
-                dpi,
-                resolution,
+                dpi_components.dpi,
+                dpi_components.resolution,
                 sigma,
                 parent_type,
             )
@@ -1152,12 +1149,12 @@ def run_bond_analysis(
             cast(AtomSite, candidate.metal).source_key, []
         ).append(candidate)
 
-    dpi, resolution, dpi_reason = calculate_dpi_details(structure, dpi_inputs)
+    dpi_components = calculate_dpi_components(structure, dpi_inputs)
     ni = count_ni(structure)
     deposited_ni = count_deposited_ni(structure)
-    if dpi_reason:
-        metadata.partial_reason_codes.append(dpi_reason)
-        metadata.messages.append(f"DPI unavailable: {dpi_reason}")
+    if dpi_components.reason_code:
+        metadata.partial_reason_codes.append(dpi_components.reason_code)
+        metadata.messages.append(f"DPI unavailable: {dpi_components.reason_code}")
     if not structure.symmetry_search_available:
         metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
         metadata.messages.append(
@@ -1189,11 +1186,9 @@ def run_bond_analysis(
                 metal,
                 [],
                 [] if structure.symmetry_search_available else None,
-                dpi,
-                resolution,
+                dpi_components,
                 ni,
                 deposited_ni,
-                dpi_reason,
                 structure,
             )
             summary["geometry_not_assessed_reason"] = (
@@ -1209,11 +1204,9 @@ def run_bond_analysis(
             declared_by_metal.get(metal.source_key, ()),
             explicit_search,
             image_search,
-            dpi,
-            resolution,
+            dpi_components,
             ni,
             deposited_ni,
-            dpi_reason,
             sig,
             zd_idx,
         )

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, cast
 from collections.abc import Mapping
 
@@ -22,6 +23,18 @@ from structure_analysis import NAN, StructureContext, count_ni
 
 if TYPE_CHECKING:
     import gemmi
+
+
+@dataclass(frozen=True, slots=True)
+class DpiComponents:
+    """The DPI result plus the entry-level inputs used to calculate it."""
+
+    dpi: float
+    resolution: float
+    reason_code: str
+    r_free: float
+    reflection_count: float
+    asu_volume: float
 
 
 def _is_placeholder_cell(cell: gemmi.UnitCell) -> bool:
@@ -89,10 +102,10 @@ def rfree_from_pdb(pdb_path: str) -> float:
     return NAN
 
 
-def calculate_dpi_details(
+def calculate_dpi_components(
     structure: StructureContext, dpi_inputs: Mapping[str, Any]
-) -> tuple[float, float, str]:
-    """Return ``(dpi, resolution, reason_code)``. Never raises.
+) -> DpiComponents:
+    """Return the DPI, its status, and its reusable numeric inputs. Never raises.
 
     Resolution is metadata only: it is implicit in va and nobs, not a term of
     the formula.
@@ -108,8 +121,18 @@ def calculate_dpi_details(
         # Manual input mode without --data-json: the reflection count has no
         # source at all, which is a different answer from a calculation that
         # ran and failed.
-        return NAN, resolution, ReasonCode.MISSING_DPI_METADATA_SOURCE
+        return DpiComponents(
+            NAN,
+            resolution,
+            ReasonCode.MISSING_DPI_METADATA_SOURCE,
+            NAN,
+            NAN,
+            NAN,
+        )
 
+    rfree_value = NAN
+    nobs_value = NAN
+    va_value = NAN
     try:
         props: dict[str, Any] = {}
         try:
@@ -125,7 +148,9 @@ def calculate_dpi_details(
             if rfree is not None and rfree != ""
             else rfree_from_pdb(dpi_inputs["pdb_path"])
         )
+        rfree_value = rfree
         nobs = float(nobs) if nobs is not None and nobs != "" else NAN
+        nobs_value = nobs
         # Keep the extension boundary widened to ``object`` so a malformed
         # runtime value is reported explicitly rather than reaching
         # ``math.isfinite`` and being folded into the catch-all reason.
@@ -136,7 +161,15 @@ def calculate_dpi_details(
         ni = count_ni(structure)
 
         if not isinstance(va, (float, int)):
-            return NAN, resolution, ReasonCode.INVALID_DPI_METADATA
+            return DpiComponents(
+                NAN,
+                resolution,
+                ReasonCode.INVALID_DPI_METADATA,
+                rfree_value,
+                nobs_value,
+                NAN,
+            )
+        va_value = float(va)
         if not (
             math.isfinite(nobs)
             and math.isfinite(rfree)
@@ -156,8 +189,37 @@ def calculate_dpi_details(
                 reason = ReasonCode.MISSING_OR_INVALID_ASU_VOLUME
             else:
                 reason = ReasonCode.INVALID_DPI_ATOM_COUNT
-            return NAN, resolution, reason
+            return DpiComponents(
+                NAN,
+                resolution,
+                reason,
+                rfree_value,
+                nobs_value,
+                va_value,
+            )
         dpi = 1.28 * (ni**0.5) * (va ** (1 / 3)) * (nobs ** (-5 / 6)) * rfree
-        return round(dpi, 4), resolution, ""
+        return DpiComponents(
+            round(dpi, 4),
+            resolution,
+            "",
+            rfree_value,
+            nobs_value,
+            va_value,
+        )
     except Exception:
-        return NAN, resolution, ReasonCode.DPI_CALCULATION_FAILED
+        return DpiComponents(
+            NAN,
+            resolution,
+            ReasonCode.DPI_CALCULATION_FAILED,
+            rfree_value,
+            nobs_value,
+            va_value,
+        )
+
+
+def calculate_dpi_details(
+    structure: StructureContext, dpi_inputs: Mapping[str, Any]
+) -> tuple[float, float, str]:
+    """Return the historical ``(dpi, resolution, reason_code)`` interface."""
+    result = calculate_dpi_components(structure, dpi_inputs)
+    return result.dpi, result.resolution, result.reason_code

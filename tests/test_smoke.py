@@ -680,12 +680,16 @@ def test_dpi_inputs_produce_a_finite_dpi_when_metadata_is_present(
         structure=context,
     )
     rows = analysis.bond_rows
+    summary = next(iter(analysis.site_summaries.values()))
     metadata = analysis.metadata
 
     assert metadata.partial_reason_codes == []
     assert rows and math.isfinite(rows[0]["dpi"])
     assert rows[0]["resolution"] == approx(1.5)
     assert math.isfinite(rows[0]["zscore"])
+    assert summary["r_free"] == approx(0.2)
+    assert summary["reflection_count"] == approx(50000)
+    assert math.isfinite(summary["asu_volume"])
 
 
 def test_ccp4_capability_probe_is_boolean_and_does_not_raise() -> None:

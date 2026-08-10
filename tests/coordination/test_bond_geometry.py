@@ -1892,6 +1892,10 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path: Path) -> None:
     assert summary["dpi_unavailable_reason"] == ("missing_or_invalid_reflection_count")
     assert "missing_or_invalid_reflection_count" in metadata.partial_reason_codes
     assert math.isnan(summary["dpi"])
+    # One unavailable DPI component does not discard the two valid components.
+    assert summary["r_free"] == approx(0.20)
+    assert math.isnan(summary["reflection_count"])
+    assert summary["asu_volume"] == approx(100.0**3)
     row = _only(rows, "O")
     assert row["distance"] == approx(2.09, abs=1e-6)
     assert math.isnan(row["zscore"])
