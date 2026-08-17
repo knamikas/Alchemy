@@ -86,7 +86,10 @@ does not receive a DPI because its non-hydrogen atom count is indeterminate.
 EDSTATS' missing-chain markers are normalized before coordinate matching. When
 EDSTATS omits its empty trailing chain field for a blank-chain residue, Alchemy
 restores that field before validating the standard 42-column schema. Other row
-width mismatches still fail. Decimal and hybrid-36 PDB residue numbers are
+width mismatches still fail. Coordinate joins use EDSTATS' `CP` field, which
+retains the actual PDB chain, rather than its `CI` statistical-group field;
+EDSTATS rewrites `CI` to `0` for every ordered water regardless of the water's
+real chain. Decimal and hybrid-36 PDB residue numbers are
 decoded to the same canonical integer representation used by Gemmi before raw
 PDB atoms and EDSTATS rows are joined. If coordinate residues repeat the same
 author identity, the one-based EDSTATS `NR` residue ordinal resolves them

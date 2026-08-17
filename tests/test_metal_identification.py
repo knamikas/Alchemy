@@ -498,6 +498,30 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path: Path) -> 
     assert rows[0]["density_observation_id"].count("chain=_") == 1
 
 
+def test_ordered_waters_join_through_their_actual_cp_chain(tmp_path: Path) -> None:
+    """CI ``0`` must not alias same-numbered waters from different chains."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
+    builder.add_water(2001, (0.0, 2.1, 0.0), chain="0")
+    builder.add_water(2001, (0.0, -2.1, 0.0), chain="1")
+    context = load_structure("test", builder.write_pdb(tmp_path / "waters.pdb"))
+    stats = helpers.write_edstats_for_structure(tmp_path / "stats.out", context)
+    density_context: dict[str, Any] = {}
+
+    rows, _header = extract_metal_statistics(
+        "test",
+        stats,
+        METAL_ELEMENTS,
+        (),
+        structure=context,
+        density_context_out=density_context,
+    )
+
+    assert [row.resname for row in rows] == ["ZN"]
+    assert density_context["water_residue_count"] == 2
+    assert density_context["water_rszd_count"] == 2
+
+
 def test_density_observation_id_names_the_edstats_row_not_an_atom() -> None:
     """The identifier is residue-level and case-normalized on the entry id."""
     fields = _normalize(helpers.edstats_row("FES", "B", "5", mn=1, nr=12))

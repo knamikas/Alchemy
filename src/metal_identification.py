@@ -576,11 +576,17 @@ def _resolve_edstats_row(
         ) from exc
 
     coordinate_resname = normalized[indices["RT"]]
-    chain, row_altloc = _edstats_chain_and_altloc(
+    _group_chain, row_altloc = _edstats_chain_and_altloc(
         normalized[indices["CI"]], line_number
     )
-    # Everything downstream addresses the deposited chain. The chosen altloc
+    # CP is the actual PDB chain. CI is normally the same chain plus an
+    # optional altloc, but EDSTATS deliberately rewrites CI to ``0`` for every
+    # ordered water so it can estimate that group's map-noise distribution.
+    # Joining coordinates through CI therefore aliases equal-numbered waters
+    # from different chains, especially when one real chain is itself ``0``.
+    # Everything downstream addresses the deposited chain; the chosen altloc
     # remains explicit on the selected coordinate site's fields.
+    chain = chain_part
     normalized[indices["CI"]] = chain
     resnum = normalized[indices["RN"]]
     coordinate_key = (coordinate_resname, chain, resnum)
