@@ -289,12 +289,31 @@ def _source_residue_records(structure: gemmi.Structure) -> list[_SourceRecord]:
 
 
 def _legacy_identifiers_need_packing(structure: gemmi.Structure) -> bool:
-    """Whether Gemmi could not shorten every chain to a portable PDB id."""
-    return any(
-        bool(str(chain.name)) and str(chain.name) not in LEGACY_PDB_CHAIN_IDS
-        for model in structure
-        for chain in model
-    )
+    """Whether the structure cannot round-trip through legacy PDB identities.
+
+    Besides one-character chain names, PDB requires every residue in a model
+    to have a unique ``(chain, number, insertion code)`` identity. Distinct
+    mmCIF residues can legitimately share that author identity, for example in
+    separate glycan branches. Gemmi merges such residues when it reads the PDB
+    back, so they need the same reversible packing used when chain names cannot
+    be shortened safely.
+    """
+    for model in structure:
+        identities: set[tuple[str, int | None, str]] = set()
+        for chain in model:
+            chain_name = str(chain.name)
+            if chain_name and chain_name not in LEGACY_PDB_CHAIN_IDS:
+                return True
+            for residue in chain:
+                identity = (
+                    chain_name,
+                    residue.seqid.num,
+                    blank_if_missing(str(residue.seqid.icode)),
+                )
+                if identity in identities:
+                    return True
+                identities.add(identity)
+    return False
 
 
 def _pack_legacy_pdb_residue_ids(structure: gemmi.Structure) -> None:

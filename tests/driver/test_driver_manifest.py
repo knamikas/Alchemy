@@ -3108,6 +3108,86 @@ class TestCifToPdb:
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"
 
+    def test_duplicate_author_residue_ids_are_reversibly_packed(
+        self, tmp_path: Path
+    ) -> None:
+        """Distinct glycan branches must not merge in the legacy PDB round trip."""
+        header = _CIF_HEADER.replace(
+            "loop_\n_atom_site.group_PDB",
+            """loop_
+_entity.id
+_entity.type
+3 branched
+4 branched
+6 branched
+loop_
+_struct_asym.id
+_struct_asym.entity_id
+G 3
+H 4
+K 6
+loop_
+_atom_site.group_PDB""",
+        )
+        cif = _write_cif(
+            tmp_path / "duplicate-residues.cif",
+            [
+                _cif_atom(
+                    1,
+                    "C",
+                    "C1",
+                    "MAN",
+                    "H",
+                    4,
+                    ".",
+                    (0.0, 0.0, 0.0),
+                    "1.00",
+                    7,
+                    "C",
+                    group="HETATM",
+                ),
+                _cif_atom(
+                    2,
+                    "C",
+                    "C1",
+                    "MAN",
+                    "G",
+                    3,
+                    ".",
+                    (5.0, 0.0, 0.0),
+                    "1.00",
+                    1,
+                    "D",
+                    group="HETATM",
+                ),
+                _cif_atom(
+                    3,
+                    "C",
+                    "C1",
+                    "MAN",
+                    "K",
+                    6,
+                    ".",
+                    (10.0, 0.0, 0.0),
+                    "1.00",
+                    7,
+                    "C",
+                    group="HETATM",
+                ),
+            ],
+            header=header,
+        )
+
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "packed.pdb"))
+        context = structure_analysis.load_structure("test", out)
+        residues = context.residues_for_source_author("MAN", "C", "7")
+
+        assert len(_pdb_atom_lines(out)) == 3
+        assert len(residues) == 2
+        assert {r.coordinate_chain_id for r in residues} == {"A"}
+        assert len({r.coordinate_resnum for r in residues}) == 2
+        assert "legacy_pdb_identifiers_packed" in context.warning_codes
+
     def test_missing_input_file_raises_file_not_found(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             conversion.cif_to_pdb(str(tmp_path / "gone.cif"), str(tmp_path / "out.pdb"))
