@@ -97,9 +97,23 @@ def first_existing(*paths: str) -> str | None:
 # file without reading a 100 MB MTZ to decide whether to keep it.
 _HTML_PREFIXES = (b"<!doctype", b"<html", b"<?xml")
 
+# A served notice is a page, and pages are small: the largest captive-portal or
+# proxy-error body is orders of magnitude under this. Size alone therefore
+# clears any bigger file without opening it, which is what makes enumerating a
+# full local mirror affordable -- probing the content of every candidate file
+# cost a ~195k-entry run about two hours of startup, because each open pulls a
+# readahead window off the filesystem to read 64 bytes.
+_MAX_WEB_PAGE_BYTES = 1024 * 1024
 
-def _looks_like_a_web_page(path: str) -> bool:
-    """Whether a cached file holds a served document rather than entry data."""
+
+def _looks_like_a_web_page(path: str, size: int | None = None) -> bool:
+    """Whether a cached file holds a served document rather than entry data.
+
+    ``size`` lets a caller that has already stat-ed the file skip the read for
+    anything too large to be a page.
+    """
+    if size is not None and size > _MAX_WEB_PAGE_BYTES:
+        return False
     try:
         with open(path, "rb") as handle:
             head = handle.read(64).lstrip().lower()
@@ -119,11 +133,12 @@ def _is_usable_entry_file(path: str | None) -> bool:
     if path is None:
         return False
     try:
-        if os.path.getsize(path) == 0:
-            return False
+        size = os.path.getsize(path)
     except OSError:
         return False
-    return not _looks_like_a_web_page(path)
+    if size == 0:
+        return False
+    return not _looks_like_a_web_page(path, size=size)
 
 
 def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str]:
