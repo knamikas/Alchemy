@@ -34,17 +34,19 @@ Running batches, resuming them, and reading what a run wrote. See
   resolution. The estimate includes both maps, overlapping CCP4 copies, fixed
   worker overhead, FFT-grid rounding, and a safety margin. If usable metadata
   is absent, MTZ size supplies a conservative fallback; otherwise the entry
-  receives the 2 GiB floor. At least 4 GiB or 20% of currently available
-  memory is protected for the OS and driver. Entries estimated above the floor
-  never overlap one another; measured EDSTATS peaks on large cells make their
-  summed estimates unsafe even when the total fits physical RAM. One such entry
-  may run beside at most two ordinary entries when all three fit the byte
-  budget. The dispatcher skips a blocked large entry to keep fitting small
-  entries active, then starts the large entry after active work drains. It also
-  pauses new admission whenever measured headroom falls into the protected
-  reserve. The run report records the budget, estimate sources, peak
-  reservation, and pressure pauses; its companion entry table records every
-  entry's estimate.
+  receives the 2 GiB floor. By default, Alchemy uses up to 80% of currently
+  available memory while protecting at least 4 GiB for the OS and driver. All
+  entries share one estimated-byte budget; the high-memory label is diagnostic
+  and does not impose a separate count or percentage ceiling. The dispatcher
+  skips a blocked large entry to keep fitting smaller entries active, then
+  starts an oversized entry alone after active work drains. It pauses new
+  admission whenever measured headroom reaches the protected reserve. After a
+  pressure event or unexplained worker death, it lowers the admission budget
+  for the rest of the run. `--memory-limit` can supply an allocation that
+  cannot be detected, and `--memory-utilization` can tune the usable fraction.
+  The run report records the initial and final budgets, estimate sources, peak
+  reservation, pressure pauses, and budget backoffs; its companion entry table
+  records every entry's estimate.
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis

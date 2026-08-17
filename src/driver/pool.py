@@ -72,6 +72,7 @@ from driver.output_lock import (
     sweep_owned_scratch_directories,
 )
 from driver.resources import (
+    AUTO_WORKER_MEMORY_BYTES,
     EntryMemoryEstimate,
     automatic_worker_limits,
     available_memory_bytes,
@@ -131,12 +132,11 @@ WORKER_STALL_GRACE_S = 600.0
 # reaches the deadline.
 WORKER_SHUTDOWN_GRACE_S = 5.0
 
-# Ceiling on the share of the byte budget that high-memory entries may hold at
-# once. A fraction rather than an entry count keeps the policy proportional to
-# the machine: it still leaves a 30 GiB workstation the single 7-9 GiB EDSTATS
-# tail it was tuned for, while a 250 GiB node runs the many mid-sized entries
-# its budget genuinely covers instead of serializing them.
-HIGH_MEMORY_BUDGET_SHARE = 0.5
+# A measured pressure event or unexplained worker death is evidence that the
+# estimates are optimistic on this machine. Reduce only future admission; work
+# already running is allowed to drain. Repeated events converge toward one
+# ordinary worker without turning a single oversized entry into a deadlock.
+MEMORY_BUDGET_BACKOFF_FACTOR = 0.80
 
 # Budget for the `git` probes that stamp run provenance. Exceeding it costs the
 # commit hash, which degrades to "unknown", rather than the run.
@@ -642,20 +642,28 @@ class MemoryPlan:
         estimates: Sequence[EntryMemoryEstimate],
         budget_bytes: int | None,
         reserve_bytes: int | None,
+        initial_available_bytes: int | None = None,
+        configured_limit_bytes: int | None = None,
     ) -> None:
         self.estimates = tuple(estimates)
         self.budget_bytes = budget_bytes
         self.reserve_bytes = reserve_bytes
+        self.initial_available_bytes = initial_available_bytes
+        self.configured_limit_bytes = configured_limit_bytes
 
 
 def plan_entry_memory(
-    ids: Sequence[str], cfg: WorkerConfig, run_log: RunLog
+    args: RunConfig, ids: Sequence[str], cfg: WorkerConfig, run_log: RunLog
 ) -> MemoryPlan:
     estimates = tuple(
         estimate_entry_memory(pdb_id, cfg.root, cfg.manual_inputs) for pdb_id in ids
     )
     available = available_memory_bytes()
-    budget, reserve = scheduling_memory_budget(available)
+    budget, reserve = scheduling_memory_budget(
+        available,
+        memory_limit_bytes=args.memory_limit,
+        utilization=args.memory_utilization,
+    )
     source_counts: dict[str, int] = {}
     for estimate in estimates:
         source_counts[estimate.source] = source_counts.get(estimate.source, 0) + 1
@@ -663,7 +671,14 @@ def plan_entry_memory(
     high_memory_entries = sum(estimate.is_high_memory for estimate in estimates)
 
     run_log.details.update(
-        memory_scheduler="weighted_entry_estimates",
+        memory_scheduler="adaptive_weighted_entry_estimates",
+        memory_scheduler_detected_available_bytes=(
+            available if available is not None else "unavailable"
+        ),
+        memory_scheduler_configured_limit_bytes=(
+            args.memory_limit if args.memory_limit is not None else "automatic"
+        ),
+        memory_scheduler_utilization=args.memory_utilization,
         memory_scheduler_budget_bytes=budget if budget is not None else "unavailable",
         memory_scheduler_reserve_bytes=(
             reserve if reserve is not None else "unavailable"
@@ -672,9 +687,6 @@ def plan_entry_memory(
         memory_estimate_max_bytes=largest.bytes,
         memory_estimate_max_entry=largest.pdb_id,
         memory_high_memory_entries=high_memory_entries,
-        memory_scheduler_high_memory_ceiling_bytes=(
-            "unavailable" if budget is None else int(budget * HIGH_MEMORY_BUDGET_SHARE)
-        ),
     )
     if budget is None:
         logger.warning(
@@ -684,12 +696,10 @@ def plan_entry_memory(
     else:
         logger.info(
             "memory-aware scheduling: %.2f GiB worker budget, %.2f GiB "
-            "protected reserve; %d high-memory entries share a %.2f GiB "
-            "ceiling; largest estimate %.2f GiB (%s)",
+            "protected reserve; largest estimate %.2f GiB (%s); all entries "
+            "share the byte budget",
             budget / (1024**3),
             cast(int, reserve) / (1024**3),
-            high_memory_entries,
-            budget * HIGH_MEMORY_BUDGET_SHARE / (1024**3),
             largest.bytes / (1024**3),
             largest.pdb_id,
         )
@@ -699,7 +709,13 @@ def plan_entry_memory(
             f"{count} {source}" for source, count in sorted(source_counts.items())
         ),
     )
-    return MemoryPlan(estimates, budget, reserve)
+    return MemoryPlan(
+        estimates,
+        budget,
+        reserve,
+        initial_available_bytes=available,
+        configured_limit_bytes=args.memory_limit,
+    )
 
 
 def _load_cofactor_catalog() -> frozenset[str]:
@@ -1006,7 +1022,10 @@ def choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> i
     one re-imports gemmi into its own interpreter.
     """
     if args.workers is None:
-        cpu_limit, memory_limit = automatic_worker_limits()
+        cpu_limit, memory_limit = automatic_worker_limits(
+            memory_limit_bytes=args.memory_limit,
+            utilization=args.memory_utilization,
+        )
         automatic_limit = cpu_limit
         if memory_limit is not None:
             automatic_limit = min(automatic_limit, memory_limit)
@@ -1025,7 +1044,10 @@ def choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> i
         )
         logger.info("  selected workers: %s", workers)
     else:
-        _cpu_limit, memory_limit = automatic_worker_limits()
+        _cpu_limit, memory_limit = automatic_worker_limits(
+            memory_limit_bytes=args.memory_limit,
+            utilization=args.memory_utilization,
+        )
         workers = min(args.workers, entry_count)
         if memory_limit is not None:
             workers = min(workers, memory_limit)
@@ -1379,14 +1401,11 @@ def pop_admissible_estimate(
 ) -> EntryMemoryEstimate | None:
     """Admit the first pending entry whose estimate still fits the budget.
 
-    Byte accounting, not entry class, is what holds concurrent map allocations
-    inside the budget, so a high-memory entry is admissible alongside other
-    work as soon as it fits. Bounding what those entries may collectively
-    reserve -- rather than how many of them there may be -- keeps a burst of
-    large allocations from crowding out ordinary throughput while still scaling
-    with the machine. Scanning past a blocked entry avoids wasting the worker
-    slots a smaller pending entry could use, and an underestimated peak is
-    caught by the dispatch loop's live pressure check rather than here.
+    Byte accounting, not entry class, holds concurrent map allocations inside
+    the budget, so a high-memory entry is admissible alongside any other work
+    as soon as their summed estimates fit. Scanning past a blocked entry avoids
+    wasting a worker slot that a smaller pending entry could use. An
+    underestimated peak is caught by the dispatch loop's live pressure check.
     """
     if not pending:
         return None
@@ -1394,23 +1413,42 @@ def pop_admissible_estimate(
         # Nothing is running, so the head is admitted even when it is oversized:
         # refusing an entry larger than the whole budget would deadlock the batch.
         return pending.pop(0)
-    high_memory_ceiling = (
-        None if budget_bytes is None else budget_bytes * HIGH_MEMORY_BUDGET_SHARE
-    )
-    high_memory_reserved = sum(
-        estimate.bytes for estimate in active_estimates if estimate.is_high_memory
-    )
     for index, estimate in enumerate(pending):
         if budget_bytes is not None and reserved_bytes + estimate.bytes > budget_bytes:
             continue
-        if (
-            estimate.is_high_memory
-            and high_memory_ceiling is not None
-            and high_memory_reserved + estimate.bytes > high_memory_ceiling
-        ):
-            continue
         return pending.pop(index)
     return None
+
+
+def backed_off_memory_budget(current_budget_bytes: int | None) -> int | None:
+    """Reduce a known admission budget after observed memory trouble."""
+    if current_budget_bytes is None or current_budget_bytes <= AUTO_WORKER_MEMORY_BYTES:
+        return current_budget_bytes
+    return max(
+        AUTO_WORKER_MEMORY_BYTES,
+        int(current_budget_bytes * MEMORY_BUDGET_BACKOFF_FACTOR),
+    )
+
+
+def guarded_available_memory(
+    memory_plan: MemoryPlan, current_available_bytes: int | None
+) -> int | None:
+    """Measure remaining headroom against host and explicit limits.
+
+    ``available_memory_bytes`` already tracks changing host/cgroup allowance.
+    For a smaller explicit limit, approximate this run's consumption from the
+    availability observed immediately before the pool started.
+    """
+    if current_available_bytes is None:
+        return None
+    if (
+        memory_plan.configured_limit_bytes is None
+        or memory_plan.initial_available_bytes is None
+    ):
+        return current_available_bytes
+    consumed = max(0, memory_plan.initial_available_bytes - current_available_bytes)
+    configured_remaining = max(0, memory_plan.configured_limit_bytes - consumed)
+    return min(current_available_bytes, configured_remaining)
 
 
 def _dispatch_entries(
@@ -1473,6 +1511,8 @@ def _dispatch_entries(
         oversized_entries: set[str] = set()
         memory_pressure_pauses = 0
         memory_pressure_active = False
+        admission_budget_bytes = memory_plan.budget_bytes
+        memory_budget_backoffs = 0
         completed = 0
         progress.render(
             completed,
@@ -1485,7 +1525,9 @@ def _dispatch_entries(
             batch: list[EntryResult] = []
 
             while pending and len(active) < workers:
-                current_available = available_memory_bytes()
+                current_available = guarded_available_memory(
+                    memory_plan, available_memory_bytes()
+                )
                 if (
                     active
                     and memory_plan.reserve_bytes is not None
@@ -1494,6 +1536,18 @@ def _dispatch_entries(
                 ):
                     if not memory_pressure_active:
                         memory_pressure_pauses += 1
+                        reduced_budget = backed_off_memory_budget(
+                            admission_budget_bytes
+                        )
+                        if reduced_budget != admission_budget_bytes:
+                            logger.warning(
+                                "reducing future memory admission from %.2f GiB "
+                                "to %.2f GiB after measured pressure",
+                                cast(int, admission_budget_bytes) / (1024**3),
+                                cast(int, reduced_budget) / (1024**3),
+                            )
+                            admission_budget_bytes = reduced_budget
+                            memory_budget_backoffs += 1
                         logger.warning(
                             "pausing new entries: %.2f GiB available has reached "
                             "the %.2f GiB protected reserve",
@@ -1506,14 +1560,14 @@ def _dispatch_entries(
                 estimate = pop_admissible_estimate(
                     pending,
                     reserved_bytes,
-                    memory_plan.budget_bytes,
+                    admission_budget_bytes,
                     [item[1] for item in active.values()],
                 )
                 if estimate is None:
                     break
                 if (
-                    memory_plan.budget_bytes is not None
-                    and estimate.bytes > memory_plan.budget_bytes
+                    admission_budget_bytes is not None
+                    and estimate.bytes > admission_budget_bytes
                 ):
                     oversized_entries.add(estimate.pdb_id)
                     logger.warning(
@@ -1521,7 +1575,7 @@ def _dispatch_entries(
                         "worker budget; admitting it alone",
                         estimate.pdb_id,
                         estimate.bytes / (1024**3),
-                        memory_plan.budget_bytes / (1024**3),
+                        admission_budget_bytes / (1024**3),
                     )
                 deaths.track_submitted_entry(estimate.pdb_id)
                 active[estimate.pdb_id] = (
@@ -1568,6 +1622,17 @@ def _dispatch_entries(
                     active_item = active.pop(loss.pdb_id, None)
                     if active_item is not None:
                         reserved_bytes -= active_item[1].bytes
+            if any(loss.reason_codes == ["worker_process_died"] for loss in batch):
+                reduced_budget = backed_off_memory_budget(admission_budget_bytes)
+                if reduced_budget != admission_budget_bytes:
+                    logger.warning(
+                        "reducing future memory admission from %.2f GiB to "
+                        "%.2f GiB after a worker process died",
+                        cast(int, admission_budget_bytes) / (1024**3),
+                        cast(int, reduced_budget) / (1024**3),
+                    )
+                    admission_budget_bytes = reduced_budget
+                    memory_budget_backoffs += 1
             last_progress = time.monotonic()
             for r in batch:
                 if deaths.superseded(r, completed_ids):
@@ -1594,6 +1659,12 @@ def _dispatch_entries(
             memory_scheduler_max_active_entries=max_active,
             memory_scheduler_oversized_entries=len(oversized_entries),
             memory_scheduler_pressure_pauses=memory_pressure_pauses,
+            memory_scheduler_budget_backoffs=memory_budget_backoffs,
+            memory_scheduler_final_budget_bytes=(
+                admission_budget_bytes
+                if admission_budget_bytes is not None
+                else "unavailable"
+            ),
         )
     finally:
         forced = _shutdown_pool(pool)
@@ -1683,7 +1754,7 @@ def process_entries(
         else {},
     )
     if memory_plan is None:
-        memory_plan = plan_entry_memory(ids, cfg, run_log)
+        memory_plan = plan_entry_memory(args, ids, cfg, run_log)
     # Which ids the manifest already describes; see ``should_write_entry``,
     # which uses it to decide whether a retry may overwrite an existing row.
     prior_ids: set[str] = (
@@ -1946,7 +2017,7 @@ def _execute_with_output_lock(
     cfg = worker_config_from_args(
         args, env, root, args.pdb_redo_cache, cofactors, manual_inputs, plan, run_log
     )
-    memory_plan = plan_entry_memory(ids, cfg, run_log)
+    memory_plan = plan_entry_memory(args, ids, cfg, run_log)
     workers = choose_worker_count(args, len(ids), run_log)
 
     tally, writers = process_entries(

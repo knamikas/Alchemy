@@ -15,6 +15,8 @@ class RunConfig:
     crystallization_download: bool
     max_pdbs: int | None
     workers: int | None
+    memory_limit: int | None
+    memory_utilization: float
     output_dir: str
     density_map_scope: str
     verbose: int

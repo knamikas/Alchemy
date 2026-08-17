@@ -7,6 +7,7 @@ that makes a scheduler stop unwind the same way Ctrl-C does.
 
 import argparse
 import contextlib
+import math
 import os
 import re
 import shlex
@@ -50,6 +51,47 @@ def positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be a positive integer") from exc
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def memory_size_bytes(value: str) -> int:
+    """Argparse type for byte sizes such as ``240G`` or ``16GiB``."""
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?I?B?)?", value.upper())
+    if match is None:
+        raise argparse.ArgumentTypeError(
+            "must be a positive byte size such as 240G or 16GiB"
+        )
+    number, suffix = match.groups()
+    normalized = (suffix or "B").removesuffix("B").removesuffix("I")
+    multiplier = {
+        "": 1,
+        "K": 1024,
+        "M": 1024**2,
+        "G": 1024**3,
+        "T": 1024**4,
+    }[normalized]
+    numeric_value = float(number)
+    if not math.isfinite(numeric_value):
+        raise argparse.ArgumentTypeError("must be a finite byte size")
+    scaled_value = numeric_value * multiplier
+    if not math.isfinite(scaled_value):
+        raise argparse.ArgumentTypeError("byte size is too large")
+    parsed = int(scaled_value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def utilization_fraction(value: str) -> float:
+    """Argparse type for a fraction in the interval ``(0, 1]``."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError(
+            "must be a number greater than 0 and at most 1"
+        ) from exc
+    if not math.isfinite(parsed) or not 0 < parsed <= 1:
+        raise argparse.ArgumentTypeError("must be greater than 0 and at most 1")
     return parsed
 
 
@@ -111,6 +153,24 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         help=(
             "worker-process ceiling (minimum: 1); memory-aware admission "
             "still limits simultaneously active entries"
+        ),
+    )
+    ap.add_argument(
+        "--memory-limit",
+        type=memory_size_bytes,
+        default=None,
+        help=(
+            "memory available to Alchemy (for example 240G or 16GiB); "
+            "default: auto-detect the host, container, or scheduler limit"
+        ),
+    )
+    ap.add_argument(
+        "--memory-utilization",
+        type=utilization_fraction,
+        default=0.80,
+        help=(
+            "maximum fraction of detected or configured memory used for "
+            "worker estimates; the protected 4 GiB reserve still applies"
         ),
     )
     ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
@@ -258,6 +318,8 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         crystallization_download=args.crystallization_download,
         max_pdbs=args.max_pdbs,
         workers=args.workers,
+        memory_limit=args.memory_limit,
+        memory_utilization=args.memory_utilization,
         output_dir=args.output_dir,
         density_map_scope=args.density_map_scope,
         verbose=args.verbose,

@@ -6,6 +6,7 @@ any CCP4 or network capability is probed, so no test needs a marker.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import os
@@ -65,6 +66,43 @@ def test_crystallization_metadata_download_can_be_disabled() -> None:
     assert default.pdb_metadata_cache.endswith("pdb-metadata-cache")
     assert offline.crystallization_download is False
     assert offline.pdb_metadata_cache == "/tmp/alchemy-metadata"
+
+
+def test_memory_controls_keep_detection_as_the_default() -> None:
+    default = cli.parse_args([])
+    configured = cli.parse_args(
+        ["--memory-limit", "240G", "--memory-utilization", "0.9"]
+    )
+
+    assert default.memory_limit is None
+    assert default.memory_utilization == 0.8
+    assert configured.memory_limit == 240 * 1024**3
+    assert configured.memory_utilization == 0.9
+
+
+@pytest.mark.parametrize(
+    "spelling,expected",
+    [
+        ("1024", 1024),
+        ("512M", 512 * 1024**2),
+        ("1.5GiB", int(1.5 * 1024**3)),
+        ("2TB", 2 * 1024**4),
+    ],
+)
+def test_memory_limit_accepts_readable_byte_sizes(spelling: str, expected: int) -> None:
+    assert cli.memory_size_bytes(spelling) == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-1G", "lots", "1PB"])
+def test_memory_limit_rejects_invalid_sizes(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.memory_size_bytes(value)
+
+
+@pytest.mark.parametrize("value", ["0", "-0.1", "1.01", "nan", "inf"])
+def test_memory_utilization_rejects_values_outside_its_fraction(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.utilization_fraction(value)
 
 
 @pytest.mark.parametrize("value", ["0", "-5"])

@@ -37,7 +37,7 @@ MTZ_GZIP_SIZE_FALLBACK_MULTIPLIER = 128
 # Do not turn every byte reported as available into a CCP4 allocation.  The
 # driver, desktop, filesystem cache and short-lived program overlap need room.
 MEMORY_RESERVE_MIN_BYTES = 4 * GIB
-MEMORY_RESERVE_FRACTION = 0.20
+DEFAULT_MEMORY_UTILIZATION = 0.80
 
 PROC_MEMINFO_PATH = "/proc/meminfo"
 PROC_SELF_CGROUP_PATH = "/proc/self/cgroup"
@@ -230,22 +230,44 @@ def available_memory_bytes() -> int | None:
     return None
 
 
-def scheduling_memory_budget(available: int | None) -> tuple[int | None, int | None]:
-    if available is None:
+def scheduling_memory_budget(
+    available: int | None,
+    *,
+    memory_limit_bytes: int | None = None,
+    utilization: float = DEFAULT_MEMORY_UTILIZATION,
+) -> tuple[int | None, int | None]:
+    """Return the entry budget and protected reserve for this process.
+
+    An explicit limit is still bounded by a tighter detected host or cgroup
+    allowance. The utilization is a ceiling rather than a promise: the 4 GiB
+    reserve remains in force on smaller machines unless doing so would prevent
+    even one ordinary worker from running.
+    """
+    if not 0 < utilization <= 1:
+        raise ValueError("memory utilization must be greater than 0 and at most 1")
+    known = [value for value in (available, memory_limit_bytes) if value is not None]
+    if not known:
         return None, None
-    reserve = max(
-        MEMORY_RESERVE_MIN_BYTES, math.ceil(available * MEMORY_RESERVE_FRACTION)
-    )
+    capacity = min(known)
+    reserve = max(MEMORY_RESERVE_MIN_BYTES, math.ceil(capacity * (1.0 - utilization)))
     # Keep at least one ordinary worker possible whenever the machine has that
     # much memory.  On a smaller machine an oversized entry is still admitted
     # alone, because refusing it forever would deadlock the batch.
-    reserve = min(reserve, max(0, available - AUTO_WORKER_MEMORY_BYTES))
-    return max(1, available - reserve), reserve
+    reserve = min(reserve, max(0, capacity - AUTO_WORKER_MEMORY_BYTES))
+    return max(1, capacity - reserve), reserve
 
 
-def automatic_worker_limits() -> tuple[int, int | None]:
+def automatic_worker_limits(
+    *,
+    memory_limit_bytes: int | None = None,
+    utilization: float = DEFAULT_MEMORY_UTILIZATION,
+) -> tuple[int, int | None]:
     cpu_limit = max(1, available_cpu_count() - 2)
-    budget, _ = scheduling_memory_budget(available_memory_bytes())
+    budget, _ = scheduling_memory_budget(
+        available_memory_bytes(),
+        memory_limit_bytes=memory_limit_bytes,
+        utilization=utilization,
+    )
     memory_limit: int | None = None
     if budget is not None:
         memory_limit = max(1, budget // AUTO_WORKER_MEMORY_BYTES)

@@ -956,12 +956,30 @@ def test_unknown_memory_leaves_the_limit_unset(
     assert memory_limit is None
 
 
+def test_explicit_memory_controls_bound_automatic_worker_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gib = 1024**3
+    monkeypatch.setattr(resources, "available_cpu_count", lambda: 64)
+    monkeypatch.setattr(resources, "available_memory_bytes", lambda: 100 * gib)
+
+    # The explicit 20 GiB capacity is tighter than detection. At 80%, with the
+    # 4 GiB minimum reserve, it supplies a 16 GiB entry budget: eight workers.
+    assert resources.automatic_worker_limits(memory_limit_bytes=20 * gib) == (62, 8)
+
+    # On a large allocation the requested utilization controls the reserve.
+    assert resources.scheduling_memory_budget(100 * gib, utilization=0.9) == (
+        90 * gib,
+        10 * gib,
+    )
+
+
 def test_explicit_workers_are_still_capped_for_process_overhead(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     args = cli.parse_args(["--workers", "50", "--output-dir", str(tmp_path)])
     run_log = runlog.RunLog(args, "pytest")
-    monkeypatch.setattr(pool, "automatic_worker_limits", lambda: (8, 3))
+    monkeypatch.setattr(pool, "automatic_worker_limits", lambda **_kwargs: (8, 3))
 
     workers = pool.choose_worker_count(args, entry_count=20, run_log=run_log)
 
@@ -1352,7 +1370,7 @@ def test_ordinary_companions_are_bounded_by_the_budget_not_a_count() -> None:
     assert pool.pop_admissible_estimate(exhausted, 19 * gib, 20 * gib, active) is None
 
 
-def test_high_memory_entries_overlap_within_their_budget_share() -> None:
+def test_high_memory_entries_overlap_within_the_total_byte_budget() -> None:
     gib = 1024**3
     active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
     pending = [resources.EntryMemoryEstimate("another-large", 4 * gib, "test")]
@@ -1361,8 +1379,8 @@ def test_high_memory_entries_overlap_within_their_budget_share() -> None:
     assert admitted is not None and admitted.pdb_id == "another-large"
 
 
-def test_high_memory_admission_stops_at_the_budget_share() -> None:
-    """Large entries may not crowd ordinary throughput out of the whole budget."""
+def test_high_memory_admission_uses_the_total_budget_without_a_class_cap() -> None:
+    """A capable node may overlap large entries whenever their estimates fit."""
     gib = 1024**3
     active = [resources.EntryMemoryEstimate("large", 9 * gib, "test")]
     pending = [
@@ -1370,11 +1388,31 @@ def test_high_memory_admission_stops_at_the_budget_share() -> None:
         resources.EntryMemoryEstimate("ordinary", 2 * gib, "test"),
     ]
 
-    # 9 GiB already held leaves under 3 GiB of the 10 GiB high-memory ceiling,
-    # so the large entry waits while the ordinary entry takes the slot.
     admitted = pool.pop_admissible_estimate(pending, 9 * gib, 20 * gib, active)
-    assert admitted is not None and admitted.pdb_id == "ordinary"
-    assert [estimate.pdb_id for estimate in pending] == ["another-large"]
+    assert admitted is not None and admitted.pdb_id == "another-large"
+    assert [estimate.pdb_id for estimate in pending] == ["ordinary"]
+
+
+def test_memory_budget_backoff_converges_without_dropping_below_one_worker() -> None:
+    gib = 1024**3
+
+    assert pool.backed_off_memory_budget(None) is None
+    assert pool.backed_off_memory_budget(20 * gib) == 16 * gib
+    assert pool.backed_off_memory_budget(2 * gib) == 2 * gib
+
+
+def test_explicit_memory_limit_tracks_consumption_from_the_starting_probe() -> None:
+    gib = 1024**3
+    plan = pool.MemoryPlan(
+        [],
+        16 * gib,
+        4 * gib,
+        initial_available_bytes=64 * gib,
+        configured_limit_bytes=20 * gib,
+    )
+
+    assert pool.guarded_available_memory(plan, 60 * gib) == 16 * gib
+    assert pool.guarded_available_memory(plan, 42 * gib) == 0
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(
