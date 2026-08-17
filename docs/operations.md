@@ -177,7 +177,11 @@ Running batches, resuming them, and reading what a run wrote. See
 - The manifest's `status_detail` column gives a bounded human-readable
   explanation of the machine-readable reason codes. It covers expected partial
   limitations as well as failures; `warning_codes` remains reserved for
-  observations that did not determine the entry's status. For an unanticipated
+  observations that did not determine the entry's status. For example,
+  `edstats_grid_point_count_overflow` means EDSTATS printed `****` because an
+  `NPm`, `NPs`, or `NPa` count exceeded its fixed-width field. Alchemy records
+  that auxiliary count as `n/a` and retains the entry's other valid density
+  statistics. For an unanticipated
   exception, the full traceback is written to the debug log, so `--log-file`,
   or `-v` on the console, is what locates it without rerunning the entry by hand
   under `--keep-intermediates`.

@@ -175,6 +175,10 @@ class WarningCode(StrEnum):
     OCCUPANCY_DICTIONARY_DEFAULT_APPLIED = "occupancy_dictionary_default_applied"
     RAW_OCCUPANCY_MAPPING_FAILED = "raw_occupancy_mapping_failed"
     LEGACY_PDB_IDENTIFIERS_PACKED = "legacy_pdb_identifiers_packed"
+    #: EDSTATS printed ``****`` because an NPm/NPs/NPa grid-point count did
+    #: not fit its fixed-width field. The count is retained as unavailable;
+    #: all other density metrics and the entry remain usable.
+    EDSTATS_GRID_POINT_COUNT_OVERFLOW = "edstats_grid_point_count_overflow"
     #: Refmac's twinned map coefficients were rewritten for EDSTATS.
     TWIN_REFMAC_COEFFICIENTS_NORMALIZED = "twin_refmac_coefficients_normalized"
     #: A declaration named an alternate conformer that per-residue selection

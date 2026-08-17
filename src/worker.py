@@ -347,6 +347,7 @@ def _run_density_stage(
             cfg.cofactors,
             structure=structure,
             density_context_out=result.density_context_row,
+            warning_codes_out=result.warning_codes,
         )
         result.timings["statistics_extraction_s"] = round(
             time.monotonic() - statistics_started, 3

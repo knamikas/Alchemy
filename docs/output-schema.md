@@ -82,7 +82,10 @@ groups:
 
 The suffixes are `m` for main-chain, `s` for side-chain, and `a` for all atoms.
 For example, `ZD-m` is the main-chain negative difference-density Z metric and
-`CCPa` is the all-atom population correlation. `aa_geometry_coverage` is an
+`CCPa` is the all-atom population correlation. If an `NP` count exceeds
+EDSTATS' fixed-width output field, Alchemy writes `n/a` for that count and adds
+`edstats_grid_point_count_overflow` to the entry's `warning_codes`; the other
+density metrics remain usable. `aa_geometry_coverage` is an
 Alchemy compatibility field containing image-inclusive geometry coverage when
 available and explicit-only coverage otherwise.
 

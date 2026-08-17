@@ -19,6 +19,7 @@ from structure_analysis import (
     canonical_pdb_residue_id,
 )
 from output_rows import MetalStatsRow
+from codes import WarningCode
 
 
 # EDSTATS 1.0.9's standard residue-table schema, whose twelve metrics repeat
@@ -54,6 +55,8 @@ EDSTATS_COLUMNS = (
 # EDSTATS' documented marker for a statistic it could not calculate.
 EDSTATS_NULL_VALUE = "n/a"
 EDSTATS_MISSING_CHAIN_IDS = frozenset(("", ".", "?", "_"))
+EDSTATS_GRID_POINT_COLUMNS = ("NPm", "NPs", "NPa")
+EDSTATS_FIXED_WIDTH_OVERFLOW = "****"
 
 
 _DENSITY_CONTEXT_GROUPS = ("ordinary", "ordinary_nonwater", "water")
@@ -546,9 +549,16 @@ def _resolve_edstats_row(
     line_number: int,
     structure: StructureContext,
     residues_by_chain_part: Mapping[str, tuple[ResidueSelection, ...]],
+    grid_point_overflow_columns: set[str],
 ) -> _ResolvedEdstatsRow | None:
     """Return ``None`` for a valid row belonging to a discarded conformer."""
     normalized = normalize_edstats_row(fields, header, indices)
+    if len(normalized) == len(header):
+        for name in EDSTATS_GRID_POINT_COLUMNS:
+            index = indices[name]
+            if normalized[index] == EDSTATS_FIXED_WIDTH_OVERFLOW:
+                normalized[index] = EDSTATS_NULL_VALUE
+                grid_point_overflow_columns.add(name)
     row_model = validate_edstats_row(normalized, header, indices, line_number)
     row_number = _validated_edstats_row_number(normalized, indices, line_number)
     if row_model != structure.model_analyzed:
@@ -685,6 +695,7 @@ def extract_metal_statistics(
     structure: StructureContext,
     *,
     density_context_out: dict[str, Any] | None = None,
+    warning_codes_out: list[str] | None = None,
 ) -> tuple[list[MetalStatsRow], list[str]]:
     """Parse an EDSTATS ``stats.out``, returning ``(rows, header)``.
 
@@ -721,6 +732,7 @@ def extract_metal_statistics(
     observed_residues: Counter[tuple[str, str, str]] = Counter()
     observed_edstats_rows: set[tuple[int, str, int]] = set()
     residue_observations: dict[tuple[int, int, int], tuple[str, int]] = {}
+    grid_point_overflow_columns: set[str] = set()
     residues_by_chain_part = _coordinate_residues_by_chain_part(structure)
     with open(stats_out, encoding="utf-8", errors="strict") as f:
         for line_number, line in enumerate(f, 1):
@@ -744,6 +756,7 @@ def extract_metal_statistics(
                 line_number,
                 structure,
                 residues_by_chain_part,
+                grid_point_overflow_columns,
             )
             if resolved is None:
                 continue
@@ -809,6 +822,12 @@ def extract_metal_statistics(
         )
     if density_context_out is not None:
         density_context_out.update(density_context.as_row(pdb_id))
+    if grid_point_overflow_columns and warning_codes_out is not None:
+        warning_codes_out[:] = list(
+            dict.fromkeys(
+                warning_codes_out + [WarningCode.EDSTATS_GRID_POINT_COUNT_OVERFLOW]
+            )
+        )
     return rows, header
 
 

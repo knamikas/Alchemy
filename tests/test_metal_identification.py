@@ -238,7 +238,7 @@ def test_the_documented_null_marker_is_accepted_for_every_metric(null: str) -> N
     assert row[INDICES["ZDm"]] == null
 
 
-@pytest.mark.parametrize("value", ["abc", "1.2.3", "--5", "n/a/", "2,5", "?"])
+@pytest.mark.parametrize("value", ["abc", "1.2.3", "--5", "n/a/", "2,5", "?", "****"])
 def test_nonnumeric_statistics_are_rejected_and_name_the_column(value: str) -> None:
     """A metric that is neither a number nor ``n/a`` fails the entry."""
     row = helpers.edstats_row("ZN", "B", "1", metrics={"CCPa": value})
@@ -266,6 +266,35 @@ def test_every_metric_column_is_checked_not_just_the_first(metric: str) -> None:
     with pytest.raises(ValueError) as excinfo:
         _validate(row)
     assert f"nonnumeric {metric} value" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("metric", ["NPm", "NPs", "NPa"])
+def test_fixed_width_grid_point_overflow_keeps_the_entry(
+    tmp_path: Path, metric: str
+) -> None:
+    """The NP count is auxiliary, so EDSTATS' print overflow is non-fatal."""
+    context = load_structure(
+        "test", simple_metal_site().write_pdb(tmp_path / "site.pdb")
+    )
+    stats = helpers.write_edstats_for_structure(
+        tmp_path / "stats.out", context, metrics={metric: "****"}
+    )
+    warning_codes = ["existing_warning"]
+
+    rows, header = extract_metal_statistics(
+        "test",
+        stats,
+        METAL_ELEMENTS,
+        (),
+        structure=context,
+        warning_codes_out=warning_codes,
+    )
+
+    assert rows[0].fields[header.index(metric)] == "n/a"
+    assert warning_codes == [
+        "existing_warning",
+        "edstats_grid_point_count_overflow",
+    ]
 
 
 @pytest.mark.parametrize("value", ["1.0", "x", "n/a", "-", ""])
