@@ -31,7 +31,7 @@ from collections.abc import Collection, Mapping, Sequence
 
 from _version import __version__
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
-from codes import EntryStatus
+from codes import EntryStatus, ReasonCode
 from reference_data import (
     cofactor_ids,
     reference_data_checksums,
@@ -131,9 +131,12 @@ WORKER_STALL_GRACE_S = 600.0
 # reaches the deadline.
 WORKER_SHUTDOWN_GRACE_S = 5.0
 
-# Two 2 GiB companions leave the measured 7-9 GiB EDSTATS tail enough room on
-# a 30 GiB workstation without returning to the multi-large-entry OOM pattern.
-MAX_ORDINARY_COMPANIONS_WITH_HIGH_MEMORY_ENTRY = 2
+# Ceiling on the share of the byte budget that high-memory entries may hold at
+# once. A fraction rather than an entry count keeps the policy proportional to
+# the machine: it still leaves a 30 GiB workstation the single 7-9 GiB EDSTATS
+# tail it was tuned for, while a 250 GiB node runs the many mid-sized entries
+# its budget genuinely covers instead of serializing them.
+HIGH_MEMORY_BUDGET_SHARE = 0.5
 
 # Budget for the `git` probes that stamp run provenance. Exceeding it costs the
 # commit hash, which degrades to "unknown", rather than the run.
@@ -573,6 +576,7 @@ class _BatchTally:
         self.no_metals = 0
         self.metal_site_limit_exceeded = 0
         self.retryable_partials = 0
+        self.worker_death_errors = 0
 
     def record(self, result: EntryResult) -> None:
         status = result.status
@@ -583,9 +587,27 @@ class _BatchTally:
             self.metal_site_limit_exceeded += 1
         if status == EntryStatus.PARTIAL and result.retryable:
             self.retryable_partials += 1
+        if status == EntryStatus.ERROR and result.reason_codes == [
+            ReasonCode.WORKER_PROCESS_DIED
+        ]:
+            self.worker_death_errors += 1
 
     def exit_code(self) -> int:
         return batch_exit_code(self.counts, self.retryable_partials)
+
+    def recoverable_incompleteness(self) -> int:
+        """Entries a later run could still add to the cohort.
+
+        A missing input may arrive, and a killed worker says nothing about the
+        entry it was holding, so both leave the database genuinely unfinished.
+        An entry whose own data or tooling defeated it does not: it fails the
+        same way on every pass over the same inputs.
+        """
+        return (
+            self.counts.get("skip", 0)
+            + self.retryable_partials
+            + self.worker_death_errors
+        )
 
 
 class MemoryPlan:
@@ -624,6 +646,9 @@ def plan_entry_memory(
         memory_estimate_max_bytes=largest.bytes,
         memory_estimate_max_entry=largest.pdb_id,
         memory_high_memory_entries=high_memory_entries,
+        memory_scheduler_high_memory_ceiling_bytes=(
+            "unavailable" if budget is None else int(budget * HIGH_MEMORY_BUDGET_SHARE)
+        ),
     )
     if budget is None:
         logger.warning(
@@ -633,11 +658,12 @@ def plan_entry_memory(
     else:
         logger.info(
             "memory-aware scheduling: %.2f GiB worker budget, %.2f GiB "
-            "protected reserve; %d high-memory entries are serialized; "
-            "largest estimate %.2f GiB (%s)",
+            "protected reserve; %d high-memory entries share a %.2f GiB "
+            "ceiling; largest estimate %.2f GiB (%s)",
             budget / (1024**3),
             cast(int, reserve) / (1024**3),
             high_memory_entries,
+            budget * HIGH_MEMORY_BUDGET_SHARE / (1024**3),
             largest.bytes / (1024**3),
             largest.pdb_id,
         )
@@ -1325,28 +1351,39 @@ def pop_admissible_estimate(
     budget_bytes: int | None,
     active_estimates: Collection[EntryMemoryEstimate],
 ) -> EntryMemoryEstimate | None:
-    """Scanning past a blocked large entry avoids wasting safe worker slots.
+    """Admit the first pending entry whose estimate still fits the budget.
 
-    Waiting for active work to drain before a large admission prevents two
-    large map allocations from overlapping; the companion cap preserves useful
-    throughput without trusting the byte estimates as exact peaks.
+    Byte accounting, not entry class, is what holds concurrent map allocations
+    inside the budget, so a high-memory entry is admissible alongside other
+    work as soon as it fits. Bounding what those entries may collectively
+    reserve -- rather than how many of them there may be -- keeps a burst of
+    large allocations from crowding out ordinary throughput while still scaling
+    with the machine. Scanning past a blocked entry avoids wasting the worker
+    slots a smaller pending entry could use, and an underestimated peak is
+    caught by the dispatch loop's live pressure check rather than here.
     """
     if not pending:
         return None
     if not active_estimates:
+        # Nothing is running, so the head is admitted even when it is oversized:
+        # refusing an entry larger than the whole budget would deadlock the batch.
         return pending.pop(0)
-    high_memory_active = any(estimate.is_high_memory for estimate in active_estimates)
-    ordinary_active = sum(not estimate.is_high_memory for estimate in active_estimates)
-    if (
-        high_memory_active
-        and ordinary_active >= MAX_ORDINARY_COMPANIONS_WITH_HIGH_MEMORY_ENTRY
-    ):
-        return None
+    high_memory_ceiling = (
+        None if budget_bytes is None else budget_bytes * HIGH_MEMORY_BUDGET_SHARE
+    )
+    high_memory_reserved = sum(
+        estimate.bytes for estimate in active_estimates if estimate.is_high_memory
+    )
     for index, estimate in enumerate(pending):
-        if estimate.is_high_memory:
+        if budget_bytes is not None and reserved_bytes + estimate.bytes > budget_bytes:
             continue
-        if budget_bytes is None or reserved_bytes + estimate.bytes <= budget_bytes:
-            return pending.pop(index)
+        if (
+            estimate.is_high_memory
+            and high_memory_ceiling is not None
+            and high_memory_reserved + estimate.bytes > high_memory_ceiling
+        ):
+            continue
+        return pending.pop(index)
     return None
 
 
@@ -1744,7 +1781,24 @@ def _report_batch(
     )
     exit_code = tally.exit_code()
     if plan.mode == "database":
-        if exit_code == 0:
+        # Gated on what a later run could still add, not on the exit code. A
+        # handful of entries that defeat CCP4 or carry unusable data fail
+        # identically on every pass, so gating the reference on a clean exit
+        # meant a full-database run could never publish one: the retry the exit
+        # code was waiting for is the retry that cannot help. The reference
+        # metadata records the manifest status counts, so a cohort with known
+        # permanent gaps stays self-describing.
+        unfinished = tally.recoverable_incompleteness()
+        if unfinished == 0:
+            permanent = tally.counts.get("error", 0)
+            if permanent:
+                logger.warning(
+                    "finalizing the confidence reference with %d permanently "
+                    "failed entr%s: no retry can add them, and their absence "
+                    "is recorded in the reference metadata",
+                    permanent,
+                    "y" if permanent == 1 else "ies",
+                )
             total, scored, cohort = _finalize_confidence_reference(layout)
             run_log.summary.update(
                 confidence_status="finalized",
@@ -1762,9 +1816,12 @@ def _report_batch(
             print(f"      confidence reference -> {layout.reference_dir}", flush=True)
         else:
             run_log.summary["confidence_status"] = "not_finalized_incomplete_run"
+            run_log.summary["confidence_recoverable_entries"] = unfinished
             print(
-                "      confidence inputs were retained, but the database "
-                "reference was not finalized because the run is incomplete.",
+                f"      confidence inputs were retained, but the database "
+                f"reference was not finalized: {unfinished} entr"
+                f"{'y' if unfinished == 1 else 'ies'} could still be added by "
+                f"--resume (missing inputs or lost workers).",
                 flush=True,
             )
     elif plan.mode == "reference":

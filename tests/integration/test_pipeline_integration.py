@@ -1710,7 +1710,10 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     )
     log_text = read_text(log_paths(output_dir)[0])
     assert "confidence_mode: reference" in log_text
-    assert "confidence_status: scored_against_reference" in log_text
+    # The report labels a completion summary rather than echoing its key, so
+    # this asserts the rendered line. Matching the raw key silently stopped
+    # checking anything the day the label was introduced.
+    assert "Confidence status: scored_against_reference" in log_text
 
 
 @_requires_entry_data
@@ -1802,7 +1805,9 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     )
     log_text = read_text(log_paths(output_dir)[0])
     assert "confidence_mode: database" in log_text
-    assert "confidence_status: finalized" in log_text
+    # See the note on the reference-mode run: the report renders a label, so
+    # matching the raw key made this assertion vacuous.
+    assert "Confidence status: finalized" in log_text
 
     # The published reference is directly reusable by a later scored run.
     reused = tmp_path / "reused"

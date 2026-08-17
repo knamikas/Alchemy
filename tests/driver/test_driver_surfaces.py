@@ -15,6 +15,7 @@ the pipeline itself (``test_pipeline_integration``).
 from __future__ import annotations
 
 import argparse
+import builtins
 import csv
 import http.client
 import gzip
@@ -24,7 +25,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 from collections.abc import Sequence
 
 import pytest
@@ -42,6 +43,8 @@ from driver import resume
 from driver import pool
 from driver import runlog
 import confidence_score
+import worker_contracts
+from codes import EntryStatus
 
 if TYPE_CHECKING:
     # Annotations only, so gemmi and numpy stay imported inside the handful of
@@ -497,6 +500,74 @@ def test_a_missing_status_key_is_treated_as_zero() -> None:
     """Counts are accumulated per status, so an absent key means none seen."""
     assert pool.batch_exit_code({}, 0) == 0
     assert pool.batch_exit_code({"error": 2}, 0) == 1
+
+
+def _entry(
+    status: EntryStatus,
+    *,
+    retryable: bool = True,
+    reason_codes: list[str] | None = None,
+) -> worker_contracts.EntryResult:
+    result = worker_contracts.EntryResult(
+        pdb_id="109m",
+        alchemy_commit="test",
+        gemmi_version="test",
+        ccp4_version="test",
+        reference_data_id="test",
+        analysis_config_id="test",
+        refinement_state="final",
+    )
+    result.status = status
+    result.retryable = retryable
+    result.reason_codes = list(reason_codes or [])
+    return result
+
+
+def _tally_of(*results: worker_contracts.EntryResult) -> pool._BatchTally:
+    tally = pool._BatchTally()
+    for result in results:
+        tally.record(result)
+    return tally
+
+
+def test_a_permanently_failed_entry_does_not_defer_the_reference() -> None:
+    """A full-database run must still publish its reference.
+
+    An entry that defeats CCP4 or carries unusable data fails identically on
+    every pass, so deferring the reference until it succeeds deferred it
+    forever -- the whole point of the uncapped run was to build one.
+    """
+    tally = _tally_of(
+        _entry(EntryStatus.OK),
+        _entry(EntryStatus.ERROR, reason_codes=["deterministic_processing_error"]),
+        _entry(EntryStatus.ERROR, reason_codes=["unexpected_processing_error"]),
+    )
+
+    assert tally.recoverable_incompleteness() == 0
+    assert tally.exit_code() == 1, "the failures must still be reported"
+
+
+def test_a_lost_worker_defers_the_reference() -> None:
+    """A killed worker says nothing about the entry it held, so a retry can add it."""
+    tally = _tally_of(
+        _entry(EntryStatus.OK),
+        _entry(EntryStatus.ERROR, reason_codes=["worker_process_died"]),
+    )
+
+    assert tally.recoverable_incompleteness() == 1
+
+
+def test_a_missing_input_defers_the_reference() -> None:
+    """A skipped entry's input may arrive before the next run."""
+    assert _tally_of(_entry(EntryStatus.SKIP)).recoverable_incompleteness() == 1
+
+
+def test_a_retryable_partial_defers_the_reference_but_a_terminal_one_does_not() -> None:
+    retryable = _tally_of(_entry(EntryStatus.PARTIAL, retryable=True))
+    terminal = _tally_of(_entry(EntryStatus.PARTIAL, retryable=False))
+
+    assert retryable.recoverable_incompleteness() == 1
+    assert terminal.recoverable_incompleteness() == 0
 
 
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
@@ -1179,7 +1250,13 @@ def test_high_memory_entry_allows_two_ordinary_companions() -> None:
     assert admitted == second
 
 
-def test_high_memory_entry_blocks_a_third_ordinary_companion() -> None:
+def test_ordinary_companions_are_bounded_by_the_budget_not_a_count() -> None:
+    """A large machine must keep filling worker slots past the third companion.
+
+    Capping companions by count throttled a 250 GiB node to the concurrency a
+    30 GiB workstation needed, which serialized the mid-sized tail of a
+    full-database run.
+    """
     gib = 1024**3
     active = [
         resources.EntryMemoryEstimate("large", 3 * gib, "test"),
@@ -1188,15 +1265,36 @@ def test_high_memory_entry_blocks_a_third_ordinary_companion() -> None:
     ]
     pending = [resources.EntryMemoryEstimate("third", 2 * gib, "test")]
 
-    assert pool.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active) is None
+    admitted = pool.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active)
+    assert admitted is not None and admitted.pdb_id == "third"
+
+    exhausted = [resources.EntryMemoryEstimate("fourth", 2 * gib, "test")]
+    assert pool.pop_admissible_estimate(exhausted, 19 * gib, 20 * gib, active) is None
 
 
-def test_high_memory_entries_never_overlap() -> None:
+def test_high_memory_entries_overlap_within_their_budget_share() -> None:
     gib = 1024**3
     active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
     pending = [resources.EntryMemoryEstimate("another-large", 4 * gib, "test")]
 
-    assert pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active) is None
+    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
+    assert admitted is not None and admitted.pdb_id == "another-large"
+
+
+def test_high_memory_admission_stops_at_the_budget_share() -> None:
+    """Large entries may not crowd ordinary throughput out of the whole budget."""
+    gib = 1024**3
+    active = [resources.EntryMemoryEstimate("large", 9 * gib, "test")]
+    pending = [
+        resources.EntryMemoryEstimate("another-large", 3 * gib, "test"),
+        resources.EntryMemoryEstimate("ordinary", 2 * gib, "test"),
+    ]
+
+    # 9 GiB already held leaves under 3 GiB of the 10 GiB high-memory ceiling,
+    # so the large entry waits while the ordinary entry takes the slot.
+    admitted = pool.pop_admissible_estimate(pending, 9 * gib, 20 * gib, active)
+    assert admitted is not None and admitted.pdb_id == "ordinary"
+    assert [estimate.pdb_id for estimate in pending] == ["another-large"]
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(
@@ -1568,6 +1666,48 @@ def test_a_cached_body_that_is_not_entry_data_is_not_treated_as_cached(
     entry.mkdir(parents=True)
     (entry / "9myr_final.mtz").write_bytes(content)
     (entry / "9myr_final.cif").write_bytes(content)
+
+    assert inputs.has_final_files(str(entry), "9myr") is False
+
+
+def test_enumeration_does_not_open_files_too_large_to_be_a_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Size alone must clear a real entry file, without reading it.
+
+    Probing content costs one open per candidate, and each open pulls a
+    readahead window off the filesystem to inspect 64 bytes. Over a ~195k-entry
+    mirror that put about two hours in front of every run, including a
+    ``--resume`` with only a handful of entries left to do.
+    """
+    entry = tmp_path / "my" / "9myr"
+    entry.mkdir(parents=True)
+    big = b"MTZ " + b"\0" * (inputs._MAX_WEB_PAGE_BYTES + 1)
+    (entry / "9myr_final.mtz").write_bytes(big)
+    (entry / "9myr_final.cif").write_bytes(big)
+
+    opened: list[str] = []
+    real_open = builtins.open
+
+    def counting_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if str(path).startswith(str(entry)):
+            opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+
+    assert inputs.has_final_files(str(entry), "9myr") is True
+    assert opened == [], f"enumeration should not read entry files, opened {opened}"
+
+
+def test_a_page_sized_html_body_is_still_rejected(tmp_path: Path) -> None:
+    """The size shortcut must not let a served notice through."""
+    entry = tmp_path / "my" / "9myr"
+    entry.mkdir(parents=True)
+    page = b"<!DOCTYPE html>\n<html><body>proxy error</body></html>\n"
+    assert len(page) <= inputs._MAX_WEB_PAGE_BYTES
+    (entry / "9myr_final.mtz").write_bytes(page)
+    (entry / "9myr_final.cif").write_bytes(page)
 
     assert inputs.has_final_files(str(entry), "9myr") is False
 
