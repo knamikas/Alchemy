@@ -222,6 +222,10 @@ def _manual_entry(
         (ValueError("no FWT column"), "deterministic_processing_error"),
         (KeyError("NR"), "deterministic_processing_error"),
         (TypeError("bad shape"), "deterministic_processing_error"),
+        (
+            density.Ccp4EntryLimitationError("MAPMASK maxsec"),
+            "deterministic_processing_error",
+        ),
         (OSError("disk full"), "unexpected_processing_error"),
         (MemoryError(), "unexpected_processing_error"),
         (RuntimeError("fft failed"), "unexpected_processing_error"),

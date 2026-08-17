@@ -115,6 +115,20 @@ class Ccp4ToolTimeoutError(RuntimeError):
         self.timings = dict(timings or {})
 
 
+class Ccp4EntryLimitationError(RuntimeError):
+    """CCP4 rejected an entry for a condition fixed by its data or build."""
+
+
+# These diagnostics identify failures observed to recur on identical inputs.
+# They remain ordinary errors, and therefore eligible for ``--resume`` after an
+# input or CCP4 installation changes, but they are terminal exclusions for the
+# current database snapshot rather than evidence of an interrupted machine.
+_CCP4_ENTRY_LIMITATION_MARKERS = (
+    "ccpmapin - map section > maxsec",
+    "no reflexions pass acceptance criteria",
+)
+
+
 @dataclass(frozen=True)
 class _DensityPaths:
     fixed_mtz: str
@@ -244,10 +258,13 @@ class _Ccp4Runner:
                     f"{self.pdb_id}{detail_suffix}",
                     timings=self.timings,
                 )
-        raise RuntimeError(
+        message = (
             f"{resolved_cmd[0]} failed for {self.pdb_id} (rc={proc.returncode}): "
             f"see {log_path}{detail_suffix}"
         )
+        if any(marker in detail.lower() for marker in _CCP4_ENTRY_LIMITATION_MARKERS):
+            raise Ccp4EntryLimitationError(message)
+        raise RuntimeError(message)
 
 
 def _decoded_stderr(error_file: IO[bytes]) -> str:

@@ -291,9 +291,12 @@ exactly one row per manifest-counted selected metal; a site with no recoverable
 density or bond identity is represented by an unresolved, unscorable placeholder
 rather than silently disappearing from the cohort denominator.
 
-Only after the database run completes without operationally incomplete entries
-does Alchemy finalize confidence. It scans the compact input—not the raw
-analysis outputs—to write `confidence_scores_all.csv` and a reusable
+Only after the database run completes without recoverable operational gaps does
+Alchemy finalize confidence. Explicitly deterministic entry errors remain
+documented terminal exclusions in the manifest; missing inputs, worker deaths,
+timeouts, and unexpected failures defer finalization until `--resume`. Alchemy
+scans the compact input—not the raw analysis outputs—to write
+`confidence_scores_all.csv` and a reusable
 `confidence_reference/` directory containing policy metadata and the empirical
 score distribution. An interrupted run retains its compact inputs for
 `--resume` but does not publish a completed reference.

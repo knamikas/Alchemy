@@ -119,9 +119,12 @@ Running batches, resuming them, and reading what a run wrote. See
   assemblies contain highly correlated sites that would otherwise dominate the
   standard database cohort and its runtime. Progress and completion summaries
   report the excluded-entry count separately.
-- The command exits nonzero when any entry ends as `error`, `skip`, or a
-  retryable `partial`. Completed `ok` and terminal `partial` results exit
-  successfully.
+- Targeted and capped runs exit nonzero when any entry ends as `error`, `skip`,
+  or a retryable `partial`. An uncapped database run treats explicitly
+  deterministic processing errors as documented terminal exclusions: when no
+  missing, interrupted, or otherwise retryable work remains, it finalizes the
+  confidence reference and exits successfully. Unknown and unexpected errors,
+  worker deaths, skips, and retryable partials remain nonzero.
 - One Alchemy process on one machine owns an output directory at a time. The
   lease uses `flock` on POSIX and a non-blocking byte-range lock on Windows.
   Across a network filesystem it is only as reliable as that filesystem's lock
@@ -158,9 +161,13 @@ Running batches, resuming them, and reading what a run wrote. See
   so a large run can be triaged. A parse, lookup, arithmetic, or type error
   describes the entry's data or Alchemy's own code and will recur while both
   stay the same, so it is reported as `deterministic_processing_error`. Anything
-  else — an `OSError`, a `MemoryError`, a `RuntimeError` from a CCP4 program —
+  else — an `OSError`, a `MemoryError`, or most `RuntimeError` failures from a
+  CCP4 program —
   may describe the machine rather than the entry, and is reported as
-  `unexpected_processing_error`. The distinction is advisory and does not change
+  `unexpected_processing_error`. Known CCP4 diagnostics that identify fixed
+  entry or compiled-tool limitations, such as MAPMASK's `maxsec` bound and
+  FFT's absence of acceptable reflections, are deterministic. The distinction
+  is advisory for resume and does not change
   what `--resume` does: every `error` entry is retried either way, because a
   resumed run may have been given a repaired input file or a re-downloaded
   mirror entry, and Alchemy does not checksum its inputs to tell. Skipping an
@@ -201,8 +208,8 @@ so a code cannot be added or renamed without this list following it.
 | `missing_input` | A coordinate or reflection file named on the command line, or expected in the mirror, was absent. |
 | `ccp4_tool_timeout` | A CCP4 program was killed at `--ccp4-timeout`. It reported nothing about the entry, so this is retryable. |
 | `mtzfix_validation_failure` | `mtzfix` failed its consistency re-test, and the entry is not a PDB-REDO-declared twin. |
-| `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError`. |
-| `deterministic_processing_error` | An unanticipated exception that will recur identically on the same inputs, such as a parse or lookup error. Terminal. |
+| `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError` or an unrecognized CCP4 failure. |
+| `deterministic_processing_error` | An exception that will recur identically on the same inputs and tool build, such as a parse or lookup error, MAPMASK's compiled `maxsec` limit, or FFT finding no acceptable reflections. Terminal for the current database snapshot, but still retried by `--resume` in case inputs or tools changed. |
 | `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analysable. |
 | `bond_stage_failure` | The geometry stage raised, so its rows are not legitimate density-only evidence. |
 | `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |

@@ -35,6 +35,7 @@ from coordination.schema import (
 from crystallization_conditions import extract_crystallization_context
 from coordinate_conversion import first_model_pdb
 from density_analysis import (
+    Ccp4EntryLimitationError,
     Ccp4ToolTimeoutError,
     MtzfixValidationError,
     run_density_analysis,
@@ -94,6 +95,7 @@ DETERMINISTIC_PROCESSING_ERRORS = (
     ArithmeticError,
     AssertionError,
     AttributeError,
+    Ccp4EntryLimitationError,
     LookupError,
     NotImplementedError,
     TypeError,

@@ -475,31 +475,18 @@ def test_orphan_rows_from_a_pre_manifest_crash_remain_recoverable(
 
 
 @pytest.mark.parametrize(
-    ("counts", "retryable_partials", "expected"),
+    ("incomplete_entries", "expected"),
     [
-        ({"ok": 5, "partial": 0, "skip": 0, "error": 0}, 0, 0),
-        ({"ok": 4, "partial": 1, "skip": 0, "error": 0}, 0, 0),
-        ({"ok": 0, "partial": 0, "skip": 0, "error": 0}, 0, 0),
-        ({"ok": 4, "partial": 0, "skip": 0, "error": 1}, 0, 1),
-        ({"ok": 4, "partial": 0, "skip": 1, "error": 0}, 0, 1),
-        ({"ok": 4, "partial": 1, "skip": 0, "error": 0}, 1, 1),
+        (0, 0),
+        (1, 1),
+        (24, 1),
     ],
 )
 def test_the_exit_code_reports_operational_incompleteness(
-    counts: dict[str, int], retryable_partials: int, expected: int
+    incomplete_entries: int, expected: int
 ) -> None:
-    """Nonzero exactly when something remains to be done.
-
-    A *terminal* partial is usable but incomplete science that no rerun can
-    improve, so it exits zero; a *retryable* one is work still outstanding.
-    """
-    assert pool.batch_exit_code(counts, retryable_partials) == expected
-
-
-def test_a_missing_status_key_is_treated_as_zero() -> None:
-    """Counts are accumulated per status, so an absent key means none seen."""
-    assert pool.batch_exit_code({}, 0) == 0
-    assert pool.batch_exit_code({"error": 2}, 0) == 1
+    """Nonzero exactly when the caller has recoverable work outstanding."""
+    assert pool.batch_exit_code(incomplete_entries) == expected
 
 
 def _entry(
@@ -540,26 +527,46 @@ def test_a_permanently_failed_entry_does_not_defer_the_reference() -> None:
     tally = _tally_of(
         _entry(EntryStatus.OK),
         _entry(EntryStatus.ERROR, reason_codes=["deterministic_processing_error"]),
-        _entry(EntryStatus.ERROR, reason_codes=["unexpected_processing_error"]),
     )
 
     assert tally.recoverable_incompleteness() == 0
-    assert tally.exit_code() == 1, "the failures must still be reported"
+    assert tally.terminal_errors == 1
+    assert tally.recoverable_errors == 0
+    assert tally.exit_code(database_run=True) == 0
+    assert tally.exit_code() == 1, "a targeted entry error remains a failure"
+
+
+def test_an_unexpected_error_defers_the_reference_and_fails_the_run() -> None:
+    """A new failure mode must not silently become a cohort exclusion."""
+    tally = _tally_of(
+        _entry(EntryStatus.ERROR, reason_codes=["unexpected_processing_error"])
+    )
+
+    assert tally.recoverable_incompleteness() == 1
+    assert tally.terminal_errors == 0
+    assert tally.recoverable_errors == 1
+    assert tally.exit_code(database_run=True) == 1
 
 
 def test_a_lost_worker_defers_the_reference() -> None:
     """A killed worker says nothing about the entry it held, so a retry can add it."""
     tally = _tally_of(
         _entry(EntryStatus.OK),
-        _entry(EntryStatus.ERROR, reason_codes=["worker_process_died"]),
+        _entry(
+            EntryStatus.ERROR,
+            reason_codes=["worker_process_died", "unexpected_processing_error"],
+        ),
     )
 
     assert tally.recoverable_incompleteness() == 1
+    assert tally.exit_code(database_run=True) == 1
 
 
 def test_a_missing_input_defers_the_reference() -> None:
     """A skipped entry's input may arrive before the next run."""
-    assert _tally_of(_entry(EntryStatus.SKIP)).recoverable_incompleteness() == 1
+    tally = _tally_of(_entry(EntryStatus.SKIP))
+    assert tally.recoverable_incompleteness() == 1
+    assert tally.exit_code(database_run=True) == 1
 
 
 def test_a_retryable_partial_defers_the_reference_but_a_terminal_one_does_not() -> None:
@@ -568,6 +575,79 @@ def test_a_retryable_partial_defers_the_reference_but_a_terminal_one_does_not() 
 
     assert retryable.recoverable_incompleteness() == 1
     assert terminal.recoverable_incompleteness() == 0
+    assert retryable.exit_code(database_run=True) == 1
+    assert terminal.exit_code(database_run=True) == 0
+
+
+def _empty_writer_counts() -> writers.OutputWriters:
+    return cast(
+        writers.OutputWriters,
+        SimpleNamespace(
+            n_rows=0,
+            n_bonds=0,
+            n_candidates=0,
+            n_crystallization_conditions=0,
+            n_crystallization_summaries=0,
+            n_density_contexts=0,
+            n_confidence=0,
+        ),
+    )
+
+
+def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The finalization gate and process status must use the same policy."""
+    args = cli.parse_args(["--output-dir", str(tmp_path)])
+    layout = pool.OutputLayout(str(tmp_path))
+    plan = pool.ConfidencePlan()
+    plan.mode = "database"
+    tally = _tally_of(
+        _entry(EntryStatus.ERROR, reason_codes=["deterministic_processing_error"])
+    )
+    run_log = runlog.RunLog(args, "pytest")
+    finalized: list[str] = []
+
+    def finalize(_layout: pool.OutputLayout) -> tuple[int, int, str]:
+        finalized.append(_layout.output_dir)
+        return 0, 0, "test-cohort"
+
+    monkeypatch.setattr(pool, "_finalize_confidence_reference", finalize)
+
+    exit_code = pool._report_batch(
+        args, layout, plan, tally, _empty_writer_counts(), run_log
+    )
+
+    assert exit_code == 0
+    assert finalized == [str(tmp_path)]
+    assert run_log.summary["confidence_status"] == "finalized"
+
+
+def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retryable error must neither publish a reference nor report success."""
+    args = cli.parse_args(["--output-dir", str(tmp_path)])
+    layout = pool.OutputLayout(str(tmp_path))
+    plan = pool.ConfidencePlan()
+    plan.mode = "database"
+    tally = _tally_of(
+        _entry(EntryStatus.ERROR, reason_codes=["unexpected_processing_error"])
+    )
+    run_log = runlog.RunLog(args, "pytest")
+
+    def must_not_finalize(_layout: pool.OutputLayout) -> tuple[int, int, str]:
+        raise AssertionError("a recoverable error must defer finalization")
+
+    monkeypatch.setattr(pool, "_finalize_confidence_reference", must_not_finalize)
+
+    exit_code = pool._report_batch(
+        args, layout, plan, tally, _empty_writer_counts(), run_log
+    )
+
+    assert exit_code == 1
+    assert run_log.summary["confidence_status"] == "not_finalized_incomplete_run"
+    assert run_log.summary["confidence_recoverable_entries"] == 1
 
 
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])

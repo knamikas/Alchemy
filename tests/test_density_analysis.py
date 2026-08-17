@@ -256,6 +256,54 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     assert not isinstance(excinfo.value, UnicodeDecodeError)
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "mapmask: ccpmapin - Map section > maxsec: change maxsec and recompile",
+        "FFTBIG: No reflexions pass acceptance criteria! Check RESOLUTION",
+    ],
+)
+def test_known_ccp4_entry_limitations_are_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, detail: str
+) -> None:
+    """Known input/build limitations must not look like transient machine errors."""
+
+    def failed_program(
+        *args: object, stderr: IO[bytes] | None = None, **kwargs: object
+    ) -> SimpleNamespace:
+        assert stderr is not None
+        stderr.write(detail.encode("ascii"))
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
+    monkeypatch.setattr("density_analysis.subprocess.run", failed_program)
+    runner = density._Ccp4Runner("1abc", str(tmp_path), None, 900, {})
+
+    with pytest.raises(density.Ccp4EntryLimitationError, match="rc=1"):
+        runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")
+
+
+def test_an_unknown_ccp4_failure_remains_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unfamiliar diagnostic must not silently become a terminal exclusion."""
+
+    def failed_program(
+        *args: object, stderr: IO[bytes] | None = None, **kwargs: object
+    ) -> SimpleNamespace:
+        assert stderr is not None
+        stderr.write(b"temporary filesystem I/O failure")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
+    monkeypatch.setattr("density_analysis.subprocess.run", failed_program)
+    runner = density._Ccp4Runner("1abc", str(tmp_path), None, 900, {})
+
+    with pytest.raises(RuntimeError) as excinfo:
+        runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")
+    assert not isinstance(excinfo.value, density.Ccp4EntryLimitationError)
+
+
 @pytest.mark.skipif(
     os.name != "posix", reason="requires POSIX shell background-process semantics"
 )

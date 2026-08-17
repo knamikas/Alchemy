@@ -410,12 +410,9 @@ def resolve_confidence_reference_dir(
     return None, candidates
 
 
-def batch_exit_code(counts: Mapping[str, int], retryable_partial_count: int) -> int:
-    """Return failure when one or more entries remain operationally incomplete."""
-    incomplete = (
-        counts.get("error", 0) + counts.get("skip", 0) + retryable_partial_count
-    )
-    return 1 if incomplete else 0
+def batch_exit_code(incomplete_entry_count: int) -> int:
+    """Return failure exactly when one or more entries remain recoverable."""
+    return 1 if incomplete_entry_count else 0
 
 
 def load_ids_from_file(path: str) -> list[str]:
@@ -576,7 +573,8 @@ class _BatchTally:
         self.no_metals = 0
         self.metal_site_limit_exceeded = 0
         self.retryable_partials = 0
-        self.worker_death_errors = 0
+        self.terminal_errors = 0
+        self.recoverable_errors = 0
 
     def record(self, result: EntryResult) -> None:
         status = result.status
@@ -587,26 +585,54 @@ class _BatchTally:
             self.metal_site_limit_exceeded += 1
         if status == EntryStatus.PARTIAL and result.retryable:
             self.retryable_partials += 1
-        if status == EntryStatus.ERROR and result.reason_codes == [
-            ReasonCode.WORKER_PROCESS_DIED
-        ]:
-            self.worker_death_errors += 1
+        if status == EntryStatus.ERROR:
+            if self._terminal_error(result):
+                self.terminal_errors += 1
+            else:
+                self.recoverable_errors += 1
 
-    def exit_code(self) -> int:
-        return batch_exit_code(self.counts, self.retryable_partials)
+    @staticmethod
+    def _terminal_error(result: EntryResult) -> bool:
+        """Whether identical inputs will reproduce this entry failure.
+
+        Errors remain eligible for ``--resume`` because the operator may repair
+        an input or update a tool. For completion of the current database
+        snapshot, however, only an explicitly deterministic reason is a known
+        terminal exclusion. Unknown, mixed, worker, and unexpected errors are
+        recoverable so a new failure mode cannot silently enter a reference.
+        """
+        return bool(result.reason_codes) and all(
+            code == ReasonCode.DETERMINISTIC_PROCESSING_ERROR
+            for code in result.reason_codes
+        )
+
+    def exit_code(self, *, database_run: bool = False) -> int:
+        """Return success for a complete run under the requested run policy.
+
+        A full database may complete with documented deterministic exclusions.
+        A targeted run remains strict: asking for one entry and receiving an
+        error still exits nonzero even when that error will recur.
+        """
+        incomplete = (
+            self.recoverable_incompleteness()
+            if database_run
+            else self.counts.get("error", 0)
+            + self.counts.get("skip", 0)
+            + self.retryable_partials
+        )
+        return batch_exit_code(incomplete)
 
     def recoverable_incompleteness(self) -> int:
         """Entries a later run could still add to the cohort.
 
-        A missing input may arrive, and a killed worker says nothing about the
-        entry it was holding, so both leave the database genuinely unfinished.
-        An entry whose own data or tooling defeated it does not: it fails the
-        same way on every pass over the same inputs.
+        A missing input, killed worker, or unexpected processing failure may
+        succeed on a later attempt, so each leaves the database genuinely
+        unfinished. Only explicitly deterministic errors are terminal gaps.
         """
         return (
             self.counts.get("skip", 0)
             + self.retryable_partials
-            + self.worker_death_errors
+            + self.recoverable_errors
         )
 
 
@@ -1779,7 +1805,8 @@ def _report_batch(
         f"{layout.density_context}",
         flush=True,
     )
-    exit_code = tally.exit_code()
+    database_run = plan.mode == "database"
+    exit_code = tally.exit_code(database_run=database_run)
     if plan.mode == "database":
         # Gated on what a later run could still add, not on the exit code. A
         # handful of entries that defeat CCP4 or carry unusable data fail
@@ -1790,7 +1817,7 @@ def _report_batch(
         # permanent gaps stays self-describing.
         unfinished = tally.recoverable_incompleteness()
         if unfinished == 0:
-            permanent = tally.counts.get("error", 0)
+            permanent = tally.terminal_errors
             if permanent:
                 logger.warning(
                     "finalizing the confidence reference with %d permanently "
@@ -1821,7 +1848,8 @@ def _report_batch(
                 f"      confidence inputs were retained, but the database "
                 f"reference was not finalized: {unfinished} entr"
                 f"{'y' if unfinished == 1 else 'ies'} could still be added by "
-                f"--resume (missing inputs or lost workers).",
+                f"--resume (missing inputs, lost workers, or retryable "
+                f"processing failures).",
                 flush=True,
             )
     elif plan.mode == "reference":
@@ -1861,9 +1889,11 @@ def _report_batch(
         )
     if exit_code:
         logger.warning(
-            "completed with incomplete entries: errors=%d, skips=%d, "
-            "retryable_partials=%d",
+            "completed with incomplete entries: errors=%d "
+            "(recoverable=%d, terminal=%d), skips=%d, retryable_partials=%d",
             tally.counts["error"],
+            tally.recoverable_errors,
+            tally.terminal_errors,
             tally.counts["skip"],
             tally.retryable_partials,
         )
