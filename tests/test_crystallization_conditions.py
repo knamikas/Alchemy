@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from collections.abc import Sequence
 
 from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
 from crystallization_conditions import (
@@ -269,7 +269,7 @@ def test_review_queue_filters_levels_and_joins_site_specific_context(
             ("2def", "site-suspect", "FE", "SUSPECT"),
         ):
             writer.writerow(
-                {column: "" for column in confidence_columns}
+                dict.fromkeys(confidence_columns, "")
                 | {
                     "pdbID": pdb_id,
                     "metal_site_id": site_id,
@@ -284,7 +284,7 @@ def test_review_queue_filters_levels_and_joins_site_specific_context(
         writer = csv.DictWriter(handle, fieldnames=summary_columns)
         writer.writeheader()
         writer.writerow(
-            {column: "" for column in summary_columns}
+            dict.fromkeys(summary_columns, "")
             | {
                 "pdbID": "1abc",
                 "crystallization_data_status": "available",
@@ -295,7 +295,7 @@ def test_review_queue_filters_levels_and_joins_site_specific_context(
             }
         )
         writer.writerow(
-            {column: "" for column in summary_columns}
+            dict.fromkeys(summary_columns, "")
             | {
                 "pdbID": "2def",
                 "crystallization_data_status": "not_reported",

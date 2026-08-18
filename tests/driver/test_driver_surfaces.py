@@ -17,40 +17,36 @@ from __future__ import annotations
 import argparse
 import builtins
 import csv
-import http.client
 import gzip
+import http.client
 import json
 import logging
 import os
 import threading
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
-from collections.abc import Sequence
+from types import SimpleNamespace
+from typing import IO, TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 import pytest
 
-from types import SimpleNamespace
-
-from coordination import schema as coordination_schema
 import ccp4_setup
 import cli
-import inputs
-from driver import resources
-from driver import writers
-from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
-from driver import resume
-from driver import pool
-from driver import runlog
 import confidence_score
+import inputs
 import worker_contracts
 from codes import EntryStatus
+from coordination import schema as coordination_schema
+from driver import pool, resources, resume, runlog, writers
+from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
 if TYPE_CHECKING:
     # Annotations only, so gemmi and numpy stay imported inside the handful of
     # helpers that build MTZ files, and ``worker`` is never imported at all.
     import numpy as np
     from numpy.typing import NDArray
+
     from worker_contracts import EntryResult
 
 
@@ -71,6 +67,11 @@ class _PytestApi(Protocol):
 
 
 approx = cast(_PytestApi, pytest).approx
+
+# This module deliberately exercises these implementation-level policy seams.
+_BatchTally = pool._BatchTally  # pyright: ignore[reportPrivateUsage]
+_report_batch = pool._report_batch  # pyright: ignore[reportPrivateUsage]
+_MAX_WEB_PAGE_BYTES = inputs._MAX_WEB_PAGE_BYTES  # pyright: ignore[reportPrivateUsage]
 
 
 class _ResumeOutputs(TypedDict):
@@ -236,8 +237,11 @@ def test_an_incompatible_header_is_refused(
     tmp_path: Path,
     target: Literal["manifest_path", "stats_path", "bonds_path", "candidates_path"],
 ) -> None:
-    """Appending beneath a foreign header would misalign every column, and
-    nothing downstream could tell that column N had changed meaning."""
+    """Verify resume rejects a foreign output header.
+
+    Appending beneath a foreign header would misalign every column, and nothing
+    downstream could tell that column N had changed meaning.
+    """
     _write_header(tmp_path / os.path.basename(resume_outputs[target]), ["unexpected"])
 
     with pytest.raises(ValueError, match="incompatible schema"):
@@ -276,8 +280,11 @@ def test_a_manifest_without_the_analysis_config_column_is_refused(
 def test_the_refusal_names_the_columns_that_differ(
     resume_outputs: _ResumeOutputs, tmp_path: Path
 ) -> None:
-    """The message names the columns that differ, leaving the operator with a
-    cause rather than two headers to diff by hand."""
+    """Verify schema errors identify differing columns.
+
+    Naming the columns that differ gives the operator a cause rather than two
+    headers to diff by hand.
+    """
     _write_header(tmp_path / "manifest.csv", list(writers.MANIFEST_COLUMNS) + ["stray"])
 
     with pytest.raises(ValueError, match="unexpected stray"):
@@ -287,8 +294,11 @@ def test_the_refusal_names_the_columns_that_differ(
 def test_a_truncated_stats_header_is_refused(
     resume_outputs: _ResumeOutputs, tmp_path: Path
 ) -> None:
-    """A different EDSTATS build shifts the density block, and a dropped metric
-    column misaligns every value after it with no other symptom."""
+    """Verify statistics resume rejects a shortened density schema.
+
+    A different EDSTATS build shifts the density block, and a dropped metric
+    column misaligns every later value with no other symptom.
+    """
     _write_header(tmp_path / "stats.csv", list(STATS_COLUMNS)[:-1])
 
     with pytest.raises(ValueError, match="incompatible schema"):
@@ -510,8 +520,8 @@ def _entry(
     return result
 
 
-def _tally_of(*results: worker_contracts.EntryResult) -> pool._BatchTally:
-    tally = pool._BatchTally()
+def _tally_of(*results: worker_contracts.EntryResult) -> _BatchTally:
+    tally = _BatchTally()
     for result in results:
         tally.record(result)
     return tally
@@ -614,7 +624,7 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
 
     monkeypatch.setattr(pool, "_finalize_confidence_reference", finalize)
 
-    exit_code = pool._report_batch(
+    exit_code = _report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
     )
 
@@ -641,7 +651,7 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
 
     monkeypatch.setattr(pool, "_finalize_confidence_reference", must_not_finalize)
 
-    exit_code = pool._report_batch(
+    exit_code = _report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
     )
 
@@ -743,8 +753,11 @@ def test_an_entry_is_final_only_with_both_inputs(
 def test_a_legacy_pdb_export_counts_as_usable_coordinates(
     tmp_path: Path, compressed: bool
 ) -> None:
-    """``.pdb`` and ``.pdb.gz`` are accepted when the authoritative mmCIF is
-    absent, so a mirror carrying only the legacy export is still analyzable."""
+    """Verify legacy PDB mirrors remain analyzable.
+
+    ``.pdb`` and ``.pdb.gz`` are accepted when the authoritative mmCIF is
+    absent, so a mirror carrying only the legacy export remains usable.
+    """
     entry_dir = _make_entry(
         tmp_path, "9myr", cif=False, pdb=True, compressed=compressed
     )
@@ -828,8 +841,11 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(
 def test_the_authoritative_mmcif_wins_over_the_legacy_export(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When a mirror carries both, the mmCIF is the one converted: the legacy
-    export loses identifiers it retains."""
+    """Verify mmCIF wins when both coordinate formats exist.
+
+    The mmCIF is converted because the legacy export loses identifiers that it
+    retains.
+    """
     entry_dir = _make_entry(tmp_path, "9myr", cif=True, pdb=True)
     work_dir = tmp_path / "work"
     work_dir.mkdir()
@@ -979,7 +995,11 @@ def test_explicit_workers_are_still_capped_for_process_overhead(
 ) -> None:
     args = cli.parse_args(["--workers", "50", "--output-dir", str(tmp_path)])
     run_log = runlog.RunLog(args, "pytest")
-    monkeypatch.setattr(pool, "automatic_worker_limits", lambda **_kwargs: (8, 3))
+
+    def automatic_worker_limits(**_kwargs: object) -> tuple[int, int]:
+        return 8, 3
+
+    monkeypatch.setattr(pool, "automatic_worker_limits", automatic_worker_limits)
 
     workers = pool.choose_worker_count(args, entry_count=20, run_log=run_log)
 
@@ -1446,8 +1466,11 @@ def test_a_complete_ccp4_installation_passes(monkeypatch: pytest.MonkeyPatch) ->
 def test_tool_availability_agrees_with_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``ccp4_tools_available`` and ``verify_ccp4`` must not disagree, or the
-    driver accepts an installation the setup helper rejects."""
+    """Verify CCP4 availability and verification use the same tool set.
+
+    If ``ccp4_tools_available`` and ``verify_ccp4`` disagree, the driver can
+    accept an installation that the setup helper rejects.
+    """
 
     def missing_fft(tool: str, path: str | None = None) -> str | None:
         del path
@@ -1619,8 +1642,11 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path: Path) -> None
 def test_incomplete_metadata_falls_back_to_the_mtz(
     tmp_path: Path, payload: str, reason: str
 ) -> None:
-    """Both limits are required before data.json is believed, or a partial
-    metadata source is mixed into DPI provenance."""
+    """Verify partial resolution metadata does not override the MTZ.
+
+    Both limits are required before data.json is trusted; otherwise a partial
+    metadata source would be mixed into DPI provenance.
+    """
     entry_dir = _make_entry(tmp_path, "9myr", data_json=payload)
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
@@ -1712,8 +1738,11 @@ def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(
 
 
 def test_intermediates_are_discarded_unless_asked_for() -> None:
-    """Per-entry maps are large, so retention is opt-in: ``process`` keys its
-    scratch cleanup off this flag."""
+    """Verify intermediate retention is opt-in.
+
+    Per-entry maps are large, so ``process`` keys its scratch cleanup off this
+    flag.
+    """
     assert cli.parse_args([]).keep_intermediates is False
     assert cli.parse_args(["--keep-intermediates"]).keep_intermediates is True
 
@@ -1800,17 +1829,17 @@ def test_enumeration_does_not_open_files_too_large_to_be_a_page(
     """
     entry = tmp_path / "my" / "9myr"
     entry.mkdir(parents=True)
-    big = b"MTZ " + b"\0" * (inputs._MAX_WEB_PAGE_BYTES + 1)
+    big = b"MTZ " + b"\0" * (_MAX_WEB_PAGE_BYTES + 1)
     (entry / "9myr_final.mtz").write_bytes(big)
     (entry / "9myr_final.cif").write_bytes(big)
 
     opened: list[str] = []
     real_open = builtins.open
 
-    def counting_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+    def counting_open(path: Any, *args: Any, **kwargs: Any) -> IO[Any]:
         if str(path).startswith(str(entry)):
             opened.append(str(path))
-        return real_open(path, *args, **kwargs)
+        return cast(IO[Any], real_open(path, *args, **kwargs))
 
     monkeypatch.setattr(builtins, "open", counting_open)
 
@@ -1823,7 +1852,7 @@ def test_a_page_sized_html_body_is_still_rejected(tmp_path: Path) -> None:
     entry = tmp_path / "my" / "9myr"
     entry.mkdir(parents=True)
     page = b"<!DOCTYPE html>\n<html><body>proxy error</body></html>\n"
-    assert len(page) <= inputs._MAX_WEB_PAGE_BYTES
+    assert len(page) <= _MAX_WEB_PAGE_BYTES
     (entry / "9myr_final.mtz").write_bytes(page)
     (entry / "9myr_final.cif").write_bytes(page)
 

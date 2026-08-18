@@ -13,25 +13,24 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, NoReturn
-from collections.abc import Mapping, Sequence
 
 import pytest
 
 import ccp4_setup
 import cli
+import confidence_score
 import density_analysis as density
 from driver import pool
-import confidence_score
 
 
 def _option_help(option: str) -> str:
     """The rendered ``--help`` paragraph for one option."""
     captured = io.StringIO()
-    with contextlib.suppress(SystemExit):
-        with contextlib.redirect_stdout(captured):
-            cli.parse_args(["--help"])
+    with contextlib.suppress(SystemExit), contextlib.redirect_stdout(captured):
+        cli.parse_args(["--help"])
     text = captured.getvalue()
     # The option name also appears in the usage banner, so the description block
     # is its last occurrence.
@@ -109,9 +108,8 @@ def test_memory_utilization_rejects_values_outside_its_fraction(value: str) -> N
 def test_max_pdbs_rejects_non_positive_caps(value: str) -> None:
     """``--max-pdbs`` is a count, so zero and negatives are rejected by name."""
     stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr):
-        with pytest.raises(SystemExit) as excinfo:
-            cli.parse_args(["--id", "109m", "--max-pdbs", value])
+    with contextlib.redirect_stderr(stderr), pytest.raises(SystemExit) as excinfo:
+        cli.parse_args(["--id", "109m", "--max-pdbs", value])
 
     # ``argparse.error`` puts the diagnostic on stderr and only the status on the
     # exception, while ``raise SystemExit(message)`` does the reverse; accept both.
@@ -125,9 +123,8 @@ def test_max_pdbs_rejects_non_positive_caps(value: str) -> None:
 def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end() -> None:
     """A negative cap is rejected, not applied as a tail-trimming ``ids[:n]``."""
     stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr):
-        with pytest.raises(SystemExit) as excinfo:
-            cli.parse_args(["--id-file", "ids.txt", "--max-pdbs", "-3"])
+    with contextlib.redirect_stderr(stderr), pytest.raises(SystemExit) as excinfo:
+        cli.parse_args(["--id-file", "ids.txt", "--max-pdbs", "-3"])
 
     assert excinfo.value.code not in (0, None)
     message = f"{stderr.getvalue()}\n{excinfo.value}"
@@ -178,9 +175,8 @@ def test_an_unusable_combination_of_arguments_exits_two(
     A script branching on the status must not have to know which one did.
     """
     stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr):
-        with pytest.raises(SystemExit) as excinfo:
-            cli.parse_args(arguments)
+    with contextlib.redirect_stderr(stderr), pytest.raises(SystemExit) as excinfo:
+        cli.parse_args(arguments)
     assert excinfo.value.code == 2
     assert fragment in stderr.getvalue()
 

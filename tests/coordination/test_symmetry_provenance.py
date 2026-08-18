@@ -25,23 +25,21 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast
-from collections.abc import Callable, Mapping, Sequence
-
-import pytest
 
 import gemmi
+import helpers
+import pytest
+from helpers import StructureBuilder, simple_metal_site
 
-import coordination.analysis as ba
 import codes
+import coordination.analysis as ba
+import structure_analysis as sa
 from coordination.contact_record import Candidate
 from coordination.schema import BondRow, CandidateRow
-import structure_analysis as sa
 from metal_elements import METAL_ELEMENTS
-
-import helpers
-from helpers import StructureBuilder, simple_metal_site
 
 
 class _ApproxFactory(Protocol):

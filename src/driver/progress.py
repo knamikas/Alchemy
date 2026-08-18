@@ -7,8 +7,8 @@ moves, a redirected log wants a file that does not grow by a megabyte an hour.
 
 import sys
 import time
-from typing import TextIO
 from collections.abc import Callable, Mapping
+from typing import TextIO
 
 
 class ProgressReporter:
@@ -23,6 +23,7 @@ class ProgressReporter:
         stream: TextIO | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
+        """Initialize progress rendering for a fixed number of entries."""
         self.total = total
         self.stream = stream if stream is not None else sys.stdout
         self.clock = clock if clock is not None else time.monotonic
@@ -50,6 +51,7 @@ class ProgressReporter:
         force: bool = False,
         final: bool = False,
     ) -> None:
+        """Render the current counts when the throttle permits it."""
         now = self.clock()
         interval = (
             self.TERMINAL_INTERVAL_S if self.terminal else self.REDIRECTED_INTERVAL_S

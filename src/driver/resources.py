@@ -1,5 +1,7 @@
-"""Keep planning independent of gemmi so it runs before worker imports and
-still handles inputs incomplete enough to become ordinary worker errors.
+"""Plan worker resources without importing Gemmi.
+
+This module runs before worker imports and handles inputs incomplete enough to
+become ordinary worker errors.
 """
 
 from __future__ import annotations
@@ -10,11 +12,10 @@ import math
 import os
 import re
 import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from multiprocessing import cpu_count
 from typing import Any, TextIO, cast
-from collections.abc import Callable, Mapping
-
 
 GIB = 1024**3
 
@@ -49,6 +50,8 @@ _PROPERTY_PREFIX_LIMIT = 4 * 1024**2
 
 @dataclass(frozen=True)
 class EntryMemoryEstimate:
+    """Estimate one entry's peak worker memory and its evidence source."""
+
     pdb_id: str
     bytes: int
     source: str
@@ -56,10 +59,12 @@ class EntryMemoryEstimate:
 
     @property
     def is_high_memory(self) -> bool:
+        """Return whether the estimate exceeds the ordinary worker floor."""
         return self.bytes > AUTO_WORKER_MEMORY_BYTES
 
 
 def available_cpu_count() -> int:
+    """Return the CPUs available to this process under platform constraints."""
     process_cpu_count = cast(
         Callable[[], int | None] | None,
         getattr(os, "process_cpu_count", None),  # Python 3.13+
@@ -183,8 +188,10 @@ def _read_cgroup_available_memory() -> int | None:
 
 
 def available_memory_bytes() -> int | None:
-    """Use the tighter host/cgroup allowance so container and scheduler jobs
-    cannot size themselves against inaccessible host RAM.
+    """Return the tighter available host or cgroup memory allowance.
+
+    Using the tighter value prevents container and scheduler jobs from sizing
+    themselves against inaccessible host RAM.
     """
     if sys.platform.startswith("linux"):
         host_available = _read_linux_available_memory()
@@ -262,6 +269,7 @@ def automatic_worker_limits(
     memory_limit_bytes: int | None = None,
     utilization: float = DEFAULT_MEMORY_UTILIZATION,
 ) -> tuple[int, int | None]:
+    """Return CPU- and memory-based automatic worker limits."""
     cpu_limit = max(1, available_cpu_count() - 2)
     budget, _ = scheduling_memory_budget(
         available_memory_bytes(),
@@ -317,6 +325,7 @@ def _positive_float(properties: Mapping[str, object], name: str) -> float | None
 def estimate_from_properties(
     pdb_id: str, properties: Mapping[str, object]
 ) -> EntryMemoryEstimate | None:
+    """Estimate peak worker memory from PDB-REDO cell properties."""
     axes = tuple(
         _positive_float(properties, name) for name in ("AAXIS", "BAXIS", "CAXIS")
     )
@@ -355,6 +364,7 @@ def estimate_entry_memory(
     root: str,
     manual_inputs: Mapping[str, str | None] | None = None,
 ) -> EntryMemoryEstimate:
+    """Estimate one entry's peak memory from metadata or MTZ size."""
     entry_dir = os.path.join(root, pdb_id[1:3], pdb_id)
     if manual_inputs is not None:
         data_path = _first_existing((manual_inputs.get("data_json"),))

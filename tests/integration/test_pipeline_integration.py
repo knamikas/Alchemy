@@ -28,6 +28,7 @@ import re
 import shutil
 import socket
 from collections import Counter
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -35,19 +36,18 @@ from typing import (
     TypeVar,
     cast,
 )
-from collections.abc import Callable, Generator, Sequence
 
+import helpers
 import pytest
 
 import confidence_score
 import crystallization_conditions
-import helpers
 import inputs
 import main
-from metal_identification import DENSITY_CONTEXT_COLUMNS
+from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
-from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
+from metal_identification import DENSITY_CONTEXT_COLUMNS
 
 
 class _ApproxFactory(Protocol):
@@ -620,7 +620,9 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
         assert site["selected_metal_site_status"] == "selected"
 
         expected_density = _MEASURED_RSZD[("9myr", chain, "201")]
-        for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected_density):
+        for column, value in zip(
+            ("ZDm", "ZD-m", "ZD+m"), expected_density, strict=False
+        ):
             assert float(site[column]) == approx(value, abs=_RSZD_TOLERANCE), (
                 chain,
                 column,
@@ -689,7 +691,7 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(
         expected = _MEASURED_RSZD[("6nlr", chain, resnum)]
         assert row["selected_metal_site_status"] == "selected", (chain, resnum)
         assert row["coordinate_mapping_status"] == "matched", (chain, resnum)
-        for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected):
+        for column, value in zip(("ZDm", "ZD-m", "ZD+m"), expected, strict=False):
             assert float(row[column]) == approx(value, abs=_RSZD_TOLERANCE), (
                 chain,
                 resnum,
@@ -1149,7 +1151,7 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
     manual_bonds = read_rows(output_dir, "metal_bonds_all.csv")
     reference_bonds = rows_for(batch.bonds, "9myr")
     assert len(manual_bonds) == len(reference_bonds) == 8
-    for manual, reference in zip(manual_bonds, reference_bonds):
+    for manual, reference in zip(manual_bonds, reference_bonds, strict=False):
         for column in (
             "metal_chain",
             "metal_element",
@@ -1498,7 +1500,9 @@ def frozen_reference(
     for index, (rszd, rms) in enumerate(
         itertools.product(rszd_values, rms_zbond_values)
     ):
-        row = {column: "" for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
+        row: dict[str, str] = dict.fromkeys(
+            confidence_score.CONFIDENCE_INPUT_COLUMNS, ""
+        )
         row.update(
             pdbID=f"c{index:03d}",
             category="ion",
@@ -1514,7 +1518,7 @@ def frozen_reference(
         )
         rows.append(row)
     for index in range(2):
-        row = {column: "" for column in confidence_score.CONFIDENCE_INPUT_COLUMNS}
+        row = dict.fromkeys(confidence_score.CONFIDENCE_INPUT_COLUMNS, "")
         row.update(
             pdbID=f"u{index:03d}",
             selected_metal_site_status="selected",
@@ -1781,7 +1785,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     for pdb_id, manifest_row in manifest.items():
         assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
     # Scoring adds columns to the streamed inputs; it does not re-derive them.
-    for streamed, scored in zip(streamed_inputs, rows):
+    for streamed, scored in zip(streamed_inputs, rows, strict=False):
         for column in confidence_score.CONFIDENCE_INPUT_COLUMNS:
             assert scored[column] == streamed[column], column
 

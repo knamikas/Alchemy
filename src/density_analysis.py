@@ -1,17 +1,17 @@
-# Alchemy
-# CCP4-based map calculation + edstats real-space statistics for one structure.
-#
-# Requires the CCP4 binaries `mtzfix`, `fft`, `mapmask`, and `edstats` on PATH
-# (pass `env=` to point at a sourced CCP4 environment). The input MTZ must carry
-# the FWT/PHWT/DELFWT/PHDELWT map-coefficient columns (PDB-REDO _final.mtz and
-# refmac output have them).
+"""Calculate CCP4 maps and EDSTATS real-space statistics for one structure.
+
+The CCP4 binaries ``mtzfix``, ``fft``, ``mapmask``, and ``edstats`` must be on
+PATH. The input MTZ must carry FWT/PHWT/DELFWT/PHDELWT map coefficients, as
+PDB-REDO final and Refmac outputs do.
+"""
+
+import contextlib
 import os
-import subprocess
 import shutil
 import struct
+import subprocess
 import tempfile
 import time
-
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import IO, Any, Protocol, cast
@@ -89,6 +89,7 @@ class MtzfixValidationError(RuntimeError):
     def __init__(
         self, message: str, timings: Mapping[str, float] | None = None
     ) -> None:
+        """Initialize an error with completed CCP4 step timings."""
         super().__init__(message)
         self.timings = dict(timings or {})
 
@@ -104,6 +105,7 @@ class Ccp4ToolTimeoutError(RuntimeError):
         log_path: str,
         timings: Mapping[str, float] | None = None,
     ) -> None:
+        """Initialize a timeout with tool, duration, and partial-log details."""
         super().__init__(
             f"{tool} exceeded its {timeout_s:g}s time budget "
             f"(killed after {elapsed_s:.1f}s); partial log kept at {log_path}"
@@ -453,10 +455,8 @@ def normalize_refmac_twin_coefficients(
         written_difference,
     )
     if output_identity_residual > REFMAC_TWIN_IDENTITY_TOLERANCE:
-        try:
+        with contextlib.suppress(OSError):
             os.remove(output_path)
-        except OSError:
-            pass
         raise ValueError(
             "written EDSTATS coefficients failed their identity check "
             f"(maximum relative residual {output_identity_residual:.6g})"
@@ -617,10 +617,11 @@ class _DensityMapBuilder:
             ):
                 continue
             xyz_starts = [0, 0, 0]
-            for start, _count, axis in zip(starts, counts, axes):
+            for start, _count, axis in zip(starts, counts, axes, strict=False):
                 xyz_starts[axis - 1] = start
             return any(
-                start >= grid_size for start, grid_size in zip(xyz_starts, sampling)
+                start >= grid_size
+                for start, grid_size in zip(xyz_starts, sampling, strict=False)
             )
         raise RuntimeError(
             f"MAPMASK produced an unrecognized CCP4 map header for "

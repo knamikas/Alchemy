@@ -4,6 +4,8 @@ from enum import StrEnum
 
 
 class EntryStatus(StrEnum):
+    """Outcome recorded for one processed entry in the run manifest."""
+
     OK = "ok"
     PARTIAL = "partial"
     SKIP = "skip"

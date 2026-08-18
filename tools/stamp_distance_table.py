@@ -15,8 +15,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from datetime import datetime, UTC
-
+from datetime import UTC, datetime
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(REPO_ROOT, "src", "data")
@@ -46,6 +45,7 @@ SOURCES = [
 
 
 def sha256(path: str) -> str:
+    """Return the hexadecimal SHA-256 digest of a file."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for block in iter(lambda: handle.read(65536), b""):
@@ -62,6 +62,7 @@ def count_rows(path: str) -> int:
 
 
 def build_metadata(path: str, generated: str) -> dict[str, object]:
+    """Build the distance-table provenance sidecar payload."""
     return {
         "generated": generated,
         "distance_table_sha256": sha256(path),
@@ -76,6 +77,7 @@ def build_metadata(path: str, generated: str) -> dict[str, object]:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse command-line options for stamping or checking the sidecar."""
     parser = argparse.ArgumentParser(
         description="Record what src/data/metal_distances_info.txt currently is."
     )
@@ -88,6 +90,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Stamp or verify the distance-table sidecar and return an exit status."""
     args = parse_args(argv)
     actual = sha256(TABLE_PATH)
     if args.check:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import (
@@ -17,21 +18,19 @@ from typing import (
     Protocol,
     cast,
 )
-from collections.abc import Mapping, Sequence
 
-import pytest
 import gemmi
-
 import helpers
+import pytest
 from helpers import AtomRef, AtomSpec, ResidueSpec, StructureBuilder
 
+import coordinate_conversion as conversion
+import reference_data
 from codes import CandidateSource
 from coordination import analysis as coordination_analysis
-from coordination import schema as coordination_schema
-import coordinate_conversion as conversion
 from coordination import declared_connections
+from coordination import schema as coordination_schema
 from structure_analysis import ResidueSelection, StructureContext, load_structure
-import reference_data
 
 
 class _ApproxFactory(Protocol):
@@ -1463,7 +1462,7 @@ def test_declared_geometry_honors_each_asu_constraint(
 def test_mmcif_declaration_carries_its_identity_type_and_link_id(
     tmp_path: Path,
 ) -> None:
-    """mmCIF preserves the declaration's own id, type and link id."""
+    """MmCIF preserves the declaration's own id, type and link id."""
     builder, his, zinc = zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"),

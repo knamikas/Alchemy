@@ -14,8 +14,8 @@ The builders are serialization only: every decision they report was made in
 """
 
 import hashlib
-from typing import Any, ClassVar
 from collections.abc import Iterable, Iterator, Mapping
+from typing import Any, ClassVar
 
 import gemmi
 from typing_extensions import override
@@ -23,7 +23,6 @@ from typing_extensions import override
 from coordination.contact_record import Candidate, MultiDonorResult
 from output_rows import CsvValue
 from structure_analysis import NAN, AtomSite, StructureContext
-
 
 # Cutoff for a reference-covered geometry outlier. Both CSVs publish it as a
 # column, so a consumer reading an old file can see which threshold produced
@@ -371,18 +370,23 @@ class _CsvRow(Mapping[str, Any]):
 
 
 class BondRow(_CsvRow):
+    """Validate and serialize one row in the bond output schema."""
+
     columns = tuple(BOND_COLUMNS)
     indices = {column: index for index, column in enumerate(columns)}
     schema_name = "metal_bonds_all.csv"
 
 
 class CandidateRow(_CsvRow):
+    """Validate and serialize one row in the candidate output schema."""
+
     columns = tuple(CANDIDATE_COLUMNS)
     indices = {column: index for index, column in enumerate(columns)}
     schema_name = "metal_contact_candidates_all.csv"
 
 
 def metal_site_identifier(pdb_id: str, metal: AtomSite) -> str:
+    """Return a stable source-index identifier for one metal site."""
     return (
         f"{pdb_id.lower()}:m{metal.model_index}:c{metal.output_chain_index}:"
         f"r{metal.output_residue_index}:a{metal.atom_index}"
@@ -390,6 +394,7 @@ def metal_site_identifier(pdb_id: str, metal: AtomSite) -> str:
 
 
 def contact_identifier(pdb_id: str, metal: AtomSite, contact: Candidate) -> str:
+    """Return a stable identifier for one metal-contact image."""
     neighbor = contact.neighbor
     identity = (
         neighbor.model_index,
@@ -471,6 +476,7 @@ def context_warning_values(
     include_proximal: bool = False,
     multi_donor: MultiDonorResult | None = None,
 ) -> dict[str, Any]:
+    """Return contextual warning fields for a candidate contact."""
     reasons: list[str] = []
     policy = candidate.donor_policy()
     eligibility = candidate.eligibility()
@@ -588,6 +594,7 @@ def bond_row(
     sigma: tuple[float, float, float],
     parent_type: str,
 ) -> BondRow:
+    """Build a validated bond-output row from an analyzed contact."""
     neighbor = contact.neighbor
     metal_residue = structure.residue_for_atom(metal)
     neighbor_residue = structure.residue_for_atom(neighbor)

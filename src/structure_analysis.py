@@ -9,17 +9,16 @@ for metal-contact searches.
 
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass, field
 import math
 import os
-from typing import Protocol, cast
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Protocol, cast
 
 import gemmi
 
 from codes import ContactScope, ElementStatus, OccupancyStatus, WarningCode
-
 
 NAN = float("nan")
 DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
@@ -36,6 +35,7 @@ PDB_HYBRID36_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def blank_if_missing(value: str) -> str:
+    """Normalize a coordinate-format missing token to an empty string."""
     return "" if value in MISSING_VALUE_TOKENS else str(value)
 
 
@@ -90,6 +90,7 @@ def canonical_pdb_residue_id(value: str) -> str:
 
 
 def position_distance(a: Sequence[float], b: Sequence[float]) -> float:
+    """Return the Cartesian distance between two three-dimensional positions."""
     ax, ay, az = a
     bx, by, bz = b
     return math.sqrt((ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2)
@@ -119,6 +120,7 @@ def _residue_number(residue: gemmi.Residue) -> int:
 
 
 def valid_occupancy(value: object) -> bool:
+    """Return whether a value is a finite occupancy in the physical range."""
     if not isinstance(value, (int, float, str)):
         return False
     try:
@@ -129,6 +131,7 @@ def valid_occupancy(value: object) -> bool:
 
 
 def parse_pdb_element(value: str) -> tuple[str, str]:
+    """Parse a deposited PDB element field and return its validation status."""
     deposited = value.strip()
     if not deposited:
         return "", ElementStatus.MISSING
@@ -150,6 +153,8 @@ def _format_number(value: float | None) -> str:
 
 @dataclass(frozen=True)
 class RawOccupancy:
+    """Preserve raw PDB occupancy, element, and atom identity fields."""
+
     value: float | None
     status: str
     element: str = ""
@@ -165,10 +170,12 @@ class RawOccupancy:
 
     @property
     def valid(self) -> bool:
+        """Return whether the deposited occupancy is usable."""
         return self.status == OccupancyStatus.VALID
 
     @property
     def stable_identity(self) -> tuple[str, str, str, str, str, str]:
+        """Return the source identifiers used to match this atom reliably."""
         return (
             self.chain_id,
             self.residue_name,
@@ -223,10 +230,12 @@ class AtomSite:
 
     @property
     def pos(self) -> gemmi.Position:
+        """Return the Gemmi position backing this atom."""
         return self.gemmi_atom.pos
 
     @property
     def xyz(self) -> tuple[float, float, float]:
+        """Return Cartesian coordinates in angstroms."""
         return self.x, self.y, self.z
 
     @property
@@ -241,10 +250,12 @@ class AtomSite:
 
     @property
     def residue_key(self) -> tuple[int, int, int]:
+        """Return stable model, chain, and residue indices."""
         return self.model_index, self.chain_index, self.residue_index
 
     @property
     def output_chain_index(self) -> int:
+        """Return the source-facing chain index used in output identities."""
         return (
             self.chain_index
             if self.source_chain_index is None
@@ -253,6 +264,7 @@ class AtomSite:
 
     @property
     def output_residue_index(self) -> int:
+        """Return the source-facing residue index used in output identities."""
         return (
             self.residue_index
             if self.source_residue_index is None
@@ -261,14 +273,17 @@ class AtomSite:
 
     @property
     def source_key(self) -> tuple[int, int, int, int]:
+        """Return stable model-local indices for this atom."""
         return (*self.residue_key, self.atom_index)
 
     @property
     def exact_identity(self) -> tuple[object, ...]:
+        """Return residue, atom, alternate-location, and element identity."""
         return (*self.residue_key, self.atom_name, self.altloc, self.element)
 
     @property
     def chemical_site_identity(self) -> tuple[object, ...]:
+        """Return atom identity with alternate locations collapsed."""
         return (*self.residue_key, self.atom_name, self.element)
 
 
@@ -363,14 +378,17 @@ class ResidueSelection:
 
     @property
     def key(self) -> tuple[int, int, int]:
+        """Return stable model, chain, and residue indices."""
         return self.model_index, self.chain_index, self.residue_index
 
     @property
     def author_key(self) -> tuple[str, str, str]:
+        """Return the source author residue identity."""
         return self.residue_name, self.chain_id, self.resnum
 
     @property
     def coordinate_author_key(self) -> tuple[str, str, str]:
+        """Return the author identity present in the analysis coordinates."""
         return (
             self.coordinate_residue_name,
             self.coordinate_chain_id or self.chain_id,
@@ -379,6 +397,7 @@ class ResidueSelection:
 
     @property
     def elements(self) -> frozenset[str]:
+        """Return the validated elements deposited in this residue."""
         return frozenset(
             atom.element for atom in self.source_atoms if atom.element_known
         )
@@ -461,6 +480,7 @@ class StructureContext:
 
     @property
     def strict_ncs_operation_count(self) -> int:
+        """Return the number of noncrystallographic symmetry operations."""
         return len(self.strict_ncs_operation_ids)
 
     @property
@@ -515,17 +535,21 @@ class StructureContext:
     def atom_for_indices(
         self, chain_index: int, residue_index: int, atom_index: int
     ) -> AtomSite | None:
+        """Return the selected atom at model-local indices, if present."""
         return self._atom_by_indices.get((chain_index, residue_index, atom_index))
 
     def atom_for_mark(self, mark: gemmi.NeighborSearch.Mark) -> AtomSite | None:
+        """Resolve a Gemmi neighbor-search mark to a selected atom."""
         return self.atom_for_indices(mark.chain_idx, mark.residue_idx, mark.atom_idx)
 
     def residue_for_atom(self, atom: AtomSite) -> ResidueSelection:
+        """Return the selected residue containing an atom."""
         return self._residue_by_key[atom.residue_key]
 
     def residues_for_author(
         self, residue_name: str, chain_id: str, resnum: str
     ) -> tuple[ResidueSelection, ...]:
+        """Return residues matching either source or coordinate author identity."""
         return self._residues_by_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
@@ -533,6 +557,7 @@ class StructureContext:
     def residues_for_source_author(
         self, residue_name: str, chain_id: str, resnum: str
     ) -> tuple[ResidueSelection, ...]:
+        """Return residues matching a source-coordinate author identity."""
         return self._residues_by_source_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
@@ -540,6 +565,7 @@ class StructureContext:
     def residues_for_coordinate_author(
         self, residue_name: str, chain_id: str, resnum: str
     ) -> tuple[ResidueSelection, ...]:
+        """Return residues matching the analysis-coordinate author identity."""
         return self.residues_by_coordinate_author_index.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
@@ -576,6 +602,7 @@ class StructureContext:
         include_symmetry: bool = True,
         positive_occupancy_only: bool = True,
     ) -> gemmi.NeighborSearch:
+        """Build a neighbor search over finite selected atom positions."""
         if include_symmetry:
             if not self.symmetry_search_available:
                 raise ValueError(
@@ -946,6 +973,7 @@ def site_is_better(candidate: AtomSite, current: AtomSite) -> bool:
 
 
 def select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
+    """Select one deterministic conformer for a residue's contact atoms."""
     first = atoms[0]
     named: dict[str, list[AtomSite]] = defaultdict(list)
     blank: list[AtomSite] = []

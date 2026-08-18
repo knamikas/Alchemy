@@ -1,8 +1,12 @@
+"""Immutable configuration passed from the CLI to the batch driver."""
+
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class RunConfig:
+    """Collect all validated options controlling one Alchemy run."""
+
     id: str | None
     id_file: str | None
     pdb_file: str | None

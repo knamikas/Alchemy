@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import analysis_config
 import pytest
+
+import analysis_config
 
 
 def _identity(

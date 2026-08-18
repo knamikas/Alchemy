@@ -14,9 +14,9 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, cast
-from collections.abc import Mapping
 
 from codes import ReasonCode
 from structure_analysis import NAN, StructureContext, count_ni

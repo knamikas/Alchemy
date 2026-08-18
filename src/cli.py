@@ -16,26 +16,26 @@ import sys
 from collections.abc import Callable, Sequence
 from types import FrameType
 
+from ccp4_setup import REPO_DIR
 from density_analysis import (
     CCP4_TOOL_TIMEOUT_S,
     DENSITY_MAP_SCOPES,
     MODEL_ENVELOPE_BORDER_ANGSTROM,
 )
+from driver.pool import DEFAULT_ROOT, run
+from driver.runlog import RunLog
+from run_config import RunConfig
 from run_logging import (
     configure_driver_logging,
     level_for_verbosity,
     logger_for,
 )
-from ccp4_setup import REPO_DIR
-from driver.pool import DEFAULT_ROOT, run
-from driver.runlog import RunLog
-from run_config import RunConfig
-
 
 logger = logger_for(__name__)
 
 
 def parse_pdb_id(value: str) -> str:
+    """Parse and normalize a four-character PDB identifier."""
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
             "PDB ID must contain exactly four alphanumeric characters"
@@ -96,6 +96,7 @@ def utilization_fraction(value: str) -> float:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
+    """Parse command-line arguments into an immutable run configuration."""
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

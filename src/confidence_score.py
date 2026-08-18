@@ -8,6 +8,7 @@ scores without ever defining their verdicts from the reference population.
 
 import argparse
 import bisect
+import contextlib
 import csv
 import hashlib
 import json
@@ -15,15 +16,13 @@ import math
 import os
 import sys
 from collections import Counter, defaultdict
-from typing import Any, TextIO
 from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, TextIO
 
 from analysis_config import analysis_config_id
 from output_rows import MetalStatsRow, scientific_csv_value
-
 from reference_data import cofactor_ids, reference_data_id
 from worker_contracts import MAX_ANALYZED_METAL_SITES
-
 
 REFERENCE_METADATA_FILE = "metadata.json"
 REFERENCE_DISTRIBUTION_FILE = "component_distributions.csv"
@@ -234,10 +233,12 @@ def _format_decimal(value: float, decimal_places: int = 6) -> str:
 
 
 def canonical_support_score(value: float) -> float:
+    """Round a support score to its canonical serialized precision."""
     return float(f"{value:.{SCORE_DECIMAL_PLACES}f}")
 
 
 def canonical_metric(value: float) -> float:
+    """Round an input metric to its canonical serialized precision."""
     return float(f"{value:.{METRIC_DECIMAL_PLACES}f}")
 
 
@@ -416,7 +417,7 @@ def _orphan_bond_site_input(
         missing_reasons.append("zbond_unavailable_for_reference")
     if summary["reference_covered_contact_count"] < summary["assigned_contact_count"]:
         missing_reasons.append("partial_geometry_coverage")
-    values: dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
+    values: dict[str, Any] = dict.fromkeys(CONFIDENCE_INPUT_COLUMNS, "")
     values.update(
         {
             "pdbID": first.get("pdbID", key[0]),
@@ -577,7 +578,7 @@ def complete_confidence_site_count(
                 reasons.append(missing_reason)
             row["confidence_inputs_missing_reasons"] = "|".join(reasons)
     for index in range(len(rows), selected_site_count):
-        values: dict[str, Any] = {column: "" for column in CONFIDENCE_INPUT_COLUMNS}
+        values: dict[str, Any] = dict.fromkeys(CONFIDENCE_INPUT_COLUMNS, "")
         values.update(
             {
                 "pdbID": pdb_id,
@@ -609,12 +610,14 @@ def component_level(value: float, review: float, suspect: float) -> str:
 
 
 def density_level(rszd_abs: float) -> str:
+    """Classify an absolute RSZD value at the density thresholds."""
     return component_level(
         rszd_abs, DENSITY_REVIEW_THRESHOLD, DENSITY_SUSPECT_THRESHOLD
     )
 
 
 def geometry_level(geometry_rms_zbond: float) -> str:
+    """Classify an RMS bond Z score at the geometry thresholds."""
     return component_level(
         geometry_rms_zbond, GEOMETRY_REVIEW_THRESHOLD, GEOMETRY_SUSPECT_THRESHOLD
     )
@@ -679,7 +682,7 @@ class _EmpiricalDistribution:
             raise ValueError("confidence reference contains an invalid value")
         if any(isinstance(count, bool) or count < 1 for count in counts):
             raise ValueError("confidence reference contains an invalid count")
-        if any(right <= left for left, right in zip(values, values[1:])):
+        if any(right <= left for left, right in zip(values, values[1:], strict=False)):
             raise ValueError("confidence reference values are not increasing")
         self.values = tuple(values)
         self.counts = tuple(counts)
@@ -718,6 +721,7 @@ class ConfidenceReference:
         geometry_counts: Sequence[int],
         metadata: Mapping[str, Any],
     ) -> None:
+        """Initialize the frozen empirical distributions and their metadata."""
         self.density = _EmpiricalDistribution(density_values, density_counts)
         self.geometry = _EmpiricalDistribution(geometry_values, geometry_counts)
         if self.density.size == 0 and self.geometry.size == 0:
@@ -729,10 +733,12 @@ class ConfidenceReference:
 
     @property
     def density_reference_size(self) -> int:
+        """Return the number of density observations in the reference."""
         return self.density.size
 
     @property
     def geometry_reference_size(self) -> int:
+        """Return the number of geometry observations in the reference."""
         return self.geometry.size
 
 
@@ -742,9 +748,9 @@ def score_site(
     reference: ConfidenceReference | None = None,
 ) -> dict[str, str | float]:
     """Return authoritative levels plus secondary empirical ranking scores."""
-    result: dict[str, str | float] = {
-        key: value for key, value in classify_site(rszd_abs, geometry_rms_zbond).items()
-    }
+    result: dict[str, str | float] = dict(
+        classify_site(rszd_abs, geometry_rms_zbond).items()
+    )
     density_score = (
         0.0
         if reference and rszd_abs >= EDSTATS_SATURATION_MAGNITUDE
@@ -1106,9 +1112,8 @@ def finalize_database_confidence(
                 density_counts[rszd] += 1
             if math.isfinite(geometry_rms) and geometry_rms >= 0:
                 geometry_counts[geometry_rms] += 1
-            if math.isfinite(rszd) or math.isfinite(geometry_rms):
-                if pdb_id:
-                    scorable_entry_ids.add(pdb_id)
+            if (math.isfinite(rszd) or math.isfinite(geometry_rms)) and pdb_id:
+                scorable_entry_ids.add(pdb_id)
     inputs_sha256 = _file_sha256(input_path)
     provenance: dict[str, Any] = {
         "cohort_id": "alchemy-cohort-" + inputs_sha256[:20],
@@ -1171,10 +1176,8 @@ def score_file_against_reference(
                 scored += score is not None
         os.replace(output_tmp, output_path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(output_tmp)
-        except OSError:
-            pass
         raise
     return total, scored
 
@@ -1248,6 +1251,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the confidence-reference CLI and return an exit status."""
     args = _parser().parse_args(argv)
     try:
         if args.command == "finalize":

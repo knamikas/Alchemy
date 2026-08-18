@@ -7,10 +7,12 @@ line is the column header.
 import math
 import statistics
 from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Iterable, Mapping, Sequence
 
+from codes import WarningCode
+from output_rows import MetalStatsRow
 from structure_analysis import (
     NAN,
     AtomSite,
@@ -18,9 +20,6 @@ from structure_analysis import (
     StructureContext,
     canonical_pdb_residue_id,
 )
-from output_rows import MetalStatsRow
-from codes import WarningCode
-
 
 # EDSTATS 1.0.9's standard residue-table schema, whose twelve metrics repeat
 # for main-chain, side-chain and all atoms.
@@ -725,7 +724,6 @@ def extract_metal_statistics(
     entry-level aggregates retain the non-target residue observations that are
     deliberately absent from the returned site-level rows.
     """
-
     metals_upper = {element.upper() for element in metals_set}
     cofactors = frozenset(cofactor_set)
     density_context = _DensityContextAccumulator()
@@ -883,6 +881,7 @@ def sigma_for(
     zd_idx: Sequence[int] | None,
     site_key: Sequence[Any] | None = None,
 ) -> tuple[float, float, float]:
+    """Return the three density Z scores for a site or author identity."""
     fields: Sequence[str] | None = None
     if site_key is not None:
         fields = sig["by_site"].get(tuple(site_key))

@@ -7,6 +7,7 @@ post-scoring REVIEW/SUSPECT projection that joins those annotations by PDB ID.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import gzip
 import json
@@ -16,15 +17,14 @@ import re
 import time
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
-from dataclasses import dataclass
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 import gemmi
 
 from output_rows import CsvValue, scientific_csv_value
-
 
 CONDITION_COLUMNS = (
     "pdbID",
@@ -209,12 +209,16 @@ query CrystallizationConditions($ids: [String!]!) {
 
 @dataclass(frozen=True, slots=True)
 class CrystallizationExtraction:
+    """Collect normalized condition rows and their entry summary."""
+
     conditions: tuple[dict[str, CsvValue], ...]
     summary: dict[str, CsvValue]
 
 
 @dataclass(frozen=True, slots=True)
 class CrystallizationPrefetchStats:
+    """Count outcomes from prefetching original-PDB condition metadata."""
+
     requested: int
     cache_hits: int
     fetched: int
@@ -294,17 +298,17 @@ def _method_from_text(text: str) -> str:
 
 def _parse_text_measurements(text: str) -> tuple[str, str, str]:
     range_match = _PH_RANGE_RE.search(text)
-    pH_range = ""
-    pH = ""
+    ph_range = ""
+    ph = ""
     if range_match:
-        pH_range = f"{range_match.group(1)}-{range_match.group(2)}"
+        ph_range = f"{range_match.group(1)}-{range_match.group(2)}"
     else:
         match = _PH_RE.search(text)
         if match:
-            pH = match.group(1)
+            ph = match.group(1)
     temp_match = _TEMP_RE.search(text)
     temperature = temp_match.group(1) if temp_match else ""
-    return pH, pH_range, temperature
+    return ph, ph_range, temperature
 
 
 def _provenance(
@@ -364,7 +368,7 @@ def _pdb_conditions(
         details = details[marker.end() :].strip()
     if not details:
         return []
-    pH, pH_range, temperature = _parse_text_measurements(details)
+    ph, ph_range, temperature = _parse_text_measurements(details)
     return [
         {
             "pdbID": pdb_id,
@@ -373,8 +377,8 @@ def _pdb_conditions(
             **_provenance(metadata_source),
             "crystal_id": "",
             "method": _method_from_text(details),
-            "pH": pH,
-            "pH_range": pH_range,
+            "pH": ph,
+            "pH_range": ph_range,
             "temperature_K": temperature,
             "temperature_details": "",
             "raw_details": details,
@@ -416,7 +420,8 @@ def unavailable_summary(
     retrieved_at_utc: str = "",
     entry_revision_date: str = "",
 ) -> dict[str, CsvValue]:
-    row: dict[str, CsvValue] = {column: "" for column in SUMMARY_COLUMNS}
+    """Build a summary row for unavailable crystallization conditions."""
+    row: dict[str, CsvValue] = dict.fromkeys(SUMMARY_COLUMNS, "")
     row.update(
         pdbID=pdb_id,
         crystallization_data_status=status,
@@ -463,11 +468,11 @@ def _summary(
         for row in rows
     )
     metals = detected_metals(searchable)
-    pH_values: list[object] = [row.get("pH", "") for row in rows]
+    ph_values: list[object] = [row.get("pH", "") for row in rows]
     for row in rows:
-        pH_range = str(row.get("pH_range", ""))
-        pH_values.extend(re.findall(r"\d+(?:\.\d+)?", pH_range))
-    pH_min, pH_max = _range(pH_values, minimum=0.0, maximum=14.0)
+        ph_range = str(row.get("pH_range", ""))
+        ph_values.extend(re.findall(r"\d+(?:\.\d+)?", ph_range))
+    ph_min, ph_max = _range(ph_values, minimum=0.0, maximum=14.0)
     temp_min, temp_max = _range(row.get("temperature_K", "") for row in rows)
     lowered = searchable.lower()
     return {
@@ -478,8 +483,8 @@ def _summary(
         "crystallization_condition_ids": "|".join(
             str(row["crystallization_condition_id"]) for row in rows
         ),
-        "crystallization_pH_min": pH_min,
-        "crystallization_pH_max": pH_max,
+        "crystallization_pH_min": ph_min,
+        "crystallization_pH_max": ph_max,
         "crystallization_temperature_min_K": temp_min,
         "crystallization_temperature_max_K": temp_max,
         "crystallization_raw_text": raw_text,
@@ -580,10 +585,8 @@ def _write_cache_payload(cache_root: str, payload: Mapping[str, Any]) -> None:
             handle.write("\n")
         os.replace(temporary, path)
     except OSError:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(temporary)
-        except FileNotFoundError:
-            pass
         raise
 
 

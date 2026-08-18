@@ -1,14 +1,15 @@
+"""Typed row values and serialization helpers for Alchemy CSV outputs."""
+
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, ClassVar
-from collections.abc import Iterator, Mapping, Sequence
 
 from typing_extensions import override
 
 from structure_analysis import AtomSite
-
 
 CsvValue = str | int | float | bool | None
 AtomKey = tuple[int, int, int, int]
@@ -17,6 +18,8 @@ ResidueKey = tuple[int, int, int]
 
 @dataclass(frozen=True, slots=True)
 class MetalStatsRow(Mapping[str, Any]):
+    """Store one metal-statistics row with its resolved structure identity."""
+
     pdb_id: str
     category: str
     resname: str
@@ -68,12 +71,14 @@ class MetalStatsRow(Mapping[str, Any]):
         return len(self.field_names)
 
     def with_fields(self, fields: Sequence[CsvValue]) -> MetalStatsRow:
+        """Return a copy containing the supplied output fields."""
         return replace(self, fields=tuple(fields))
 
     @classmethod
     def from_output_fields(
         cls, pdb_id: str, category: str, fields: Sequence[CsvValue]
     ) -> MetalStatsRow:
+        """Build an unresolved row from already serialized output fields."""
         return cls(
             pdb_id=pdb_id,
             category=category,
@@ -93,6 +98,7 @@ class MetalStatsRow(Mapping[str, Any]):
         )
 
     def as_output_dict(self, columns: Sequence[str]) -> dict[str, CsvValue]:
+        """Map the row values to a validated output column sequence."""
         values = (self.pdb_id, self.category, *self.fields)
         if len(values) != len(columns):
             raise ValueError("metal statistics row does not match its output schema")
@@ -100,12 +106,14 @@ class MetalStatsRow(Mapping[str, Any]):
 
 
 def csv_value(value: object) -> CsvValue:
+    """Validate and return a scalar suitable for CSV serialization."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError(f"output value is not a CSV scalar: {type(value).__name__}")
 
 
 def scientific_csv_value(value: object) -> object:
+    """Normalize booleans and non-finite floats for scientific CSV output."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float) and not math.isfinite(value):

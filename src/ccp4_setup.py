@@ -5,6 +5,7 @@ outside a CLI process; ``driver.pool.resolve_ccp4_environment`` is the one
 place that turns one into an exit.
 """
 
+import contextlib
 import json
 import os
 import shlex
@@ -12,9 +13,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
-from collections.abc import Mapping, Sequence
 
 
 class Ccp4SetupError(Exception):
@@ -59,10 +60,10 @@ def _windows_ccp4_setup_candidates() -> list[str]:
     ccp4_root = os.environ.get("CCP4")
     if ccp4_root:
         roots.append(ccp4_root)
-    system_drive = os.environ.get("SystemDrive", "C:")
+    system_drive = os.environ.get("SYSTEMDRIVE", "C:")
     for base in (
         system_drive + os.sep,
-        os.environ.get("ProgramFiles", ""),
+        os.environ.get("PROGRAMFILES", ""),
         os.path.expanduser("~"),
     ):
         if not base:
@@ -121,6 +122,7 @@ def load_ccp4_setup_config(
 def save_ccp4_setup(
     setup_path: str, config_files: Sequence[str] | None = None
 ) -> list[str]:
+    """Save the CCP4 setup path to the highest-precedence config file."""
     config_files = config_files or DEFAULT_CONFIG_FILES
     target = config_files[0]
     path = Path(target)
@@ -182,6 +184,7 @@ def missing_ccp4_tools(env: Mapping[str, str] | None = None) -> list[str]:
 
 
 def ccp4_tools_available(env: Mapping[str, str] | None = None) -> bool:
+    """Return whether every required CCP4 program is available on PATH."""
     return not missing_ccp4_tools(env)
 
 
@@ -254,10 +257,8 @@ def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
                 "run rather than failing one entry."
             ) from None
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(script_path)
-        except OSError:
-            pass
 
     if out.returncode != 0:
         raise Ccp4SetupError(f"Failed to run CCP4 setup {ccp4_setup}:\n{out.stderr}")

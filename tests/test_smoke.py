@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import gemmi
-import pytest
-
 import helpers
+import pytest
 from helpers import (
-    AtomSpec,
     EDSTATS_HEADER,
+    AtomSpec,
     StructureBuilder,
     simple_metal_site,
 )
@@ -52,22 +51,24 @@ def test_src_modules_import() -> None:
     it on ``sys.path``; failing here names that cause before the rest of the
     suite fails with ``ModuleNotFoundError``.
     """
-    from coordination import analysis
-    from coordination import schema
     import ccp4_setup
+    import cli
     import codes
     import confidence_score
-    from coordination import contact_record
-    from coordination import declared_connections
     import density_analysis
-    from coordination import donor_chemistry
-    from coordination import dpi
     import main
     import metal_elements
     import metal_identification
-    import cli
     import structure_analysis
     import worker
+    from coordination import (
+        analysis,
+        contact_record,
+        declared_connections,
+        donor_chemistry,
+        dpi,
+        schema,
+    )
     from driver import pool, progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
@@ -466,7 +467,7 @@ def test_edstats_row_matches_the_documented_schema() -> None:
     assert len(EDSTATS_HEADER) == 42
     row = helpers.edstats_row("ZN", "B", "1", metrics={"ZDm": 1.5}, nr=3)
     assert len(row) == len(EDSTATS_HEADER)
-    fields = dict(zip(EDSTATS_HEADER, row))
+    fields = dict(zip(EDSTATS_HEADER, row, strict=False))
     assert (fields["RT"], fields["CI"], fields["RN"]) == ("ZN", "B", "1")
     assert (fields["MN"], fields["CP"], fields["NR"]) == ("1", "B", "3")
     assert fields["ZDm"] == "1.5"

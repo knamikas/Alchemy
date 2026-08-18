@@ -5,11 +5,10 @@ import os
 import struct
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO, Any, NoReturn, Protocol, cast
-from collections.abc import Callable
 
 import gemmi
 import numpy as np
@@ -17,6 +16,8 @@ import pytest
 
 import density_analysis as density
 import inputs
+
+_Ccp4Runner = density._Ccp4Runner  # pyright: ignore[reportPrivateUsage]
 
 
 class _ApproxFactory(Protocol):
@@ -277,7 +278,7 @@ def test_known_ccp4_entry_limitations_are_deterministic(
 
     monkeypatch.setattr("density_analysis.shutil.which", _found_command)
     monkeypatch.setattr("density_analysis.subprocess.run", failed_program)
-    runner = density._Ccp4Runner("1abc", str(tmp_path), None, 900, {})
+    runner = _Ccp4Runner("1abc", str(tmp_path), None, 900, {})
 
     with pytest.raises(density.Ccp4EntryLimitationError, match="rc=1"):
         runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")
@@ -297,7 +298,7 @@ def test_an_unknown_ccp4_failure_remains_recoverable(
 
     monkeypatch.setattr("density_analysis.shutil.which", _found_command)
     monkeypatch.setattr("density_analysis.subprocess.run", failed_program)
-    runner = density._Ccp4Runner("1abc", str(tmp_path), None, 900, {})
+    runner = _Ccp4Runner("1abc", str(tmp_path), None, 900, {})
 
     with pytest.raises(RuntimeError) as excinfo:
         runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")

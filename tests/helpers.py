@@ -13,6 +13,7 @@ import math
 import os
 import shutil
 import socket
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
@@ -20,15 +21,14 @@ from typing import (
     Protocol,
     cast,
 )
-from collections.abc import Iterable, Mapping, Sequence
 
 import gemmi
 
 if TYPE_CHECKING:
     # Annotations only, so that the deliberate per-function imports below stay
     # the only place this module reaches into ``src`` at run time.
-    from structure_analysis import StructureContext
     from output_rows import MetalStatsRow
+    from structure_analysis import StructureContext
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -864,7 +864,7 @@ def edstats_row(
     unknown = set(metrics or {}) - set(EDSTATS_METRICS)
     if unknown:
         raise KeyError(f"not EDSTATS metric columns: {sorted(unknown)}")
-    values = {name: default for name in EDSTATS_METRICS}
+    values = dict.fromkeys(EDSTATS_METRICS, default)
     values.update(metrics or {})
     fields = [str(rt), str(ci), str(rn)]
     fields.extend(str(values[name]) for name in EDSTATS_METRICS)

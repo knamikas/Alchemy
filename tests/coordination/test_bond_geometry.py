@@ -5,24 +5,24 @@ from __future__ import annotations
 import math
 import os
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, cast
-from collections.abc import Mapping, Sequence
 
 import gemmi
+import helpers
 import pytest
+from helpers import EDSTATS_HEADER, AtomSpec, StructureBuilder
 
-import coordination.analysis as ba
-from coordination import schema as coordination_schema
-from coordination.schema import BondRow, CandidateRow
 import codes
 import coordinate_conversion
-from coordination.contact_record import Candidate
-from coordination import donor_chemistry
+import coordination.analysis as ba
 import coordination.dpi as dpi_module
-import helpers
 import reference_data
-from helpers import AtomSpec, EDSTATS_HEADER, StructureBuilder
+from coordination import donor_chemistry
+from coordination import schema as coordination_schema
+from coordination.contact_record import Candidate
+from coordination.schema import BondRow, CandidateRow
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import AtomSite, StructureContext, count_ni, load_structure
 
@@ -1180,7 +1180,7 @@ def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path: Path) 
 
 
 def test_zscore_matches_the_documented_formula() -> None:
-    """z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
+    """Z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
     assert ba.zscore(2.30, 2.09, 0.05, 0.12) == approx(
         (2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2)
     )
@@ -1651,7 +1651,7 @@ def test_dpi_counts_atoms_by_occupancy_not_by_record(tmp_path: Path) -> None:
 def test_asu_volume_is_the_cell_volume_over_the_operation_count(
     tmp_path: Path, spacegroup: str, operations: int
 ) -> None:
-    """va = V(cell) / number of symmetry operations, centring included.
+    """Va = V(cell) / number of symmetry operations, centring included.
 
     Counting only the point-group operations of ``C 2`` would inflate va by the
     centring multiplicity of two, worth 26% on the DPI through the cube root.
@@ -1852,7 +1852,7 @@ def test_rfree_takes_the_first_matching_line(tmp_path: Path) -> None:
 def test_rfree_is_nan_when_absent_or_malformed(
     tmp_path: Path, content: str | None
 ) -> None:
-    """A header that does not state a usable R-free yields NaN, never 0.0.
+    r"""A header that does not state a usable R-free yields NaN, never 0.0.
 
     0.0 would pass as a number and give a DPI of exactly zero, making every
     z-score infinite. The two malformed spellings are the ones the scrape's

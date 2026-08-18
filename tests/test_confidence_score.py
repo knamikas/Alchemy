@@ -8,15 +8,15 @@ import json
 import math
 import os
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
-from collections.abc import Mapping, Sequence
 
+import helpers
 import pytest
 
 import analysis_config
 import confidence_score as cs
-import helpers
 import reference_data
 from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
@@ -63,7 +63,7 @@ def _stats_row(
     zd_pos: object = 2.0,
     **overrides: str,
 ) -> dict[str, str]:
-    row = {column: "" for column in cs.IDENTITY_COLUMNS}
+    row: dict[str, str] = dict.fromkeys(cs.IDENTITY_COLUMNS, "")
     row.update(SITE)
     row.update(
         {
@@ -101,7 +101,7 @@ def _bond_row(
     atom: str = "NE2",
     **overrides: str,
 ) -> dict[str, str]:
-    row = dict(SITE)
+    row: dict[str, str] = dict(SITE)
     row.update(
         {
             "pdbID": pdb_id,
@@ -135,7 +135,7 @@ def _bond_row(
 
 
 def _input_row(**overrides: str) -> dict[str, str]:
-    row = {column: "" for column in cs.CONFIDENCE_INPUT_COLUMNS}
+    row: dict[str, str] = dict.fromkeys(cs.CONFIDENCE_INPUT_COLUMNS, "")
     row.update(SITE)
     row.update(
         {
@@ -679,7 +679,7 @@ def test_score_file_requires_new_evidence_columns_and_cleans_partial_output(
 
 def test_score_file_rejects_already_scored_input(tmp_path: Path) -> None:
     columns = [*cs.CONFIDENCE_INPUT_COLUMNS, *cs.ANALYSIS_COLUMNS]
-    row = {**_input_row(), **{column: "" for column in cs.ANALYSIS_COLUMNS}}
+    row = {**_input_row(), **dict.fromkeys(cs.ANALYSIS_COLUMNS, "")}
     input_path = _write_input_csv(tmp_path / "scored.csv", [row], columns)
     with pytest.raises(ValueError, match="already contains analysis"):
         cs.score_file_against_reference(

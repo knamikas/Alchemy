@@ -16,24 +16,24 @@ import os
 import shutil
 import signal
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from multiprocessing.queues import Queue, SimpleQueue
 from typing import Any
-from collections.abc import Mapping
 
+from codes import EntryStatus, ReasonCode, WarningCode
+from coordinate_conversion import first_model_pdb
 from coordination.analysis import (
     BondAnalysisMetadata,
     BondAnalysisResult,
     run_bond_analysis,
 )
-from codes import EntryStatus, ReasonCode, WarningCode
 from coordination.schema import (
     STATS_EXTRA_COLUMNS,
     check_row_schema,
     stats_extra_values,
 )
 from crystallization_conditions import extract_crystallization_context
-from coordinate_conversion import first_model_pdb
 from density_analysis import (
     Ccp4EntryLimitationError,
     Ccp4ToolTimeoutError,
@@ -57,7 +57,6 @@ from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
 from structure_analysis import NAN, StructureContext, load_structure
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult, WorkerConfig
-
 
 METALS_SET = set(METAL_ELEMENTS)
 
@@ -112,6 +111,7 @@ def initialize_worker(
     inflight: SimpleQueue[tuple[str, int, str]] | None = None,
     log_queue: Queue[logging.LogRecord] | None = None,
 ) -> None:
+    """Initialize process-local configuration, logging, and signal state."""
     global worker_config, _inflight_queue
     worker_config = cfg
     _inflight_queue = inflight
@@ -140,10 +140,8 @@ def announce_inflight(state: str, pdb_id: str) -> None:
     """
     if _inflight_queue is None:
         return
-    try:
+    with contextlib.suppress(Exception):  # bookkeeping must never fail an entry
         _inflight_queue.put((state, os.getpid(), pdb_id))
-    except Exception:  # noqa: BLE001 - bookkeeping must never fail an entry
-        pass
 
 
 def _preserve_timeout_log(

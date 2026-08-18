@@ -1,6 +1,7 @@
-"""Batch-driver data management: argument validation, resume bookkeeping, the
-manifest projection, the staged-retry and streamed-output machinery, and the
-two coordinate-preparation converters.
+"""Test batch-driver data management.
+
+Coverage includes argument validation, resume bookkeeping, manifest projection,
+staged retries, streamed outputs, and both coordinate-preparation converters.
 
 Worker-death recovery and end-to-end pipeline runs are covered elsewhere.
 """
@@ -13,51 +14,43 @@ import io
 import json
 import logging
 import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Protocol
-from collections.abc import Callable
-from collections.abc import Mapping
-from typing import NamedTuple
-from collections.abc import Sequence
-from typing import cast
+from typing import Any, NamedTuple, Protocol, cast
 
 import gemmi
+import helpers
 import pytest
 
-import helpers
-from coordination import schema as coordination_schema
+import cli
+import confidence_score
 import coordinate_conversion as conversion
-from coordination import declared_connections
 import density_analysis as density
 import main
 import metal_identification
-from inputs import PdbRedoMetadata
 import structure_analysis
 import worker
 import worker_contracts
 from codes import EntryStatus
+from coordination import declared_connections
+from coordination import schema as coordination_schema
+from driver import output_lock, pool, resources, resume, runlog
+from driver import pool as driver_pool
 from driver.progress import ProgressReporter
-from driver import runlog
-from driver import resources
 from driver.runlog import RunLog
 from driver.writers import (
     MANIFEST_COLUMNS,
     MANIFEST_FIELDS,
     STATS_COLUMNS,
-    manifest_row,
     OutputWriters,
+    manifest_row,
 )
-from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
-import cli
-from driver import pool as driver_pool
-from driver import resume
-from driver import pool
-from driver import output_lock
-import confidence_score
+from inputs import PdbRedoMetadata
 from output_rows import MetalStatsRow
 from run_config import RunConfig
+from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 
 
 class _ApproxFactory(Protocol):
@@ -1302,7 +1295,9 @@ class TestInitialResult:
         assert result.retryable is True
 
     def test_carries_the_reference_data_identity(self) -> None:
-        """Two runs whose z-scores used different reference distances must be
+        """Verify reference-data identity is preserved.
+
+        Runs whose z-scores used different reference distances must remain
         distinguishable in the output.
         """
         result = worker.initial_result("109m", CFG, None)
@@ -1371,8 +1366,10 @@ class TestInitialResult:
         assert second.reason_codes == []
 
     def test_a_misspelled_field_cannot_be_assigned(self) -> None:
-        """``slots=True`` makes a misspelled assignment the error, not a field
-        nobody reads and a stale value in the manifest.
+        """Verify result records reject misspelled fields.
+
+        With ``slots=True``, a misspelled assignment is an error rather than an
+        unread field that leaves a stale value in the manifest.
         """
         result = worker.initial_result("109m", CFG, None)
 
@@ -1382,7 +1379,9 @@ class TestInitialResult:
         assert result.retryable is True, "the real field must be untouched"
 
     def test_unmeasured_fields_render_blank_not_none(self) -> None:
-        """A ``None`` reaching a CSV as ``"None"`` reads back to the next
+        """Verify unmeasured fields serialize as blanks.
+
+        A ``None`` reaching CSV as ``"None"`` reads back to the next
         ``--resume`` as a completed stage.
         """
         result = worker.initial_result("109m", CFG, None)
@@ -1525,7 +1524,9 @@ class TestUnrunBondStageChain:
     def test_resume_no_bonds_recovery_does_not_fake_a_completed_bond_stage(
         self, tmp_path: Path
     ) -> None:
-        """Run 1 fails before the bond stage, run 2 recovers it under
+        """Verify a no-bonds retry does not mark bonds complete.
+
+        Run 1 fails before the bond stage, run 2 recovers it under
         ``--no-bonds``, and run 3 must still schedule it: no bond analysis has
         ever run for the entry.
         """
@@ -1603,8 +1604,10 @@ class TestResumeReplacementSucceeded:
             EntryStatus(status)
 
     def test_an_untouched_partial_is_assumed_unfinished(self) -> None:
-        """``retryable`` defaults to true, so a partial nothing cleared cannot
-        replace.
+        """Verify an untouched partial remains unfinished.
+
+        ``retryable`` defaults to true, so a partial that cleared nothing cannot
+        replace the previous result.
         """
         assert resume.resume_replacement_succeeded(_result(status="partial")) is False
 
@@ -1703,7 +1706,7 @@ class TestResumeStaging:
             with open(path, "w", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(columns)
-        prior = {name: "" for name in MANIFEST_COLUMNS}
+        prior = dict.fromkeys(MANIFEST_COLUMNS, "")
         prior.update(pdbID="aaaa", status="ok", retryable="False")
         with open(layout.manifest, "a", newline="") as handle:
             csv.writer(handle).writerow([prior[name] for name in MANIFEST_COLUMNS])
@@ -1723,7 +1726,7 @@ class TestResumeStaging:
         ) -> None:
             del memory_plan
             for pdb_id in ids:
-                row = {name: "" for name in MANIFEST_COLUMNS}
+                row = dict.fromkeys(MANIFEST_COLUMNS, "")
                 row.update(pdbID=pdb_id, status="ok", retryable="False")
                 writers.write_manifest_row(row)
                 staging.replacement_ids.add(pdb_id)
@@ -1863,7 +1866,7 @@ class TestResumeStaging:
             staging.commit(bonds_enabled=True)
         finally:
             staging.discard()
-        for target, name in zip(targets, self.TARGET_NAMES):
+        for target, name in zip(targets, self.TARGET_NAMES, strict=False):
             rows = _read_csv(target)
             assert rows[0] == ["pdbID", "value"]
             values = {row[0]: row[1] for row in rows[1:]}
@@ -2135,7 +2138,7 @@ class TestOutputWriters:
     def test_stats_rows_are_projected_onto_the_fixed_schema(
         self, tmp_path: Path
     ) -> None:
-        """id and category lead each row; the EDSTATS block follows verbatim."""
+        """Id and category lead each row; the EDSTATS block follows verbatim."""
         handles = self._handles(tmp_path)
         writers = OutputWriters(*handles)
         fields = [str(i) for i in range(len(STATS_COLUMNS) - 2)]
@@ -2155,9 +2158,9 @@ class TestOutputWriters:
         context_handle = open(tmp_path / "density-context.csv", "w", newline="")
         writers = OutputWriters(*handles, density_context_fh=context_handle)
         writers.write_density_context_row(_result("109m"))
-        measured: dict[str, Any] = {
-            column: "" for column in metal_identification.DENSITY_CONTEXT_COLUMNS
-        }
+        measured: dict[str, Any] = dict.fromkeys(
+            metal_identification.DENSITY_CONTEXT_COLUMNS, ""
+        )
         measured.update(
             pdbID="1cll",
             density_context_status="available",
@@ -2704,8 +2707,10 @@ class TestRunLog:
     def test_the_slowest_entries_table_is_ordered_slowest_first(
         self, tmp_path: Path
     ) -> None:
-        """Reversed, the table still looks plausible while naming the entries
-        that mattered least.
+        """Verify slowest-entry reporting sorts in descending order.
+
+        Reversed, the table still looks plausible while naming the entries that
+        mattered least.
         """
         text = open(self._log(tmp_path, [0.5, 9.0, 3.0]).write(0)).read()
         section = text.split("Slowest entries")[1].split("Entry diagnostics")[0]
@@ -3008,7 +3013,9 @@ class TestCifToPdb:
     def test_conversion_round_trips_through_load_structure(
         self, tmp_path: Path
     ) -> None:
-        """The mapping is reversible: the truncated name is what EDSTATS sees,
+        """Verify packed residue names retain source identity.
+
+        The mapping is reversible: the truncated name is what EDSTATS sees,
         while Alchemy's own output keeps the mmCIF identity.
         """
         cif = self._standard_cif(tmp_path)
@@ -3546,12 +3553,14 @@ class TestOutputDirectoryLock:
         except OSError as exc:
             pytest.skip(f"this Windows account cannot create symlinks: {exc}")
 
-        with pytest.raises(
-            output_lock.OutputDirectoryLockError,
-            match="symbolic link|unsafe lock paths are refused",
+        with (
+            pytest.raises(
+                output_lock.OutputDirectoryLockError,
+                match="symbolic link|unsafe lock paths are refused",
+            ),
+            output_lock.OutputDirectoryLock(str(output_dir), "unsafe link"),
         ):
-            with output_lock.OutputDirectoryLock(str(output_dir), "unsafe link"):
-                pass
+            pass
 
         assert lock_path.is_symlink()
         assert target.read_text(encoding="utf-8") == "important data\n"
@@ -3566,11 +3575,13 @@ class TestOutputDirectoryLock:
         lock_path = output_dir / output_lock.LOCK_FILENAME
         os.link(target, lock_path)
 
-        with pytest.raises(
-            output_lock.OutputDirectoryLockError, match="multiple hard links"
+        with (
+            pytest.raises(
+                output_lock.OutputDirectoryLockError, match="multiple hard links"
+            ),
+            output_lock.OutputDirectoryLock(str(output_dir), "unsafe hard link"),
         ):
-            with output_lock.OutputDirectoryLock(str(output_dir), "unsafe hard link"):
-                pass
+            pass
 
         assert target.read_text(encoding="utf-8") == "important data\n"
 
@@ -3578,10 +3589,12 @@ class TestOutputDirectoryLock:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        with output_lock.OutputDirectoryLock(str(output_dir), "alchemy first"):
-            with pytest.raises(output_lock.OutputDirectoryBusyError) as caught:
-                with output_lock.OutputDirectoryLock(str(output_dir), "alchemy second"):
-                    pass
+        with (
+            output_lock.OutputDirectoryLock(str(output_dir), "alchemy first"),
+            pytest.raises(output_lock.OutputDirectoryBusyError) as caught,
+            output_lock.OutputDirectoryLock(str(output_dir), "alchemy second"),
+        ):
+            pass
 
         message = str(caught.value)
         assert str(output_dir) in message
@@ -3923,7 +3936,9 @@ class TestDensityResultReachesTheResult:
 def test_a_loaded_structure_fills_in_the_model_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The model fields start unmeasured, like the bond counts, so an entry that
+    """Verify model provenance is populated only after structure loading.
+
+    The model fields start unmeasured, like the bond counts, so an entry that
     failed before ``load_structure`` cannot claim a model count; a successful
     load must fill them in.
     """
@@ -3995,7 +4010,9 @@ class TestCcp4TimeoutOutcome:
     def test_the_partial_log_survives_scratch_cleanup(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``Ccp4ToolTimeoutError`` names a partial log, but ``process`` deletes
+        """Verify timeout diagnostics preserve only the partial tool log.
+
+        ``Ccp4ToolTimeoutError`` names a partial log, but ``process`` deletes
         the scratch directory unless --keep-intermediates is given, so the log
         alone is copied out: the maps beside it can be hundreds of megabytes.
         """

@@ -6,6 +6,7 @@ is absent, decompressing what arrived, converting the coordinates, and reading
 the resolution limits off the result.
 """
 
+import contextlib
 import gzip
 import json
 import os
@@ -23,7 +24,6 @@ import numpy.typing as npt
 from coordinate_conversion import cif_to_pdb
 from run_logging import logger_for
 
-
 # The four Fourier coefficients EDSTATS' two maps are calculated from; a
 # reflection is usable only where all four are present.
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
@@ -33,6 +33,8 @@ logger = logger_for(__name__)
 
 @dataclass(frozen=True)
 class PdbRedoMetadata:
+    """Store the PDB-REDO metadata used for provenance and map handling."""
+
     is_twin: bool = False
     version: str = ""
     date: str = ""
@@ -88,6 +90,7 @@ def _gunzip_to(src_gz: str, dst: str) -> str:
 
 
 def first_existing(*paths: str) -> str | None:
+    """Return the first existing path, or ``None`` when none exists."""
     return next((path for path in paths if os.path.exists(path)), None)
 
 
@@ -244,6 +247,7 @@ def read_pdb_redo_metadata(
 def read_pdb_redo_is_twin(
     data_json_path: str | None, *, required: bool = False
 ) -> bool:
+    """Return the validated PDB-REDO twinning flag."""
     return read_pdb_redo_metadata(data_json_path, required=required).is_twin
 
 
@@ -309,10 +313,8 @@ def has_final_files(entry_dir: str, pdb_id: str) -> bool:
 
 def _remove_partial_download(tmp: str) -> None:
     """Drop a ``.part`` file so no caller can mistake it for a complete one."""
-    try:
+    with contextlib.suppress(OSError):
         os.remove(tmp)
-    except OSError:
-        pass
 
 
 def _response_content_length(response: object, url: str) -> int | None:

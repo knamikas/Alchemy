@@ -23,12 +23,11 @@ import zipfile
 from pathlib import Path
 
 import pytest
-
 from helpers import REPO_ROOT, SRC_DIR
+
 from codes import ReasonCode
 from driver import pool
 from driver.writers import STATS_COLUMNS
-
 
 README_PATH = os.path.join(REPO_ROOT, "README.md")
 DOCS_DIR = os.path.join(REPO_ROOT, "docs")
@@ -228,8 +227,9 @@ def test_default_paths_land_in_the_checkout_not_inside_src() -> None:
         f"dirname calls from {os.path.join(SRC_DIR, 'driver')} name src/, "
         "not the checkout"
     )
-    assert pool.DEFAULT_CONFIDENCE_REFERENCE_DIR == os.path.join(
-        REPO_ROOT, "confidence_reference"
+    assert (
+        os.path.join(REPO_ROOT, "confidence_reference")
+        == pool.DEFAULT_CONFIDENCE_REFERENCE_DIR
     )
 
 
@@ -279,8 +279,11 @@ def test_the_density_cli_does_not_default_its_output_into_the_source_tree() -> N
     + ["launcher-docstring"],
 )
 def test_examples_do_not_assume_a_private_environment(path: str) -> None:
-    """Documented commands run anywhere: Alchemy requires no named environment,
-    and one a reader has no way to create is one they cannot follow."""
+    """Verify documented commands do not assume a private environment.
+
+    Alchemy requires no named environment, and readers cannot follow an example
+    that depends on one they have no way to create.
+    """
     offending = [
         line.strip()
         for line in _read(path).splitlines()
@@ -406,7 +409,7 @@ def test_version_has_a_single_definition() -> None:
         "attr": "_version.__version__"
     }
 
-    assert pool.ALCHEMY_VERSION == _version.__version__, (
+    assert _version.__version__ == pool.ALCHEMY_VERSION, (
         "driver.pool.ALCHEMY_VERSION must come from _version.py, not a second literal"
     )
 
@@ -521,13 +524,13 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         REFERENCE_METADATA_FIELDS,
         VERDICT_REASONS,
     )
+    from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from crystallization_conditions import (
         CONDITION_COLUMNS,
         CRYSTALLIZATION_DATA_STATUSES,
         REVIEW_CONTEXT_COLUMNS,
         SUMMARY_COLUMNS,
     )
-    from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
     from metal_identification import (
         DENSITY_CONTEXT_COLUMNS,

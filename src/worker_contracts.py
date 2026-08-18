@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from collections.abc import Collection
 
 from _version import __version__
 from codes import EntryStatus
@@ -48,6 +48,33 @@ class WorkerConfig:
     reference_data_id: str
     analysis_config_id: str
     pdb_metadata_cache: str = ""
+
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            root: str,
+            mirror_root: str,
+            cache_root: str,
+            env: dict[str, str],
+            output_dir: str,
+            cofactors: Collection[str],
+            keep: bool,
+            bonds: bool,
+            density_map_scope: str,
+            ccp4_timeout_s: int,
+            log_level: int,
+            allow_download: bool,
+            manual_inputs: dict[str, str | None] | None,
+            alchemy_commit: str,
+            gemmi_version: str,
+            ccp4_version: str,
+            reference_data_id: str,
+            analysis_config_id: str,
+            pdb_metadata_cache: str = "",
+        ) -> None:
+            """Expose the generated dataclass signature to type checkers."""
+            raise NotImplementedError
 
 
 def blank_if_unmeasured(value: Any) -> Any:

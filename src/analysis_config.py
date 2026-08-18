@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
 from collections.abc import Iterable
+from typing import Any
 
 from worker_contracts import (
     ALTLOC_POLICY,
@@ -13,7 +13,6 @@ from worker_contracts import (
     MODEL_POLICY,
     SYMMETRY_POLICY,
 )
-
 
 ANALYSIS_CONFIG_SCHEMA_VERSION = 1
 

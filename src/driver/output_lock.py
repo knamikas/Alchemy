@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import importlib
 import json
@@ -10,10 +11,9 @@ import shutil
 import socket
 import stat
 import tempfile
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import IO, Any, cast
-
 
 _IS_WINDOWS = os.name == "nt"
 _platform_lock: Any = importlib.import_module("msvcrt" if _IS_WINDOWS else "fcntl")
@@ -130,12 +130,10 @@ def _close_inherited_lock_after_fork() -> None:
         or os.getpid() == _active_lock_pid
     ):
         return
-    try:
+    with contextlib.suppress(OSError):
         # Close the file object, rather than only its descriptor, so a later
         # garbage collection in the child cannot close a reused descriptor.
         _active_lock_handle.close()
-    except OSError:
-        pass
     _active_lock_handle = None
     _active_lock_pid = None
 
@@ -166,12 +164,14 @@ class OutputDirectoryLock:
     """Hold the stable advisory lock for one output directory."""
 
     def __init__(self, output_dir: str, command: str = "") -> None:
+        """Initialize a lock for the stable output-directory path."""
         self.output_dir = os.path.abspath(output_dir)
         self.path = os.path.join(self.output_dir, LOCK_FILENAME)
         self.command = str(command)
         self._handle: IO[str] | None = None
 
     def __enter__(self) -> OutputDirectoryLock:
+        """Acquire the lock and record this process as its owner."""
         global _active_lock_handle, _active_lock_pid
         try:
             handle = _open_lock_handle(self.path)
@@ -230,6 +230,7 @@ class OutputDirectoryLock:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        """Release and close the output-directory lock."""
         global _active_lock_handle, _active_lock_pid
         handle = self._handle
         self._handle = None

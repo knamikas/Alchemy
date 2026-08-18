@@ -10,6 +10,7 @@ an entry's rows instead of appending beside them; the merge keeps every entry
 that reached its manifest row, whether or not the batch as a whole finished.
 """
 
+import contextlib
 import csv
 import os
 import shutil
@@ -19,10 +20,9 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 
 from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
-from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
+from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult
-
 
 # A row read back is not ``dict[str, str]``: DictReader fills a short row's
 # missing fields with ``None`` and collects a long row's surplus cells in a
@@ -497,10 +497,8 @@ def _merge_csv_replacements(
             os.chmod(tmp_path, original_mode)
         os.replace(tmp_path, path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
 
@@ -519,6 +517,7 @@ class ResumeStaging:
         *,
         always_extra_count: int = 0,
     ) -> None:
+        """Create staging paths for all outputs participating in resume."""
         self.targets = targets
         self.always_extra_count = always_extra_count
         self.dir = create_owned_scratch_directory(
@@ -548,15 +547,18 @@ class ResumeStaging:
                 candidates_path, staged_candidates, self.replacement_ids
             )
         extra_end = 4 + self.always_extra_count
-        for target, staged in zip(self.targets[4:extra_end], self.staged[4:extra_end]):
+        for target, staged in zip(
+            self.targets[4:extra_end], self.staged[4:extra_end], strict=False
+        ):
             _merge_csv_replacements(target, staged, self.replacement_ids)
         if confidence_enabled:
             for target, staged in zip(
-                self.targets[extra_end:], self.staged[extra_end:]
+                self.targets[extra_end:], self.staged[extra_end:], strict=False
             ):
                 _merge_csv_replacements(target, staged, self.replacement_ids)
         _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
 
     def discard(self) -> None:
+        """Discard every staged output without changing published files."""
         if os.path.isdir(self.dir):
             shutil.rmtree(self.dir, ignore_errors=True)

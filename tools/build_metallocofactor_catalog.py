@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
@@ -31,7 +31,6 @@ if str(SOURCE_DIR) not in sys.path:
     sys.path.insert(0, str(SOURCE_DIR))
 
 from metal_elements import METAL_ELEMENTS  # noqa: E402
-
 
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 DEFAULT_OUTPUT_DIR = SOURCE_DIR / "data"
@@ -231,6 +230,7 @@ def _sha256(path: str) -> str:
 
 
 def formula_has_metal(formula: str) -> bool:
+    """Return whether a chemical formula contains a recognized metal."""
     return any(element in METAL_ELEMENTS for element in element_counts(formula))
 
 
@@ -240,9 +240,11 @@ def symbol_is_metal(symbol: str) -> bool:
 
 
 def _decompress_ccd(source_path: str, destination_path: str) -> None:
-    with gzip.open(source_path, "rb") as source:
-        with open(destination_path, "wb") as destination:
-            shutil.copyfileobj(source, destination)
+    with (
+        gzip.open(source_path, "rb") as source,
+        open(destination_path, "wb") as destination,
+    ):
+        shutil.copyfileobj(source, destination)
 
 
 def download_ccd(temp_dir: str) -> tuple[str, dict[str, str | None]]:
@@ -468,6 +470,7 @@ def report_status(output_dir: str) -> dict[str, Any]:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse catalog rebuild and verification options."""
     parser = argparse.ArgumentParser(
         description=("Explicitly rebuild Alchemy's bundled metallocofactor catalog.")
     )
@@ -492,6 +495,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the catalog maintenance command and return an exit status."""
     args = parse_args(argv)
     if args.status:
         report_status(os.path.abspath(args.output_dir))

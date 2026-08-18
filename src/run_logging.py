@@ -19,7 +19,6 @@ import os
 import sys
 from typing import IO
 
-
 # Longest message a single record may carry. External programs and tracebacks
 # produce output of unbounded size, and a record's level does not bound it.
 MAX_RECORD_CHARS = 2000

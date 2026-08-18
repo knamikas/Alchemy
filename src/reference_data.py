@@ -13,7 +13,6 @@ from collections.abc import Mapping
 from functools import cache
 from types import MappingProxyType
 
-
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
@@ -39,6 +38,7 @@ class ReferenceDataError(RuntimeError):
 
 
 def sha256(path: str) -> str:
+    """Return the hexadecimal SHA-256 digest of a file."""
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for block in iter(lambda: handle.read(65536), b""):
@@ -152,6 +152,7 @@ def _verified_sha256(path: str) -> str:
 def catalog(
     path: str = COFACTOR_CATALOG_PATH,
 ) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Load and cache the verified metallocofactor catalog."""
     _verify_checksum(path)
     return _parse_cofactor_catalog(path)
 

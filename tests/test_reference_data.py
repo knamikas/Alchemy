@@ -13,16 +13,15 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import IO, Any, Protocol, cast
-from collections.abc import Callable, Iterable, Iterator
 
 import pytest
-
-import reference_data
 from helpers import SRC_DIR
 
+import reference_data
 
 _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
     "coordination.analysis",
@@ -105,8 +104,11 @@ print("|".join(str(path) for path in opened))
 def test_a_malformed_catalog_raises_from_the_call_not_the_import(
     tmp_path: Path,
 ) -> None:
-    """The failure has to be attributable to a caller: raised out of an import,
-    the traceback names whichever module happened to be loaded first."""
+    """Verify malformed catalog failures occur at the call site.
+
+    Raised during import, the traceback would name whichever module happened to
+    be loaded first instead of an attributable caller.
+    """
     path = _catalog(tmp_path, ["ABC\t'C1'\t", "DEF\t'C2'\t"])
     with pytest.raises(ValueError, match="no structural classes"):
         reference_data.cofactor_ids(path)
@@ -126,8 +128,10 @@ def test_ids_and_classes_come_from_one_pass_over_one_file(tmp_path: Path) -> Non
 
 
 def test_a_short_row_is_a_component_but_never_a_classification(tmp_path: Path) -> None:
-    """A row without a class column is known and unclassified, nothing else:
-    guessing a class would fill ``parent_type`` on no evidence at all."""
+    """Verify short catalog rows remain unclassified.
+
+    Guessing a missing class would fill ``parent_type`` without evidence.
+    """
     path = _catalog(
         tmp_path,
         ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme", "OLD\t'C2'", "BARE"],
@@ -156,8 +160,11 @@ def test_an_empty_catalog_is_named_as_empty(tmp_path: Path) -> None:
 
 
 def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path: Path) -> None:
-    """These objects are process-wide, so a mutable one would let a single
-    caller change what every later z-score is measured against."""
+    """Verify loaded reference collections are immutable.
+
+    These objects are process-wide, so a mutable one would let a single caller
+    change what every later z-score is measured against.
+    """
     assert isinstance(reference_data.cofactor_ids(), frozenset)
     assert isinstance(reference_data.cluster_ids(), frozenset)
     assert isinstance(reference_data.heme_ids(), frozenset)
@@ -177,8 +184,11 @@ def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path: Path) -> None:
 def test_a_file_is_read_once_however_many_callers_ask(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Caching is what makes on-demand loading affordable: the tables are
-    consulted for every contact of every metal site."""
+    """Verify reference tables are loaded only once.
+
+    Caching makes on-demand loading affordable because every contact of every
+    metal site consults the tables.
+    """
     path = _catalog(tmp_path, ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme"])
     reads: list[Any] = []
     real_open = open
@@ -220,8 +230,11 @@ def test_building_the_targets_leaves_nothing_in_the_module_namespace() -> None:
 
 
 def test_both_bundled_files_match_their_recorded_checksums() -> None:
-    """The shipped data is the data the sidecars record: identity, not
-    correctness. A checkout that has drifted produces unattributable results."""
+    """Verify bundled data matches its recorded identity.
+
+    Checksums establish identity rather than correctness; a checkout that has
+    drifted would produce unattributable results.
+    """
     for path, (sidecar, key) in reference_data.CHECKSUM_SIDECARS.items():
         with open(sidecar, encoding="utf-8") as handle:
             recorded = json.load(handle)[key]
@@ -344,8 +357,10 @@ def test_duplicate_reference_keys_are_rejected(tmp_path: Path) -> None:
 
 
 def test_the_table_header_is_skipped_by_name() -> None:
-    """It is skipped by name, which is what allows every other unparseable line
-    to be an error rather than a shrug."""
+    """Verify only the named distance-table header is skipped.
+
+    Skipping it by name allows every other unparseable line to remain an error.
+    """
     assert reference_data.DISTANCE_TABLE_HEADER == (
         "residue",
         "atom",

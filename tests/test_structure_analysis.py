@@ -9,16 +9,16 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol, cast
-from collections.abc import Sequence
 
 import gemmi
-import pytest
-
 import helpers
-import structure_analysis as sa
+import pytest
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
+
+import structure_analysis as sa
 
 
 class _ApproxFactory(Protocol):
@@ -179,8 +179,11 @@ def _write_pdb_with_ncs(
 def test_decode_pdb_resseq_matches_gemmi(
     field: str, expected: int, tmp_path: Path
 ) -> None:
-    """EDSTATS rows and raw PDB atoms are joined on this number, so any
-    divergence from Gemmi's ``Residue.seqid.num`` mismatches residues."""
+    """Verify decoded residue numbers agree with Gemmi.
+
+    EDSTATS rows and raw PDB atoms join on this number, so any divergence from
+    Gemmi's ``Residue.seqid.num`` mismatches residues.
+    """
     assert sa.decode_pdb_resseq(field) == expected
 
     line = (
@@ -261,9 +264,12 @@ def test_canonical_pdb_residue_id_rejects_multi_character_insertion(
 def test_canonical_pdb_residue_id_equals_loaded_residue_resnum(
     tmp_path: Path,
 ) -> None:
-    """The stats table carries ``canonical_pdb_residue_id("10:A")`` and the
-    coordinate side ``ResidueSelection.resnum``; if they differ the sigma join
-    loses the residue."""
+    """Verify insertion-code identities agree across statistics and coordinates.
+
+    The statistics table carries ``canonical_pdb_residue_id("10:A")`` and the
+    coordinate side carries ``ResidueSelection.resnum``; a mismatch loses the
+    residue during the sigma join.
+    """
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="B")
     builder.add_amino_acid("HIS", 10, chain="A", icode="A")
@@ -466,8 +472,11 @@ def test_select_residue_breaks_occupancy_ties_by_altloc_label(order: str) -> Non
 
 
 def test_select_residue_averages_only_valid_occupancies() -> None:
-    """Conformer A is 0.4 plus an out-of-range 5.0: averaging the raw values
-    gives 2.7 and hands A the selection, the valid subset gives 0.4 and B."""
+    """Verify conformer selection averages only valid occupancies.
+
+    Conformer A is 0.4 plus an out-of-range 5.0: averaging raw values gives 2.7
+    and selects A, while the valid subset gives 0.4 and selects B.
+    """
     atoms = [
         _site("CB", altloc="A", occupancy=0.4, source_order=0),
         _site("CG", altloc="A", occupancy=5.0, source_order=1),
@@ -571,8 +580,11 @@ def test_select_residue_orders_contact_atoms_by_source_order() -> None:
 def test_load_structure_selects_conformer_and_keeps_both_for_counting(
     tmp_path: Path,
 ) -> None:
-    """Occupancies 0.35/0.55 make the deposited sum (0.90) differ from both the
-    selected conformer alone and from 1.0."""
+    """Verify deposited alternate occupancies determine the DPI atom count.
+
+    Occupancies 0.35/0.55 make the deposited sum of 0.90 differ from both the
+    selected conformer alone and 1.0.
+    """
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
     builder.add_conformers(
@@ -750,8 +762,11 @@ def test_load_structure_analyzes_the_first_model_only(tmp_path: Path) -> None:
 def test_load_structure_reports_source_model_count_from_the_original_file(
     tmp_path: Path,
 ) -> None:
-    """``main`` strips MODEL/ENDMDL before EDSTATS, so the analysis file has one
-    model where the deposited entry had several."""
+    """Verify stripped coordinates retain deposited model provenance.
+
+    ``main`` strips MODEL/ENDMDL before EDSTATS, so the analysis file has one
+    model where the deposited entry had several.
+    """
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     path = builder.write_pdb(tmp_path / "stripped.pdb")
 
@@ -845,8 +860,11 @@ def test_zero_occupancy_is_valid_for_ni(tmp_path: Path) -> None:
 
 
 def test_missing_occupancy_is_not_counted_as_a_measured_zero(tmp_path: Path) -> None:
-    """Gemmi parses the blank column as 0.0, so only the raw provenance can tell
-    "not deposited" from "deposited as zero"."""
+    """Verify missing occupancy differs from a measured zero.
+
+    Gemmi parses the blank column as 0.0, so only raw provenance distinguishes
+    "not deposited" from "deposited as zero".
+    """
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     clean = builder.write_pdb(tmp_path / "clean.pdb")
     path = _rewrite_atom_field(
@@ -934,8 +952,11 @@ def test_count_deposited_ni_counts_alternate_positions_separately(
 
 
 def test_count_ni_multiplies_by_non_given_strict_ncs_copies(tmp_path: Path) -> None:
-    """Operations flagged ``given`` are already deposited and are not counted
-    a second time."""
+    """Verify the DPI multiplier excludes deposited strict-NCS copies.
+
+    Operations flagged ``given`` are already deposited and are not counted a
+    second time.
+    """
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     path = _write_pdb_with_ncs(
         builder, tmp_path / "ncs.pdb", [("1", False), ("2", True), ("3", False)]
@@ -1090,9 +1111,12 @@ def test_image_provenance_classifies_symmetry_and_ncs(
     translation: tuple[int, int, int],
     expected: tuple[bool, bool, str, str],
 ) -> None:
-    """Gemmi's ``setup_cell_images()`` lists the identity, then the remaining
-    space-group operations, then one full block per strict-NCS transform. A
-    nonzero cell translation is crystallographic even at the identity."""
+    """Verify Gemmi image indices preserve symmetry provenance.
+
+    ``setup_cell_images()`` lists the identity, remaining space-group
+    operations, and then one full block per strict-NCS transform. A nonzero
+    cell translation is crystallographic even at the identity.
+    """
     assert ncs_context.image_provenance(image_index, translation) == expected
 
 

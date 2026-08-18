@@ -15,6 +15,7 @@ per-entry pipeline replaced by a scripted stub, and need POSIX (``fork`` and
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import dataclasses
 import logging
@@ -28,23 +29,23 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
-from collections.abc import Iterable
 
 import pytest
 
 import analysis_config
+import cli
 import density_analysis as density
 import main
+import reference_data
 import worker
 import worker_contracts
 from codes import EntryStatus
+from driver import pool as driver_pool
 from driver import runlog, writers
 from driver.writers import MANIFEST_COLUMNS
-import cli
-from driver import pool as driver_pool
-import reference_data
 
 if TYPE_CHECKING:
     # Annotations and casts only: the fakes below stand in for these nominal
@@ -977,10 +978,8 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(
         )
         deadline = time.monotonic() + 45.0
         while time.monotonic() < deadline and not (finished and dead_pids):
-            try:
+            with contextlib.suppress(multiprocessing.TimeoutError):
                 finished.append(results.next(timeout=0.5))
-            except multiprocessing.TimeoutError:
-                pass
             driver_pool.drain_inflight(inflight, assignments)
             dead_pids |= driver_pool.dead_worker_pids(pool, worker_pids)
         pool.terminate()

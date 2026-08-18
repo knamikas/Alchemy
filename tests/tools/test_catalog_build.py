@@ -20,13 +20,12 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import ModuleType
-from collections.abc import Iterable, Mapping
 
 import gemmi
 import pytest
-
 from helpers import REPO_ROOT
 
 
@@ -167,8 +166,11 @@ def test_a_simple_cycle_is_one_biconnected_component() -> None:
 
 
 def test_a_bridge_separates_two_rings() -> None:
-    """Two rings joined by a single bond are two components: a macrocycle fused
-    to a substituent is not one oversized conjugated core."""
+    """Verify a bridge separates two ring components.
+
+    A macrocycle joined to a substituent by one bond is not a single oversized
+    conjugated core.
+    """
     adjacency = {
         "A": {"B", "C"},
         "B": {"A", "C"},
@@ -187,8 +189,11 @@ def test_a_bridge_separates_two_rings() -> None:
 
 
 def test_atoms_outside_the_allowed_set_are_not_traversed() -> None:
-    """The heme rule excludes metals and hydrogens before looking for a core:
-    a four-coordinate metal bridges separate ligands into a false one."""
+    """Verify excluded atoms are not traversed during ring detection.
+
+    The heme rule excludes metals and hydrogens before looking for a core;
+    otherwise, a four-coordinate metal falsely bridges separate ligands.
+    """
     adjacency = {
         "A": {"B", "FE"},
         "B": {"A", "FE"},
@@ -241,8 +246,11 @@ def test_selenium_bridges_count_as_well_as_sulfur() -> None:
 
 
 def test_a_bridged_pair_of_non_cluster_metals_is_not_a_cluster() -> None:
-    """Only the metals that form these cofactors qualify: zinc bridged by a
-    sulfur is an ordinary binuclear thiolate site."""
+    """Verify a bridged non-cluster metal pair is not a cluster.
+
+    Only the metals that form these cofactors qualify; zinc bridged by sulfur
+    is an ordinary binuclear thiolate site.
+    """
     atoms = {"ZN1": "ZN", "ZN2": "ZN", "S1": "S"}
     bonds = [("ZN1", "S1"), ("ZN2", "S1")]
 
@@ -264,8 +272,11 @@ def test_a_porphyrin_without_iron_is_not_a_heme() -> None:
 
 
 def test_a_covalently_modified_heme_with_three_fe_n_bonds_is_still_a_heme() -> None:
-    """Three Fe-N bonds is the floor: CCD ``WRK`` and its relatives lose a
-    fourth Fe-N bond to a covalent link."""
+    """Verify a three-coordinate covalently modified heme remains a heme.
+
+    Three Fe-N bonds is the floor because CCD ``WRK`` and relatives lose a
+    fourth Fe-N bond to a covalent link.
+    """
     atoms, bonds = porphyrin(nitrogen_bonds=3)
 
     assert catalog.classify_component(component_block("WRK", atoms, bonds)) == "heme"
@@ -310,8 +321,11 @@ def test_an_oxaporphyrin_reaches_the_size_floor_on_heteroatoms() -> None:
 
 
 def test_a_component_with_two_irons_is_not_a_heme() -> None:
-    """The heme rule is single-iron: a second one means a polynuclear site,
-    which is either a cluster or outside both populations."""
+    """Verify a two-iron component is not classified as heme.
+
+    The heme rule is single-iron; a second iron means a polynuclear site that is
+    either a cluster or outside both populations.
+    """
     atoms, bonds = porphyrin()
     atoms["FE2"] = "FE"
     bonds.append(("N1", "FE2"))
@@ -320,8 +334,11 @@ def test_a_component_with_two_irons_is_not_a_heme() -> None:
 
 
 def test_cluster_wins_when_a_component_could_be_read_as_both() -> None:
-    """Cluster wins, because ``_parent_type`` in the analysis resolves the same
-    collision the same way and the two must agree."""
+    """Verify cluster classification wins an ambiguous component.
+
+    ``_parent_type`` resolves the same collision during analysis, so both paths
+    must agree.
+    """
     atoms, bonds = porphyrin()
     atoms.update({"FE2": "FE", "S1": "S"})
     bonds += [("FE", "S1"), ("FE2", "S1")]
@@ -330,8 +347,11 @@ def test_cluster_wins_when_a_component_could_be_read_as_both() -> None:
 
 
 def test_a_bond_naming_an_absent_atom_is_ignored_rather_than_fatal() -> None:
-    """The CCD is 40,000 components; one bad bond row costs that component its
-    classification, not the whole rebuild."""
+    """Verify a bond naming an absent atom is skipped locally.
+
+    With roughly 40,000 CCD components, one bad bond row should cost that
+    component its classification rather than aborting the whole rebuild.
+    """
     atoms = {"FE1": "FE", "FE2": "FE", "S1": "S"}
     bonds = [("FE1", "S1"), ("FE2", "S1"), ("S1", "GHOST")]
 

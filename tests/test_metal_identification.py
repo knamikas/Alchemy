@@ -10,21 +10,19 @@ row *shape*: a CI-gated guard rejects every water row and fails the entry.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable, Iterable, Sequence
 
-import pytest
-
-import confidence_score
 import helpers
-import worker
-from driver.writers import STATS_COLUMNS
+import pytest
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
+import confidence_score
+import worker
+from driver.writers import STATS_COLUMNS
 from metal_elements import METAL_ELEMENTS
-from output_rows import MetalStatsRow
 from metal_identification import (
     DENSITY_CONTEXT_COLUMNS,
     EDSTATS_COLUMNS,
@@ -32,6 +30,7 @@ from metal_identification import (
     classify_residue,
     density_observation_id,
     expected_edstats_residues,
+    extract_metal_statistics,
     is_edstats_separator,
     normalize_edstats_row,
     sigma_for,
@@ -39,10 +38,9 @@ from metal_identification import (
     validate_edstats_row,
     validated_edstats_header,
     zd_indices,
-    extract_metal_statistics,
 )
+from output_rows import MetalStatsRow
 from structure_analysis import ResidueSelection, StructureContext, load_structure
-
 
 HEADER = list(helpers.EDSTATS_HEADER)
 INDICES = validated_edstats_header(HEADER)

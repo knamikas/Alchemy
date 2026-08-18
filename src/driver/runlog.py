@@ -6,6 +6,7 @@ table. Matching names are reserved together so concurrent runs cannot split a
 report across different suffixes or overwrite an earlier run.
 """
 
+import contextlib
 import csv
 import os
 import platform
@@ -99,19 +100,15 @@ def _copy_log_exclusively(source_path: str, destination_path: str) -> None:
         destination = os.fdopen(descriptor, "wb")
     except BaseException:
         os.close(descriptor)
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(destination_path)
-        except OSError:
-            pass
         raise
     try:
         with open(source_path, "rb") as source, destination:
             shutil.copyfileobj(source, destination)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(destination_path)
-        except OSError:
-            pass
         raise
     os.unlink(source_path)
 
@@ -175,6 +172,7 @@ class RunLog:
     """Collect run diagnostics and publish the report pair at completion."""
 
     def __init__(self, args: RunConfig, command: str) -> None:
+        """Initialize diagnostics and timing for one driver invocation."""
         self.args = args
         self.command = command
         self.started_at = datetime.now(UTC)
@@ -248,7 +246,7 @@ class RunLog:
         return RunLog._clean(value)
 
     def _timing_columns(self) -> tuple[str, ...]:
-        present = {name for entry in self.entries for name in entry["timings"].keys()}
+        present = {name for entry in self.entries for name in entry["timings"]}
         preferred = tuple(name for name in PREFERRED_TIMING_COLUMNS if name in present)
         return (*preferred, *sorted(present - set(preferred)))
 
@@ -641,10 +639,8 @@ class RunLog:
                 _copy_log_exclusively(temporary_log, log_path)
                 temporary_log = ""
             except BaseException:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(diagnostics_path)
-                except OSError:
-                    pass
                 diagnostics_published = False
                 raise
             return log_path
@@ -652,16 +648,10 @@ class RunLog:
             for temporary_path in (temporary_log, temporary_diagnostics):
                 if not temporary_path:
                     continue
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(temporary_path)
-                except OSError:
-                    pass
             if diagnostics_published and not os.path.lexists(log_path):
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(diagnostics_path)
-                except OSError:
-                    pass
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(claim_path)
-            except OSError:
-                pass

@@ -7,9 +7,10 @@ back to decide what still needs running.
 """
 
 import csv
-from typing import Any, TextIO
 from collections.abc import Mapping, Sequence
+from typing import Any, TextIO
 
+from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from coordination.schema import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
@@ -17,16 +18,14 @@ from coordination.schema import (
     BondRow,
     CandidateRow,
 )
-from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from crystallization_conditions import (
     CONDITION_COLUMNS,
     SUMMARY_COLUMNS,
     unavailable_summary,
 )
 from metal_identification import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
-from worker_contracts import EntryResult, blank_if_unmeasured
 from output_rows import MetalStatsRow, scientific_csv_value
-
+from worker_contracts import EntryResult, blank_if_unmeasured
 
 # CSV column names keep the deposited-data spelling ``pdbID`` even though every
 # Python identifier is ``pdb_id``: downstream scripts and joins address the
@@ -138,6 +137,7 @@ class OutputWriters:
         crystallization_summary_fh: TextIO | None = None,
         density_context_fh: TextIO | None = None,
     ) -> None:
+        """Initialize CSV writers and emit all enabled output headers."""
         self._manifest_fh = manifest_fh
         self._stats_fh = stats_fh
         self._bonds_fh = bonds_fh
@@ -210,6 +210,7 @@ class OutputWriters:
             self._density_context.writeheader()
 
     def write_stats_rows(self, rows: Sequence[MetalStatsRow]) -> None:
+        """Write and flush metal-site statistics rows."""
         if not rows:
             return
         output_rows = [row.as_output_dict(STATS_COLUMNS) for row in rows]
@@ -221,6 +222,7 @@ class OutputWriters:
         self._stats_fh.flush()
 
     def write_bond_rows(self, bond_rows: Sequence[BondRow]) -> None:
+        """Write and flush analyzed bond rows when that output is enabled."""
         if self._bonds is None or self._bonds_fh is None or not bond_rows:
             return
         for bond in bond_rows:
@@ -232,6 +234,7 @@ class OutputWriters:
         self._bonds_fh.flush()
 
     def write_candidate_rows(self, candidate_rows: Sequence[CandidateRow]) -> None:
+        """Write and flush contact-candidate rows when enabled."""
         if (
             self._candidates is None
             or self._candidates_fh is None
@@ -247,10 +250,12 @@ class OutputWriters:
         self._candidates_fh.flush()
 
     def write_manifest_row(self, row: Mapping[str, Any]) -> None:
+        """Write and flush one entry manifest row."""
         self._manifest.writerow(row)
         self._manifest_fh.flush()
 
     def write_crystallization_rows(self, result: EntryResult) -> None:
+        """Write condition and summary rows for one entry when enabled."""
         if (
             self._crystallization_conditions is None
             or self._crystallization_summary is None
@@ -283,7 +288,7 @@ class OutputWriters:
         """Write exactly one available or explicitly uncomputed entry row."""
         if self._density_context is None or self._density_context_fh is None:
             return
-        row = {column: "" for column in DENSITY_CONTEXT_COLUMNS}
+        row = dict.fromkeys(DENSITY_CONTEXT_COLUMNS, "")
         row.update(
             {
                 "pdbID": result.pdb_id,
@@ -306,6 +311,7 @@ class OutputWriters:
         self._density_context_fh.flush()
 
     def write_confidence_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Write scored confidence rows and synchronized inputs when enabled."""
         if self._confidence is None or not rows:
             return
         if self._confidence_columns is None or self._confidence_fh is None:

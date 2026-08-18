@@ -23,6 +23,7 @@ indistinguishable from a metal that has no coordination at all.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence, Set
 from typing import (
     TYPE_CHECKING,
     NamedTuple,
@@ -30,7 +31,6 @@ from typing import (
     TypedDict,
     cast,
 )
-from collections.abc import Mapping, Sequence, Set
 
 from codes import CandidateSource, ContactScope, WarningCode
 from coordination.contact_record import Candidate, DeclaredConnectionRecord
@@ -60,7 +60,9 @@ class PartnerLocator(Protocol):
 
     def find_cra(
         self, address: gemmi.AtomAddress, /, ignore_segment: bool = ...
-    ) -> gemmi.CRA: ...
+    ) -> gemmi.CRA:
+        """Find the chain, residue, and atom at a source-model address."""
+        ...
 
 
 #: Identity of one selected metal atom, as ``AtomSite.source_key`` reports it.
@@ -83,6 +85,7 @@ class _CandidateGeometry(TypedDict):
 
 
 def connection_source(path: str | None) -> CandidateSource:
+    """Infer declaration provenance from the source coordinate format."""
     lower = str(path or "").lower()
     if lower.endswith(".gz"):
         lower = lower[:-3]
@@ -116,7 +119,7 @@ def analysis_chain_names(connection_path: str) -> dict[str, str]:
     copy.shorten_chain_names()
     return {
         source: str(chain.name)
-        for source, chain in zip(source_names, copy[0])
+        for source, chain in zip(source_names, copy[0], strict=False)
         if source != str(chain.name)
     }
 
@@ -307,7 +310,7 @@ def resolve_declared_partners(
         ]
         declares_metal = declares_metal or any(
             declared_partner_is_metal(address, cra)
-            for address, cra in zip(addresses, source_cras)
+            for address, cra in zip(addresses, source_cras, strict=False)
         )
         atoms: list[AtomSite | None] = []
         deselected = False

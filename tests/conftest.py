@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable, Generator
 
 import pluggy
 import pytest
-
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
@@ -23,9 +22,7 @@ for _path in (SRC_DIR, TESTS_DIR):
         sys.path.insert(0, _path)
 
 import gemmi  # noqa: E402  (needs the sys.path entries above)
-
 import helpers  # noqa: E402  (needs the sys.path entries above)
-
 
 # ``src/structure_analysis.py`` uses ``gemmi.Model.num``, which arrived in 0.7;
 # an older build imports fine and then fails inside ~200 unrelated tests.
@@ -33,7 +30,7 @@ MINIMUM_GEMMI = (0, 7)
 
 
 def _gemmi_version_string() -> str:
-    """gemmi's reported version.
+    """Gemmi's reported version.
 
     Read through ``getattr``: gemmi ships ``py.typed`` but its stubs omit
     ``__version__``, so a direct access is a type error against a real name.
@@ -80,9 +77,9 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     if config.getoption("--require-entry-data"):
         state._alchemy_required_capabilities += ("entry_data",)
-    state._alchemy_capability_tests_ran = {
-        name: False for name in state._alchemy_required_capabilities
-    }
+    state._alchemy_capability_tests_ran = dict.fromkeys(
+        state._alchemy_required_capabilities, False
+    )
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

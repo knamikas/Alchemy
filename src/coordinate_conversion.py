@@ -210,7 +210,7 @@ def residue_conversion_records(
         if len(converted_residues) != len(source_residues):
             raise ValueError("PDB conversion changed duplicate residue multiplicity")
         model_index, converted_chain, converted_resnum = key
-        for source, converted in zip(source_residues, converted_residues):
+        for source, converted in zip(source_residues, converted_residues, strict=False):
             source_name, source_atoms = source
             converted_name, converted_atoms = converted
             if source_atoms != converted_atoms:
@@ -378,7 +378,7 @@ def _residue_identity_records(
         raise ValueError("PDB conversion changed residue count")
 
     records: list[_IdentityRecord] = []
-    for source, converted in zip(source_records, converted_records):
+    for source, converted in zip(source_records, converted_records, strict=False):
         (
             source_model,
             source_chain,
@@ -450,7 +450,7 @@ def _polymer_position_records(
     if len(source_records) != len(converted_records):
         raise ValueError("PDB conversion changed residue count")
     positions: dict[tuple[int, str, str, str], str] = {}
-    for source, converted in zip(source_records, converted_records):
+    for source, converted in zip(source_records, converted_records, strict=False):
         position = source[-1]
         previous = positions.get(converted)
         if previous is not None and previous != position:
@@ -481,7 +481,9 @@ def _write_cif_conversion_provenance(
     ]
     if len(atom_line_indices) != len(missing_occupancies):
         raise ValueError("PDB conversion output atom count does not match mmCIF input")
-    for line_index, missing in zip(atom_line_indices, missing_occupancies):
+    for line_index, missing in zip(
+        atom_line_indices, missing_occupancies, strict=False
+    ):
         if not missing:
             continue
         line = lines[line_index]
@@ -570,7 +572,7 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
         )
     if _structure_atom_signatures(structure) != indexed_signatures:
         raise ValueError("generated atom_site ids changed Gemmi atom traversal")
-    for atom, serial in zip(structure_atoms, pdb_serials):
+    for atom, serial in zip(structure_atoms, pdb_serials, strict=False):
         atom.serial = serial
     missing_occupancies = [occupancy in (".", "?") for occupancy in occupancies]
 

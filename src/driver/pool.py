@@ -17,6 +17,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections.abc import Collection, Mapping, Sequence
 from multiprocessing import (
     Pool,
     SimpleQueue,
@@ -27,24 +28,9 @@ from typing import (
     TextIO,
     cast,
 )
-from collections.abc import Collection, Mapping, Sequence
 
 from _version import __version__
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
-from codes import EntryStatus, ReasonCode
-from reference_data import (
-    cofactor_ids,
-    reference_data_checksums,
-    reference_data_id,
-)
-from run_logging import (
-    logger_for,
-    worker_level,
-    level_for_verbosity,
-    create_worker_log_queue,
-    start_worker_log_listener,
-)
-from run_config import RunConfig
 from ccp4_setup import (
     REPO_DIR,
     REQUIRED_CCP4_TOOLS,
@@ -56,21 +42,38 @@ from ccp4_setup import (
     save_ccp4_setup,
     verify_ccp4,
 )
-from inputs import (
-    ensure_entry_available,
-    enumerate_entries,
-    infer_pdb_id_from_path,
-    read_data_json_properties,
+from codes import EntryStatus, ReasonCode
+from confidence_score import (
+    ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
 )
-from worker import initialize_worker, process, worker_death_result
-from worker_contracts import EntryResult, WorkerConfig
-from driver.progress import ProgressReporter
+from confidence_score import (
+    CONFIDENCE_INPUT_COLUMNS,
+    REFERENCE_METADATA_FILE,
+    ConfidenceReference,
+    classify_without_reference,
+    complete_confidence_site_count,
+    finalize_database_confidence,
+    prepare_result_confidence_inputs,
+    score_against_reference,
+    validate_scored_reference,
+)
+from confidence_score import (
+    load_reference as load_confidence_reference,
+)
+from crystallization_conditions import (
+    CONDITION_COLUMNS,
+    SUMMARY_COLUMNS,
+    CrystallizationMetadataError,
+    prefetch_rcsb_crystallization_metadata,
+    write_review_queue,
+)
 from driver.output_lock import (
     OutputDirectoryBusyError,
     OutputDirectoryLock,
     OutputDirectoryLockError,
     sweep_owned_scratch_directories,
 )
+from driver.progress import ProgressReporter
 from driver.resources import (
     AUTO_WORKER_MEMORY_BYTES,
     EntryMemoryEstimate,
@@ -89,27 +92,28 @@ from driver.resume import (
 )
 from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS, OutputWriters, manifest_row
+from inputs import (
+    ensure_entry_available,
+    enumerate_entries,
+    infer_pdb_id_from_path,
+    read_data_json_properties,
+)
 from metal_identification import DENSITY_CONTEXT_COLUMNS
-from confidence_score import (
-    ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
-    CONFIDENCE_INPUT_COLUMNS,
-    REFERENCE_METADATA_FILE,
-    ConfidenceReference,
-    classify_without_reference,
-    finalize_database_confidence,
-    complete_confidence_site_count,
-    load_reference as load_confidence_reference,
-    prepare_result_confidence_inputs,
-    score_against_reference,
-    validate_scored_reference,
+from reference_data import (
+    cofactor_ids,
+    reference_data_checksums,
+    reference_data_id,
 )
-from crystallization_conditions import (
-    CONDITION_COLUMNS,
-    SUMMARY_COLUMNS,
-    CrystallizationMetadataError,
-    prefetch_rcsb_crystallization_metadata,
-    write_review_queue,
+from run_config import RunConfig
+from run_logging import (
+    create_worker_log_queue,
+    level_for_verbosity,
+    logger_for,
+    start_worker_log_listener,
+    worker_level,
 )
+from worker import initialize_worker, process, worker_death_result
+from worker_contracts import EntryResult, WorkerConfig
 
 if TYPE_CHECKING:
     # ``multiprocessing.Pool`` and its queues are bound methods of the default
@@ -221,6 +225,7 @@ def resolve_ccp4_environment(
 
 
 def alchemy_commit() -> str:
+    """Return the abbreviated source commit with a dirty-worktree marker."""
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "--short=12", "HEAD"],
@@ -245,6 +250,7 @@ def alchemy_commit() -> str:
 
 
 def gemmi_version() -> str:
+    """Return the installed Gemmi version, or ``unknown``."""
     try:
         import gemmi
 
@@ -254,6 +260,7 @@ def gemmi_version() -> str:
 
 
 def ccp4_version(env: Mapping[str, str]) -> str:
+    """Return the CCP4 version exposed by a resolved environment."""
     for key in ("CCP4_VERSION", "CCP4_VERSION_CODE", "CCP4VER"):
         if env.get(key):
             return env[key]
@@ -307,10 +314,8 @@ def _signal_worker_process_group(pid: int, sig: int) -> None:
     """
     if os.name != "posix" or not hasattr(os, "killpg") or not pid:
         return
-    try:
+    with contextlib.suppress(OSError, ValueError):
         os.killpg(pid, sig)
-    except (OSError, ValueError):
-        pass
 
 
 def stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bool:
@@ -338,6 +343,7 @@ def stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bo
 
 
 def sweep_owned_scratch_dirs(output_dir: str) -> int:
+    """Remove stale Alchemy-owned scratch directories beneath an output path."""
     return sweep_owned_scratch_directories(output_dir)
 
 
@@ -375,17 +381,13 @@ def _shutdown_pool(pool: WorkerPool) -> bool:
     # Cancel the at-exit finalizer, which would repeat the same blocked wait.
     finalizer = getattr(pool, "_terminate", None)
     if finalizer is not None:
-        try:
+        with contextlib.suppress(Exception):  # best effort; shutdown must proceed
             finalizer.cancel()
-        except Exception:  # noqa: BLE001 - best effort, shutdown must proceed
-            pass
     for child in children_by_pid.values():
-        try:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
             # Process.kill is SIGKILL on POSIX and TerminateProcess on Windows,
             # where signal.SIGKILL does not exist.
             child.kill()
-        except (OSError, ValueError, AttributeError):  # already reaped
-            pass
     # The closer thread is abandoned: the lock is held by a process that is
     # already gone, and a daemon thread does not keep the interpreter alive.
     return True
@@ -517,6 +519,7 @@ class OutputLayout:
     """Every path a run reads or writes, all derived from ``--output-dir``."""
 
     def __init__(self, output_dir: str) -> None:
+        """Derive every run artifact path from an output directory."""
         self.output_dir = output_dir
         self.manifest = os.path.join(output_dir, "manifest.csv")
         self.stats = os.path.join(output_dir, "metal_sites_all.csv")
@@ -554,6 +557,7 @@ class ConfidencePlan:
     """
 
     def __init__(self) -> None:
+        """Initialize a disabled confidence-analysis plan."""
         self.mode: str | None = None
         self.reference: ConfidenceReference | None = None
         self.stream_path: str | None = None
@@ -562,6 +566,7 @@ class ConfidencePlan:
 
     @property
     def enabled(self) -> bool:
+        """Return whether confidence analysis is enabled."""
         return self.mode is not None
 
 
@@ -637,6 +642,8 @@ class _BatchTally:
 
 
 class MemoryPlan:
+    """Record per-entry estimates and the run's memory admission budget."""
+
     def __init__(
         self,
         estimates: Sequence[EntryMemoryEstimate],
@@ -645,6 +652,7 @@ class MemoryPlan:
         initial_available_bytes: int | None = None,
         configured_limit_bytes: int | None = None,
     ) -> None:
+        """Initialize an immutable view of memory-planning inputs."""
         self.estimates = tuple(estimates)
         self.budget_bytes = budget_bytes
         self.reserve_bytes = reserve_bytes
@@ -655,6 +663,7 @@ class MemoryPlan:
 def plan_entry_memory(
     args: RunConfig, ids: Sequence[str], cfg: WorkerConfig, run_log: RunLog
 ) -> MemoryPlan:
+    """Estimate entry memory and record the resulting admission budget."""
     estimates = tuple(
         estimate_entry_memory(pdb_id, cfg.root, cfg.manual_inputs) for pdb_id in ids
     )

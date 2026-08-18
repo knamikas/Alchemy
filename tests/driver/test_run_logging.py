@@ -15,8 +15,8 @@ import logging
 import logging.handlers  # importing logging alone does not bind it
 import multiprocessing
 import re
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -40,15 +40,21 @@ def restore_logging() -> Iterator[None]:
 
 
 def test_module_loggers_share_one_configurable_root() -> None:
-    """Every module logs through a child of ``alchemy``, so one configuration
-    governs all of them, worker-only modules included."""
+    """Verify all modules share the configurable Alchemy logger.
+
+    Every module logs through a child of ``alchemy``, so one configuration
+    governs all of them, including worker-only modules.
+    """
     assert run_logging.logger_for("bond_analysis").name == "alchemy.bond_analysis"
     assert run_logging.logger_for("alchemy.main").name == "alchemy.main"
 
 
 def test_the_script_entry_point_is_not_named_dunder_main() -> None:
-    """``main.py`` runs as ``__main__``, which would name every driver record
-    ``alchemy.__main__``."""
+    """Verify the script entry point receives the stable logger name.
+
+    Because ``main.py`` runs as ``__main__``, its raw module name would label
+    every driver record ``alchemy.__main__``.
+    """
     assert run_logging.logger_for("__main__").name == "alchemy.main"
 
 
@@ -212,8 +218,11 @@ def test_configuring_the_driver_twice_does_not_duplicate_records() -> None:
 
 
 def test_a_log_file_raises_the_worker_level_to_debug() -> None:
-    """Workers filter before the queue, so the console level would discard the
-    DEBUG records the file handler is there to keep."""
+    """Verify file logging raises the worker threshold to debug.
+
+    Workers filter before the queue, so the console level would discard the
+    DEBUG records that the file handler exists to keep.
+    """
     console = run_logging.level_for_verbosity(verbose=0, quiet=True)
     assert console == logging.WARNING
     assert run_logging.worker_level(console, log_file=None) == logging.WARNING
@@ -266,8 +275,11 @@ def test_worker_debug_records_reach_a_log_file_under_a_quiet_console(
 def test_an_unusable_log_file_is_raised_for_the_caller_to_report(
     tmp_path: Path,
 ) -> None:
-    """An ``OSError`` rather than an exit: this runs before any handler exists,
-    so only the caller can still report the failure."""
+    """Verify an unwritable log path raises ``OSError``.
+
+    Configuration runs before any handler exists, so only the caller can still
+    report the failure.
+    """
     with pytest.raises(OSError):
         run_logging.configure_driver_logging(
             level=logging.INFO, stream=io.StringIO(), log_file=str(tmp_path)
@@ -277,8 +289,11 @@ def test_an_unusable_log_file_is_raised_for_the_caller_to_report(
 def test_main_reports_an_unusable_log_file_and_exits_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``--log-file`` on a directory is a fixable failure: name the path and
-    exit 1, not a traceback and not argparse's usage status."""
+    """Verify the CLI reports an invalid log-file path cleanly.
+
+    A directory passed to ``--log-file`` is a fixable failure: name the path
+    and exit 1, without a traceback or argparse's usage status.
+    """
     import cli
 
     exit_code = cli.main(["--id", "109m", "--log-file", str(tmp_path)])

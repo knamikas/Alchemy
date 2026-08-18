@@ -17,6 +17,7 @@ discarding measured bond geometry.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from statistics import median
 from typing import (
@@ -24,18 +25,7 @@ from typing import (
     Any,
     cast,
 )
-from collections.abc import Iterable, Mapping, Sequence
 
-from coordination.schema import (
-    BondRow,
-    CandidateRow,
-    ZSCORE_OUTLIER_CUTOFF,
-    bond_row,
-    candidate_row,
-    contact_identifier,
-    context_warning_values,
-    metal_site_identifier,
-)
 from codes import (
     CandidateSource,
     ContactScope,
@@ -59,6 +49,16 @@ from coordination.donor_chemistry import (
     N_TERMINAL_DONOR_ATOMS,
 )
 from coordination.dpi import DpiComponents, calculate_dpi_components
+from coordination.schema import (
+    ZSCORE_OUTLIER_CUTOFF,
+    BondRow,
+    CandidateRow,
+    bond_row,
+    candidate_row,
+    contact_identifier,
+    context_warning_values,
+    metal_site_identifier,
+)
 from metal_elements import METAL_ELEMENTS
 from metal_identification import sigma_for, sigma_index, zd_indices
 from reference_data import (
@@ -793,6 +793,7 @@ def _current_contacts_from_candidates(
 def annotate_contacts(
     contacts: Iterable[Candidate], metal_element: str, dpi: float
 ) -> None:
+    """Attach reference-based geometry results to candidate contacts."""
     for contact in contacts:
         neighbor = contact.neighbor
         reported_distance = round(contact.distance_raw, 3)
@@ -926,25 +927,25 @@ def _scope_summary(
     score_excluded = candidate - score_eligible
     scored_outlier = sum(
         result.score_eligible and geometry.outlier is True
-        for result, geometry in zip(multi_donor, geometries)
+        for result, geometry in zip(multi_donor, geometries, strict=False)
     )
     scored_consistent = sum(
         result.score_eligible and geometry.consistent is True
-        for result, geometry in zip(multi_donor, geometries)
+        for result, geometry in zip(multi_donor, geometries, strict=False)
     )
     multi_donor_groups = {
         _residue_image_key(contact)
-        for contact, result in zip(contacts, multi_donor)
+        for contact, result in zip(contacts, multi_donor, strict=False)
         if result.detected
     }
     suspect_multi_donor_groups = {
         _residue_image_key(contact)
-        for contact, result in zip(contacts, multi_donor)
+        for contact, result in zip(contacts, multi_donor, strict=False)
         if result.geometry_status == MultiDonorStatus.SUSPECT
     }
     indeterminate_multi_donor_groups = {
         _residue_image_key(contact)
-        for contact, result in zip(contacts, multi_donor)
+        for contact, result in zip(contacts, multi_donor, strict=False)
         if result.geometry_status == MultiDonorStatus.INDETERMINATE
     }
     multi_donor_contacts = sum(result.detected for result in multi_donor)
@@ -1257,6 +1258,8 @@ def _analyze_metal_site(
 
 @dataclass(slots=True)
 class BondAnalysisMetadata:
+    """Collect non-row outcomes from coordination analysis."""
+
     partial_reason_codes: list[str]
     warning_codes: list[str]
     messages: list[str]
@@ -1265,6 +1268,8 @@ class BondAnalysisMetadata:
 
 @dataclass(frozen=True, slots=True)
 class BondAnalysisResult:
+    """Collect coordination rows, site summaries, and run metadata."""
+
     bond_rows: list[BondRow]
     candidate_rows: list[CandidateRow]
     site_summaries: dict[AtomKey, dict[str, Any]]
