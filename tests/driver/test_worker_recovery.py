@@ -393,6 +393,8 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(
 #              "silent":    SIGKILL mid-entry without ever naming the entry
 #   external_child
 #              start a long-lived native child before the scripted death
+#   wait_for_start
+#              don't continue until this other entry has started in a worker
 #   claim      after finishing cleanly, announce a start for THIS other entry,
 #              leaving the driver with a stale attribution for it
 #   die_after  seconds after finishing cleanly to SIGKILL this now-idle worker
@@ -404,6 +406,23 @@ _DRIVER_HARD_TIMEOUT_S: float = 60.0
 def _announce(state: str, pdb_id: str) -> None:
     """Forward a scripted notification through the real worker mechanism."""
     worker.announce_inflight(state, pdb_id)
+
+
+def _announce_task_start(pdb_id: str) -> None:
+    """Announce a task and leave a cross-process marker for test coordination."""
+    _announce("start", pdb_id)
+    Path(_stub_marker_dir, f"started-{pdb_id}").touch()
+
+
+def _wait_for_task_start(pdb_id: str) -> None:
+    """Wait until another worker has announced the specified task."""
+    marker = Path(_stub_marker_dir, f"started-{pdb_id}")
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if marker.exists():
+            return
+        time.sleep(0.01)
+    raise TimeoutError(f"worker did not start {pdb_id} within 10 seconds")
 
 
 def _first_visit(pdb_id: str) -> bool:
@@ -453,12 +472,14 @@ def _stub_process(pdb_id: str) -> worker_contracts.EntryResult:
             with open(marker, "w", encoding="utf-8") as handle:
                 handle.write(f"{external.pid}\n")
         if die in ("announced", "announced_early"):
-            _announce("start", pdb_id)
+            _announce_task_start(pdb_id)
         if die != "announced_early":
             time.sleep(runtime)
         os.kill(os.getpid(), signal.SIGKILL)
 
-    _announce("start", pdb_id)
+    _announce_task_start(pdb_id)
+    if step.get("wait_for_start"):
+        _wait_for_task_start(str(step["wait_for_start"]))
     time.sleep(runtime)
     _announce("end", pdb_id)
 
@@ -737,21 +758,25 @@ def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(
     failure is invisible in the results: every row is written and only teardown
     hangs, leaving no run log and no exit code.
 
-    ``aaaa`` finishes quickly and is killed 0.3 s later, by which time it is
-    idle and holding the lock; ``bbbb`` is still working, so the driver has not
-    reached teardown yet. The deliberately short fallback grace expires while
-    ``bbbb`` is active; its live pid assignment must protect it from the older,
-    unattributed death. Reaching the assertions also proves shutdown completed.
+    ``aaaa`` waits until another worker starts ``bbbb``, then finishes quickly
+    and is killed 0.3 s later, by which time it is idle and holding the lock.
+    The deliberately short fallback grace expires while ``bbbb`` is active;
+    its live pid assignment must protect it from the older, unattributed death.
+    Reaching the assertions also proves shutdown completed.
     """
-    script = {
-        "aaaa": {"runtime": 0.05, "die_after": 0.3},
+    script: dict[str, dict[str, Any]] = {
+        "aaaa": {
+            "runtime": 0.05,
+            "wait_for_start": "bbbb",
+            "die_after": 0.3,
+        },
         "bbbb": {"runtime": 1.5},
     }
     exit_code, output_dir, _ = _run_driver(tmp_path, script, stall_grace=0.1, workers=2)
 
     by_id = {row["pdbID"]: row for row in _read_manifest(output_dir)}
     assert set(by_id) == set(script)
-    # The kill lands after both entries are done, so the work itself completed.
+    # The kill lands after aaaa returns while the other worker still holds bbbb.
     assert by_id["aaaa"]["status"] == "ok"
     assert by_id["bbbb"]["status"] == "ok"
     assert exit_code == 0
