@@ -1,4 +1,4 @@
-# Alchemy pipeline
+# Alchemy
 
 Alchemy evaluates how well experimental electron density supports metal atoms
 in protein crystal structures. For each PDB entry, it calculates 2mFo-DFc and
