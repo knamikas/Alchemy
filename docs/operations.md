@@ -1,18 +1,18 @@
 # Operations
 
-Running batches, resuming them, and reading what a run wrote. See
-[usage.md](usage.md) for the options themselves and
-[maintenance.md](maintenance.md) for the bundled reference data.
+Use this guide to run batches, resume interrupted work, and diagnose entry
+outcomes. For command options, see the [usage guide](usage.md). For bundled
+reference data, see [Reference-data maintenance](maintenance.md).
 
-## Operational notes
+## Read progress and logs
 
 - Alchemy separates three kinds of output. The progress line and the final
-  result summary go to **stdout**, so a redirected stdout remains a usable
-  record of what was produced. Diagnostics go to **stderr** as log records,
+  result summary go to `stdout`, so redirected standard output remains a usable
+  record of what was produced. Diagnostics go to `stderr` as log records,
   controlled by `-v`/`--quiet`/`--log-file`. The concise per-run report in
-  `<log-dir>/alchemy_run_*.log` and its complete
-  `<log-dir>/alchemy_run_*_entries.csv` diagnostics table -- under
-  `<output-dir>/logs/` unless `--log-dir` says otherwise -- are written
+  `LOG_DIR/alchemy_run_*.log` and its complete
+  `LOG_DIR/alchemy_run_*_entries.csv` diagnostics table—under
+  `OUTPUT_DIR/logs/` unless `--log-dir` says otherwise—are written
   separately and are unaffected by verbosity. They are structured artifacts,
   not transcripts. Worker processes emit records through a queue that the
   driver re-emits, so per-entry diagnostics from parallel workers never
@@ -23,12 +23,15 @@ Running batches, resuming them, and reading what a run wrote. See
   line every 30 seconds to avoid producing oversized logs.
 - Per-entry maps and logs are written to uniquely created working directories
   and removed after their rows are extracted unless `--keep-intermediates` is
-  supplied. Cleanup never targets a pre-existing `<output-dir>/<pdb-id>`
+  supplied. Cleanup never targets a pre-existing `OUTPUT_DIR/PDB_ID`
   directory.
 - Model-envelope mode still calculates each complete FFT map before cropping,
   so map values come from the same Fourier calculation as legacy full-map mode.
   Full temporary maps are deleted as soon as they are no longer needed unless
   `--keep-intermediates` is supplied.
+
+## Manage worker resources
+
 - Before starting workers, Alchemy estimates each entry's density-stage peak
   from the `GRID SAMP=5` map dimensions implied by its unit-cell axes and
   resolution. The estimate includes both maps, overlapping CCP4 copies, fixed
@@ -47,6 +50,9 @@ Running batches, resuming them, and reading what a run wrote. See
   The run report records the initial and final budgets, estimate sources, peak
   reservation, pressure pauses, and budget backoffs; its companion entry table
   records every entry's estimate.
+
+## Preserve and validate outputs
+
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis
@@ -65,6 +71,9 @@ Running batches, resuming them, and reading what a run wrote. See
 - The statistics header is a fixed schema rather than a copy of whatever EDSTATS
   emitted, because `extract_metal_statistics` already requires the EDSTATS
   residue table to match the standard column set and order.
+
+## Resume a run
+
 - Resume retries are staged separately. Existing rows are replaced only after a
   retry produces a terminal result and the retry batch completes; failed or
   interrupted retries leave the previous rows intact. `--resume --no-bonds`
@@ -75,58 +84,62 @@ Running batches, resuming them, and reading what a run wrote. See
   entries from the manifest after a processing improvement while continuing to
   protect `ok` entries. Optional `--id` or `--id-file` selectors restrict that
   set. Skips, retryable errors, and retryable partials already follow ordinary
-  resume behavior. The
-  same staged replacement rules apply, so an interrupted or retryably failed
-  attempt does not discard the previous terminal result. When a frozen
-  reference scores a targeted resume inside an existing database output,
-  `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
-  together so their per-entry evidence cannot diverge. Crystallization
+  resume behavior. The same staged replacement rules apply, so an interrupted
+  or retryably failed attempt does not discard the previous terminal result.
+  When a frozen reference scores a targeted resume inside an existing database
+  output, `confidence_scores_all.csv` and `confidence_inputs_all.csv` are
+  replaced together so their per-entry evidence cannot diverge. Crystallization
   condition and summary rows use the same staged per-entry replacement. The
   derived review queue is regenerated from the completed confidence and
   summary files rather than merged independently.
 - A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
   `metal_contact_candidates_all.csv` files before replacing the manifest and
   statistics, so old bond-stage rows cannot be mistaken for current output.
+
+## Interpret entry outcomes
+
 - A failure in bond analysis does not discard real-space-statistics rows already
   calculated for that entry; the manifest records the entry as `partial` with
   the bond-stage error.
 - If `mtzfix` cannot make an MTZ's Fourier coefficients pass its consistency
   re-test, Alchemy does not use the rejected maps or retry indefinitely. An
   explicitly twin-refined PDB-REDO entry is eligible for the guarded Refmac
-  coefficient normalization described above. Every other entry, and any twin
-  entry that fails a provenance, schema, or coefficient-identity check, is a
-  terminal `partial` with `mtzfix_validation_failure`; coordinate-based bond
-  analysis still runs, while its metal sites remain explicitly unscorable by
-  confidence because RSZD is unavailable.
+  coefficient normalization described in the [method reference](method.md).
+  Every other entry, and any twin entry that fails a provenance, schema, or
+  coefficient-identity check, is a terminal `partial` with
+  `mtzfix_validation_failure`; coordinate-based bond analysis still runs, while
+  its metal sites remain explicitly unscorable by confidence because RSZD is
+  unavailable.
 - After canonical model and conformer selection, structures with no recognized
   positive-occupancy metal sites and no unknown-element atoms finish with
-  `n_metals=0` without
-  running `mtzfix`, either FFT, or `edstats`. These stages cannot produce
-  metal-site output for such entries. Progress and completion summaries report
-  these successful negative results as `no_metals`; the manifest records them
-  explicitly as `no_metals=true`. Valid zero-occupancy metal records remain
-  visible through the `zero_occupancy_atoms` warning but are not counted as
-  sites. `no_metals` is an informational subset of `ok`, whereas
-  `skip` remains reserved for entries that could not be processed
-  operationally. If any atom has a missing or invalid deposited
-  element, metal absence cannot be established under the no-inference policy;
-  the entry instead finishes as terminal `partial` with
+  `n_metals=0` without running `mtzfix`, either FFT, or `edstats`. These stages
+  cannot produce metal-site output for such entries. Progress and completion
+  summaries report these successful negative results as `no_metals`; the
+  manifest records them explicitly as `no_metals=true`. Valid zero-occupancy
+  metal records remain visible through the `zero_occupancy_atoms` warning but
+  are not counted as sites. `no_metals` is an informational subset of `ok`,
+  whereas `skip` remains reserved for entries that could not be processed
+  operationally. If any atom has a missing or invalid deposited element, metal
+  absence cannot be established under the no-inference policy; the entry
+  instead finishes as terminal `partial` with
   `metal_presence_indeterminate` and is not counted as `no_metals`.
 - Structures with more than 100 selected canonical metal sites finish
   immediately after the same coordinate inspection, before `mtzfix`, either
   FFT, or `edstats`. Their manifest rows retain the detected `n_metals`, set
   `metal_site_limit_exceeded=true`, carry the matching reason code, and
   contribute no site, bond, candidate, or confidence rows. This is a successful
-  policy exclusion: metal-dense
-  assemblies contain highly correlated sites that would otherwise dominate the
-  standard database cohort and its runtime. Progress and completion summaries
-  report the excluded-entry count separately.
+  policy exclusion: metal-dense assemblies contain highly correlated sites that
+  would otherwise dominate the standard database cohort and its runtime.
+  Progress and completion summaries report the excluded-entry count separately.
 - Targeted and capped runs exit nonzero when any entry ends as `error`, `skip`,
   or a retryable `partial`. An uncapped database run treats explicitly
   deterministic processing errors as documented terminal exclusions: when no
   missing, interrupted, or otherwise retryable work remains, it finalizes the
   confidence reference and exits successfully. Unknown and unexpected errors,
   worker deaths, skips, and retryable partials remain nonzero.
+
+## Protect the output directory and scratch data
+
 - One Alchemy process on one machine owns an output directory at a time. The
   lease uses `flock` on POSIX and a non-blocking byte-range lock on Windows.
   Across a network filesystem it is only as reliable as that filesystem's lock
@@ -134,7 +147,7 @@ Running batches, resuming them, and reading what a run wrote. See
   they own it and both truncate the result CSVs. Give
   concurrent runs separate output directories rather than relying on the lease
   to arbitrate between hosts. A run takes a
-  non-blocking advisory lease on `<output-dir>/.alchemy.lock` before it reads,
+  non-blocking advisory lease on `OUTPUT_DIR/.alchemy.lock` before it reads,
   replaces, or resumes any result file. A second run fails immediately and
   reports the current owner's process, host, start time, and command instead of
   touching those results. The lock file intentionally remains after exit; the
@@ -147,11 +160,14 @@ Running batches, resuming them, and reading what a run wrote. See
 - Startup cleanup removes only Alchemy scratch directories carrying a valid
   disposable ownership marker. Unmarked directories, symlinks, malformed
   markers, and intermediates retained by `--keep-intermediates` are left alone.
+
+## Diagnose failures
+
 - A CCP4 program that exceeds `--ccp4-timeout` is killed and its entry recorded
   as a retryable `partial` with reason `ccp4_tool_timeout`, distinct from a
   program that failed with an error. A killed program reported nothing about the
   entry, so retrying it is meaningful. Its partial log is copied to
-  `<output-dir>/ccp4_timeout_logs/<id>_<tool>_timeout.log` before the entry's
+  `OUTPUT_DIR/ccp4_timeout_logs/PDB_ID_TOOL_timeout.log` before the entry's
   scratch directory is removed; the maps beside it are not retained.
 - `partial` describes usable but incomplete scientific output; it does not by
   itself mean that rerunning can repair the entry. Deterministic limitations,
@@ -163,14 +179,13 @@ Running batches, resuming them, and reading what a run wrote. See
   so a large run can be triaged. A parse, lookup, arithmetic, or type error
   describes the entry's data or Alchemy's own code and will recur while both
   stay the same, so it is reported as `deterministic_processing_error`. Anything
-  else — an `OSError`, a `MemoryError`, or most `RuntimeError` failures from a
-  CCP4 program —
-  may describe the machine rather than the entry, and is reported as
+  else—an `OSError`, a `MemoryError`, or most `RuntimeError` failures from a
+  CCP4 program—may describe the machine rather than the entry and is reported as
   `unexpected_processing_error`. Known CCP4 diagnostics that identify fixed
   entry or compiled-tool limitations, such as MAPMASK's `maxsec` bound and
   FFT's absence of acceptable reflections, are deterministic. The distinction
-  is advisory for resume and does not change
-  what `--resume` does: every `error` entry is retried either way, because a
+  is advisory for resume and does not change what `--resume` does: every
+  `error` entry is retried either way because a
   resumed run may have been given a repaired input file or a re-downloaded
   mirror entry, and Alchemy does not checksum its inputs to tell. Skipping an
   entry the operator had just fixed would be worse than repeating one.
@@ -181,10 +196,12 @@ Running batches, resuming them, and reading what a run wrote. See
   `edstats_grid_point_count_overflow` means EDSTATS printed `****` because an
   `NPm`, `NPs`, or `NPa` count exceeded its fixed-width field. Alchemy records
   that auxiliary count as `n/a` and retains the entry's other valid density
-  statistics. For an unanticipated
-  exception, the full traceback is written to the debug log, so `--log-file`,
-  or `-v` on the console, is what locates it without rerunning the entry by hand
-  under `--keep-intermediates`.
+  statistics. For an unanticipated exception, Alchemy writes the full traceback
+  to the debug log. Use `--log-file` or `-v` on the console to locate it without
+  rerunning the entry with `--keep-intermediates`.
+
+## Handle schema and metadata changes
+
 - Output-schema migrations are not appended onto older artifacts. `--resume`
   refuses to mix rows with incompatible headers or with missing
   crystallization outputs; use a new `--output-dir` for the first run after
@@ -205,8 +222,8 @@ Running batches, resuming them, and reading what a run wrote. See
 
 `reason_codes` is a `|`-separated list explaining why an entry is not a plain
 `ok`. The vocabulary is defined once as `ReasonCode` in `src/codes.py`, and
-`tests/test_documentation.py` fails if a member is missing from the table below,
-so a code cannot be added or renamed without this list following it.
+`tests/test_documentation.py` fails if a member is missing from the following
+table, so a code cannot be added or renamed without updating this list.
 
 | Code | Meaning |
 | --- | --- |
@@ -216,12 +233,12 @@ so a code cannot be added or renamed without this list following it.
 | `mtzfix_validation_failure` | `mtzfix` failed its consistency re-test, and the entry is not a PDB-REDO-declared twin. |
 | `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError` or an unrecognized CCP4 failure. |
 | `deterministic_processing_error` | An exception that will recur identically on the same inputs and tool build, such as a parse or lookup error, MAPMASK's compiled `maxsec` limit, or FFT finding no acceptable reflections. Terminal for the current database snapshot, but still retried by `--resume` in case inputs or tools changed. |
-| `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analysable. |
+| `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analyzable. |
 | `bond_stage_failure` | The geometry stage raised, so its rows are not legitimate density-only evidence. |
 | `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |
 | `ambiguous_coordinate_residue_join` | An EDSTATS row matched more than one coordinate residue. |
 | `cofactor_without_selected_metal` | A matched cofactor contains no configured metal site to select. |
-| `metal_site_without_density` | A selected coordinate metal site is absent from the statistics table, so it has no density evidence; it remains included in the coordinate-site total `n_metals`. This is detected with or without bond analysis and can happen when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot: see [maintenance.md](maintenance.md) for rebuilding it. |
+| `metal_site_without_density` | A selected coordinate metal site is absent from the statistics table, so it has no density evidence; it remains included in the coordinate-site total `n_metals`. This is detected with or without bond analysis and can happen when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot. See [Rebuild the cofactor reference](maintenance.md#cofactor-reference-maintenance). |
 | `declared_connection_resolution_incomplete` | A source `_struct_conn` or `LINK` record named an atom that could not be resolved in the coordinate model. |
 | `symmetry_search_unavailable` | The structure has no usable cell or space group, so only explicit contacts could be found. |
 | `missing_first_sphere_reference` | No bundled reference distance covers a donor class present at the site, so those contacts cannot be z-scored. |

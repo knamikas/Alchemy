@@ -1,10 +1,11 @@
 # Maintenance
 
-The data that travels with the checkout, and how to change it. Both files below
-decide results: the catalog says what counts as a metal cofactor, the distance
-table sets every assignment cutoff and every z-score. Both are verified against
-their checksums when a run first reads them, and every manifest row records the
-`reference_data_id` they compose.
+This guide explains how to change the reference data that travels with the
+checkout. Both bundled files affect results: the catalog says what counts as a
+metal cofactor, and the distance table sets every assignment cutoff and every
+z-score. Alchemy verifies both files against their checksums when a run first
+reads them, and every manifest row records the `reference_data_id` that they
+compose.
 
 ## Cofactor reference maintenance
 
@@ -38,16 +39,16 @@ list or classification rules change.
 - `src/data/metallocofactors_id.meta.json` — generation metadata for the
   committed cofactor list.
 - `src/data/metal_distances_info.txt` — reference metal-ligand distances and
-  standard deviations, keyed by donor residue, donor element and metal. Values
+  standard deviations, keyed by donor residue, donor element, and metal. Values
   are from Harding (2006), [Acta Cryst. D62,
   678-682](https://doi.org/10.1107/S0907444906014594), except NI, which is from
   Zheng et al. (2008), and SER/THR/TYR, which are approximated from statements
-  in Harding (2006) rather than tabulated. See [method.md]
-  (method.md#reference-coverage-of-the-donor-table) for which donors this file
-  does and does not cover. Note the format
-  trap: column 1 `CA` is the backbone-carbonyl pseudo residue, while column 3
-  `CA` is calcium.
-- `src/data/metal_distances_info.meta.json` — checksum, row count and citations
+  in Harding (2006) rather than tabulated. See
+  [Reference coverage of the donor table](method.md#reference-coverage-of-the-donor-table)
+  for the donors that this file does and doesn't cover. The format has one
+  important distinction: column 1 `CA` is the backbone-carbonyl pseudo residue,
+  while column 3 `CA` is calcium.
+- `src/data/metal_distances_info.meta.json` — checksum, row count, and citations
   for the distance table, written by `tools/stamp_distance_table.py`.
 
 Both bundled files are verified against their sidecars when they are first

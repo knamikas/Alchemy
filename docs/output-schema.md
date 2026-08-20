@@ -1,8 +1,8 @@
-# Scientific CSV schema
+# Output schema
 
 This document defines the row grain, identifiers, serialization, and columns
-of Alchemy's scientific CSV outputs. The ordered machine-enforced schemas live
-in `src/driver/writers.py`, `src/coordination/schema.py`,
+of Alchemy's CSV outputs. The ordered machine-enforced schemas live in
+`src/driver/writers.py`, `src/coordination/schema.py`,
 `src/metal_identification.py`, `src/confidence_score.py`, and
 `src/crystallization_conditions.py`.
 
@@ -11,7 +11,7 @@ in `src/driver/writers.py`, `src/coordination/schema.py`,
 - `pdbID` is the normalized entry identifier used for grouping entries.
 - `metal_site_id` identifies one selected coordinate-model metal atom. It is
   built from the PDB ID and zero-based model, chain, residue, and atom indices.
-  It is the supported site join key across all three files. A diagnostic
+  It is the supported site join key across the site-level files. A diagnostic
   density row that could not be matched to a coordinate site has a blank ID.
 - `contact_id` identifies one deposited donor atom in one explicit or generated
   image around a metal site. It is the supported join key between bond and
@@ -28,6 +28,66 @@ in `src/driver/writers.py`, `src/coordination/schema.py`,
 - `*_model_index`, `*_chain_index`, `*_residue_index`, and `*_atom_index` are
   zero-based coordinate-model indices. Author-facing chain, residue, insertion,
   atom, and alternate-location labels are retained separately.
+
+## Interpret a result
+
+Use this sequence to inspect one entry without treating missing evidence as a
+negative result:
+
+1. Find the entry in `manifest.csv`. Read `status`, `retryable`, `reason_codes`,
+   and `status_detail` before you use its scientific rows. An `ok` entry
+   completed all enabled stages. A `partial` entry has usable but incomplete
+   output. A `skip` or `error` entry didn't produce a complete analysis.
+2. Check `no_metals` and `metal_site_limit_exceeded`. If `no_metals=true`,
+   Alchemy found no selected positive-occupancy metal sites. If
+   `metal_site_limit_exceeded=true`, the entry was excluded from the standard
+   cohort and has no site, bond, candidate, or confidence rows.
+3. Read one row per selected site in `metal_sites_all.csv`. Use
+   `metal_site_id` for site-level joins. For a multi-metal cofactor, use
+   `density_observation_id` to avoid counting one residue-level EDSTATS
+   observation more than once in density analyses.
+4. Join assigned contacts from `metal_bonds_all.csv` by `metal_site_id`. Use
+   `metal_contact_candidates_all.csv` when you need to audit rejected or
+   unreferenced candidates. Join an exact contact between those files with
+   `contact_id`.
+5. If `confidence_scores_all.csv` exists, treat `alchemy_level` as the
+   authoritative classification. `PASS` means all assessable components pass
+   their raw thresholds. `REVIEW` means one assessable component needs review.
+   `SUSPECT` means at least one component is suspect or both components need
+   review. `INCOMPLETE` means neither component is assessable. The empirical
+   `alchemy_score` ranks sites but doesn't determine the classification.
+6. Use `review_queue_all.csv` as a triage view. Its crystallization fields add
+   context but don't change confidence levels or scores.
+
+An empty cell means unavailable or inapplicable, not zero or `false`. Read the
+associated status or reason field before drawing a conclusion. For the exact
+classification thresholds and decision matrix, see
+[Database-referenced confidence scoring](method.md#database-referenced-confidence-scoring).
+
+## `manifest.csv`
+
+Grain: one outcome row per processed PDB entry. Read this file before the
+scientific tables because it records whether the enabled stages completed and
+whether the output is complete enough for your analysis.
+
+| Columns | Meaning |
+| --- | --- |
+| `pdbID` | Normalized entry identifier and entry-level join key. |
+| `status`, `retryable` | Entry outcome and whether an ordinary resume should retry it. |
+| `no_metals`, `metal_site_limit_exceeded` | Successful metal-free result and standard-cohort exclusion flag. |
+| `n_metals`, `n_bonds`, `n_candidates` | Selected coordinate sites, assigned contacts, and candidate rows. Blank bond or candidate counts mean that stage didn't run; `0` means it ran and found no rows. |
+| `runtime_s` | Total entry runtime in seconds. |
+| `reason_codes`, `warning_codes`, `status_detail` | Pipe-separated outcome reasons, non-status warnings, and a bounded human-readable explanation. |
+| `alchemy_version`, `alchemy_commit`, `gemmi_version`, `ccp4_version` | Software provenance. |
+| `reference_data_id`, `analysis_config_id` | Bundled-reference identity and analysis-policy identity used for compatibility checks. |
+| `refinement_state`, `pdb_redo_is_twin`, `pdb_redo_version`, `pdb_redo_date` | PDB-REDO refinement and source provenance. |
+| `source_coordinate_format`, `analysis_coordinate_format`, `coordinate_conversion_performed`, `source_coordinate_path` | Source-coordinate identity and any conversion performed for analysis. |
+| `model_policy`, `input_model_count`, `model_analyzed`, `multi_model_structure` | Model-selection policy, available model count, selected model, and multi-model flag. |
+| `altloc_policy`, `symmetry_contact_policy` | Alternate-conformer and generated-contact policies. |
+
+Resume requires a compatible manifest schema, `reference_data_id`, and
+`analysis_config_id`. For retry behavior and the complete reason-code
+vocabulary, see the [operations guide](operations.md#resume-a-run).
 
 ## `density_context_all.csv`
 
@@ -103,7 +163,7 @@ The concrete metric columns are:
 | Columns | Meaning |
 | --- | --- |
 | `metal_site_id` | Stable join key for the selected coordinate metal site. |
-| `category` | `metal` for a single-atom ion or `cofactor` for a catalogued metal-containing residue. |
+| `category` | `metal` for a single-atom ion or `cofactor` for a cataloged metal-containing residue. |
 | `model_policy`, `input_model_count`, `model_analyzed`, `model_id`, `multi_model_structure` | Model-selection policy, deposited model count, selected model, its source identifier, and whether additional models existed. |
 | `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location used by `metal_site_id`. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited identity of the selected metal atom. |
@@ -343,9 +403,9 @@ confidence component, score, level, evidence basis, or verdict reason.
 
 ## `confidence_reference/`
 
-The frozen reference is portable only as the pair of files below. The metadata
-is its completion marker; Alchemy removes it before rebuilding so a failed
-finalization cannot leave an older reference looking current.
+The frozen reference is portable only as the following pair of files. The
+metadata is its completion marker; Alchemy removes it before rebuilding so a
+failed finalization cannot leave an older reference looking current.
 
 ### `component_distributions.csv`
 

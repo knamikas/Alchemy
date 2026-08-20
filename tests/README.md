@@ -10,7 +10,7 @@ python3 -m pip install '.[test]'
 python3 -m pytest
 ```
 
-Alchemy supports Python 3.11 and newer and requires gemmi 0.7 or newer.
+Alchemy supports Python 3.11 or later and requires `gemmi` 0.7 or later.
 
 Tests under `coordination/`, `driver/`, and `tools/` follow the corresponding
 source subsystems. Whole-run coverage lives under `integration/`. Shared
@@ -40,10 +40,10 @@ already on `PATH`, source the CCP4 setup script first:
 
 ## What CI runs, and what it does not
 
-CI runs the offline lane — `--no-ccp4 --no-network --skip-slow` — on Linux,
-Windows and macOS, with Linux additionally enforcing `ruff check`,
-`ruff format --check`, Mypy, and the coverage floor. Provisioning CCP4 and the pinned entry data in CI
-is deliberately not done: the setup cost is not considered worth it.
+CI runs the offline lane—`--no-ccp4 --no-network --skip-slow`—on Linux,
+Windows, and macOS, with Linux additionally enforcing `ruff check`,
+`ruff format --check`, Mypy, and the coverage floor. CI doesn't provision CCP4
+or the pinned entry data because of the setup cost.
 
 The consequence is worth stating plainly, because it is not visible from a green
 run. Nothing in CI executes `mtzfix`, `fft`, `mapmask`, or `edstats`, and nothing
@@ -94,7 +94,7 @@ network access, entry-backed tests skip.
 
 ## Markers and options
 
-- `ccp4`: requires the CCP4 programs listed above
+- `ccp4`: requires the CCP4 programs listed in the requirements section
 - `network`: may contact PDB-REDO
 - `entry_data`: requires the pinned integration entries
 - `slow`: runs the end-to-end pipeline
@@ -107,12 +107,12 @@ the run. `--require-entry-data` ensures the integration tests did not all skip.
 
 `test_known_limitations.py` is the ledger for validated-but-unfixed defects. It
 currently holds none: every finding it once pinned has been fixed and its test
-moved to the module that owns the behaviour, so the file collects no tests and
+moved to the module that owns the behavior, so the file collects no tests and
 documents the protocol for the next one.
 
-That protocol is: assert the behaviour Alchemy *should* have, mark it
+That protocol is: assert the behavior Alchemy _should_ have, mark it
 `xfail(strict=True)` with a source anchor in the reason, and move it out when it
-turns green. Strictness is the point -- an unexpected pass fails the suite, so a
+turns green. Strictness is the point—an unexpected pass fails the suite, so a
 fix cannot land unnoticed. Defects that can only be reproduced by killing a
 process or exhausting memory are recorded as explicit skips with the manual
 procedure in their docstrings.

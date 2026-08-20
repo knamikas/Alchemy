@@ -125,9 +125,9 @@ available alternatives are recorded.
 EDSTATS is run with `USEALT=true`, which reports named alternate conformers as
 separate residue observations while retaining an additional pooled summary row.
 Alchemy ignores that summary and retains only the EDSTATS row whose altloc
-matches the conformer selected above. Missing or contradictory conformer output
-fails the entry rather than assigning density from a discarded conformer to the
-selected metal site.
+matches the conformer selected for geometry analysis. Missing or contradictory
+conformer output fails the entry rather than assigning density from a discarded
+conformer to the selected metal site.
 
 `run_bond_analysis()` uses a 4 Å search only to discover broad
 positive-occupancy N/O/S candidates around a configured metal, outside the
@@ -164,15 +164,15 @@ This includes internal peptide N, ASN/GLN amide N, TRP pyrrole N, and ARG
 guanidinium N. A declaration can still establish such an atom as a declared
 bond; `donor_rule_override=declared_connection` makes that exception explicit.
 
-### Reference coverage of the donor table
+#### Reference coverage of the donor table
 
-Inferring a contact and scoring one are separate questions. The donor table
-above governs inference; scoring additionally requires a literature reference
-distance in `src/data/metal_distances_info.txt`, and that reference does not
-cover every donor Alchemy will infer:
+Inferring a contact and scoring one are separate questions. The
+geometry-inference donor table governs inference; scoring additionally requires a
+literature reference distance in `src/data/metal_distances_info.txt`, and that
+reference does not cover every donor Alchemy will infer:
 
-- **ASN, GLN, LYS and MET have no reference entry.** Harding (2006) tabulates
-  water `O`, ASP/GLU carboxylate `O`, backbone carbonyl `O`, HIS `N` and CYS
+- **ASN, GLN, LYS, and MET have no reference entry.** Harding (2006) tabulates
+  water `O`, ASP/GLU carboxylate `O`, backbone carbonyl `O`, HIS `N`, and CYS
   `S` only. Contacts to these four side chains are therefore discovered,
   reported and measured, but never receive a Zbond: they carry the
   same-element fallback and NaN derived values. This is a limitation of the
@@ -181,17 +181,18 @@ cover every donor Alchemy will infer:
   C-terminal `OXT`/`OT1`/`OT2` contacts are likewise reported through the
   same-element fallback without a Zbond; they do not borrow chemically
   different side-chain or backbone-carbonyl distributions.
-- **SER, THR and TYR values are approximations** derived from statements in
-  Harding (2006) rather than from its tables, so their `sigma_lit` is not an
-  empirical spread. Treat z-scores for these three donors as indicative.
-- **Nucleic acids, modified residues and other ligands have no reference at
+- **SER, THR, and TYR values are approximations.** These values are derived
+  from statements in Harding (2006) rather than from its tables, so their
+  `sigma_lit` is not an empirical spread. Treat z-scores for these three donors
+  as indicative.
+- **Nucleic acids, modified residues, and other ligands have no reference at
   all.** A metal coordinated by, say, a DNA phosphate oxygen is real
   coordination, but no bundled distance can assess it.
 
 A declared contact to a donor class with no reference is retained in
 `metal_contact_candidates_all.csv` with its measured distance and full connection
 provenance, and the entry records
-`declared_donor_outside_supported_classes`. It is deliberately **not** promoted
+`declared_donor_outside_supported_classes`. It is deliberately _not_ promoted
 to a bond row: doing so would raise the site's coordination count and apparent
 geometry coverage on the strength of a contact that nothing in the reference
 data can evaluate. The distinction that
@@ -268,6 +269,8 @@ first-sphere distance rule, a declared donor-rule override, or a suspect
 multi-donor group. A distant non-typical atom found only by the broad 4 Å search
 does not by itself place the complete metal site under warning.
 
+## Confidence scoring
+
 ### Database-referenced confidence scoring
 
 Confidence inputs are collected as part of an uncapped full-database run: no
@@ -278,8 +281,9 @@ to `confidence_inputs_all.csv`. It never rereads the complete statistics and
 bond tables to reconstruct those inputs.
 
 The compact row records metal-site `ZDm` as `rszd`, its magnitude as
-`rszd_abs`, its signed negative and positive density diagnostics, and whether EDSTATS reported
-its 99.9 saturation value. For geometry, every finite `score_eligible` Zbond
+`rszd_abs`, its signed negative and positive density diagnostics, and whether
+EDSTATS reported its 99.9 saturation value. For geometry, every finite
+`score_eligible` Zbond
 contributes with equal weight to `geometry_rms_zbond`; declared and inferred
 contacts are not numerically reweighted. The row also retains maximum, mean
 absolute, and mean signed Zbond diagnostics, scored-contact counts, and the
@@ -304,34 +308,6 @@ scans the compact input—not the raw analysis outputs—to write
 `confidence_reference/` directory containing policy metadata and the empirical
 score distribution. An interrupted run retains its compact inputs for
 `--resume` but does not publish a completed reference.
-
-### Crystallization conditions as non-scoring context
-
-Alchemy extracts deposited crystallization metadata once per entry. For a
-normal PDB-REDO run it prefers the original PDB entry's
-`exptl_crystal_grow` records, retrieved in batches from the RCSB Data API and
-stored in a persistent per-entry cache. It falls back to the PDB-REDO
-coordinate file's mmCIF `_exptl_crystal_grow` category or legacy PDB
-`REMARK 280` when the deposited API record has no condition. Manual-input runs
-reverse that precedence so an explicitly supplied coordinate file remains the
-authority. The original condition description is retained in
-`crystallization_conditions_all.csv`. A separate one-row-per-entry summary
-reports availability, pH and temperature ranges, explicitly detected metals,
-the manuscript's metal-class flags, and sulfate, cacodylate, and acetate. Both
-outputs identify the selected metadata source; API-derived rows also record
-retrieval time and the deposited entry revision date.
-
-These annotations are positive evidence only. `not_reported`, `unparseable`,
-and `input_unavailable` produce blank detection flags rather than negative
-claims because deposited condition records are heterogeneous and incomplete.
-The conditions do not enter either raw confidence threshold, empirical support
-distribution, the overall verdict matrix, or `alchemy_score`.
-
-After confidence finalization, Alchemy joins the entry summary to only REVIEW
-and SUSPECT sites in `review_queue_all.csv`. This places experimental context
-beside the sites most likely to need inspection while retaining canonical
-conditions for every processed entry and avoiding repeated condition text in
-the primary site and confidence outputs.
 
 The standard database cohort excludes an entry when coordinate inspection
 finds more than 100 selected canonical metal sites. These exceptionally
@@ -402,6 +378,8 @@ reconstructs inputs by rescanning `metal_sites_all.csv` or
 completed manifest is available so the rebuilt reference retains entry counts,
 artifact hashes, and software provenance.
 
+## DPI and occupancy validation
+
 The DPI is calculated from PDB-REDO reflection and R-free metadata, the
 asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen and
 non-deuterium atoms in the complete first-model asymmetric unit. Alternate
@@ -451,3 +429,33 @@ reads as an authoritative negative about a file that contains a metal record.
 For PDB input, raw occupancy records are matched to Gemmi atoms by chain,
 residue number and insertion code, residue and atom names, alternate location,
 and atom serial rather than parser traversal order.
+
+## Crystallization conditions as non-scoring context
+
+Alchemy extracts deposited crystallization metadata once per entry. For a
+normal PDB-REDO run, it prefers the original PDB entry's
+`exptl_crystal_grow` records, retrieves them in batches from the RCSB Data API,
+and stores them in a persistent per-entry cache. It falls back to the PDB-REDO
+coordinate file's mmCIF `_exptl_crystal_grow` category or legacy PDB
+`REMARK 280` when the deposited API record has no condition. Manual-input runs
+reverse that precedence so an explicitly supplied coordinate file remains the
+authority.
+
+Alchemy retains the original condition description in
+`crystallization_conditions_all.csv`. A separate one-row-per-entry summary
+reports availability, pH and temperature ranges, explicitly detected metals,
+the manuscript's metal-class flags, and sulfate, cacodylate, and acetate. Both
+outputs identify the selected metadata source. API-derived rows also record
+retrieval time and the deposited entry revision date.
+
+These annotations provide positive evidence only. `not_reported`,
+`unparseable`, and `input_unavailable` produce blank detection flags instead of
+negative claims because deposited condition records are heterogeneous and
+incomplete. The conditions don't enter a raw confidence threshold, empirical
+support distribution, the overall verdict matrix, or `alchemy_score`.
+
+After confidence finalization, Alchemy joins the entry summary to only `REVIEW`
+and `SUSPECT` sites in `review_queue_all.csv`. This puts experimental context
+beside the sites most likely to need inspection while retaining canonical
+conditions for every processed entry and avoiding repeated condition text in
+the primary site and confidence outputs.
