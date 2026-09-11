@@ -203,6 +203,8 @@ def test_only_reclaimable_file_cache_is_discounted(
 def test_cgroup_cache_discount_preserves_ancestor_and_host_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Exercise the Linux memory probes against these fixtures on every host.
+    monkeypatch.setattr("driver.resources.sys.platform", "linux")
     child = tmp_path / "job"
     child.mkdir()
     for directory, limit, usage in [(tmp_path, 100, 80), (child, 80, 70)]:
