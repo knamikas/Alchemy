@@ -76,7 +76,7 @@ from driver.output_lock import (
 )
 from driver.progress import ProgressReporter
 from driver.resources import (
-    AUTO_WORKER_MEMORY_BYTES,
+    WORKER_FIXED_OVERHEAD_BYTES,
     EntryMemoryEstimate,
     automatic_worker_limits,
     available_memory_bytes,
@@ -1402,6 +1402,8 @@ def pop_admissible_estimate(
     reserved_bytes: int,
     budget_bytes: int | None,
     active_estimates: Collection[EntryMemoryEstimate],
+    *,
+    workers: int = 0,
 ) -> EntryMemoryEstimate | None:
     """Admit the first pending entry whose estimate still fits the budget.
 
@@ -1417,8 +1419,16 @@ def pop_admissible_estimate(
         # Nothing is running, so the head is admitted even when it is oversized:
         # refusing an entry larger than the whole budget would deadlock the batch.
         return pending.pop(0)
+    # The candidate occupies one idle worker; its estimate already includes
+    # that worker's overhead. Other idle processes remain resident as well.
+    idle_bytes = (
+        max(0, workers - len(active_estimates) - 1) * WORKER_FIXED_OVERHEAD_BYTES
+    )
     for index, estimate in enumerate(pending):
-        if budget_bytes is not None and reserved_bytes + estimate.bytes > budget_bytes:
+        if (
+            budget_bytes is not None
+            and reserved_bytes + estimate.bytes + idle_bytes > budget_bytes
+        ):
             continue
         return pending.pop(index)
     return None
@@ -1505,7 +1515,7 @@ def _dispatch_entries(
         oversized_entries: set[str] = set()
         admission = MemoryAdmission(
             memory_plan.budget_bytes,
-            AUTO_WORKER_MEMORY_BYTES,
+            WORKER_FIXED_OVERHEAD_BYTES,
             memory_plan.reserve_bytes,
         )
         completed = 0
@@ -1526,13 +1536,14 @@ def _dispatch_entries(
             old_pauses = admission.pauses
             pause = admission.observe(
                 current_available,
-                reserved_bytes,
+                reserved_bytes + (workers - len(active)) * WORKER_FIXED_OVERHEAD_BYTES,
                 time.monotonic(),
                 active=bool(active),
                 oversized=(
                     len(active) == 1
                     and memory_plan.budget_bytes is not None
-                    and reserved_bytes > memory_plan.budget_bytes
+                    and reserved_bytes + (workers - 1) * WORKER_FIXED_OVERHEAD_BYTES
+                    > memory_plan.budget_bytes
                 ),
             )
             if admission.budget != old_budget:
@@ -1570,16 +1581,22 @@ def _dispatch_entries(
                     reserved_bytes,
                     admission.budget,
                     [item[1] for item in active.values()],
+                    workers=workers,
                 )
                 if estimate is None:
                     break
-                if admission.budget is not None and estimate.bytes > admission.budget:
+                required_bytes = (
+                    reserved_bytes
+                    + estimate.bytes
+                    + (workers - len(active) - 1) * WORKER_FIXED_OVERHEAD_BYTES
+                )
+                if admission.budget is not None and required_bytes > admission.budget:
                     oversized_entries.add(estimate.pdb_id)
                     logger.warning(
-                        "%s has a %.2f GiB memory estimate above the %.2f GiB "
-                        "worker budget; admitting it alone",
+                        "%s needs an estimated %.2f GiB including resident workers, "
+                        "above the %.2f GiB worker budget; admitting it alone",
                         estimate.pdb_id,
-                        estimate.bytes / (1024**3),
+                        required_bytes / (1024**3),
                         admission.budget / (1024**3),
                     )
                 deaths.track_submitted_entry(estimate.pdb_id)
@@ -1588,7 +1605,11 @@ def _dispatch_entries(
                     estimate,
                 )
                 reserved_bytes += estimate.bytes
-                peak_reserved_bytes = max(peak_reserved_bytes, reserved_bytes)
+                peak_reserved_bytes = max(
+                    peak_reserved_bytes,
+                    reserved_bytes
+                    + (workers - len(active)) * WORKER_FIXED_OVERHEAD_BYTES,
+                )
                 max_active = max(max_active, len(active))
 
             ready_ids: list[str] = []
@@ -1659,6 +1680,8 @@ def _dispatch_entries(
                     final=finished,
                 )
         run_log.summary.update(
+            memory_scheduler_worker_overhead_bytes=workers
+            * WORKER_FIXED_OVERHEAD_BYTES,
             memory_scheduler_peak_reserved_bytes=peak_reserved_bytes,
             memory_scheduler_max_active_entries=max_active,
             memory_scheduler_oversized_entries=len(oversized_entries),

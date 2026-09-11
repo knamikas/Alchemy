@@ -19,8 +19,8 @@ from typing import Any, TextIO, cast
 
 GIB = 1024**3
 
-# A 2 GiB floor prevents many ordinary CCP4 processes from consuming the OS
-# reserve together before their map-dependent estimates become significant.
+# Keep uncertain inputs conservative; known map dimensions have their own
+# estimate, including fixed worker overhead and a safety margin.
 AUTO_WORKER_MEMORY_BYTES = 2 * GIB
 
 # Match density_analysis.py's GRID SAMP=5 and add margin because CCP4 rounds
@@ -43,6 +43,7 @@ DEFAULT_MEMORY_UTILIZATION = 0.80
 PROC_MEMINFO_PATH = "/proc/meminfo"
 PROC_SELF_CGROUP_PATH = "/proc/self/cgroup"
 CGROUP_ROOT = "/sys/fs/cgroup"
+CPU_TOPOLOGY_ROOT = "/sys/devices/system/cpu"
 
 _PROPERTIES_PATTERN = re.compile(r'"properties"\s*:\s*')
 _PROPERTY_PREFIX_LIMIT = 4 * 1024**2
@@ -107,6 +108,60 @@ def _read_int(path: str) -> int | None:
         return parsed if parsed >= 0 else None
     except (OSError, ValueError):
         return None
+
+
+def available_physical_cpu_count() -> int | None:
+    """Count physical cores represented in Linux's allowed CPU affinity set.
+
+    Missing topology returns unknown rather than assuming all machines have
+    two hardware threads per core. Other platforms retain the CPU fallback.
+    """
+    if not sys.platform.startswith("linux") or not hasattr(os, "sched_getaffinity"):
+        return None
+    try:
+        allowed = os.sched_getaffinity(0)
+    except OSError:
+        return None
+    cores: set[tuple[int, int]] = set()
+    for cpu in allowed:
+        topology = os.path.join(CPU_TOPOLOGY_ROOT, f"cpu{cpu}", "topology")
+        package = _read_int(os.path.join(topology, "physical_package_id"))
+        core = _read_int(os.path.join(topology, "core_id"))
+        if package is None or core is None:
+            return None
+        cores.add((package, core))
+    return len(cores) or None
+
+
+def available_cpu_quota() -> int | None:
+    """Bound workers by the tightest Linux cgroup-v2 CPU quota, if present."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        with open(PROC_SELF_CGROUP_PATH, encoding="ascii") as handle:
+            paths = [line.strip().split(":", 2) for line in handle]
+    except OSError:
+        return None
+    quotas: list[int] = []
+    root = os.path.abspath(CGROUP_ROOT)
+    for fields in paths:
+        if len(fields) != 3 or fields[:2] != ["0", ""]:
+            continue
+        current = _safe_cgroup_dir(fields[2])
+        if current is None:
+            continue
+        while True:
+            try:
+                with open(os.path.join(current, "cpu.max"), encoding="ascii") as handle:
+                    quota, period = handle.read().split()
+                if quota != "max" and int(quota) > 0 and int(period) > 0:
+                    quotas.append(max(1, int(quota) // int(period)))
+            except (OSError, ValueError):
+                pass
+            if current == root:
+                break
+            current = os.path.dirname(current)
+    return min(quotas) if quotas else None
 
 
 def _safe_cgroup_dir(relative_path: str) -> str | None:
@@ -303,16 +358,28 @@ def automatic_worker_limits(
     memory_limit_bytes: int | None = None,
     utilization: float = DEFAULT_MEMORY_UTILIZATION,
 ) -> tuple[int, int | None]:
-    """Return CPU- and memory-based automatic worker limits."""
-    cpu_limit = max(1, available_cpu_count() - 2)
+    """Size the pool separately from the memory cost of active analyses.
+
+    Reserve at most half the entry budget for resident worker overhead, so
+    starting a pool leaves space for calculations. Weighted admission charges
+    each active entry and the overhead of idle workers against that budget.
+    """
+    logical = available_cpu_count()
+    physical = available_physical_cpu_count()
+    cpu_limit = min(logical, physical) if physical else max(1, logical - 2)
+    quota = available_cpu_quota()
+    if quota is not None:
+        cpu_limit = min(cpu_limit, quota)
     budget, _ = scheduling_memory_budget(
         available_memory_bytes(),
         memory_limit_bytes=memory_limit_bytes,
         utilization=utilization,
     )
-    memory_limit: int | None = None
-    if budget is not None:
-        memory_limit = max(1, budget // AUTO_WORKER_MEMORY_BYTES)
+    # With no measurable or explicit allowance, concurrency cannot be safely
+    # calibrated. A user-supplied --memory-limit enables sizing in that case.
+    memory_limit = (
+        max(1, budget // (2 * WORKER_FIXED_OVERHEAD_BYTES)) if budget is not None else 1
+    )
     return cpu_limit, memory_limit
 
 
@@ -383,7 +450,7 @@ def estimate_from_properties(
     )
     return EntryMemoryEstimate(
         pdb_id=pdb_id,
-        bytes=max(AUTO_WORKER_MEMORY_BYTES, peak),
+        bytes=peak,
         source="data_json",
         combined_map_bytes=combined_maps,
     )

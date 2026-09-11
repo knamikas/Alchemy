@@ -221,8 +221,9 @@ def test_cgroup_cache_discount_preserves_ancestor_and_host_limits(
     assert resources.available_memory_bytes() == 0
 
 
+@pytest.mark.parametrize("entry_gib", [2, 7])
 def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry_gib: int
 ) -> None:
     """Exercise admission in the actual dispatch loop with a cheap test pipeline."""
     lock = threading.Lock()
@@ -275,7 +276,6 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
     monkeypatch.setattr(pool, "_shutdown_pool", always_false)
     monkeypatch.setattr(pool, "process", analyze)
     monkeypatch.setattr(pool, "available_memory_bytes", available)
-    monkeypatch.setattr(pool, "AUTO_WORKER_MEMORY_BYTES", GIB // 2)
     monkeypatch.setattr(MemoryAdmission, "HEALTHY_SECONDS", 0.01)
     monkeypatch.setattr(pool, "_WorkerDeathWatch", death_watch)
     args = cli.parse_args(["--output-dir", str(tmp_path), "--workers", "4"])
@@ -291,7 +291,10 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
             pool.ConfidencePlan(),
             log,
             pool.MemoryPlan(
-                [resources.EntryMemoryEstimate(p, 2 * GIB, "test") for p in ids],
+                [
+                    resources.EntryMemoryEstimate(p, entry_gib * GIB, "test")
+                    for p in ids
+                ],
                 8 * GIB,
                 4 * GIB,
             ),
@@ -299,10 +302,18 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
     finally:
         threads.close()
         threads.join()
-    assert log.summary["memory_scheduler_budget_backoffs"] == 1
-    assert log.summary["memory_scheduler_budget_recoveries"] >= 1
+    if entry_gib == 2:
+        assert log.summary["memory_scheduler_budget_backoffs"] == 1
+        assert log.summary["memory_scheduler_budget_recoveries"] >= 1
+        assert log.summary["memory_scheduler_max_active_entries"] == 4
+    else:
+        # A 7 GiB entry plus three idle workers exceeds the 8 GiB budget.
+        # Its pressure must not penalize the budget for ordinary entries.
+        assert log.summary["memory_scheduler_budget_backoffs"] == 0
+        assert log.summary["memory_scheduler_budget_recoveries"] == 0
+        assert log.summary["memory_scheduler_max_active_entries"] == 1
+        assert log.summary["memory_scheduler_oversized_entries"] == len(ids)
     assert log.summary["memory_scheduler_final_budget_bytes"] == 8 * GIB
-    assert log.summary["memory_scheduler_max_active_entries"] == 4
     with (tmp_path / "manifest.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == len(ids)

@@ -32,18 +32,34 @@ reference data, see [Reference-data maintenance](maintenance.md).
 
 ## Manage worker resources
 
+- Automatic selection sizes the resident pool separately from active analyses.
+  On Linux, readable CPU topology selects one worker per physical core present
+  in the process affinity set, bounded by the available logical CPUs and any
+  detected cgroup-v2 CPU quota (including ancestor quotas). Without physical
+  topology, the fallback leaves two logical CPUs free, with at least one
+  worker. Memory can reduce this count further: at most half the analysis
+  budget is normally reserved for pool overhead, estimated at 512 MiB per
+  worker (at least one worker is allowed on smaller allocations). The
+  remaining capacity supports calculations. Explicit `--workers` values remain
+  capped by this memory allowance. The pool ceiling is fixed at startup;
+  active concurrency adjusts throughout the run. If neither available memory
+  nor an explicit `--memory-limit` is known, Alchemy uses one worker.
 - Before starting workers, Alchemy estimates each entry's density-stage peak
   from the `GRID SAMP=5` map dimensions implied by its unit-cell axes and
   resolution. The estimate includes both maps, overlapping CCP4 copies, fixed
   worker overhead, FFT-grid rounding, and a safety margin. If usable metadata
-  is absent, MTZ size supplies a conservative fallback; otherwise the entry
-  receives the 2 GiB floor. By default, Alchemy uses up to 80% of currently
-  available memory while protecting at least 4 GiB for the OS and driver. All
+  is absent, MTZ size supplies a conservative fallback with a 2 GiB minimum;
+  missing inputs receive a 2 GiB estimate. Valid map estimates can be smaller
+  than 2 GiB, but still include 512 MiB overhead plus the safety margin.
+  By default, Alchemy uses up to 80% of currently available memory while
+  protecting at least 4 GiB for the OS and driver. All
   detected host and cgroup limits remain in force. On cgroup v2, clean inactive
   file cache is treated as reclaimable; anonymous, dirty, mapped and shared
-  memory remains charged. All
-  entries share one estimated-byte budget; the high-memory label is diagnostic
-  and does not impose a separate count or percentage ceiling. The dispatcher
+  memory remains charged. All entries and idle workers share one estimated-byte
+  budget; active estimates already include their worker overhead, so it is
+  counted only once. The
+  high-memory label is diagnostic and does not impose a separate count or
+  percentage ceiling. The dispatcher
   skips a blocked large entry to keep fitting smaller entries active, then
   starts an oversized entry alone after active work drains. It pauses new
   admission whenever measured headroom reaches the protected reserve. After a
@@ -57,8 +73,9 @@ reference data, see [Reference-data maintenance](maintenance.md).
   OS. `--memory-limit` can supply an allocation that cannot be detected, and
   `--memory-utilization` can tune the usable fraction.
   The run report records the initial and final budgets, estimate sources, peak
-  reservation, pressure pauses, budget backoffs and recoveries; its companion
-  entry table records every entry's estimate.
+  reservation (including idle workers), pool overhead allowance, pressure
+  pauses, budget backoffs and recoveries; its companion entry table records
+  every entry's estimate.
 
 ## Preserve and validate outputs
 

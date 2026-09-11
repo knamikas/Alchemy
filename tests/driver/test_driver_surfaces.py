@@ -945,44 +945,51 @@ def test_worker_limits_leave_headroom_and_respect_memory(
     """Both limits are floored at one, so a small machine still runs.
 
     The CPU limit leaves two cores for the driver and the OS; the memory limit
-    exists because each worker holds whole maps in memory, and oversubscribing
-    it invites the OOM killer.
+    bounds resident process overhead; entry admission accounts for the maps.
     """
+    monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
+    monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 16)
     monkeypatch.setattr(
         resources,
         "available_memory_bytes",
         lambda: 8 * resources.AUTO_WORKER_MEMORY_BYTES,
     )
-    assert resources.automatic_worker_limits() == (14, 6)
+    assert resources.automatic_worker_limits() == (14, 12)
 
+    monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
+    monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 1)
     monkeypatch.setattr(resources, "available_memory_bytes", lambda: 0)
     assert resources.automatic_worker_limits() == (1, 1)
 
 
-def test_unknown_memory_leaves_the_limit_unset(
+def test_unknown_memory_limits_concurrency_to_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unreadable ``/proc/meminfo`` must not silently cap parallelism."""
+    """Unknown memory uses one worker until an explicit allowance is supplied."""
+    monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
+    monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 8)
     monkeypatch.setattr(resources, "available_memory_bytes", lambda: None)
 
     cpu_limit, memory_limit = resources.automatic_worker_limits()
     assert cpu_limit == 6
-    assert memory_limit is None
+    assert memory_limit == 1
 
 
 def test_explicit_memory_controls_bound_automatic_worker_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gib = 1024**3
+    monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
+    monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 64)
     monkeypatch.setattr(resources, "available_memory_bytes", lambda: 100 * gib)
 
     # The explicit 20 GiB capacity is tighter than detection. At 80%, with the
-    # 4 GiB minimum reserve, it supplies a 16 GiB entry budget: eight workers.
-    assert resources.automatic_worker_limits(memory_limit_bytes=20 * gib) == (62, 8)
+    # 4 GiB minimum reserve, it supplies a 16 GiB budget: 16 resident workers.
+    assert resources.automatic_worker_limits(memory_limit_bytes=20 * gib) == (62, 16)
 
     # On a large allocation the requested utilization controls the reserve.
     assert resources.scheduling_memory_budget(100 * gib, utilization=0.9) == (
@@ -1182,10 +1189,10 @@ def test_available_memory_is_read_from_meminfo(
     _host_meminfo(tmp_path, monkeypatch, host_bytes=7 * budget)
 
     assert resources.available_memory_bytes() == 7 * budget
-    assert resources.automatic_worker_limits()[1] == 5
+    assert resources.automatic_worker_limits()[1] == 10
 
 
-def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
+def test_an_unreadable_meminfo_uses_one_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A memory probe that fails must not be read as zero available memory."""
@@ -1202,7 +1209,7 @@ def test_an_unreadable_meminfo_leaves_worker_sizing_to_the_cpu_limit(
     )
 
     assert resources.available_memory_bytes() is None
-    assert resources.automatic_worker_limits()[1] is None
+    assert resources.automatic_worker_limits()[1] == 1
 
 
 def test_a_cgroup_v2_memory_limit_caps_host_memory(
@@ -1294,7 +1301,7 @@ def test_density_memory_estimate_grows_with_cell_volume() -> None:
     )
 
     assert small is not None and large is not None
-    assert small.bytes == resources.AUTO_WORKER_MEMORY_BYTES
+    assert resources.WORKER_FIXED_OVERHEAD_BYTES < small.bytes < 2 * 1024**3
     assert large.bytes > 8 * 1024**3
     assert large.combined_map_bytes is not None
 
