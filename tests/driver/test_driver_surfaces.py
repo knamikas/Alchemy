@@ -464,7 +464,7 @@ def test_density_only_entries_can_resume_without_bond_or_confidence_rows(
     outputs_present: bool,
     scored: bool,
 ) -> None:
-    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+    columns: list[str] = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
     if scored:
         columns.extend(confidence_score.ANALYSIS_COLUMNS)
     path = _write_header(tmp_path / "confidence.csv", columns)
@@ -2039,7 +2039,16 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
 def test_targeted_run_without_reference_still_plans_classifications(
     tmp_path: Path,
 ) -> None:
-    args = cli.parse_args(["--id", "1abc", "--output-dir", str(tmp_path)])
+    args = cli.parse_args(
+        [
+            "--id",
+            "1abc",
+            "--output-dir",
+            str(tmp_path),
+            "--confidence-reference-dir",
+            str(tmp_path / "absent-reference"),
+        ]
+    )
     plan = pool.plan_confidence(
         args,
         pool.OutputLayout(str(tmp_path)),
@@ -2052,6 +2061,23 @@ def test_targeted_run_without_reference_still_plans_classifications(
     assert plan.columns == (
         *confidence_score.CONFIDENCE_INPUT_COLUMNS,
         *confidence_score.ANALYSIS_COLUMNS,
+    )
+
+
+def test_fresh_targeted_run_automatically_uses_the_manuscript_reference(
+    tmp_path: Path,
+) -> None:
+    args = cli.parse_args(["--id", "9myr", "--output-dir", str(tmp_path)])
+    run_log = runlog.RunLog(args, "pytest")
+    plan = pool.plan_confidence(args, pool.OutputLayout(str(tmp_path)), False, run_log)
+
+    assert plan.mode == "reference"
+    assert plan.reference is not None
+    assert plan.reference.reference_id == "alchemy-confidence-8ba6808c816791ffbb87"
+    assert plan.reference.cohort_size == 330978
+    assert (
+        run_log.details["confidence_reference_dir"]
+        == pool.DEFAULT_CONFIDENCE_REFERENCE_DIR
     )
 
 

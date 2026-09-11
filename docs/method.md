@@ -359,21 +359,23 @@ hashes, input statuses, and software provenance. `context_warning` is carried
 into the result as an interpretive annotation and does not change a level or
 score.
 
-No empirical confidence reference is distributed with Alchemy. A fresh clone
-still writes the authoritative classifications, but leaves the three numerical
-ranking fields and reference provenance blank. Completing an uncapped
-full-database run writes a reference of your own; supplying a compatible one
-with `--confidence-reference-dir` adds empirical rankings to later runs.
+Alchemy includes the frozen [manuscript confidence reference](../src/data/confidence_reference/README.md)
+from the August 17, 2026 dataset: 330,978 sites, with 330,887 density observations
+and 275,870 geometry observations. A fresh clone uses this reference to provide
+empirical rankings for available evidence alongside the authoritative
+classifications. Completing an uncapped full-database run writes a reference
+of your own under the output directory; it does not replace the bundled files.
 
 For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
 the reference produced under the current output directory's
-`confidence_reference/`, then in the repository's `confidence_reference/`.
+`confidence_reference/`, then in the repository's `src/data/confidence_reference/`.
 `--confidence-reference-dir` selects an explicit copy instead. Alchemy loads
 that reference once, derives each new site's compact inputs while its normal
 result is still in memory, and writes `confidence_scores_all.csv` directly. These runs
 are compared with the frozen database and never generate rankings from their
-own small cohort. If no compatible reference is installed, classifications are
-still produced from the raw thresholds.
+own small cohort. If no reference is found, classifications are still produced
+from the raw thresholds and numerical rankings remain blank. An incompatible
+reference is rejected rather than silently substituted.
 
 `src/confidence_score.py` retains `finalize` and `score` subcommands for recovery
 and reproducibility using already compact confidence-input CSVs; neither command

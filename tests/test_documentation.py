@@ -207,7 +207,7 @@ def test_launcher_docstring_requirements_match_the_declaration() -> None:
     )
 
 
-def test_default_paths_land_in_the_checkout_not_inside_src() -> None:
+def test_default_paths_resolve_from_the_checkout_root() -> None:
     """``REPO_DIR`` names the checkout root from every module that reads it.
 
     It walks up from ``__file__``, so the number of ``dirname`` calls is right
@@ -228,7 +228,7 @@ def test_default_paths_land_in_the_checkout_not_inside_src() -> None:
         "not the checkout"
     )
     assert (
-        os.path.join(REPO_ROOT, "confidence_reference")
+        os.path.join(REPO_ROOT, "src", "data", "confidence_reference")
         == pool.DEFAULT_CONFIDENCE_REFERENCE_DIR
     )
 

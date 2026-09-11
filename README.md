@@ -62,6 +62,17 @@ sites.
    `output/metal_bonds_all.csv` by `metal_site_id`. For guidance on verdicts,
    missing values, and joins, see [Interpret a result](docs/output-schema.md#interpret-a-result).
 
+5. Open `output/confidence_scores_all.csv` for classifications and numerical
+   support scores. A fresh checkout automatically uses the bundled
+   [manuscript confidence reference](src/data/confidence_reference/README.md), built
+   from 330,978 sites. No reference download or extra option is needed.
+   Missing density or geometry evidence can still leave its component score blank.
+
+An explicit `--confidence-reference-dir` selects another reference. Otherwise,
+Alchemy uses a reference in `OUTPUT_DIR/confidence_reference/` if one exists,
+then the bundled manuscript reference. An uncapped full-database run builds
+its own reference under the output directory.
+
 The run also writes an immutable report under `output/logs/`. If the command
 doesn't complete, start with the entry's `reason_codes` and `status_detail` in
 the manifest, then see the

@@ -126,7 +126,9 @@ if TYPE_CHECKING:
 
 
 DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
-DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(REPO_DIR, "confidence_reference")
+DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
+    REPO_DIR, "src", "data", "confidence_reference"
+)
 
 ALCHEMY_VERSION = __version__
 # Seconds of no completed entry, after a worker died without naming the entry

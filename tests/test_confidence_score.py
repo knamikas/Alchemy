@@ -22,6 +22,16 @@ from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
 
 
+def test_bundled_reference_matches_the_archived_manuscript_bytes() -> None:
+    directory = Path(helpers.SRC_DIR) / "data" / "confidence_reference"
+    expected = {
+        "component_distributions.csv": "92ca1c704db005172eee9111d1e0d7cad907d736bf20e7b54c160814a1314b4e",
+        "metadata.json": "b62ceaf812d4512c77740290d5b7dcf9d986df1d385d711e6492c4e0ba9c0b4e",
+    }
+    for filename, digest in expected.items():
+        assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == digest
+
+
 class _ApproxFactory(Protocol):
     def __call__(
         self,

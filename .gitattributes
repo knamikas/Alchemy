@@ -2,3 +2,6 @@
 # checked-out representation identical on every supported platform.
 /src/data/metallocofactors_id.txt text eol=lf
 /src/data/metal_distances_info.txt text eol=lf
+# Preserve the archived manuscript reference byte for byte, including CSV CRLF.
+/src/data/confidence_reference/component_distributions.csv -text
+/src/data/confidence_reference/metadata.json -text

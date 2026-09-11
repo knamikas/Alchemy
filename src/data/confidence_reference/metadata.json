@@ -1,0 +1,70 @@
+{
+  "analysis_config_id": "alchemy-analysis-config-a0b84cce3e1c3c230cbb",
+  "cohort_id": "alchemy-cohort-2e97cf013eefa9d8e0b4",
+  "cohort_weighting": "per_metal_site",
+  "confidence_inputs_file": "confidence_inputs_all.csv",
+  "confidence_inputs_sha256": "2e97cf013eefa9d8e0b4b0df949041a714f9770bdb050d52c56df24d957fa786",
+  "confidence_method_version": "three_level_rms_2026_v1",
+  "confidence_schema_version": 3,
+  "coverage_policy": "annotation_only_v1",
+  "density_distinct_value_count": 382,
+  "density_reference_size": 330887,
+  "density_saturation_policy": "suspect_with_zero_support",
+  "density_saturation_value": 99.9,
+  "density_thresholds": {
+    "review": 3.0,
+    "suspect": 6.0
+  },
+  "distribution_file": "component_distributions.csv",
+  "geometry_distinct_value_count": 247145,
+  "geometry_reference_size": 275870,
+  "geometry_statistic": "rms_finite_score_eligible_zbond",
+  "geometry_thresholds": {
+    "review": 1.0,
+    "suspect": 2.0
+  },
+  "input_entry_count": 76954,
+  "input_row_count": 330978,
+  "input_status_counts": {
+    "complete": 275799,
+    "density_only": 55088,
+    "geometry_only": 71,
+    "unscorable": 20
+  },
+  "input_status_policy": "independent_component_availability_v1",
+  "manifest_status_counts": {
+    "error": 12,
+    "ok": 181072,
+    "partial": 13335
+  },
+  "maximum_entry_metal_sites": 100,
+  "metal_bearing_entry_count": 77557,
+  "metal_site_limit_exceeded_entry_count": 603,
+  "metric_decimal_places": 12,
+  "no_metals_entry_count": 116850,
+  "overall_rule": "any_suspect_or_review_plus_review",
+  "reference_data_id": "53538d4273b0",
+  "reference_id": "alchemy-confidence-8ba6808c816791ffbb87",
+  "scorable_entry_count": 76942,
+  "score_decimal_places": 6,
+  "software_versions": {
+    "alchemy_commit": [
+      "67a2a8dfb781+dirty",
+      "d2bfdcdae0db",
+      "unknown"
+    ],
+    "alchemy_version": [
+      "1.0.0"
+    ],
+    "ccp4_version": [
+      "ccp4-9"
+    ],
+    "gemmi_version": [
+      "0.7.5"
+    ]
+  },
+  "source_entry_count": 194419,
+  "source_manifest_file": "manifest.csv",
+  "source_manifest_sha256": "91bc976a74dd9e7ebe2ba65b4eae1027930ce928251fd8ba8298e0c6632d5430",
+  "support_score_method": "reverse_average_rank_empirical_cdf"
+}
