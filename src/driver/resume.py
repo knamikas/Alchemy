@@ -1,13 +1,8 @@
-"""Resuming a run over output a previous run left behind.
+"""Validate previous output and replace completed entries during resume.
 
-Three rules carry the weight. An entry counts as finished only when its
-manifest row says so, and that row is written after its data rows, so an
-interruption between the two costs a repeated entry, never a lost one. A blank
-``n_bonds`` means the bond stage never ran while ``0`` means it ran and found
-nothing, so reading blank as zero would mark an unanalysed entry permanently
-done. And a retry batch is staged to a temporary directory so a re-run replaces
-an entry's rows instead of appending beside them; the merge keeps every entry
-that reached its manifest row, whether or not the batch as a whole finished.
+A manifest row marks entry completion. Blank stage counts mean unrun stages;
+zero means measured absence. Stage retries separately and merge only entries
+whose manifest rows were written.
 """
 
 import contextlib
@@ -24,10 +19,7 @@ from driver.output_lock import create_owned_scratch_directory
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult
 
-# A row read back is not ``dict[str, str]``: DictReader fills a short row's
-# missing fields with ``None`` and collects a long row's surplus cells in a
-# list under the ``None`` key, which is exactly what the completeness checks
-# below look for.
+# DictReader uses None for missing cells and stores surplus cells under a None key.
 _CsvRow = dict[str | None, str | list[str] | None]
 
 
@@ -49,18 +41,13 @@ def load_done(
     candidate_output_present: bool = True,
     retry_partial_ids: Iterable[str] = (),
 ) -> set[str]:
-    """PDB IDs whose requested result is terminal in an existing manifest.
+    """Return IDs whose requested stages are complete or terminal.
 
-    Blank ``n_bonds`` or ``n_candidates`` mean the bond stage never ran, so
-    under ``bonds_required`` such a row is not done unless the manifest says
-    metal presence was indeterminate and therefore supplied no analyzable site.
-    A missing bond or candidate CSV otherwise has the same effect.
-    ``retry_partial_ids`` releases only non-retryable ``partial`` rows, never
-    ``ok`` ones.
-
-    An ``error`` row is never done, whatever its reason code claims about
-    recurring: a resumed run may have been given a repaired input file, and
-    skipping the entry would silently drop work the operator had just fixed.
+    Blank bond or candidate counts require reprocessing when bonds are requested,
+    unless no site was analyzable because metal presence was indeterminate.
+    Missing bond files also require reprocessing. retry_partial_ids releases
+    terminal partial rows, but never ok rows. Errors remain eligible for resume
+    because inputs or software may have been repaired.
     """
     retry_partial_ids = {
         str(pdb_id).strip().lower()
@@ -368,16 +355,11 @@ def validate_resume_schemas(
     confidence_columns: Sequence[str] | None = None,
     additional_outputs: Sequence[tuple[str, Sequence[str]]] = (),
 ) -> None:
-    """Refuse to resume into incompatible or internally inconsistent output.
+    """Reject incompatible schemas or inconsistent completed results before resume.
 
-    Whole headers are compared, including the EDSTATS block of
-    metal_sites_all.csv: a header from a different EDSTATS build would misalign
-    every density column with no other symptom. Once the manifest contains a
-    terminal result, completed stages require their outputs and matching row
-    counts. Successful density-only entries may lack bond and confidence files
-    because a bond-enabled resume will reprocess them. Orphan rows without a
-    complete manifest row remain recoverable and are ignored here because
-    retry replacement removes them.
+    Validate full headers, required stage outputs, and row counts. Density-only
+    entries may lack bond and confidence output when those stages will be retried.
+    Ignore orphan rows without a complete manifest record; retry removes them.
     """
     checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
@@ -525,12 +507,7 @@ def _merge_csv_replacements(
 
 
 class ResumeStaging:
-    """Hold a resumed run's rows so completed entries replace their old ones.
-
-    Only ids in ``replacement_ids`` are merged, and an id is added there after
-    the entry's manifest row is written, so a commit promotes finished entries
-    and silently leaves behind any entry that was still being written.
-    """
+    """Stage retry outputs and merge entries with completed manifest rows."""
 
     def __init__(
         self,
@@ -546,9 +523,8 @@ class ResumeStaging:
             output_dir,
             prefix=".alchemy-resume-",
             kind="resume",
-            # Staging can be the only copy of completed work after a failed
-            # merge. Remove it explicitly after success, never in a startup
-            # sweep following an interruption or I/O error.
+            # Staging may hold the only completed copy after merge failure; delete it
+            # only after success.
             preserve=True,
         )
         self.staged = tuple(

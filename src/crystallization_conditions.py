@@ -1,8 +1,7 @@
-"""Extract crystallization metadata and attach it to confidence review rows.
+"""Extract crystallization conditions and attach them to review rows.
 
-Crystallization conditions are contextual evidence, never confidence-score
-inputs.  This module therefore owns a separate entry-level schema and the
-post-scoring REVIEW/SUSPECT projection that joins those annotations by PDB ID.
+Join entry-level context to REVIEW/SUSPECT sites after scoring. Conditions
+do not affect confidence scores.
 """
 
 from __future__ import annotations

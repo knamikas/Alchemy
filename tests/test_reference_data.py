@@ -1,11 +1,4 @@
-"""The bundled reference data: when it is read, and what the caller gets back.
-
-Scope: ``src/reference_data.py`` as a loading policy, not as crystallography.
-Whether a particular reference distance is right belongs to
-``test_bond_geometry``; whether reading it costs an import, can be mutated by
-one caller for the whole process, or can be simultaneously valid and invalid
-depending on which module asked, belongs here.
-"""
+"""Test reference-data loading, validation, caching, and immutability."""
 
 from __future__ import annotations
 
@@ -49,15 +42,10 @@ def _clear_reference_data_caches() -> None:
 
 @pytest.fixture(autouse=True)
 def isolate_reference_data_caches() -> Iterator[None]:
-    """Clear the memoized reads around every test in this module.
+    """Clear cached reference data before and after each test.
 
-    ``reference_data_checksums`` and ``reference_data_id`` take no arguments, so
-    a value computed from stubbed files outlives the ``monkeypatch`` that
-    produced it: the patched ``CHECKSUM_SIDECARS`` is restored while the value
-    derived from it is not. Clearing only before use therefore left whichever
-    identity the last stubbing test computed visible for the rest of the
-    session, which failed unrelated tests in other modules and made this file's
-    own results depend on collection order.
+    Cached values derived from monkeypatched files otherwise survive patch
+    restoration and make later tests depend on collection order.
     """
     _clear_reference_data_caches()
     yield
@@ -71,10 +59,9 @@ def _catalog(tmp_path: Path, lines: Iterable[str], name: str = "catalog.txt") ->
 
 
 def test_importing_the_analysis_modules_reads_no_files() -> None:
-    """Importing must not touch the disk.
+    """Verify imports do not read reference files.
 
-    Run in a subprocess: this process has already imported all three, so a
-    second ``import`` is a dict lookup that passes whatever the module does.
+    Use a fresh process because repeated imports reuse cached modules.
     """
     program = f"""
 import builtins, sys
@@ -410,12 +397,7 @@ def _stub_reference_data(
 def test_the_identity_covers_both_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Editing either file changes the id.
-
-    The catalog decides what counts as a metal cofactor and the distance table
-    sets every cutoff and z-score, so an id derived from one of them alone
-    would report two incomparable runs as comparable.
-    """
+    """Verify changes to either reference file change the combined data ID."""
     _stub_reference_data(
         tmp_path, monkeypatch, "ABC\tZn\tcluster\n", "HOH O ZN 2.09 0.11\n"
     )
@@ -478,15 +460,10 @@ def test_the_bundled_identity_is_short_and_hexadecimal() -> None:
 
 
 def test_the_ambiguous_component_ids_are_exactly_the_impostors() -> None:
-    """Derive the denylist from Gemmi rather than trusting a hand-written one.
+    """Verify the residue-name denylist against Gemmi's component weights.
 
-    An element symbol is safe to match against a residue name only if the CCD
-    does not also use it for something else. Three do: ``U`` is uridine
-    5'-monophosphate, ``NO`` is nitric oxide, ``CM`` is a small buffer
-    component -- and the last was missed when this set was first written from
-    the two that were already known. Comparing each tabulated component's
-    weight against its element's own finds them without anyone having to
-    remember, and fails if the CCD ever adds a fourth.
+    U, NO, and CM also name non-metal components. Weight mismatches identify
+    these collisions and detect future additions.
     """
     import gemmi
 
@@ -497,8 +474,7 @@ def test_the_ambiguous_component_ids_are_exactly_the_impostors() -> None:
         info = gemmi.find_tabulated_residue(symbol)
         if str(info.kind) == "ResidueKind.UNKNOWN":
             continue
-        # A tabulated component whose weight is not its element's is a
-        # different molecule wearing the same two letters.
+        # A different component weight identifies a residue-name collision.
         if abs(info.weight - gemmi.Element(symbol).weight) > 0.5:
             impostors.add(symbol)
 

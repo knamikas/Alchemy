@@ -216,14 +216,7 @@ def _stub_ccp4_program(tmp_path: Path, name: str, script: str) -> Path:
 def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A CCP4 program may write any byte to stderr; that must not raise.
-
-    Decoding a pipe under ``text=True`` is strict, so one such byte used to
-    raise ``UnicodeDecodeError`` before the exit status was read. The worker's
-    catch-all then recorded a retryable ``unexpected_processing_error`` naming
-    nothing, and every later ``--resume`` reprocessed the entry and failed
-    identically.
-    """
+    """Verify non-UTF-8 stderr is decoded without failing the entry."""
 
     def non_utf8_failure(
         *args: object, stderr: IO[bytes] | None = None, **kwargs: object
@@ -252,7 +245,6 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
 
     message = str(excinfo.value)
     assert "rc=1" in message
-    # The undecodable bytes cost characters, not the entry.
     assert "bad" in message and "byte" in message
     assert not isinstance(excinfo.value, UnicodeDecodeError)
 
@@ -311,11 +303,9 @@ def test_an_unknown_ccp4_failure_remains_recoverable(
 def test_a_helper_holding_stderr_does_not_fake_a_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The budget bounds the program, not the lifetime of an inherited pipe.
+    """Verify an inherited stderr handle cannot extend the program timeout.
 
-    With stderr on a pipe, ``communicate`` waits for EOF, so a program that
-    forks a helper and exits at once still raised ``TimeoutExpired`` at the
-    full budget and recorded a timeout that could never be reproduced.
+    A helper may keep a pipe open after the tested program exits.
     """
     program = _stub_ccp4_program(
         tmp_path, "mtzfix", "echo note >&2\n(sleep 30) &\nexit 1"
@@ -437,11 +427,7 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(
 def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A hung CCP4 step raises ``Ccp4ToolTimeoutError`` and keeps what it wrote.
-
-    The driver detects workers that have died, but nothing detects one that is
-    merely stuck, and the partial log is the only evidence of where it stalled.
-    """
+    """Verify a hung CCP4 step times out and preserves its partial log."""
     source = tmp_path / "source.mtz"
     pdb = tmp_path / "model.pdb"
     source.write_bytes(b"source")

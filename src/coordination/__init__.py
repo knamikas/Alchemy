@@ -1,6 +1,4 @@
-"""Metal-donor coordination: what contacts a metal has, and how good they are.
+"""Identify and assess metal-donor coordination.
 
-``analysis.run_bond_analysis`` is the entry point the worker calls, and
-``schema`` holds the published CSV columns the driver reads. Nothing here knows
-about density, entries or the pool.
+Workers call analysis.run_bond_analysis; schema defines the output columns.
 """

@@ -1,10 +1,7 @@
-"""EDSTATS table parsing and metal/cofactor identification.
+"""Test EDSTATS parsing and metal/cofactor identification.
 
-EDSTATS emits a fixed 42-column table plus a synthetic model-separator row, and
-for a chain-less coordinate file it omits the empty trailing CP field, so those
-rows arrive with 41 fields. It also relabels every ordered water's CI field to
-``0`` whatever the real chain, so restoring the missing field must key on the
-row *shape*: a CI-gated guard rejects every water row and fails the entry.
+Cover standard rows, model separators, omitted blank-chain fields, and
+water chain labels that differ from the deposited chain.
 """
 
 from __future__ import annotations
@@ -101,16 +98,10 @@ def _remapped_structure(
     residues: Iterable[ResidueSelection],
     all_residues: Iterable[ResidueSelection] | None = None,
 ) -> StructureContext:
-    """A real context with one coordinate-author key resolving twice.
+    """Build a context with an ambiguous coordinate-author key.
 
-    Gemmi merges coordinate residues that share an author name, chain and
-    sequence number, so a genuine duplicate cannot be produced from a file.
-    The context's own author index can still hold one, so rebuilding it
-    directly keeps the parser under test looking at the production type.
-
-    ``residues`` is what the ambiguous key resolves to; ``all_residues``
-    defaults to it and is given separately only when the model has to carry
-    unrelated residues as well.
+    Set the index directly because Gemmi merges duplicate author identities
+    when reading files. all_residues can include unrelated model residues.
     """
     ambiguous = tuple(residues)
     return replace(
@@ -1168,12 +1159,7 @@ def test_nr_must_be_a_positive_integer(tmp_path: Path, nr: str) -> None:
 def test_nr_restarting_per_chain_is_the_normal_case_not_a_duplicate(
     tmp_path: Path,
 ) -> None:
-    """EDSTATS numbers NR within each chain, so every chain begins again at 1.
-
-    Reading NR as an ordinal over the whole model made the first row of the
-    second chain collide with the first row of the first chain, which failed
-    every multi-chain entry outright.
-    """
+    """Verify EDSTATS NR ordinals restart at one within each chain."""
     builder = StructureBuilder()
     builder.add_metal("ZN", 1, chain="A", pos=(0.0, 0.0, 0.0))
     builder.add_metal("MG", 1, chain="B", pos=(12.0, 0.0, 0.0))

@@ -1,7 +1,6 @@
-"""Plan worker resources without importing Gemmi.
+"""Plan worker CPU and memory resources without importing Gemmi.
 
-This module runs before worker imports and handles inputs incomplete enough to
-become ordinary worker errors.
+Use conservative estimates when input metadata is incomplete.
 """
 
 from __future__ import annotations

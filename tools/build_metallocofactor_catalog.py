@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild Alchemy's bundled metallocofactor catalog.
-
-A developer utility: the analysis pipeline never imports it and never networks.
-"""
+"""Rebuild or verify the bundled metallocofactor catalog from CCD data."""
 
 from __future__ import annotations
 

@@ -1,14 +1,4 @@
-"""Keep the setup instructions honest.
-
-Scope: the contract between three places that each describe the same
-environment -- ``pyproject.toml``, the README, and the repository-root
-``alchemy`` launcher's module docstring. The instructions are compared against
-the declaration, and the declaration against the code, since a correct
-declaration cannot catch instructions that install less than it declares.
-
-Out of scope here (owned elsewhere): argument parsing (``test_cli_and_config``)
-and the pipeline itself (``test_pipeline_integration``).
-"""
+"""Check documentation against dependencies, CLI options, and output schemas."""
 
 from __future__ import annotations
 
@@ -59,13 +49,7 @@ def _read(path: str) -> str:
 
 
 def test_every_reason_code_is_documented() -> None:
-    """The manifest vocabulary is the most user-visible text Alchemy writes.
-
-    ``docs/operations.md`` is where an operator looks a code up, so a code that
-    reaches the manifest without an entry there is undocumented in the only
-    place it matters. Checking the enum rather than the source also means a
-    renamed code cannot quietly leave the documentation describing the old one.
-    """
+    """Verify every manifest reason code is documented in docs/operations.md."""
     documented = _read(os.path.join(DOCS_DIR, "operations.md"))
     missing = sorted(
         code.value for code in ReasonCode if f"`{code.value}`" not in documented
@@ -74,12 +58,7 @@ def test_every_reason_code_is_documented() -> None:
 
 
 def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
-    """Reason codes are assigned from ``ReasonCode``, not spelled out again.
-
-    ``driver.resume`` reads one of these back to decide whether a bond stage was
-    applicable, so a literal at one end and a constant at the other would let a
-    rename reprocess those entries on every resume with nothing to catch it.
-    """
+    """Verify reason codes use shared constants so producer and resume logic agree."""
     # Two words are both a reason code and an output column, and the column is
     # legitimately written as a literal dict key. Excluding them costs coverage
     # of those two codes rather than reporting correct code as a defect.
@@ -195,27 +174,17 @@ def test_declared_dependencies_cover_every_third_party_import() -> None:
     )
 
 
-def test_launcher_docstring_requirements_match_the_declaration() -> None:
-    """The ``./alchemy`` Requirements section names every dependency.
-
-    That docstring is the third copy of the list, and this is what holds it to
-    the other two.
-    """
-    requirements = _read(LAUNCHER_PATH).lower()
-    missing = [name for name in _declared_dependencies() if name not in requirements]
-    assert not missing, (
-        f"the ./alchemy docstring omits declared dependencies: {missing}"
-    )
+def test_launcher_docstring_points_to_project_documentation() -> None:
+    """Verify the launcher directs readers to existing project documentation."""
+    docstring = ast.get_docstring(ast.parse(_read(LAUNCHER_PATH)))
+    assert docstring is not None
+    for relative_path in ("README.md", "docs/"):
+        assert relative_path in docstring
+        assert os.path.exists(os.path.join(REPO_ROOT, relative_path))
 
 
 def test_default_paths_resolve_from_the_checkout_root() -> None:
-    """``REPO_DIR`` names the checkout root from every module that reads it.
-
-    It walks up from ``__file__``, so the number of ``dirname`` calls is right
-    only for a module sitting directly in ``src/``. Recomputed one directory
-    deeper it resolves to ``src/``, nothing raises, and the run writes its
-    output into the source tree.
-    """
+    """Verify modules resolve REPO_DIR to the project root."""
     import ccp4_setup
     from driver import pool
 
@@ -235,13 +204,9 @@ def test_default_paths_resolve_from_the_checkout_root() -> None:
 
 
 def test_the_density_cli_does_not_default_its_output_into_the_source_tree() -> None:
-    """``density_analysis.py``'s own CLI must not write where the code lives.
+    """Verify the density debug CLI writes outside src.
 
-    It is a debugging entry point documented nowhere, and it once defaulted
-    ``--out-dir`` to this file's directory, so a run without the flag dropped
-    FFT maps, mapmask output and EDSTATS logs into ``src/`` -- which
-    ``.gitignore`` does not cover. Read from the source because the parser is
-    built under ``if __name__ == "__main__"`` and never imported.
+    Inspect its parser statically because it is defined in the script entry block.
     """
     tree = ast.parse(_read(os.path.join(SRC_DIR, "density_analysis.py")))
     defaults = [
@@ -318,15 +283,9 @@ def test_setuptools_declares_nothing_installable() -> None:
 
 
 def test_built_wheel_contains_only_distribution_metadata(tmp_path: Path) -> None:
-    """A built wheel ships metadata and dependencies, but no Alchemy code.
+    """Verify built wheels contain metadata and dependencies without Alchemy modules.
 
-    Nothing else detects the loss of that invariant: the suite reaches ``src``
-    through ``conftest.py``'s ``sys.path`` insertion and CI installs editable,
-    so both stay green even if modules are published again.
-
-    Built from a copy because ``pip wheel`` leaves ``build/`` and
-    ``*.egg-info/`` beside the sources it builds, and this suite writes nothing
-    inside the repository.
+    Build a temporary copy so build artifacts stay outside the repository.
     """
     source = tmp_path / "source"
     source.mkdir()
@@ -473,13 +432,7 @@ def _declared_cli_flags() -> set[str]:
 
 
 def test_every_cli_flag_appears_in_the_prose() -> None:
-    """A flag nobody documents is a flag nobody can find.
-
-    ``--confidence-reference-dir`` was absent from every page for exactly as
-    long as nothing checked, and it is the flag that enables confidence scoring
-    at all. Reading the flags from the parser means adding one without a
-    sentence about it fails here rather than in a user's search.
-    """
+    """Verify every CLI flag appears in the documentation."""
     prose = _all_prose()
     undocumented = sorted(flag for flag in _declared_cli_flags() if flag not in prose)
 
@@ -507,13 +460,7 @@ _NON_FIELD_TERMS = frozenset(
 
 
 def test_every_field_name_in_the_prose_still_exists() -> None:
-    """A renamed column must not leave the documentation describing the old one.
-
-    The prose names specific fields and codes throughout, and a reader looks
-    them up in an output file. Checking the direction that matters -- that
-    everything named still exists -- catches a rename without demanding that
-    all 134 statistics columns be documented.
-    """
+    """Verify documented output fields and status codes still exist."""
     from enum import StrEnum
 
     import codes as codes_module
@@ -579,13 +526,7 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
 
 
 def test_documented_thresholds_match_the_constants() -> None:
-    """Numbers in the prose are the ones the code actually uses.
-
-    Every one of these was verified by hand once. Pinning them means a
-    threshold cannot be tuned in ``src/`` while the documentation goes on
-    quoting the old value, which is the failure mode that leaves a reader
-    confidently wrong about what a run did.
-    """
+    """Verify documented thresholds match the constants used by the code."""
     from coordination.analysis import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
     from coordination.schema import ZSCORE_OUTLIER_CUTOFF
     from density_analysis import CCP4_TOOL_TIMEOUT_S, MODEL_ENVELOPE_BORDER_ANGSTROM
@@ -610,8 +551,6 @@ def test_documented_thresholds_match_the_constants() -> None:
     ]
     assert not missing, missing
 
-    # The constants themselves, so a change to one is visible here as well as
-    # in the prose that quotes it.
     assert (CANDIDATE_SEARCH_RADIUS, ZSCORE_OUTLIER_CUTOFF, FIRST_SPHERE_TOLERANCE) == (
         4.0,
         6.0,

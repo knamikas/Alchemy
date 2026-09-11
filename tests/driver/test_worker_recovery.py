@@ -1,16 +1,7 @@
-"""Worker-death recovery in the batch driver (invoked by ``./alchemy``).
+"""Test worker-death detection, result recovery, and shutdown.
 
-A worker felled by the OOM killer or by a segfault in a compiled extension runs
-no further Python, and ``multiprocessing.Pool`` never delivers a result for the
-task it was holding: it silently replaces the process. The driver therefore
-tracks which entry each pid holds (``drain_inflight`` over a ``SimpleQueue``
-the workers write to), diffs the pool roster (``dead_worker_pids``) and
-synthesizes a retryable result for the orphaned entry
-(``worker_death_result``).
-
-The end-to-end tests drive the real ``driver_pool.run``, with only the
-per-entry pipeline replaced by a scripted stub, and need POSIX (``fork`` and
-``SIGKILL``); the ``spawn`` coverage runs anywhere.
+Use the real driver with scripted per-entry work. Fork and SIGKILL scenarios
+require POSIX; spawn scenarios also cover other platforms.
 """
 
 from __future__ import annotations
@@ -530,9 +521,7 @@ def _driver_child(
             None,
         )
         driver_pool.available_memory_bytes = lambda: None  # type: ignore[attr-defined]
-        # The stub has to replace ``process`` as driver.pool sees it, and that
-        # module imported the name from worker; strict's no-implicit-reexport
-        # objects to reaching it there, not to the patch.
+        # Patch process where driver.pool imported it; strict typing rejects this re-export.
         driver_pool.process = _stub_process  # type: ignore[attr-defined]
         if stall_grace is not None:
             driver_pool.WORKER_STALL_GRACE_S = stall_grace
@@ -555,9 +544,7 @@ def _terminate_driver_tree(
         and hasattr(signal, "SIGKILL")
     ):
         try:
-            # _driver_child calls setsid() before setting the event, so its pid
-            # is the process-group id, and stays valid even once the driver
-            # itself has died and left only Pool grandchildren behind.
+            # setsid makes the driver PID its group ID, which survives while descendants remain.
             os.killpg(child.pid, signal.SIGKILL)
             killed_group = True
         except ProcessLookupError:
@@ -750,19 +737,11 @@ def test_worker_death_kills_its_external_process_group(tmp_path: Path) -> None:
 def test_idle_worker_death_does_not_fail_live_work_or_wedge_shutdown(
     tmp_path: Path,
 ) -> None:
-    """An idle death cannot be transferred to a healthy long-running entry.
+    """Verify an idle worker death cannot fail a healthy active entry.
 
-    A worker waiting for its next task blocks inside the pool task queue's
-    ``get()`` holding that queue's lock, so a process killed there never
-    releases it and ``Pool.terminate`` blocks acquiring the same lock. The
-    failure is invisible in the results: every row is written and only teardown
-    hangs, leaving no run log and no exit code.
-
-    ``aaaa`` waits until another worker starts ``bbbb``, then finishes quickly
-    and is killed 0.3 s later, by which time it is idle and holding the lock.
-    The deliberately short fallback grace expires while ``bbbb`` is active;
-    its live pid assignment must protect it from the older, unattributed death.
-    Reaching the assertions also proves shutdown completed.
+    Kill aaaa after it finishes while bbbb remains assigned to a live worker
+    past the fallback grace period. Completion also verifies bounded shutdown
+    when the killed worker held the task-queue lock.
     """
     script: dict[str, dict[str, Any]] = {
         "aaaa": {
@@ -841,19 +820,10 @@ def test_silent_death_fallback_attributes_only_the_outstanding_entry(
     assert exit_code == 1
 
 
-# One run staging every composition rule the dispatch loop has to obey: two
-# workers finish their own entry and then, while idle, leave the driver holding
-# a start notification for "aaaa" before being killed a second apart; a third
-# dies idle holding nothing; "aaaa" is really processed elsewhere and returns a
-# genuine result long after the driver has given up on it, and "bbbb" later
-# still, so the loop is still running when it does.
-#
-# "ffff" is scaffolding, not a case: a worker SIGKILLed while blocked in
-# ``inqueue.get()`` holds the pool's task-queue read lock forever and
-# ``Pool.terminate()`` then deadlocks in ``_help_stuff_finish``. The lock is
-# held by the first worker to run out of work, so "ffff" (far the quickest
-# entry, and never killed) owns it and the workers that do get killed queue
-# harmlessly behind it.
+# Exercise stale notifications, multiple idle deaths, and late real results
+# in one run. aaaa returns after being declared lost; bbbb keeps the loop active.
+# ffff finishes first and keeps the task-queue lock, so killed idle workers
+# wait behind it rather than dying while holding the lock.
 _STALE_ATTRIBUTION_SCRIPT: dict[str, dict[str, Any]] = {
     "aaaa": {"runtime": 3.0},  # late, real
     "bbbb": {"runtime": 3.8},  # keeps it open
@@ -888,14 +858,10 @@ def stale_attribution_batch(
 def test_lost_entry_is_written_once_even_if_a_real_result_arrives(
     stale_attribution_batch: dict[str, Any],
 ) -> None:
-    """A genuine result for an already-declared-lost entry is dropped.
+    """Verify late results cannot duplicate entries already declared lost.
 
-    Two manifest rows for one entry would make ``--resume`` see a completed
-    entry whose data rows were never produced, and the extra completion would
-    end the batch with another entry still unwritten. ``aaaa`` runs to
-    completion in its own worker, yet is declared lost first because the worker
-    that died held a start notification for it, so dropping the guard in
-    ``driver_pool.run`` writes ``aaaa`` twice and never writes ``bbbb``.
+    A stale notification causes aaaa to be marked lost before its real worker
+    returns. Keep the synthesized row and continue processing bbbb.
     """
     batch = stale_attribution_batch
     ids = list(_STALE_ATTRIBUTION_SCRIPT)
@@ -1103,8 +1069,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
     )
 
     assert isinstance(cfg, worker_contracts.WorkerConfig)
-    # The log keeps the two hashes the id was composed from, so a changed id can
-    # be attributed to a file.
+    # Keep both file hashes so changes in the combined ID can be traced.
     assert cfg.reference_data_id == reference_data.reference_data_id()
     assert run_log.details["reference_data_id"] == cfg.reference_data_id
     assert run_log.details["analysis_config_id"] == cfg.analysis_config_id
@@ -1197,13 +1162,9 @@ def _sigterm_driver_child(
 def test_sigterm_to_the_driver_stops_its_workers_and_writes_a_log(
     tmp_path: Path,
 ) -> None:
-    """SIGTERM must unwind through cleanup instead of killing the driver dead.
+    """Verify SIGTERM stops workers through driver cleanup and records the interruption.
 
-    Under SIGTERM's default disposition no ``finally`` runs: the pool is never
-    shut down, its children are reparented to init and keep driving CCP4
-    subprocesses, and nothing is written to explain the stop. The driver is
-    signalled directly rather than through its process group, so the workers
-    only stop if the driver itself stops them.
+    Signal only the driver so workers can stop only through its cleanup path.
     """
     output_dir = tmp_path / "out"
     id_file = tmp_path / "ids.txt"
@@ -1344,14 +1305,9 @@ def _child_pids(pid: int) -> list[int]:
 
 
 def _descendant_pids(pid: int) -> list[int]:
-    """Every descendant of ``pid``, not only its direct children.
+    """Return all descendants, including workers beneath a fork server.
 
-    Pool workers are direct children under the ``fork`` start method but
-    grandchildren of the driver under ``forkserver``, which became the
-    interpreter default in Python 3.14. Collecting only direct children
-    therefore silently reduced the assertion that workers die with the driver
-    to one about the fork server and the resource tracker, which die anyway.
-    Walking the tree keeps the check meaningful under either topology.
+    Checking direct children alone would miss workers under forkserver.
     """
     found: list[int] = []
     frontier = [pid]

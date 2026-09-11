@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Record what ``src/data/metal_distances_info.txt`` currently is.
+"""Record the distance table's checksum, row count, and source citations.
 
-Writes the sidecar ``src/reference_data`` verifies at load: the table's
-SHA-256, its row count, and the citations the distances come from. Run it
-after every hand edit of the table.
-
-    python tools/stamp_distance_table.py            # rewrite the sidecar
-    python tools/stamp_distance_table.py --check    # verify, change nothing
+Run after editing src/data/metal_distances_info.txt. Use --check to verify
+the existing metadata without rewriting it.
 """
 
 import argparse
@@ -101,9 +97,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"no sidecar at {SIDECAR_PATH}")
             return 1
         except ValueError as exc:
-            # ``json.JSONDecodeError`` is a ValueError. A sidecar truncated by
-            # an interrupted write is exactly what --check exists to report, so
-            # it must not escape as a traceback.
+            # JSONDecodeError is a ValueError; report truncated sidecars without a traceback.
             print(f"unreadable sidecar at {SIDECAR_PATH}: {exc}")
             return 1
         if recorded != actual:

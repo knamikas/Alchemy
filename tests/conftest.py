@@ -15,8 +15,7 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 SRC_DIR = os.path.join(REPO_ROOT, "src")
 
-# ``src`` is not a package, so it is reached through sys.path, and the entry
-# must exist before any test module is collected.
+# Add src before test collection because it is not an installed package.
 for _path in (SRC_DIR, TESTS_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
@@ -24,8 +23,7 @@ for _path in (SRC_DIR, TESTS_DIR):
 import gemmi  # noqa: E402  (needs the sys.path entries above)
 import helpers  # noqa: E402  (needs the sys.path entries above)
 
-# ``src/structure_analysis.py`` uses ``gemmi.Model.num``, which arrived in 0.7;
-# an older build imports fine and then fails inside ~200 unrelated tests.
+# Model.num requires Gemmi 0.7; fail before collecting dependent tests.
 MINIMUM_GEMMI = (0, 7)
 
 
@@ -68,9 +66,7 @@ def pytest_configure(config: pytest.Config) -> None:
         if disabled:
             os.environ[f"ALCHEMY_TESTS_NO_{name.upper()}"] = "1"
 
-    # Capability bookkeeping rides on the ``Config`` object for the rest of the
-    # session; pytest types no slot for plugin state, so it is reached here, and
-    # in the hooks below, through a deliberately untyped alias.
+    # Pytest has no typed slot for this plugin state; use an untyped alias.
     state: Any = config
     state._alchemy_required_capabilities = tuple(
         name for name in ("ccp4", "network") if config.getoption(f"--require-{name}")
@@ -258,11 +254,9 @@ def ccp4_env() -> dict[str, str]:
 
 @pytest.fixture(scope="session")
 def pdb_redo_cache(tmp_path_factory: pytest.TempPathFactory) -> str:
-    """Directory for PDB-REDO downloads, shared across the session.
+    """Return a shared download cache, using a session temporary directory if unset.
 
-    Falls back to a session tmp directory when no warm cache is configured,
-    which means a real download. Treat the contents as best-effort: entries may
-    be missing.
+    The cache may be incomplete and require downloads.
     """
     configured = helpers.cache_dir_from_env()
     if configured:

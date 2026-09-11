@@ -1,8 +1,7 @@
-"""The command line: arguments in, exit code out.
+"""Alchemy's command-line interface.
 
-Argument parsing and its validation, plus the two things that bracket every
-run: the run report, written whatever happens, and the SIGTERM handler
-that makes a scheduler stop unwind the same way Ctrl-C does.
+Parse and validate arguments, start the pipeline, write the run report,
+and handle termination signals.
 """
 
 import argparse
@@ -55,11 +54,11 @@ def positive_int(value: str) -> int:
 
 
 def memory_size_bytes(value: str) -> int:
-    """Argparse type for byte sizes such as ``240G`` or ``16GiB``."""
+    """Argparse type for byte sizes such as ``8G`` or ``16GiB``."""
     match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?I?B?)?", value.upper())
     if match is None:
         raise argparse.ArgumentTypeError(
-            "must be a positive byte size such as 240G or 16GiB"
+            "must be a positive byte size such as 8G or 16GiB"
         )
     number, suffix = match.groups()
     normalized = (suffix or "B").removesuffix("B").removesuffix("I")
@@ -161,7 +160,7 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         type=memory_size_bytes,
         default=None,
         help=(
-            "memory available to Alchemy (for example 240G or 16GiB); "
+            "memory available to Alchemy (for example 8G or 16GiB); "
             "default: auto-detect the host, container, or scheduler limit"
         ),
     )
@@ -265,9 +264,6 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
             "or --id-file may restrict the retry set"
         ),
     )
-    # ArgumentDefaultsHelpFormatter would append ``bonds``' default, rendering
-    # "(default: True)" against --no-bonds; naming %(default)s in the help
-    # string suppresses that append.
     ap.add_argument(
         "--no-bonds",
         dest="bonds",
@@ -285,14 +281,10 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         ap.error("--retry-partials requires --resume")
     if args.retry_partials and (args.pdb_file or args.mtz_file or args.cif_file):
         ap.error("--retry-partials cannot be used with manual structure inputs")
-    # Manual mode needs reflections and coordinates. Caught here rather than in
-    # a worker, where the omission surfaces as an unexpected processing error
-    # instead of a usage mistake.
     if (args.pdb_file or args.cif_file) and not args.mtz_file:
         ap.error("manual structure input requires --mtz-file")
     if args.mtz_file and not (args.pdb_file or args.cif_file):
         ap.error("--mtz-file requires --pdb-file or --cif-file")
-    # Both name the coordinates; unrejected, the cif silently wins.
     if args.pdb_file and args.cif_file:
         ap.error("use either --pdb-file or --cif-file, not both")
     manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
@@ -341,13 +333,9 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
 def _install_termination_handler() -> (
     Callable[[int, FrameType | None], object] | int | None
 ):
-    """Route SIGTERM through the same unwind path as Ctrl-C.
+    """Handle SIGTERM like Ctrl-C so cleanup can stop workers and CCP4 processes.
 
-    SIGTERM's default disposition kills the process without running any
-    ``finally``, so the pool is never shut down and its children are reparented
-    to init still driving CCP4 subprocesses and holding scratch directories
-    open. Returns the previous handler, or ``None`` where SIGTERM cannot be
-    trapped.
+    Return the previous signal handler, or None if installation fails.
     """
 
     def _raise_interrupt(  # noqa: ARG001 - signal API
@@ -362,7 +350,7 @@ def _install_termination_handler() -> (
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse arguments, execute the driver, and always emit a run log."""
+    """Parse arguments, run the pipeline, and attempt to write its run report."""
     raw_args = None if argv is None else list(argv)
     args = parse_args(raw_args)
     try:
@@ -371,7 +359,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             log_file=args.log_file,
         )
     except OSError as exc:
-        # The one failure that cannot be logged, because it is the logging.
         print(
             f"Cannot write --log-file {args.log_file}: {exc.strerror or exc}",
             file=sys.stderr,
@@ -386,8 +373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         exit_code = run(args, run_log)
         return exit_code
     except KeyboardInterrupt:
-        # ``run``'s own finally has already shut the pool down, so this only
-        # decides how the interrupt is reported.
+        # run() has already stopped the workers; report the interruption.
         run_log.driver_error = "interrupted before completion"
         print(
             "\nInterrupted: workers stopped; rows already flushed are kept "

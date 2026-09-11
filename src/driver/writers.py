@@ -1,9 +1,7 @@
-"""The streamed CSV outputs and the schemas they are written against.
+"""Write and flush per-entry CSV results using shared output schemas.
 
-Every entry's rows are appended and flushed as soon as the worker returns, so
-an interrupted batch keeps the results it already has. The column lists are an
-external contract twice over: users read the files, and ``--resume`` reads them
-back to decide what still needs running.
+Flush each result so interrupted runs retain completed work. Resume reads
+these same schemas to determine what remains.
 """
 
 import csv
@@ -27,9 +25,7 @@ from metal_identification import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
 from output_rows import MetalStatsRow, scientific_csv_value
 from worker_contracts import EntryResult, blank_if_unmeasured
 
-# CSV column names keep the deposited-data spelling ``pdbID`` even though every
-# Python identifier is ``pdb_id``: downstream scripts and joins address the
-# columns by name, so renaming one breaks them silently.
+# Keep the published pdbID spelling for downstream readers and joins.
 MANIFEST_COLUMNS = [
     "pdbID",
     "status",
@@ -65,9 +61,7 @@ MANIFEST_COLUMNS = [
     "symmetry_contact_policy",
 ]
 
-# The middle block is the EDSTATS residue table, whose column set and order
-# `extract_metal_statistics` validates against EDSTATS_COLUMNS before emitting
-# any row, so the full header is fixed.
+# EDSTATS column order is validated before rows reach this writer.
 STATS_COLUMNS = (
     ["pdbID", "category"]
     + list(EDSTATS_COLUMNS)
@@ -76,9 +70,7 @@ STATS_COLUMNS = (
 )
 
 
-# ``status_detail`` avoids classifying expected partial-result explanations as
-# errors in the public CSV while preserving the worker's internal exception
-# field used by logging and recovery paths.
+# Use status_detail for expected partial outcomes; retain exception for internal logs.
 MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {
     "pdbID": "pdb_id",
     "status_detail": "error",

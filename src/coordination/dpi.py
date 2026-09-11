@@ -1,12 +1,9 @@
-"""The diffraction-component precision index, and the crystal metadata it needs.
+"""Calculate the diffraction-component precision index and its input metadata.
 
-    DPI = 1.28 * ni**0.5 * va**(1/3) * nobs**(-5/6) * rfree     (Blow 2002, eq. 7)
+    DPI = 1.28 * ni**0.5 * va**(1/3) * nobs**(-5/6) * rfree
 
-Every input can be absent: manual runs may have no ``data.json``, a coordinate
-file may carry no CRYST1 record, an older deposition may not report R-free.
-Nothing here raises for any of that. Each function degrades to ``NAN`` and
-``calculate_dpi_details`` returns a reason code naming which input was
-missing, so the caller still emits the geometry it did measure.
+Uses Blow (2002), equation 7. Missing inputs yield NaN and a reason code so
+measured geometry can still be reported.
 """
 
 from __future__ import annotations
@@ -38,12 +35,10 @@ class DpiComponents:
 
 
 def _is_placeholder_cell(cell: gemmi.UnitCell) -> bool:
-    """Whether ``cell`` is Gemmi's stand-in for a file with no CRYST1 record.
+    """Return whether cell is Gemmi's default for missing crystal metadata.
 
-    ``UnitCell.is_crystal()`` is false only for the exact 1 x 1 x 1 default a
-    file with no usable cell parses to. That volume is smaller than one
-    non-hydrogen atom, so accepting it would give every contact in the entry a
-    confident-looking z-score off an impossible asymmetric unit.
+    The default 1 x 1 x 1 cell is too small for a physical asymmetric unit and
+    must not be used to calculate DPI.
     """
     return not cell.is_crystal()
 
@@ -118,9 +113,7 @@ def calculate_dpi_components(
 
     data_json = dpi_inputs.get("data_json")
     if not data_json:
-        # Manual input mode without --data-json: the reflection count has no
-        # source at all, which is a different answer from a calculation that
-        # ran and failed.
+        # Distinguish missing manual metadata from a failed DPI calculation.
         return DpiComponents(
             NAN,
             resolution,

@@ -524,13 +524,10 @@ def test_selected_conformer_atom_is_none_when_the_conformer_lacks_the_atom(
 def test_regression_declared_partner_survives_the_ter_serial_shift(
     tmp_path: Path,
 ) -> None:
-    """A declaration in an mmCIF still binds the right atoms after PDB conversion.
+    """Verify declared partners resolve correctly after PDB conversion.
 
-    gemmi's PDB writer emits a ``TER`` per polymer chain and each ``TER``
-    consumes a serial number, so analysis serials past it run ahead of the
-    source ``_atom_site.id``: partners are matched by author identity, never by
-    serial. The oracle is the declaration's own reported distance, which only a
-    correctly bound pair measures.
+    TER records shift serial numbers. Compare against the deposited distance
+    to detect incorrect joins.
     """
     builder = StructureBuilder()
     his = builder.add_amino_acid(
@@ -1718,14 +1715,10 @@ def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
 def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(
     tmp_path: Path,
 ) -> None:
-    """An unscoreable declared donor stays visible instead of disappearing.
+    """Verify unsupported declared donors retain candidate evidence.
 
-    Nucleic acids, modified residues and organic ligands are real metal donors,
-    but no bundled literature reference covers them, so the contact can never be
-    z-scored. The contract is asymmetric: it is reported with its measured
-    distance and provenance, and not promoted to a bond, which would raise
-    coordination counts and the confidence geometry-coverage denominator on
-    evidence nothing can assess.
+    Keep measured distances and provenance without adding unscorable contacts
+    to bond counts or geometry coverage.
     """
     builder = StructureBuilder()
     metal = builder.add_metal("MN", 1, chain="B", pos=(0.0, 0.0, 0.0))

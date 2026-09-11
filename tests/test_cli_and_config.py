@@ -1,8 +1,4 @@
-"""Command-line contracts and CCP4 configuration precedence.
-
-Everything here is offline: argparse rejects these argument combinations before
-any CCP4 or network capability is probed, so no test needs a marker.
-"""
+"""Test argument validation and CCP4 configuration precedence without external tools."""
 
 from __future__ import annotations
 
@@ -170,10 +166,7 @@ def test_negative_max_pdbs_does_not_silently_drop_entries_from_the_end() -> None
 def test_an_unusable_combination_of_arguments_exits_two(
     arguments: list[str], fragment: str
 ) -> None:
-    """Every unusable argument combination exits 2, whichever check caught it.
-
-    A script branching on the status must not have to know which one did.
-    """
+    """Verify all invalid argument combinations exit with code 2."""
     stderr = io.StringIO()
     with contextlib.redirect_stderr(stderr), pytest.raises(SystemExit) as excinfo:
         cli.parse_args(arguments)
@@ -375,11 +368,7 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
 def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The requested installation is used, not the one the shell had sourced.
-
-    Honouring ``PATH`` first would run the wrong binaries and record their
-    version as the run's provenance, so the output looks internally consistent.
-    """
+    """Verify explicit CCP4 setup overrides the shell's existing installation."""
     ambient = _stub_ccp4_dir(tmp_path, "ambient")
     requested = _stub_ccp4_dir(tmp_path, "requested")
     # Sourcing the setup script runs through ``bash``, so the system directories
@@ -482,11 +471,7 @@ def test_a_hanging_setup_script_aborts_the_run(
 def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Provenance degrades to ``unknown`` instead of failing anything.
-
-    ``git`` only stamps the run log, so a stuck index lock must not take the
-    analysis with it.
-    """
+    """Verify failed Git provenance probes report unknown without failing the run."""
     calls: list[float | None] = []
 
     def fake_run(cmd: Sequence[str], **kwargs: Any) -> NoReturn:

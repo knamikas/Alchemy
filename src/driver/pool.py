@@ -1,10 +1,8 @@
-"""The batch driver: everything between the parsed arguments and the workers.
+"""Schedule entry analysis, supervise workers, and publish batch results.
 
-Two constraints shape the dispatch loop. ``multiprocessing.Pool`` silently
-replaces a worker that died and never delivers a result for the task it held,
-so a lost entry is recovered from the pool roster rather than waited on. And a
-worker killed while blocked on the task queue never releases that queue's lock,
-which wedges ``Pool.terminate``, so shutdown is bounded explicitly.
+Track worker deaths because Pool replaces failed workers without returning
+their tasks. Bound shutdown waits because killed workers can leave queue
+locks held.
 """
 
 from __future__ import annotations
@@ -117,9 +115,7 @@ from worker import initialize_worker, process, worker_death_result
 from worker_contracts import EntryResult, WorkerConfig
 
 if TYPE_CHECKING:
-    # ``multiprocessing.Pool`` and its queues are bound methods of the default
-    # context, not the classes they return, so the annotations name the classes
-    # themselves.
+    # Annotate with concrete pool and queue classes; multiprocessing exposes factories.
     from logging.handlers import QueueListener
     from multiprocessing.pool import Pool as WorkerPool
     from multiprocessing.queues import Queue as WorkerLogQueue
@@ -134,13 +130,10 @@ ALCHEMY_VERSION = __version__
 # Seconds of no completed entry, after a worker died without naming the entry
 # it held, before the remaining outstanding entries are failed retryably.
 WORKER_STALL_GRACE_S = 600.0
-# Seconds to let a worker pool shut down cleanly before its children are killed
-# outright. Every result has been collected by then, so only a wedged pool ever
-# reaches the deadline.
+# Bound clean shutdown before forcefully stopping remaining workers.
 WORKER_SHUTDOWN_GRACE_S = 5.0
 
-# Budget for the `git` probes that stamp run provenance. Exceeding it costs the
-# commit hash, which degrades to "unknown", rather than the run.
+# A timed-out provenance probe reports an unknown commit without failing the run.
 PROVENANCE_COMMAND_TIMEOUT_S = 1
 
 
@@ -148,7 +141,7 @@ logger = logger_for(__name__)
 
 
 def _verify_resolved_ccp4(env: Mapping[str, str], setup_path: str) -> None:
-    """Verify ``env``, naming the script that was run when it comes up short."""
+    """Verify CCP4 tools and include the setup path in any failure message."""
     try:
         verify_ccp4(env)
     except Ccp4SetupError as exc:
@@ -180,15 +173,10 @@ def _resolve_ccp4_environment(
 
     environment = os.environ.copy()
 
-    # An explicit --ccp4-setup is checked before the ambient environment, and a
-    # missing path is an error rather than a fallthrough: honouring PATH first
-    # would run against the very installation the user is replacing, and stamp
-    # that installation's version as the run's provenance.
+    # Validate explicit setup before PATH so a bad override cannot select another install.
     if args.ccp4_setup:
         setup_path = os.path.abspath(os.path.expanduser(args.ccp4_setup))
         if not os.path.exists(setup_path):
-            # The user's own spelling, not the expanded path, so the message
-            # shows the typo as they typed it.
             raise Ccp4SetupError(f"CCP4 setup file not found: {args.ccp4_setup}")
         env = resolve_env(setup_path)
         _verify_resolved_ccp4(env, setup_path)
@@ -296,18 +284,11 @@ def dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:
 
 
 def _signal_worker_process_group(pid: int, sig: int) -> None:
-    """Signal one isolated worker group, ignoring an already-empty group.
+    """Signal a worker group even if its leader has already exited.
 
-    The group is signalled even once ``pid`` has been reaped, which is the
-    point: the worker is gone but the CCP4 programs it started are still in its
-    group, and killing them is the only thing that stops them outliving the
-    run. A reaped pid is free for reuse, so in principle this can reach an
-    unrelated group that has taken the number. Guarding on
-    ``os.getpgid(pid) == pid`` was tried and rejected: it also rejects the case
-    above, because a reaped leader no longer has a group to report, and the
-    external children then survive. Cleanup that works is worth more than
-    closing a window that needs pid wraparound inside a few milliseconds and a
-    replacement that has made itself a group leader.
+    CCP4 children can remain in that group after the worker is reaped, so a
+    leader-existence check would skip required cleanup. A reused process-group
+    ID could target an unrelated group.
     """
     if os.name != "posix" or not hasattr(os, "killpg") or not pid:
         return
@@ -316,24 +297,16 @@ def _signal_worker_process_group(pid: int, sig: int) -> None:
 
 
 def stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bool:
-    """Stop the worker log listener on a deadline and drop its queue.
+    """Stop the logging listener within a deadline and close its queue.
 
-    ``QueueListener.stop`` puts a sentinel and then joins its thread untimed.
-    That put has to take the queue's cross-process write lock, which a worker
-    SIGKILLed mid-write never released -- the same hazard ``_shutdown_pool``
-    already bounds for the task queue. Without a deadline here a batch whose
-    every row is safely on disk could hang at the very end of the run with no
-    log written and no exit status. The listener thread is a daemon, so
-    abandoning it does not keep the interpreter alive. Returns ``True`` when it
-    had to be abandoned.
+    A killed worker may leave the write lock held, blocking the stop sentinel.
+    Return True if the daemon listener had to be abandoned.
     """
     stopper = threading.Thread(target=listener.stop, daemon=True)
     stopper.start()
     stopper.join(WORKER_SHUTDOWN_GRACE_S)
     abandoned = stopper.is_alive()
-    # ``close`` only drops this process's handles; ``join_thread`` would wait on
-    # the same feeder the sentinel is stuck behind, so it is deliberately not
-    # called.
+    # Do not join the queue feeder; it may be blocked on the same lock.
     with contextlib.suppress(Exception):
         queue.close()
     return abandoned
@@ -360,9 +333,7 @@ def _shutdown_pool(pool: WorkerPool) -> bool:
     closer = threading.Thread(target=pool.terminate, daemon=True)
     closer.start()
     closer.join(WORKER_SHUTDOWN_GRACE_S)
-    # Workers isolate themselves as process-group leaders. Let Pool terminate
-    # them first, avoiding a task-queue lock race, then kill any CCP4 program
-    # left in an original or newly replacement worker's surviving group.
+    # Terminate workers before killing surviving CCP4 groups to avoid task-queue races.
     current_children = [
         child
         for child in getattr(pool, "_pool", ()) or ()
@@ -385,8 +356,7 @@ def _shutdown_pool(pool: WorkerPool) -> bool:
             # Process.kill is SIGKILL on POSIX and TerminateProcess on Windows,
             # where signal.SIGKILL does not exist.
             child.kill()
-    # The closer thread is abandoned: the lock is held by a process that is
-    # already gone, and a daemon thread does not keep the interpreter alive.
+    # A daemon closer can be abandoned if a dead worker left its lock held.
     return True
 
 
@@ -415,12 +385,9 @@ def batch_exit_code(incomplete_entry_count: int) -> int:
 
 
 def load_ids_from_file(path: str) -> list[str]:
-    """Return a list of PDB ids from a comma/newline-separated text file.
+    """Read PDB IDs from comma- or newline-separated text.
 
-    Read as ``utf-8-sig`` so a byte-order mark is consumed rather than glued to
-    the first id. Editors on Windows and spreadsheet exports add one routinely,
-    and under plain ``utf-8`` it made the first entry fail validation with a
-    message that blamed the id instead of the encoding.
+    Use utf-8-sig to accept byte-order marks from Windows editors and exports.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"id file not found: {path}")
@@ -485,11 +452,8 @@ def select_entry_ids(
                 f"Entry {args.id} not found locally and download failed."
             ) from None
         except OSError as exc:
-            # Preparing an entry also creates directories and writes files, so
-            # a local problem -- an unwritable cache, a full disk -- surfaces
-            # here too. It is not a missing entry and must not be reported as
-            # one, but it is still a user-facing failure rather than a bug, so
-            # it exits with a message instead of a traceback.
+            # Report cache and filesystem failures as usage errors without mislabeling
+            # them as missing entries.
             raise DriverError(
                 f"Entry {args.id} could not be prepared: {type(exc).__name__}: {exc}"
             ) from None
@@ -513,7 +477,7 @@ def select_entry_ids(
 
 
 class OutputLayout:
-    """Every path a run reads or writes, all derived from ``--output-dir``."""
+    """Paths to run artifacts derived from the output directory."""
 
     def __init__(self, output_dir: str) -> None:
         """Derive every run artifact path from an output directory."""
@@ -625,11 +589,9 @@ class _BatchTally:
         return batch_exit_code(incomplete)
 
     def recoverable_incompleteness(self) -> int:
-        """Entries a later run could still add to the cohort.
+        """Return the count of entries that may succeed on a later attempt.
 
-        A missing input, killed worker, or unexpected processing failure may
-        succeed on a later attempt, so each leaves the database genuinely
-        unfinished. Only explicitly deterministic errors are terminal gaps.
+        Only explicitly deterministic failures are terminal for database completion.
         """
         return (
             self.counts.get("skip", 0)
@@ -743,10 +705,9 @@ def _prepare_output_directory(output_dir: str) -> None:
 
 
 def _classify_run(args: RunConfig) -> tuple[str, bool]:
-    """Return ``(run_mode, database_run)`` for this invocation.
+    """Return the run mode and whether this is an uncapped full-database run.
 
-    ``database_run`` is the uncapped full-mirror case, the only one that may
-    finalize a confidence reference: a capped or hand-picked run is no cohort.
+    Only the full-database mode can build a new confidence reference.
     """
     manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
     database_run = (
@@ -780,12 +741,8 @@ def plan_confidence(
     if not args.bonds:
         return plan
     if database_run:
-        # An uncapped full-database run builds the reference every later run is
-        # scored against, so it cannot also be scored against an existing one.
-        # Said rather than raised: passing the flag uniformly across a mix of
-        # capped and uncapped runs is reasonable, and failing the multi-day run
-        # over an argument that changes nothing would be the worse outcome. It
-        # must not be ignored in silence either.
+        # A full-database run builds its own reference. Warn about an existing-reference
+        # option without rejecting commands shared with smaller runs.
         if args.confidence_reference_dir:
             logger.warning(
                 "--confidence-reference-dir is ignored on an uncapped "
@@ -923,12 +880,7 @@ def schedule_entries(
             )
         else:
             done = normally_done
-        # ``done`` holds lowercased manifest ids, while a mirror enumeration
-        # returns directory names as they are spelled on disk, so the
-        # comparison must normalize: otherwise a non-lowercase directory never
-        # matches its own completed row and is reprocessed on every resume. The
-        # id itself is kept as found, because it is also the path the entry is
-        # read from.
+        # Normalize IDs for manifest comparison while preserving on-disk path spelling.
         ids = [i for i in ids if i.lower() not in done]
     if args.max_pdbs is not None:
         ids = ids[: args.max_pdbs]
@@ -979,7 +931,7 @@ def _finish_without_entries(
 def _clear_stale_outputs(
     args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
 ) -> None:
-    """Remove output from a previous run that this one is about to contradict."""
+    """Remove stale outputs that conflict with the current run mode."""
     try:
         removed = remove_stale_disabled_bond_outputs(
             (layout.bonds, layout.candidates),
@@ -1118,8 +1070,7 @@ def worker_config_from_args(
         confidence_mode=plan.mode or "disabled",
         reference_data_id=cfg.reference_data_id,
         analysis_config_id=cfg.analysis_config_id,
-        # The manifest carries one combined id; the per-file digests here are
-        # what attributes a change in it to a file.
+        # Retain per-file hashes to explain changes in the combined reference ID.
         **{
             f"{name.split('.')[0]}_sha256": digest
             for name, digest in reference_data_checksums().items()
@@ -1223,7 +1174,7 @@ def _open_writers(
 def confidence_rows_for(
     result: EntryResult, plan: ConfidencePlan
 ) -> list[dict[str, Any]]:
-    """The confidence rows one entry contributes, scored where a reference is."""
+    """Prepare one entry's confidence rows, scoring against a reference if available."""
     if result.metal_site_limit_exceeded:
         return []
     rows = prepare_result_confidence_inputs(
@@ -1245,14 +1196,10 @@ def confidence_rows_for(
 def should_write_entry(
     resuming: bool, result: EntryResult, prior_ids: set[str]
 ) -> bool:
-    """Whether this result's rows belong in the output.
+    """Return whether this result should replace or add output rows.
 
-    A resumed run suppresses a retry that did not improve on the row it would
-    replace, so a failed attempt cannot overwrite a good previous result. An
-    entry the manifest has never described has nothing to protect, and
-    suppressing it left it absent from the manifest altogether -- the artifact
-    ``--resume`` and downstream analysis read then under-reported the set the
-    run actually scheduled.
+    Protect existing results from unsuccessful retries. Always record entries
+    not yet represented in the manifest.
     """
     if not resuming:
         return True
@@ -1292,13 +1239,10 @@ def write_entry(
 
 
 class _WorkerDeathWatch:
-    """Stands in for the pool on the results a dead worker will never deliver.
+    """Track dead workers and synthesize results for their unfinished entries.
 
-    Workers announce the entry they are holding, so a pid that leaves the pool
-    roster is usually attributable and its entry can be failed retryably at
-    once. A worker killed before it announced anything leaves no such trace:
-    that death is only counted, and is settled by ``stalled_losses`` once the
-    run has gone quiet for long enough to rule out a live worker.
+    Use worker notifications to identify lost entries. Resolve unattributed
+    deaths only after the grace period and stalled-work checks.
     """
 
     def __init__(
@@ -1317,10 +1261,7 @@ class _WorkerDeathWatch:
         self._worker_pids: set[int] = set()
         self._lost_ids: set[str] = set()
         self._unattributed_deaths = 0
-        # ``Pool`` has started its workers before its constructor returns, and
-        # no tasks are submitted until after this watch is created. Snapshot
-        # that original roster now: if the first task kills its worker before
-        # the result loop's first poll, its vanished pid must still be known.
+        # Snapshot workers before submitting tasks so an early death cannot go unnoticed.
         dead_worker_pids(self._pool, self._worker_pids)
 
     def track_submitted_entry(self, pdb_id: str) -> None:
@@ -1400,13 +1341,10 @@ def pop_admissible_estimate(
     *,
     workers: int = 0,
 ) -> EntryMemoryEstimate | None:
-    """Admit the first pending entry whose estimate still fits the budget.
+    """Admit the first pending entry whose estimated memory fits the budget.
 
-    Byte accounting, not entry class, holds concurrent map allocations inside
-    the budget, so a high-memory entry is admissible alongside any other work
-    as soon as their summed estimates fit. Scanning past a blocked entry avoids
-    wasting a worker slot that a smaller pending entry could use. An
-    underestimated peak is caught by the dispatch loop's live pressure check.
+    Scan past oversized entries to use available capacity. Live pressure checks
+    handle underestimated peaks.
     """
     if not pending:
         return None
@@ -1473,23 +1411,10 @@ def _dispatch_entries(
     inflight: SimpleQueue[tuple[str, int, str]] = SimpleQueue()
     completed_ids: set[str] = set()
     last_progress = time.monotonic()
-    # The start method is the interpreter's default, deliberately not pinned.
-    # It changed from ``fork`` to ``forkserver`` in Python 3.14, so the process
-    # topology does depend on which interpreter is installed, and both pins
-    # were tried and rejected. ``forkserver`` is the safer method -- ``Pool``
-    # respawns a dead worker from its ``_handle_workers`` thread, and forking a
-    # threaded process risks the child deadlocking on a lock no thread there
-    # holds -- but the worker-death tests inject their scripted pipeline by
-    # patching this module, which only reaches a worker through ``fork``.
-    # Pinning ``fork`` would instead extend that deadlock hazard to 3.14, where
-    # the default already avoids it, to satisfy a test-only dependency.
-    # Making those tests start-method agnostic is the prerequisite for pinning.
-    #
-    # Not a ``with`` block: ``Pool.__exit__`` calls the same ``terminate`` a
-    # killed idle worker can wedge, so the ``finally`` below bounds shutdown.
-    # The log listener thread starts only after the pool: forking a process
-    # that already has running threads risks the child deadlocking on a lock no
-    # thread there holds.
+    # Use Python's default start method for platform compatibility.
+    # Avoid Pool's context manager: its unbounded terminate can hang after a
+    # worker dies with a queue lock held. The finally block bounds shutdown.
+    # Start the log listener after the pool to avoid forking with active threads.
     log_queue = create_worker_log_queue()
     pool = Pool(
         workers, initializer=initialize_worker, initargs=(cfg, inflight, log_queue)
@@ -1689,8 +1614,7 @@ def _dispatch_entries(
         )
     finally:
         forced = _shutdown_pool(pool)
-        # Stopped after the pool is gone, so records emitted during shutdown
-        # are still forwarded.
+        # Keep forwarding logs until worker shutdown completes.
         if stop_log_listener(log_listener, log_queue):
             run_log.summary["worker_log_listener_abandoned"] = True
             logger.warning(
@@ -1714,14 +1638,10 @@ def keep_completed_staging(
     plan: ConfidencePlan,
     run_log: RunLog,
 ) -> None:
-    """Promote the entries a halted resume finished, rather than dropping them.
+    """Commit entries completed before a resumed batch was interrupted.
 
-    An id reaches ``replacement_ids`` only after its manifest row, which is the
-    entry's completion marker, so committing here keeps exactly the entries that
-    finished and leaves any half-written rows in staging. Discarding instead
-    destroyed every entry the run had completed -- including entries with no
-    previous manifest row, which staging exists to replace and was never meant
-    to protect -- while the interrupt message promised they were kept.
+    Only IDs with a written manifest row enter replacement_ids. Keep unfinished
+    rows in staging and preserve completed work if committing fails.
     """
     kept = len(staging.replacement_ids)
     if not kept:
@@ -1730,8 +1650,7 @@ def keep_completed_staging(
     try:
         staging.commit(args.bonds, confidence_enabled=plan.enabled)
     except Exception as exc:
-        # These rows are now the only copy of that work, so leave them on disk
-        # to be recovered by hand rather than deleting them behind a failure.
+        # Preserve staging for manual recovery if it is the only copy of completed work.
         run_log.summary["resume_staging_recovery_dir"] = staging.dir
         run_log.summary["resume_staging_commit_error"] = f"{type(exc).__name__}: {exc}"
         logger.error(
@@ -1808,7 +1727,6 @@ def process_entries(
                 memory_plan,
             )
             processing_completed = True
-            # Bound here so the summary below needs no ``Optional`` narrowing.
             opened_writers = writers
     finally:
         if staging is not None and not processing_completed:
@@ -1871,10 +1789,9 @@ def _report_batch(
     writers: OutputWriters,
     run_log: RunLog,
 ) -> int:
-    """Print the human summary, finalize confidence, and return the exit code.
+    """Report batch results, finalize eligible confidence outputs, and return the exit code.
 
-    Confidence is finalized only on a clean batch: a reference built from
-    incomplete entries becomes the cohort every later run is scored against.
+    Build a database reference only when no recoverable entries remain.
     """
     print(
         f"Done. ok={tally.counts['ok']} partial={tally.counts['partial']} "
@@ -1908,13 +1825,8 @@ def _report_batch(
     database_run = plan.mode == "database"
     exit_code = tally.exit_code(database_run=database_run)
     if plan.mode == "database":
-        # Gated on what a later run could still add, not on the exit code. A
-        # handful of entries that defeat CCP4 or carry unusable data fail
-        # identically on every pass, so gating the reference on a clean exit
-        # meant a full-database run could never publish one: the retry the exit
-        # code was waiting for is the retry that cannot help. The reference
-        # metadata records the manifest status counts, so a cohort with known
-        # permanent gaps stays self-describing.
+        # Finalize when no recoverable entries remain. Known deterministic exclusions
+        # are recorded in reference metadata and do not prevent completion.
         unfinished = tally.recoverable_incompleteness()
         if unfinished == 0:
             permanent = tally.terminal_errors
@@ -2035,10 +1947,8 @@ def _execute_with_output_lock(
     if not ids:
         return _finish_without_entries(args, layout, plan)
 
-    # A manual structure may use an arbitrary four-character label rather than
-    # a deposited PDB ID. Its coordinate file is authoritative, so consult an
-    # existing cache entry but do not turn local analysis into a network
-    # prerequisite.
+    # Manual labels may not be deposited PDB IDs; use cached metadata without
+    # requiring a network lookup.
     prepare_crystallization_metadata(
         args, ids, run_log, allow_download=False if manual_inputs else None
     )

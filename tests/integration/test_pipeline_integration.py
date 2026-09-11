@@ -1,17 +1,8 @@
-"""End-to-end pipeline behaviour: ``./alchemy`` driven as a whole run.
+"""Test complete Alchemy runs against checksum-pinned PDB-REDO entries.
 
-Most tests here execute the real driver over a checksum-pinned PDB-REDO entry
-snapshot, so they need CCP4 and either a warm entry cache or network access.
-The ``network`` marker is applied only when the configured cache is not already
-complete, so ``pytest -m 'not network'`` can use a warm cache and still never
-opens a socket.
-
-``9myr``  Sal-Shy(DUF35) aldolase; two zinc sites, each declared as a Cys3-His
-          zinc-ribbon tetrad in ``_struct_conn``.
-``6nlr``  PIXE-remodelled histidinol phosphatase; eleven Mn, Co, Fe and Ca
-          sites across three chains, the multi-site multi-element case.
-``9nxl``  steroid aldehyde dehydrogenase with no modelled metal, the
-          ``no_metals`` control.
+CCP4 is required. Network access is required only for missing cached inputs.
+9myr covers two Cys3-His zinc sites; 6nlr covers multiple metals and chains;
+9nxl is the no-metals control.
 """
 
 from __future__ import annotations
@@ -73,11 +64,8 @@ _StrPath = str | os.PathLike[str]
 
 ENTRY_IDS = ("9myr", "6nlr", "9nxl")
 
-# PDB-REDO's live entry URLs are mutable, so pinning the bytes turns an upstream
-# revision into an explicit snapshot-drift failure instead of a mysterious change
-# in Alchemy's numbers. Uncompressed mmCIF, MTZ and data.json only: production
-# also accepts compressed and legacy-PDB variants, but those are not
-# interchangeable numerical regression inputs.
+# Pin uncompressed mmCIF, MTZ, and metadata bytes because live PDB-REDO
+# entries change. Alternate formats are not equivalent regression fixtures.
 _ENTRY_SNAPSHOT_SHA256 = {
     "9myr": {
         "9myr_final.mtz": "7d47d24a5a1e1cafc003adde878082aa9a2f4da8e947031b8228e1cf2234d21a",  # noqa: E501 - a SHA-256 digest cannot be wrapped
@@ -98,9 +86,8 @@ _ENTRY_SNAPSHOT_SHA256 = {
 
 _HIS_N_ZN = ("HIS", "N", "ZN")
 
-# ``(entry, chain, residue number) -> (ZDm, ZD-m, ZD+m)`` measured by the whole
-# density arm -- mtzfix, both FFTs, mapmask and edstats -- over the pinned
-# snapshot above, the only genuine oracle that arm has.
+# Expected (ZDm, ZD-m, ZD+m), keyed by entry, chain, and residue,
+# measured using the complete CCP4 pipeline on the pinned inputs.
 _MEASURED_RSZD = {
     ("9myr", "B", "201"): (2.1, -2.1, 1.6),
     ("9myr", "D", "201"): (1.2, -1.0, 1.2),
@@ -289,12 +276,10 @@ def run_alchemy(
     mirror: _StrPath | None = None,
     reference_dir: _StrPath | None = None,
 ) -> RunResult:
-    """Invoke the driver in-process and return its exit code and output.
+    """Run the driver in-process and return its exit code and output.
 
-    Every path option that otherwise defaults into the repository is supplied
-    here, so no test can write into the checkout. Omitting ``mirror`` or
-    ``reference_dir`` points that option at a non-existent path, which is what
-    forces cache-only input and leaves confidence scoring off.
+    Keep all paths outside the repository. Missing mirror or reference options
+    use nonexistent paths to force cache input and prevent reference scoring.
     """
     output_dir = str(output_dir)
     argv = ["--output-dir", output_dir, "--no-crystallization-download"]
@@ -652,11 +637,8 @@ def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> Non
             assert math.isfinite(dpi) and dpi > 0.0
             denominator = math.sqrt(dpi**2 + sigma**2)
             expected_z = (distance - mu) / denominator
-            # The z-score is computed from the full-precision distance, while
-            # the CSV reports it rounded to three decimals, so recomputing here
-            # inherits up to half a unit in that last place. Divided by the
-            # denominator that is worth far more than the z-score's own
-            # rounding, and a fixed tolerance would be tuned to one entry.
+            # Recalculation uses distances rounded to three decimals. Scale the tolerance
+            # by the z-score denominator to account for that lost precision.
             tolerance = 0.0005 / denominator + 5e-5
             assert float(bond["zscore"]) == approx(expected_z, abs=tolerance)
             assert abs(expected_z) < float(bond["zscore_outlier_cutoff"])
@@ -716,14 +698,10 @@ def test_6nlr_multi_element_sites_report_their_measured_difference_density(
 def test_declared_connections_measure_their_own_reported_distance(
     batch: Batch,
 ) -> None:
-    """Every declared contact's measured distance matches the one it declares.
+    """Verify declared distances match the resolved atom pairs after conversion.
 
-    gemmi's PDB writer emits a TER after each polymer and every TER consumes a
-    serial, so translating source-mmCIF atom serials into analysis-PDB serial
-    space re-points every partner behind a TER -- and both entries number their
-    metals after their polymer chains. A ``_struct_conn`` row carries the
-    distance the depositor measured, so a misbound declaration disagrees with
-    its own number.
+    TER records shift PDB serials, so these fixtures detect serial-based joins
+    that bind the wrong atoms instead of matching author identities.
     """
     declared = [row for row in batch.bonds if row["declared_connection"] == "true"]
     assert declared, "the batch must contain declared metal connections"
@@ -796,13 +774,7 @@ def test_declared_contacts_reach_the_expected_zinc_ribbon_donors(
 @pytest.mark.ccp4
 @pytest.mark.slow
 def test_no_metal_entry_is_reported_not_dropped(batch: Batch) -> None:
-    """9nxl finishes as a successful negative result with zeroed counts.
-
-    README: "structures with no recognized metal atoms finish with n_metals=0
-    without running mtzfix, either FFT, or edstats", reported as ``no_metals``,
-    an informational subset of ``ok``. The stage ran, so the counts are a
-    measured ``0`` rather than blank.
-    """
+    """Verify an entry without metals completes successfully with zero counts."""
     row = batch.manifest["9nxl"]
     assert row["status"] == "ok"
     assert row["retryable"] == "false"
@@ -872,11 +844,7 @@ def test_multi_entry_batch_aggregates_every_entry_exactly_once(batch: Batch) -> 
 def test_manifest_counts_match_the_rows_actually_written(
     batch: Batch, pdb_id: str
 ) -> None:
-    """``n_metals``/``n_bonds``/``n_candidates`` agree with the CSV contents.
-
-    README: ``n_metals`` counts distinct selected coordinate-model sites, not
-    diagnostic or repeated EDSTATS rows.
-    """
+    """Verify manifest counts match distinct coordinate sites and emitted contact rows."""
     row = batch.manifest[pdb_id]
     assert int(row["n_bonds"]) == len(rows_for(batch.bonds, pdb_id))
     assert int(row["n_candidates"]) == len(rows_for(batch.candidates, pdb_id))
@@ -899,11 +867,7 @@ def test_manifest_counts_match_the_rows_actually_written(
 def test_each_run_writes_its_own_immutable_log(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """A second invocation adds a suffixed log instead of replacing the first.
-
-    README: "Additional runs on the same UTC date receive a numeric suffix ...
-    Resume runs create another log rather than replacing the original record".
-    """
+    """Verify repeated runs preserve earlier reports and use suffixed log names."""
     output_dir = tmp_path / "output"
     first = run_alchemy(
         output_dir,
@@ -943,11 +907,7 @@ def test_each_run_writes_its_own_immutable_log(
 def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """Resuming a finished batch reprocesses nothing and rewrites nothing.
-
-    README: ``--resume`` skips ``ok`` and terminal ``partial`` outcomes without
-    duplicating their previous rows.
-    """
+    """Verify resuming a completed batch does not rewrite entry results."""
     output_dir = tmp_path / "output"
     first = run_batch(output_dir, entry_cache, ccp4_env, tmp_root=tmp_path)
     assert first.result.exit_code == 0, first.result.text
@@ -985,11 +945,7 @@ def test_resume_over_a_completed_batch_adds_no_duplicate_rows(
 def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """``--no-bonds`` erases stale bond output; a later resume fills it back in.
-
-    README: "Entries originating from a bond-disabled run retain blank n_bonds
-    and n_candidates, so a later bond-enabled resume will process them".
-    """
+    """Verify a bond-enabled resume fills outputs omitted by an earlier no-bonds run."""
     output_dir = tmp_path / "output"
     complete = run_batch(output_dir, entry_cache, ccp4_env, tmp_root=tmp_path)
     assert complete.result.exit_code == 0, complete.result.text
@@ -1041,12 +997,10 @@ def test_fresh_no_bonds_run_clears_bond_outputs_and_resume_restores_them(
 def test_entry_failing_before_the_bond_stage_is_never_resumed_away(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """A pre-bond failure leaves blank counts, so bonds are still filled later.
+    """Verify unrun bond counts stay blank across a density-only resume.
 
-    A seeded ``0`` would read as a measured zero: ``--resume --no-bonds``
-    carries it onto the now-``ok`` row, and the next bond-enabled resume then
-    judges the stage complete and skips the entry permanently with no bond rows
-    written for it. The three runs below are that sequence.
+    A later bond-enabled resume must process the stage rather than read a
+    placeholder zero as a completed measurement.
     """
     output_dir = tmp_path / "output"
     good_mtz = entry_file(entry_cache, "9myr", "9myr_final.mtz")
@@ -1178,12 +1132,9 @@ def test_manual_files_with_data_json_reproduce_the_cached_entry_run(
 def test_manual_files_without_data_json_are_a_terminal_partial(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str], batch: Batch
 ) -> None:
-    """Omitting ``--data-json`` costs DPI only, and is not a failure.
+    """Verify missing manual metadata disables DPI without discarding density.
 
-    README: "Without --data-json there is no reflection count, so DPI and every
-    value derived from it are unavailable ... the omission is reported as
-    ``missing_dpi_metadata_source`` rather than as a calculation failure". A
-    deterministic limitation is a terminal partial, and those exit successfully.
+    Report missing_dpi_metadata_source as a terminal partial result.
     """
     output_dir = tmp_path / "output"
     result = run_alchemy(
@@ -1231,12 +1182,7 @@ def test_manual_files_without_data_json_are_a_terminal_partial(
 def test_full_and_model_envelope_map_scopes_give_identical_statistics(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """Cropping the FFT map to the model envelope changes no EDSTATS number.
-
-    README: "Model-envelope mode still calculates each complete FFT map before
-    cropping, so map values come from the same Fourier calculation as legacy
-    full-map mode", which makes the default a pure performance optimisation.
-    """
+    """Verify model-envelope cropping preserves EDSTATS measurements."""
     cropped = run_batch(
         tmp_path / "envelope",
         entry_cache,
@@ -1377,12 +1323,9 @@ def test_unknown_pdb_id_fails_with_a_message_and_no_output_tables(
 def test_mtz_without_map_coefficients_fails_the_entry_cleanly(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """A missing FWT/PHWT/DELFWT/PHDELWT set fails one entry, not the process.
+    """Verify missing map coefficients fail the entry with an explicit reason.
 
-    README: "The MTZ input must contain FWT, PHWT, DELFWT, and PHDELWT
-    columns". The failure names them and must not read as a bond stage that ran
-    and found nothing. Its reason code reports that the failure will recur while
-    the same file is supplied, without preventing a resume from retrying it.
+    Keep unrun bond counts blank and permit resume after the input is repaired.
     """
     output_dir = tmp_path / "output"
     broken = _mtz_without_map_coefficients(
@@ -1446,9 +1389,8 @@ def test_workers_below_one_is_rejected_before_any_work(
     assert not os.path.exists(output_dir)
 
 
-# The final raw thresholds are restated here so this module remains an
-# independent oracle. The policy test below keeps this copy aligned with the
-# implementation and the same values are frozen into every reference version.
+# Keep independent threshold values here; the policy test checks them
+# against production constants.
 _DENSITY_THRESHOLDS = (3.0, 6.0)
 _GEOMETRY_THRESHOLDS = (1.0, 2.0)
 
@@ -1736,9 +1678,7 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     )
     log_text = read_text(log_paths(output_dir)[0])
     assert "confidence_mode: reference" in log_text
-    # The report labels a completion summary rather than echoing its key, so
-    # this asserts the rendered line. Matching the raw key silently stopped
-    # checking anything the day the label was introduced.
+    # Check the rendered report label rather than its internal key.
     assert "Confidence status: scored_against_reference" in log_text
 
 
@@ -1748,15 +1688,9 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
 def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str]
 ) -> None:
-    """A run over a whole mirror streams inputs and then freezes a reference.
+    """Verify an uncapped database run streams inputs and builds a reference.
 
-    README: confidence inputs are collected "as part of an uncapped
-    full-database run: no `--id`, `--id-file`, manual coordinate arguments, or
-    `--max-pdbs`", and "only after the database run completes without
-    operationally incomplete entries does Alchemy finalize confidence".
-
-    The three-entry mirror below is a complete database as far as the driver is
-    concerned, which reaches the database arm without a 24k-entry mirror.
+    Use a complete three-entry mirror to exercise database mode.
     """
     mirror = os.path.join(str(tmp_path), "mirror")
     for pdb_id in ENTRY_IDS:
@@ -1831,8 +1765,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     )
     log_text = read_text(log_paths(output_dir)[0])
     assert "confidence_mode: database" in log_text
-    # See the note on the reference-mode run: the report renders a label, so
-    # matching the raw key made this assertion vacuous.
+    # Check the rendered report label.
     assert "Confidence status: finalized" in log_text
 
     # The published reference is directly reusable by a later scored run.
@@ -1975,12 +1908,7 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
     damage: str,
     message: str,
 ) -> None:
-    """A reference that is not the one it claims to be aborts the run.
-
-    Either damage -- a policy that no longer matches this code, a distribution
-    that no longer matches its published identifier -- yields scores comparable
-    with nothing, so the run must stop before any entry is processed.
-    """
+    """Verify invalid policy or distribution identity aborts reference loading."""
     reference_dir = frozen_reference(tmp_path / "installed")
     metadata_path = os.path.join(
         reference_dir, confidence_score.REFERENCE_METADATA_FILE

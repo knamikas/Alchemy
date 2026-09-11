@@ -1,13 +1,7 @@
-"""Logging setup for the driver and its worker processes.
+"""Configure logging for the driver and workers.
 
-``ProgressReporter``'s terminal line and ``RunLog``'s per-invocation document
-are not routed through logging: the first would interleave with records and
-lose its carriage-return redraw, and the second has its own schema.
-
-Worker processes cannot share the driver's handlers, because several processes
-writing one stream interleave mid-record. Records are forwarded over a queue
-and re-emitted by a single listener thread in the driver, which is the only
-place handlers are attached.
+Workers send records to one driver listener to avoid interleaved writes.
+Progress display and the structured run report use separate output paths.
 """
 
 from __future__ import annotations
@@ -19,16 +13,14 @@ import os
 import sys
 from typing import IO
 
-# Longest message a single record may carry. External programs and tracebacks
-# produce output of unbounded size, and a record's level does not bound it.
+# Bound external output and traceback text in each record.
 MAX_RECORD_CHARS = 2000
 
 # Longest excerpt of an external program's output to embed in a message.
 # Smaller than MAX_RECORD_CHARS so the surrounding context still fits.
 MAX_TOOL_OUTPUT_CHARS = 500
 
-# Appended to a shortened value, counted against the budget rather than added
-# to it.
+# Count the truncation marker within the message limit.
 _OMITTED_MARKER = "... [{} more characters]"
 
 LOGGER_NAME = "alchemy"
@@ -43,28 +35,19 @@ def logger_for(module_name: str) -> logging.Logger:
     configuration governs all of them, including the ones running in workers.
     """
     leaf = module_name.rsplit(".", 1)[-1]
-    # main.py is normally executed as a script, where ``__name__`` is
-    # "__main__", so records would otherwise be named differently depending on
-    # whether it was run or imported.
+    # Use the same logger name whether main.py is run or imported.
     if leaf == "__main__":
         leaf = "main"
     return logging.getLogger(f"{LOGGER_NAME}.{leaf}")
 
 
 def truncate(text: object, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
-    """Shorten ``text`` to at most ``limit`` characters, marking the cut.
-
-    The marker is counted against the limit rather than appended to it, so a
-    bound chosen to fit a fixed-width field cannot overflow it. An unmarked cut
-    would leave a truncated traceback looking like one that ended early.
-    """
+    """Truncate text to the limit, including a marker when space permits."""
     rendered = str(text).strip()
     if len(rendered) <= limit:
         return rendered
 
-    # The marker's length depends on how much is omitted, which depends on the
-    # marker's length. Two passes converge, and the second only shrinks what is
-    # kept.
+    # The marker length depends on the omitted count; two passes fit both.
     keep = limit
     for _ in range(2):
         marker = _OMITTED_MARKER.format(len(rendered) - keep)
@@ -72,24 +55,18 @@ def truncate(text: object, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
     marker = _OMITTED_MARKER.format(len(rendered) - keep)
 
     if keep == 0:
-        # The budget cannot hold even the marker; a hard cut is all that fits.
         return rendered[:limit]
     return (rendered[:keep] + marker)[:limit]
 
 
 class _BoundedMessage(logging.Filter):
-    """Cap the rendered message of every record.
-
-    Applied to the handlers rather than to individual call sites, so a new
-    logging call cannot forget it.
-    """
+    """Limit message length on handlers so every logging call is covered."""
 
     def __init__(self, limit: int = MAX_RECORD_CHARS) -> None:
         super().__init__()
         self.limit = limit
 
-    # No @override: typing.override arrived in 3.12 and this project still
-    # supports 3.11, where importing it would fail at runtime.
+    # typing.override requires Python 3.12; this project supports 3.11.
     def filter(  # type: ignore[explicit-override]
         self, record: logging.LogRecord
     ) -> bool:
@@ -103,22 +80,16 @@ class _BoundedMessage(logging.Filter):
 
 
 def level_for_verbosity(verbose: int = 0, quiet: bool = False) -> int:
-    """Map the CLI's verbosity flags onto a console level.
-
-    A single ``-v`` already enables every debug record there is, so further
-    occurrences are accepted and change nothing.
-    """
+    """Map verbosity flags to the console level; repeated -v has no further effect."""
     if quiet:
         return logging.WARNING
     return logging.DEBUG if verbose else logging.INFO
 
 
 def worker_level(console_level: int, log_file: str | None = None) -> int:
-    """The level a worker filters at.
+    """Return DEBUG for file logging, otherwise the console level.
 
-    A worker discards records below its own level before they reach the queue,
-    so with a log file active it must run at DEBUG regardless of the console
-    level; otherwise ``--log-file`` holds no worker detail without ``-v``.
+    Worker filtering happens before queueing, so it must retain file-log detail.
     """
     return logging.DEBUG if log_file else console_level
 
@@ -147,12 +118,10 @@ def configure_driver_logging(
     root.addHandler(console)
 
     if log_file:
-        # ``OSError`` rather than a message and an exit: this runs before any
-        # handler exists, so only the caller can report a failure.
+        # Let the caller report failures before a handler exists.
         os.makedirs(os.path.dirname(os.path.abspath(log_file)) or ".", exist_ok=True)
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
-        # A file is read after the fact, when the console level may have
-        # discarded the detail that explains what happened.
+        # Keep debug detail in the file regardless of console verbosity.
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(
             logging.Formatter(
@@ -166,12 +135,10 @@ def configure_driver_logging(
 
 
 def create_worker_log_queue() -> multiprocessing.Queue[logging.LogRecord]:
-    """Return the queue workers will forward their records over.
+    """Create the worker logging queue before starting the pool.
 
-    Separate from :func:`start_worker_log_listener` because ``fork`` copies
-    only the calling thread, so a child can deadlock on a lock held by a thread
-    that does not exist in it. Create the queue, fork the pool, then start the
-    listener.
+    Start the listener after forking to avoid inheriting locks held by threads
+    that do not exist in the child.
     """
     return multiprocessing.Queue(-1)
 

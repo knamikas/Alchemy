@@ -1,12 +1,4 @@
-"""Diagnostics reach one place, bounded, from every process.
-
-Scope: the driver owns the handlers, workers reach them over a queue rather
-than writing concurrently, and no single record grows without limit.
-
-Out of scope here (owned elsewhere): what individual modules choose to log, and
-the per-run report written by ``driver.runlog.RunLog``, which is an artifact
-rather than a transcript.
-"""
+"""Test queued worker logging, driver handlers, and message-size limits."""
 
 from __future__ import annotations
 
@@ -148,7 +140,7 @@ def test_a_log_file_keeps_debug_detail_the_console_discarded(tmp_path: Path) -> 
 def _worker_emits(
     queue: multiprocessing.Queue[logging.LogRecord], level: int, message: str
 ) -> None:
-    """Log from a genuinely separate process, as a pool worker would."""
+    """Log from a separate process using the worker logging configuration."""
     run_logging.configure_worker_logging(queue, level=level)
     logging.getLogger("alchemy.worker").warning(message)
 

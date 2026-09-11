@@ -1,10 +1,7 @@
-"""Shared Gemmi structure preprocessing for Alchemy.
+"""Prepare deterministic first-model atom selections with Gemmi.
 
-Two atom sets are built from the first coordinate model, so that no policy
-depends on a parser's implicit alternate-location selection: ``source_atoms``
-retains every deduplicated alternate position for the occupancy-weighted DPI
-count, and ``contact_atoms`` holds one occupancy-selected conformer per residue
-for metal-contact searches.
+source_atoms retains deduplicated alternate positions for occupancy-weighted
+DPI counts. contact_atoms selects one conformer per residue for contact searches.
 """
 
 from __future__ import annotations
@@ -287,27 +284,18 @@ class AtomSite:
         return (*self.residue_key, self.atom_name, self.element)
 
 
-# An overfull alternate-occupancy site inflates Ni by its excess. Because
-# DPI is proportional to Ni**0.5, a relative error in Ni produces half that
-# relative error in the DPI, so the excess only matters in proportion to the
-# structure's own atom count -- a fixed per-site tolerance cannot express that.
-# At this fraction the DPI is wrong by 0.1%, which for values near 0.16 is
-# about one unit in the last digit it is reported to (round(dpi, 4)), so the
-# threshold sits where the excess first becomes visible at all. Deposited
-# occupancies are written to two decimals, so independently rounded conformers
-# routinely sum to 1.01; real structures sit orders of magnitude inside this
-# bound, while a refinement genuinely corrupt enough to move the DPI exceeds it.
+# DPI scales with sqrt(Ni), so relative atom-count error contributes half as
+# much relative DPI error. This threshold limits that error to 0.1% while
+# allowing routine two-decimal occupancy rounding, such as a sum of 1.01.
 OVERFULL_OCCUPANCY_NI_FRACTION = 0.002
 
 
 def _overfull_occupancy_summary(
     atoms: Iterable[AtomSite],
 ) -> tuple[int, float, frozenset[tuple[object, ...]]]:
-    """Chemical atom sites whose alternates exceed one, by how much, and which.
+    """Record sites whose alternate occupancies sum above one and their excess.
 
-    The identities are kept so a metal site can report whether the overfull
-    occupancy is its own or a donor's. An entry-level count cannot answer that,
-    and a residue hundreds of angstroms away is not evidence about a site.
+    Keep site identities so callers can locate the excess within a metal site.
     """
     by_chemical_site: dict[tuple[object, ...], list[AtomSite]] = defaultdict(list)
     for atom in atoms:
@@ -330,11 +318,9 @@ def _overfull_occupancy_summary(
 
 
 def _occupancy_weighted_atom_count(atoms: Iterable[AtomSite]) -> float:
-    """Ni as counted for the DPI, ignoring the validation flags that gate it.
+    """Count Ni without applying occupancy-validation flags.
 
-    ``count_deposited_ni`` refuses to return a number once occupancy validation
-    has failed, but deciding whether an overfull site is large enough to matter
-    needs the count itself, so it is measured here from the atoms directly.
+    The raw count is needed to assess how much overfull sites affect DPI.
     """
     return math.fsum(
         atom.occupancy
@@ -612,9 +598,8 @@ class StructureContext:
             cell = self.structure.cell
         else:
             cell = gemmi.UnitCell()
-        # With an empty UnitCell Gemmi derives search bounds from the complete
-        # model during construction. Supplying the original model would expose
-        # even atoms we never add explicitly to NaN/Inf handling inside Gemmi.
+        # An empty UnitCell makes Gemmi derive bounds from all model atoms,
+        # so use a model with finite coordinates only.
         search = gemmi.NeighborSearch(self._spatial_model, cell, radius)
         for atom in self.contact_atoms:
             # Gemmi raises while binning a NaN position. Keep malformed atoms
@@ -1489,9 +1474,7 @@ def load_structure(
         key: tuple(value) for key, value in by_coordinate_author_lists.items()
     }
 
-    # An occupancy that cannot be read at all leaves Ni unknowable, so it still
-    # voids the DPI. An overfull site is different in kind: the count is known,
-    # and only its size relative to Ni decides whether the DPI is affected.
+    # Unreadable occupancy makes Ni unknown; a known excess is judged relative to Ni.
     countable_ni = _occupancy_weighted_atom_count(inventory.source_atoms)
     if inventory.overfull_excess <= 0.0:
         overfull_invalidates_dpi = False

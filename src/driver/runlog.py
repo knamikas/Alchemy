@@ -1,9 +1,7 @@
-"""The run report written once, at the end of every run.
+"""Collect entry diagnostics and write a run report with a companion CSV.
 
-``RunLog`` accumulates compact per-entry diagnostics during the batch and
-publishes a concise human-readable log alongside a complete CSV diagnostics
-table. Matching names are reserved together so concurrent runs cannot split a
-report across different suffixes or overwrite an earlier run.
+Reserve matching output names together to prevent concurrent runs from
+overwriting files or splitting the pair across different suffixes.
 """
 
 import contextlib
@@ -31,8 +29,7 @@ from worker_contracts import (
     blank_if_unmeasured,
 )
 
-# A subdirectory rather than the output directory itself: one log accumulates
-# per invocation, and the startup sweep never sees them beside the result CSVs.
+# Keep per-run logs separate from result CSVs and startup cleanup.
 DEFAULT_LOG_DIRNAME = "logs"
 
 ENTRY_DIAGNOSTIC_BASE_COLUMNS = (
@@ -177,8 +174,7 @@ class RunLog:
         self.command = command
         self.started_at = datetime.now(UTC)
         self.started_monotonic = time.monotonic()
-        # The driver records whatever a stage learned about itself here, so the
-        # values are as heterogeneous as the stages that supply them.
+        # Stage-specific diagnostics may contain different value types.
         self.details: dict[str, Any] = {
             "initial_available_memory_bytes": available_memory_bytes(),
         }

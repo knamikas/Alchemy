@@ -1,4 +1,4 @@
-"""Deterministic identity for settings that shape scientific evidence."""
+"""Identify settings that affect scientific results."""
 
 from __future__ import annotations
 

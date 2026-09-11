@@ -1,24 +1,8 @@
-"""Symmetry-image provenance: published coordinates, special positions, scope.
+"""Test symmetry-image coordinates, deduplication, and contact scope.
 
-Three claims Alchemy publishes about a symmetry-generated contact, each of which
-can be wrong while ``distance`` and ``symmetry_operation`` still look right:
-
-* **The image coordinates.** ``position_distance(metal, transformed_neighbor)``
-  must equal the row's own ``distance``, and ``cell_translation_x/y/z`` must
-  agree with the ``N_klm`` symmetry code.
-
-* **Special-position deduplication.** A metal on a crystallographic axis sees
-  several Gemmi images of one deposited donor land on nearly the same point;
-  ``deduplicate_special_position_contacts`` collapses them inside the 0.8 A
-  special-position cutoff, which is a different threshold from the 0.001 A
-  tolerance for conflicting duplicate coordinate records.
-
-* **Explicit-only versus image-inclusive divergence.** The two contact counts,
-  ``generated_contact_scope`` and the ``coordination_depends_on_*`` flags are
-  how a reader learns that a coordination sphere exists only in a symmetry mate
-  or only in an NCS copy, so the two scopes must not leak into each other.
-
-Everything here is synthetic, offline, and needs neither CCP4 nor the network.
+Verify image distances and translations, the 0.8 A special-position cutoff,
+and differences between explicit-only and image-inclusive geometry.
+Fixtures are synthetic and require neither CCP4 nor network access.
 """
 
 from __future__ import annotations
@@ -61,9 +45,7 @@ class _PytestApi(Protocol):
 approx = cast(_PytestApi, pytest).approx
 
 
-# Every edge is short enough that a donor deposited on the far side of the box
-# has an image inside the metal's first coordination sphere, which is what makes
-# the symmetry branch fire at all.
+# Use short cell edges so donors across a boundary have first-sphere images.
 SMALL_CELL: tuple[float, ...] = (20.0, 20.0, 20.0, 90.0, 90.0, 90.0)
 
 # Roomy enough that no crystallographic image of a donor reaches a metal near
@@ -279,7 +261,7 @@ def _case_cell_edge() -> _Case:
 
 
 def _case_screw_axis() -> _Case:
-    """A P 21 21 21 21-screw image, i.e. a genuinely rotated operation."""
+    """Build a P 21 21 21 screw image with a non-identity rotation."""
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 21 21 21")
     builder.add_metal("ZN", 1, chain="B", pos=(5.0, 0.0, 5.0))
     builder.add_water(101, (5.0, 0.0, -2.91), chain="B")
@@ -750,13 +732,10 @@ def test_collapsed_images_are_not_reported_as_duplicate_records(
 def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Show the corruption the collapse prevents, by neutralizing the cutoff.
+    """Verify disabling near-image deduplication inflates coordination counts.
 
-    An aspartate on the two-fold contributes OD1 and OD2, a genuine two-donor
-    chelate. With the cutoff neutralized the same deposited pair is counted
-    twice: the coordination number doubles, a second multi-donor residue group
-    appears out of nothing, and the site is mislabelled as depending on
-    crystallographic symmetry.
+    An aspartate on a two-fold axis supplies two donors whose near-coincident
+    images would otherwise duplicate the donor group and imply symmetry dependence.
     """
     builder = _axis_site(0.025, donor="aspartate")
 
@@ -978,13 +957,10 @@ def test_generated_columns_are_blank_without_symmetry_metadata(
 
 
 def test_generated_images_can_change_the_geometry_verdict(tmp_path: Path) -> None:
-    """The headline caveat: the verdict differs between the two scopes.
+    """Verify generated-image contacts can change the geometry verdict.
 
-    The deposited histidine alone looks plausible; the water reached across a
-    cell edge sits at 1.35 A, far too short for Zn-O, and makes the
-    image-inclusive assessment suspect. Without
-    ``geometry_classification_changes_with_generated_images`` a user reading
-    only the primary result blames the deposited model for a lattice contact.
+    The explicit histidine is plausible; a lattice water at 1.35 A makes the
+    image-inclusive geometry suspect.
     """
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.5, 0.5, 0.5))

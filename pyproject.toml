@@ -21,18 +21,12 @@ test = [
     "pytest-cov>=4.0",
 ]
 
-# Alchemy is run from a clone (`./alchemy`), never imported as a
-# library, so it deliberately ships no importable modules. Declaring both lists
-# empty keeps `pip install .` a dependency-only operation: it records the
-# distribution metadata that resolves gemmi and numpy, and installs nothing
-# else. Left to auto-discovery, setuptools would instead publish `main`, `data`
-# and six other generic top-level names into site-packages, where they would
-# shadow or be shadowed by unrelated projects.
+# Install dependencies and distribution metadata only. Disable module discovery
+# so generic source names such as main cannot shadow unrelated packages.
 [tool.setuptools]
 packages = []
 py-modules = []
-# Needed so the dynamic version below can resolve `_version` under src/. It
-# does not re-enable discovery: packages and py-modules stay empty.
+# Resolve the version from src without enabling package discovery.
 package-dir = {"" = "src"}
 
 [tool.setuptools.dynamic]
@@ -42,20 +36,8 @@ version = {attr = "_version.__version__"}
 minversion = "7.0"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
-# Coverage is measured but not enforced by default, so a plain
-# `pytest` run stays fast. CI adds:
-#   --cov=src --cov-report=term-missing --cov-fail-under=86
-# The floor is set just under the measured figure so it ratchets rather than
-# trips; left far below it, a change could delete hundreds of covered
-# statements unnoticed. Last measured at 88% (4905 statements, 608 missed) on
-# the lane CI runs:
-#   pytest --no-ccp4 --no-network --skip-slow --cov=src
-# Re-run that before moving the floor, and keep it in step with
-# .github/workflows/tests.yml, which is where the number takes effect. The gap
-# is concentrated in driver/resources (62%), inputs.py (65%), ccp4_setup (67%)
-# and driver/pool (76%): mostly error and interrupt paths that need a real
-# subprocess or a killed worker to reach, plus platform fallbacks outside the
-# Linux coverage lane. Windows behavior is exercised by a separate CI job.
+# CI enforces 86% coverage on the offline suite; plain pytest does not collect it.
+# Measure that suite before changing the floor in .github/workflows/tests.yml.
 markers = [
     "ccp4: requires the CCP4 binaries (mtzfix, fft, mapmask, edstats) on PATH",
     "entry_data: requires the checksum-pinned PDB-REDO integration entries",
@@ -66,23 +48,13 @@ filterwarnings = [
     "error::pytest.PytestUnknownMarkWarning",
 ]
 
-# Line length 88 rather than 79: at the time this was adopted 19 lines exceeded
-# 88 against 571 exceeding 79, so 88 was much the closer fit to how the code was
-# already written.
-#
-# The tree is `ruff format`-formatted, and CI enforces that with
-# `ruff format --check` alongside `ruff check`. Keep the CI pin in
-# .github/workflows/tests.yml in step with whatever version you format with
-# locally: Ruff's style can change between releases, so an unpinned version
-# would reformat the tree and fail unrelated pull requests.
+# Use the Ruff version pinned in CI to keep formatting consistent.
 [tool.ruff]
 line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-# Keep this curated list in step with the repository's Python style guide.
-# New rule families should be evaluated separately instead of enabling every
-# Ruff rule indiscriminately.
+# Keep enabled rules aligned with the Python style guide.
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "PIE", "N", "D"]
 ignore = [
     # Formatting and long-line judgment are handled by Ruff's formatter.
@@ -100,17 +72,12 @@ convention = "google"
 "tests/**/*.py" = ["D1"]
 
 [tool.mypy]
-# `python_version` is deliberately unset, so mypy checks against whichever
-# interpreter CI's matrix is running. Pinning it to 3.11 would read a 3.12-only
-# numpy's stubs at 3.11 syntax level and fail on PEP 695 `type` aliases.
-#
-# `src` is not a package and is reached through sys.path at runtime, so the
-# type checker needs the same entry to resolve the flat module names.
+# Use the running interpreter's Python version to match installed dependency stubs.
+# Mirror the runtime search path for source and test modules.
 mypy_path = ["src", "tests"]
 strict = true
 warn_unreachable = true
-# Every optional error code mypy 1.19 ships. They are off by default because
-# each one is opinionated, not because they are unsound.
+# Enable optional checks supported by the pinned mypy version.
 enable_error_code = [
     "deprecated",
     "exhaustive-match",
@@ -127,7 +94,4 @@ enable_error_code = [
     "unused-ignore",
 ]
 
-# `disallow_any_explicit` and `disallow_any_expr` are the two knobs left off.
-# Both forbid `Any` outright rather than requiring it be declared, which here
-# would ban the honest annotation for a heterogeneous CSV result row and push
-# the code toward casts that assert a shape nothing checks.
+# Allow explicit Any for heterogeneous CSV rows without inventing unchecked shapes.

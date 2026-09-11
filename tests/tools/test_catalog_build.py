@@ -1,18 +1,7 @@
-"""The classification rules that decide what a metallocofactor is.
+"""Test metallocofactor classification using synthetic CCD connectivity.
 
-Scope: ``tools/build_metallocofactor_catalog.py``, whose output is bundled and
-then read by every analysis run, where ``parent_type`` is ``cluster``, ``heme``
-or neither for every metal site in the database. Rebuilding against the real
-CCD takes a download and cannot be done in CI.
-
-The rules are structural, not stoichiometric: an Fe/N/C count resembling a heme
-is common in synthetic chelates, and sulfur in a formula says nothing about
-whether it bridges two metals. Every test here therefore builds a CCD block
-with real connectivity and asserts on what the graph says.
-
-``CANONICAL_CLASSES`` in the tool pins the published cofactors against the real
-CCD at build time. These tests pin the rules themselves, against synthetic
-components small enough to reason about.
+Build small atom graphs to distinguish hemes and clusters from components
+with similar formulas. Real-CCD checks run in the catalog maintenance tool.
 """
 
 from __future__ import annotations
@@ -142,10 +131,9 @@ def test_a_charge_suffix_is_not_read_as_an_element() -> None:
 
 
 def test_the_parser_reads_element_case_the_way_the_ccd_writes_it() -> None:
-    """Two-letter symbols must arrive capitalized, and the CCD writes them so.
+    """Verify formulas use the CCD's case-sensitive element symbols.
 
-    ``FE4`` is not a misspelling this parser absorbs: it reads as fluorine
-    followed by four of element ``E``, silently rather than as an error.
+    FE4 parses as F followed by E4, rather than as four iron atoms.
     """
     assert catalog.element_counts("FE4 S4") == {"F": 1, "E": 4, "S": 4}
     assert "FE" not in catalog.element_counts("FE4 S4")
@@ -385,12 +373,7 @@ def test_a_corrupt_sidecar_is_reported_rather_than_raised(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A truncated sidecar is exactly what --check exists to catch.
-
-    Only ``OSError`` was handled, so a half-written file raised
-    ``JSONDecodeError`` -- a traceback, from the command whose job is to report
-    that the sidecar cannot be trusted.
-    """
+    """Verify --check reports a truncated sidecar without a traceback."""
     sidecar = tmp_path / "metal_distances_info.meta.json"
     sidecar.write_text('{"distance_table_sha256": "abc', encoding="utf-8")
     monkeypatch.setattr(stamper, "SIDECAR_PATH", str(sidecar))

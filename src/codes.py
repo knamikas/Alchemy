@@ -1,4 +1,4 @@
-"""The status and provenance words Alchemy writes, defined once."""
+"""Shared status, reason, and provenance values for serialized outputs."""
 
 from enum import StrEnum
 
@@ -19,8 +19,7 @@ class GeometryStatus(StrEnum):
     ``image_inclusive_geometry_status``.
     """
 
-    # INSUFFICIENT_DATA keeps its space: it is a published column value, and
-    # changing it reclassifies every site in an existing output file.
+    # Preserve the space in this published CSV value.
     #: No contact could be scored -- no reference covered them, or the metal
     #: itself has zero occupancy.
     INSUFFICIENT_DATA = "insufficient data"
@@ -96,14 +95,9 @@ class ElementStatus(StrEnum):
 
 
 class ReasonCode(StrEnum):
-    """Why an entry is incomplete or intentionally excluded in the manifest.
+    """Reasons for incomplete or excluded entries.
 
-    These are the most user-visible words Alchemy writes, and
-    ``docs/operations.md`` documents them, so they belong here rather than as
-    literals at the point of use. One of them is also read back:
-    ``driver.resume`` decides whether a bond stage was applicable by testing for
-    ``METAL_PRESENCE_INDETERMINATE``, and with the string spelled out at both
-    ends a rename would silently reprocess those entries on every resume.
+    Documented in docs/operations.md and used by resume to interpret prior results.
     """
 
     #: The pool never received a result: the worker holding the entry died.
@@ -116,8 +110,7 @@ class ReasonCode(StrEnum):
     MTZFIX_VALIDATION_FAILURE = "mtzfix_validation_failure"
     #: An unanticipated exception whose type leaves a retry meaningful.
     UNEXPECTED_PROCESSING_ERROR = "unexpected_processing_error"
-    #: An unanticipated exception that will recur identically on the same
-    #: inputs, so the entry is terminal rather than retried forever.
+    #: An exception expected to recur on identical inputs; resume may retry it.
     DETERMINISTIC_PROCESSING_ERROR = "deterministic_processing_error"
     #: An atom's element could not be trusted, so metal absence cannot be
     #: established under the no-inference policy and no site is analysable.
@@ -130,8 +123,7 @@ class ReasonCode(StrEnum):
     COFACTOR_COORDINATE_JOIN_FAILED = "cofactor_coordinate_join_failed"
     AMBIGUOUS_COORDINATE_RESIDUE_JOIN = "ambiguous_coordinate_residue_join"
     COFACTOR_WITHOUT_SELECTED_METAL = "cofactor_without_selected_metal"
-    #: Bond analysis measured a metal site that statistics did not report, so
-    #: its contacts carry no density evidence and it is not counted as a site.
+    #: A selected coordinate metal site has no corresponding statistics row.
     METAL_SITE_WITHOUT_DENSITY = "metal_site_without_density"
     DECLARED_CONNECTION_RESOLUTION_INCOMPLETE = (
         "declared_connection_resolution_incomplete"
@@ -170,11 +162,8 @@ class WarningCode(StrEnum):
     #: spatial search.
     NON_FINITE_COORDINATES = "non_finite_coordinates"
     ZERO_OCCUPANCY_ATOMS = "zero_occupancy_atoms"
-    #: A metal record was excluded from site selection because its occupancy is
-    #: a valid zero. Zero occupancy is not evidence for a site, but without this
-    #: an entry whose only metal is modeled absent reports ``no_metals`` -- an
-    #: authoritative negative about a file that does contain a metal record.
-    #: ``zero_occupancy_atoms`` alone cannot say the metal was the atom dropped.
+    #: A metal was excluded for valid zero occupancy. Distinguish modeled
+    #: absence from an entry containing no metal records.
     ZERO_OCCUPANCY_METAL_EXCLUDED = "zero_occupancy_metal_excluded"
     OVERFULL_ALTERNATE_OCCUPANCY = "overfull_alternate_occupancy"
     OCCUPANCY_DICTIONARY_DEFAULT_APPLIED = "occupancy_dictionary_default_applied"

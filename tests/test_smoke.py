@@ -1,7 +1,4 @@
-"""Scaffolding smoke tests: src imports, and helper output the pipeline accepts.
-
-Shallow by design; behavioural coverage lives in the other test modules.
-"""
+"""Check imports, launchers, and shared fixture compatibility."""
 
 from __future__ import annotations
 
@@ -45,12 +42,7 @@ approx = cast(_PytestApi, pytest).approx
 
 
 def test_src_modules_import() -> None:
-    """Every src module imports from a test process and exposes its entry points.
-
-    ``src/`` is not a package, so this works only because ``conftest.py`` puts
-    it on ``sys.path``; failing here names that cause before the rest of the
-    suite fails with ``ModuleNotFoundError``.
-    """
+    """Verify source modules import and expose their entry points."""
     import ccp4_setup
     import cli
     import codes
@@ -85,10 +77,8 @@ def test_src_modules_import() -> None:
     assert callable(dpi.calculate_dpi_details)
     assert callable(declared_connections.collect_declared_candidates)
     assert schema.BOND_COLUMNS[0] == "pdbID"
-    # Compared as a bare string, not through ``.value``: that these members are
-    # ``str`` is what lets every status comparison across src/ and the written
-    # CSVs work, so a demotion to a plain Enum has to fail here. mypy reads the
-    # two literals as non-overlapping and cannot see the StrEnum base.
+    # Compare enum members directly with strings to verify serialized compatibility.
+    # Mypy cannot infer the intended cross-enum comparison.
     assert codes.GeometryStatus.SUSPECT == "suspect"  # type: ignore[comparison-overlap]
     assert callable(contact_record.Candidate)
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
@@ -240,12 +230,7 @@ def test_builder_output_loads_cleanly(tmp_path: Path, suffix: str) -> None:
 def test_simple_metal_site_places_donors_at_requested_distances(
     tmp_path: Path, suffix: str
 ) -> None:
-    """``simple_metal_site`` donor distances survive into measured bond rows.
-
-    Distance assertions across the suite are only meaningful if a donor
-    requested at 2.03 Angstrom really is 2.03 Angstrom from the metal after the
-    file round-trip, and if nothing else falls inside the 4 Angstrom search.
-    """
+    """Verify synthetic donor distances survive coordinate writing and analysis."""
     from coordination.analysis import run_bond_analysis
     from structure_analysis import load_structure
 
@@ -788,18 +773,11 @@ def test_not_network_selection_does_not_call_the_network_probe(
 def test_ccp4_env_fixture_resolves_every_required_tool(
     ccp4_env: dict[str, str],
 ) -> None:
-    """The ``ccp4_env`` fixture hands back an environment CCP4 can actually run in.
-
-    An install that resolves but is broken -- missing shared libraries, a stale
-    setup script -- must be caught here rather than halfway through an
-    end-to-end run.
-    """
+    """Verify the resolved CCP4 programs start successfully."""
     resolved = {tool: helpers.which(tool, ccp4_env) for tool in helpers.CCP4_TOOLS}
     assert all(resolved.values()), resolved
 
-    # What the loader says when a shared object is missing or a symbol is
-    # unresolved. Not "no such file or directory": fft and mapmask print that
-    # themselves when given no input file, which is healthy.
+    # Detect loader errors; missing-input messages are expected for these probes.
     loader_failures = (
         "error while loading shared libraries",
         "cannot open shared object file",
@@ -822,8 +800,7 @@ def test_ccp4_env_fixture_resolves_every_required_tool(
         output = completed.stdout.decode("utf-8", "replace")
         excerpt = output[:500]
 
-        # Negative means killed by a signal, so a SIGSEGV on startup is caught
-        # here rather than read as a normal nonzero exit.
+        # Negative return codes indicate termination by a signal, including startup crashes.
         assert completed.returncode >= 0, (
             f"{tool} died on signal {-completed.returncode}: {excerpt!r}"
         )

@@ -230,13 +230,9 @@ def test_an_unanticipated_failure_reports_whether_it_will_recur(
     exception: Exception,
     expected_code: str,
 ) -> None:
-    """The exception type separates a permanent failure from a possible fluke.
+    """Verify exception types distinguish deterministic and potentially transient failures.
 
-    A parse, lookup or type error describes the data or Alchemy's code and will
-    recur while both are unchanged. An OSError or a CCP4 RuntimeError may
-    describe the machine instead. The distinction is for triage: both stay
-    retryable, because nothing here can establish that a later run reads the
-    same bytes.
+    Both remain eligible for resume because inputs or software may change.
     """
 
     def failing_stage(*args: Any, **kwargs: Any) -> None:
@@ -574,9 +570,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
         pdb_redo_is_twin=False,
         source_coordinate_path="/nonexistent/entry.cif",
     )
-    # A real ``StructureContext`` only comes from parsing a file on disk, which
-    # this test has no use for: the bond stage fails before reading anything
-    # but the warning codes it carries forward.
+    # The failing bond stage reads warnings only, so a full parsed context is unnecessary.
     structure = cast(
         structure_analysis.StructureContext, SimpleNamespace(warning_codes=[])
     )
@@ -826,9 +820,7 @@ _BASE_RESIDUES = [
 class TestPositiveInt:
     """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
 
-    # ``value`` is typed ``Any`` throughout: argparse only ever hands it text,
-    # and the cases below deliberately include the ints and ``None`` a
-    # programmatic caller can pass, which the declared parameter type excludes.
+    # Use Any to test non-string programmatic inputs outside the annotated CLI contract.
     @pytest.mark.parametrize(
         "value,expected",
         [
@@ -1482,14 +1474,10 @@ class TestManifestRow:
 
 
 class TestUnrunBondStageChain:
-    """An unrun bond stage must never look complete.
+    """Verify an unrun bond stage remains eligible after a density-only resume.
 
-    What matters is the chain, not the seed value:
-      1. an entry fails before the bond stage,
-      2. its manifest row is carried forward by ``--resume --no-bonds``,
-      3. a bond-enabled ``--resume`` reads that row.
-    A ``0`` anywhere along it makes step 3 skip the entry permanently while the
-    bond CSVs hold no rows for it.
+    Seed a pre-bond failure, resume without bonds, then resume with bonds.
+    A placeholder zero must not mark the unrun stage complete.
     """
 
     @staticmethod
@@ -2219,7 +2207,7 @@ class TestOutputWriters:
         assert _read_csv(tmp_path / "stats.csv") == [STATS_COLUMNS]
 
     def test_bond_rows_are_written_in_schema_order(self, tmp_path: Path) -> None:
-        """Columns are positional, so the projection order is load-bearing."""
+        """Verify projected row values follow the CSV column order."""
         handles = self._handles(tmp_path)
         writers = OutputWriters(*handles)
         row = {column: f"v-{column}" for column in coordination_schema.BOND_COLUMNS}
@@ -2307,8 +2295,7 @@ class TestOutputWriters:
             self._close(handles)
         message = str(excinfo.value)
         assert "metal_bonds_all.csv" in message
-        # The guard must name the column: "the schema drifted" alone sends a
-        # maintainer through 90 columns by hand.
+        # Name the mismatched column so schema failures are actionable.
         assert expected_clause in message
         assert writers.n_bonds == 0
 
@@ -2628,8 +2615,7 @@ class TestProgressReporter:
             super().__init__()
             self._terminal = terminal
 
-        # No @override: typing.override arrived in 3.12 and this project still
-        # supports 3.11, where importing it would fail at runtime.
+        # typing.override requires Python 3.12; this project supports 3.11.
         def isatty(self) -> bool:  # type: ignore[explicit-override]
             return self._terminal
 

@@ -1,8 +1,6 @@
-"""Locating CCP4 and resolving the environment its programs run under.
+"""Locate CCP4 and prepare its process environment.
 
-Failures are ``Ccp4SetupError``, never ``SystemExit``, so this is usable
-outside a CLI process; ``driver.pool.resolve_ccp4_environment`` is the one
-place that turns one into an exit.
+Raise Ccp4SetupError on setup failures so callers control how they are reported.
 """
 
 import contextlib
@@ -19,19 +17,14 @@ from typing import Any, cast
 
 
 class Ccp4SetupError(Exception):
-    """CCP4 could not be located, sourced, or verified.
-
-    The CLI prints the message verbatim, so it is written for a terminal.
-    """
+    """CCP4 could not be located, sourced, or verified."""
 
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "mapmask", "edstats")
 
-# Consulted for a saved CCP4 setup path, highest precedence first.
-# ``save_ccp4_setup`` writes only to the first, and ``load_ccp4_setup_config``
-# merges with the first file winning.
+# Search in precedence order; save updates to the first file.
 DEFAULT_CONFIG_FILES = [
     os.path.expanduser("~/.config/alchemy/ccp4.json"),
     os.path.expanduser("~/.alchemy/ccp4.json"),
@@ -40,22 +33,15 @@ DEFAULT_CONFIG_FILES = [
 
 WINDOWS_CCP4_SETUP_NAMES = ("ccp4.setup.bat", "ccp4.setup.cmd")
 
-# Marker echoed by the Windows setup wrapper so the CCP4 launcher's own banner
-# is never mistaken for environment variables.
+# Separate environment output from the CCP4 launcher banner.
 ENV_SENTINEL = "__ALCHEMY_CCP4_ENV__"
 
-# Sourcing a CCP4 setup script takes well under a second even on a network
-# filesystem; one that blocks past this is hung, most often on an interactive
-# prompt the shell has no terminal to answer.
+# Bound setup scripts that hang or wait for interactive input.
 SETUP_SHELL_TIMEOUT_S = 30
 
 
 def _windows_ccp4_setup_candidates() -> list[str]:
-    """Best-effort Windows install locations for the CCP4 batch launcher.
-
-    ``%CCP4%`` comes first because the installer sets it, making it the only
-    root that is not a guess; the rest are the usual installer defaults.
-    """
+    """Find Windows setup candidates, checking %CCP4% before default install paths."""
     roots: list[str] = []
     ccp4_root = os.environ.get("CCP4")
     if ccp4_root:
@@ -92,11 +78,9 @@ COMMON_CCP4_SETUP_CANDIDATES = (
 def load_ccp4_setup_config(
     config_files: Sequence[str] | None = None,
 ) -> dict[str, str]:
-    """Merge the CCP4 configuration files, earliest file winning.
+    """Merge configuration files with the first file taking precedence.
 
-    The order must match ``save_ccp4_setup``, which writes only to
-    ``config_files[0]``; with the last file winning, a path stored by
-    ``--configure-ccp4`` is shadowed and silently ignored.
+    This must match save_ccp4_setup, which updates the first file.
     """
     config_files = config_files or DEFAULT_CONFIG_FILES
     config: dict[str, str] = {}
@@ -146,11 +130,10 @@ def find_ccp4_setup(
     config: Mapping[str, str] | None = None,
     config_files: Sequence[str] | None = None,
 ) -> str | None:
-    """Locate a CCP4 setup script, or return ``None``.
+    """Locate a CCP4 setup script, or return None.
 
-    ``None`` means two different things and the caller must distinguish them:
-    CCP4 is already on PATH and no script is needed, or nothing could be found
-    at all. ``driver.pool.resolve_ccp4_environment`` treats the second as fatal.
+    None can mean CCP4 is already on PATH or no setup was found. The caller
+    must check tool availability to distinguish these cases.
     """
     env = os.environ.copy() if env is None else env
     config = (
@@ -234,9 +217,7 @@ def _parse_windows_set_output(stdout: str) -> tuple[dict[str, str], bool]:
 
 def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
     """Capture the environment a Windows CCP4 batch launcher establishes."""
-    # cmd.exe's quoting rules differ from the ones subprocess applies when
-    # building a command line, so an install path containing spaces survives
-    # only via a temporary script.
+    # Use a temporary script to preserve paths with spaces under cmd.exe quoting.
     handle, script_path = tempfile.mkstemp(prefix="alchemy-ccp4-", suffix=".cmd")
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\r\n") as fh:
@@ -268,18 +249,14 @@ def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
             f"CCP4 setup {ccp4_setup} did not report its environment; "
             f"expected `set` output after the marker.\n{out.stderr}"
         )
-    # ``cmd`` inherited the parent environment before calling the setup file,
-    # so this listing is authoritative: merging the parent back would restore
-    # variables the setup intentionally removed.
+    # Use the setup environment as returned, including variables it removed.
     return _normalize_path_key(env)
 
 
 def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
-    """Return the environment dict to run CCP4 under.
+    """Return the environment after sourcing CCP4 setup.
 
-    Sourcing ``ccp4_setup`` in a subshell and capturing the result is the only
-    way to reproduce what it exports; without one, the current environment is
-    assumed to be set up already.
+    Without a setup script, use the current environment.
     """
     if not ccp4_setup:
         return os.environ.copy()
@@ -312,6 +289,5 @@ def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
         if "=" in chunk:
             k, v = chunk.split("=", 1)
             env[k] = v
-    # The shell inherited the parent before sourcing the setup file. Its final
-    # ``env`` output is therefore authoritative, including deliberate unsets.
+    # Preserve deliberate variable removals from the setup script.
     return _normalize_path_key(env)

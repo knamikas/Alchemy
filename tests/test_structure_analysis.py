@@ -613,11 +613,9 @@ def test_load_structure_selects_conformer_and_keeps_both_for_counting(
 def test_rounded_alternate_occupancy_is_reported_but_keeps_the_dpi(
     tmp_path: Path,
 ) -> None:
-    """0.46 + 0.55 is a two-decimal rounding artifact, not unusable occupancy.
+    """Verify small alternate-occupancy rounding excess does not invalidate DPI.
 
-    Deposited occupancies carry two decimals, so independently rounded
-    conformers legitimately sum to 1.01. Voiding on that discarded every
-    z-score in the entry over 0.01 of an atom.
+    Independently rounded 0.46 and 0.55 occupancies can legitimately sum to 1.01.
     """
     builder = simple_metal_site("ZN", [("HIS", "NE2", 2.03)])
     his = builder.residues[1]
@@ -762,11 +760,7 @@ def test_load_structure_analyzes_the_first_model_only(tmp_path: Path) -> None:
 def test_load_structure_reports_source_model_count_from_the_original_file(
     tmp_path: Path,
 ) -> None:
-    """Verify stripped coordinates retain deposited model provenance.
-
-    ``main`` strips MODEL/ENDMDL before EDSTATS, so the analysis file has one
-    model where the deposited entry had several.
-    """
+    """Verify first-model extraction preserves the source model count as provenance."""
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     path = builder.write_pdb(tmp_path / "stripped.pdb")
 

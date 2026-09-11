@@ -1,16 +1,7 @@
-"""The three CSV schemas Alchemy publishes, and the rows written against them.
+"""Define and validate bond, contact-candidate, and metal-site CSV rows.
 
-This is the output contract: ``metal_bonds_all.csv`` carries assigned
-metal-donor contacts, ``metal_contact_candidates_all.csv`` the evidence behind
-them, and ``metal_sites_all.csv`` the EDSTATS table with per-site columns
-appended.
-Rows are written by projecting them onto their column list, so a key a builder
-gained without a matching column would be dropped in silence and one it lost
-would surface downstream as a bare ``KeyError``. ``check_row_schema`` catches
-both.
-
-The builders are serialization only: every decision they report was made in
-``coordination.analysis`` before the row is built.
+Builders serialize decisions made in coordination.analysis. Schema checks
+reject missing or extra fields before output projection can lose information.
 """
 
 import hashlib
@@ -24,15 +15,11 @@ from coordination.contact_record import Candidate, MultiDonorResult
 from output_rows import CsvValue
 from structure_analysis import NAN, AtomSite, StructureContext
 
-# Cutoff for a reference-covered geometry outlier. Both CSVs publish it as a
-# column, so a consumer reading an old file can see which threshold produced
-# its `geometry_outlier` values.
+# Publish the outlier cutoff with results so older files retain their threshold.
 ZSCORE_OUTLIER_CUTOFF = 6.0
 
 
-# The driver's writers import these column lists, so the row builders and the
-# CSV header cannot drift apart. "candidate" field names are kept for CSV
-# compatibility and describe inferred first-sphere or source-declared contacts.
+# Share columns with the writers; retain published candidate field names.
 BOND_COLUMNS = [
     "pdbID",
     "metal_site_id",
@@ -320,7 +307,7 @@ STATS_EXTRA_COLUMNS = [
 
 
 def check_row_schema(row: Mapping[str, Any], columns: Iterable[str], name: str) -> None:
-    """Fail loudly when a row builder and its CSV schema have drifted apart."""
+    """Reject rows with missing or extra fields relative to the CSV schema."""
     expected = set(columns)
     if set(row) == expected:
         return

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Thin Python delegate for the repository-root ``./alchemy`` launcher."""
+"""Expose the CLI entry point for the Alchemy launcher."""
 
 import sys
 

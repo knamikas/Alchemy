@@ -27,9 +27,7 @@ logger = logger_for(__name__)
 
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 
-# Roughly five times the worst step observed across the July 2026 database runs
-# (EDSTATS 185.7 s), so a genuine hang is bounded without killing a very large
-# structure.
+# Allow roughly five times the slowest observed CCP4 step (185.7 seconds).
 CCP4_TOOL_TIMEOUT_S = 15 * 60
 DENSITY_MAP_SCOPES = ("model-envelope", "full")
 REFMAC_TWIN_COLUMNS = {
@@ -63,7 +61,7 @@ REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
 
 @dataclass(frozen=True)
 class DensityResult:
-    """What one entry's density stage produced, and how it produced it."""
+    """Density-stage output paths, provenance, and timings for one entry."""
 
     # stats_out is the only output the pipeline parses; the remaining paths
     # exist so the debug CLI and --keep-intermediates can name what was written.
@@ -121,10 +119,8 @@ class Ccp4EntryLimitationError(RuntimeError):
     """CCP4 rejected an entry for a condition fixed by its data or build."""
 
 
-# These diagnostics identify failures observed to recur on identical inputs.
-# They remain ordinary errors, and therefore eligible for ``--resume`` after an
-# input or CCP4 installation changes, but they are terminal exclusions for the
-# current database snapshot rather than evidence of an interrupted machine.
+# These failures recur on identical inputs. They are terminal for database
+# completion, but resume retries them in case inputs or CCP4 have changed.
 _CCP4_ENTRY_LIMITATION_MARKERS = (
     "ccpmapin - map section > maxsec",
     "no reflexions pass acceptance criteria",
@@ -184,18 +180,9 @@ class _Ccp4Runner:
         logger.debug("%s: running %s (budget %gs)", self.pdb_id, program, budget)
         started = time.monotonic()
         try:
-            # stderr is captured to a file rather than a pipe. Decoding a pipe
-            # under ``text=True`` is strict, so a single non-UTF-8 byte in a
-            # Fortran runtime notice would raise before the exit status was read
-            # and lose the entry to a retryable error that always recurs. And
-            # with no output pipe to drain, the timeout bounds the process
-            # rather than EOF, so a program that leaves a helper holding stderr
-            # cannot report a false timeout at the full budget.
-            #
-            # The program is deliberately left in the worker's process group: a
-            # group of its own would make a timeout kill its descendants too,
-            # but would also let them escape the group-wide signal the driver
-            # uses to stop a worker's CCP4 children at shutdown.
+            # Capture stderr in a file to tolerate non-UTF-8 output and avoid waiting
+            # for EOF from helpers that inherit a pipe.
+            # Keep CCP4 in the worker's process group so driver cleanup reaches it.
             with (
                 open(log_path, "w", encoding="utf-8", errors="replace") as log,
                 tempfile.TemporaryFile(dir=self.out_dir) as error_file,
@@ -270,12 +257,7 @@ class _Ccp4Runner:
 
 
 def _decoded_stderr(error_file: IO[bytes]) -> str:
-    """Read a CCP4 program's captured stderr, tolerating any byte it wrote.
-
-    Replacement decoding is deliberate: this text only ever reaches a log line
-    or the manifest's status detail, so an undecodable byte should cost a
-    character rather than the entry.
-    """
+    """Read captured stderr, replacing undecodable bytes so logging cannot fail the entry."""
     try:
         error_file.seek(0)
         return error_file.read().decode("utf-8", errors="replace")
@@ -731,10 +713,8 @@ def run_density_analysis(
             "QQDOUT",
             paths.qq_out,
         ],
-        # EDSTATS otherwise pools every named alternate conformer into one
-        # residue observation (USEALT defaults to false).  Alchemy selects one
-        # coherent residue conformer by occupancy, so request separate EDSTATS
-        # rows and let ``extract_metal_statistics`` retain that same conformer.
+        # Request separate conformer rows so density uses the same occupancy-selected
+        # conformer as coordinate analysis.
         f"reslo={reslo},reshi={reshi},usealt=true\n",
         f"{pdb_id}_edstats.log",
         "edstats_s",
@@ -772,8 +752,7 @@ if __name__ == "__main__":
     p.add_argument("pdb_id", metavar="pdbID")
     p.add_argument("mtz", help="MTZ with FWT/PHWT/DELFWT/PHDELWT columns")
     p.add_argument("pdb", help="coordinate file (edstats XYZIN)")
-    # Must not default to this file's own directory: maps, mapmask output and
-    # EDSTATS logs would land in src/, which .gitignore does not cover.
+    # Keep generated maps and logs out of src/.
     p.add_argument(
         "--out-dir",
         default=".",

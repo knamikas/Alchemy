@@ -1,10 +1,6 @@
-"""Running one PDB-REDO entry, from the worker process that owns it.
+"""Process one PDB entry and record its results and failures.
 
-``process`` never raises: one bad entry must not take the batch down, so every
-failure is recorded in the result as a status, a reason code and a bounded
-message. Configuration reaches a worker once through ``initialize_worker`` and is
-held in ``worker_config``, because a pool initializer cannot return a value and passing
-the config with every task would pickle it per entry.
+Configuration is initialized once per worker to avoid serializing it per entry.
 """
 
 from __future__ import annotations
@@ -84,13 +80,8 @@ TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
 
 logger = logger_for(__name__)
 
-# Unanticipated exceptions that will recur on the same inputs: a parse, lookup,
-# or type error is a property of the entry's data or of Alchemy's code, not of
-# the machine. The distinction is advisory -- it separates "this will keep
-# failing until something changes" from "this may have been the machine", which
-# is what triage of a database-scale run needs. It deliberately does not change
-# what --resume does: an entry is retried either way, because nothing here can
-# establish that a later run reads the same bytes.
+# Classify failures likely to recur on identical inputs. Resume still retries
+# errors because the inputs or software may have changed.
 DETERMINISTIC_PROCESSING_ERRORS = (
     ArithmeticError,
     AssertionError,
@@ -116,28 +107,22 @@ def initialize_worker(
     global worker_config, _inflight_queue
     worker_config = cfg
     _inflight_queue = inflight
-    # Give this worker and every CCP4 descendant a group the driver can kill as
-    # one unit. If the worker itself is SIGKILLed, its active external program
-    # otherwise survives as an orphan and keeps consuming resources/writing
-    # scratch. Windows has no ``setpgrp``; Process.kill remains the fallback.
+    # Keep each worker and its CCP4 children in one group for driver cleanup.
+    # Windows uses Process.kill because setpgrp is unavailable.
     with contextlib.suppress(AttributeError, OSError):
         os.setpgrp()
-    # A forked worker inherits the driver's SIGTERM-to-KeyboardInterrupt
-    # handler, and raising there during ``pool.terminate`` interrupts whatever
-    # the worker is doing, including the log queue's feeder-thread finalizer.
+    # Reset the inherited SIGTERM handler so pool termination cannot interrupt
+    # worker finalizers with KeyboardInterrupt.
     with contextlib.suppress(AttributeError, OSError, ValueError):
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
     configure_worker_logging(log_queue, level=cfg.log_level)
 
 
 def announce_inflight(state: str, pdb_id: str) -> None:
-    """Tell the driver which entry this worker process currently holds.
+    """Notify the driver which entry this worker holds.
 
-    A worker killed by the OOM killer or a segfault runs no further Python and
-    delivers no result, so these notifications are the driver's only record of
-    which entry to fail retryably. ``SimpleQueue.put`` writes to the pipe
-    synchronously, so a notification sent before the work begins is already
-    readable when the process dies mid-entry.
+    Synchronous queue writes let the driver identify the entry if the worker dies
+    without returning a result.
     """
     if _inflight_queue is None:
         return
@@ -148,11 +133,10 @@ def announce_inflight(state: str, pdb_id: str) -> None:
 def _preserve_timeout_log(
     timeout: Ccp4ToolTimeoutError, pdb_id: str, output_dir: str
 ) -> str:
-    """Copy a timed-out program's partial log out of the scratch directory.
+    """Preserve a timed-out program's log outside its scratch directory.
 
-    Only the log: the maps beside it run to hundreds of megabytes per entry.
-    Returns ``""`` when there was nothing to copy, and never raises, because
-    failing to keep a diagnostic must not change the entry's outcome.
+    Return an empty string if no log can be copied. Diagnostic failures must not
+    change the entry outcome.
     """
     source = getattr(timeout, "log_path", "")
     if not source or not os.path.isfile(source):
@@ -247,20 +231,13 @@ def _resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
 
 @dataclass(frozen=True)
 class EntryInputs:
-    """What the input stage resolved, and the later stages then read.
-
-    Held together rather than threaded through each stage separately, so that
-    the density and bond stages take one entry-shaped argument instead of a
-    handful of loose paths and resolution limits.
-    """
+    """Resolved input paths, metadata, and resolution limits for one entry."""
 
     work_dir: str
     mtz: str
-    # First-model-only coordinates: what the analysis reads, which is not
-    # necessarily what was deposited (see ``source_coordinate_path``).
+    # First-model analysis coordinates; source_coordinate_path retains the input.
     pdb: str
-    # PDB-REDO's per-entry metadata, or a manual run's ``--data-json``, and
-    # ``None`` when a manual run supplied none.
+    # PDB-REDO metadata or manual --data-json; None if none was supplied.
     data_json: str | None
     # The diffraction data's own high-resolution limit, as distinct from the
     # map columns' range below.
@@ -301,9 +278,7 @@ def _run_density_stage(
             tool_timeout_s=cfg.ccp4_timeout_s,
         )
     except Ccp4ToolTimeoutError as exc:
-        # A killed program says nothing about the entry, so unlike a
-        # failure exit this is retryable, under its own reason code so a
-        # stalled CCP4 install is visible in the manifest.
+        # A timeout does not establish an input defect, so allow a retry.
         rows, header = [], []
         kept_log = _preserve_timeout_log(exc, result.pdb_id, cfg.output_dir)
         result.retryable = True
@@ -315,9 +290,7 @@ def _run_density_stage(
         result.ccp4_timeout_log_path = kept_log
         result.timings.update(exc.timings)
     except MtzfixValidationError as exc:
-        # MTZFIX could not make the Fourier coefficients internally
-        # consistent, which retrying will not change; geometry stays
-        # independently assessable.
+        # Coefficient validation failed; geometry can still be assessed.
         rows, header = [], []
         result.retryable = False
         result.reason_codes = [ReasonCode.MTZFIX_VALIDATION_FAILURE]
@@ -374,13 +347,10 @@ def _identification_reason_codes(rows: list[MetalStatsRow]) -> list[ReasonCode]:
 
 
 def _excluded_zero_occupancy_metals(structure: StructureContext) -> int:
-    """Metal records dropped from site selection for a valid zero occupancy.
+    """Return metal records excluded for valid zero occupancy.
 
-    Site selection excludes them deliberately -- a metal modeled as absent is
-    not evidence for a site -- but the exclusion must not be silent: a
-    structure whose only metal is at zero occupancy would otherwise report
-    ``no_metals``, an authoritative negative about a file that plainly contains
-    a metal record.
+    Report these separately so an entry with modeled-absent metals is
+    distinguishable from an entry with no metal records.
     """
     selected = structure.metal_atoms(METALS_SET, canonical=True)
     with_absent = structure.metal_atoms(
@@ -392,14 +362,10 @@ def _excluded_zero_occupancy_metals(structure: StructureContext) -> int:
 def _sites_without_density_rows(
     rows: list[MetalStatsRow], structure: StructureContext
 ) -> list[tuple[int, int, int, int]]:
-    """Selected coordinate metal sites that the statistics table omits.
+    """Find selected metal sites missing from the statistics rows.
 
-    Coordinate analysis selects every canonical metal atom by element, while
-    statistics reports a residue only when it is a catalog cofactor or a
-    single-atom ion. A metal inside a multi-atom residue outside the bundled
-    catalog therefore has no density row. Deriving the expected keys directly
-    from the structure keeps this completeness check active when bond analysis
-    is disabled or fails, and covers any later divergence between selections.
+    Derive expected keys from coordinates so this check also works when bond
+    analysis is disabled or fails.
     """
     reported = {row.site_key for row in rows if row.site_key is not None}
     selected = structure.metal_atoms(METALS_SET, canonical=True)
@@ -513,11 +479,7 @@ def _finalize_result(
     bond_meta: BondAnalysisMetadata,
     structure: StructureContext,
 ) -> None:
-    """Merge the stage outcomes into the final status, codes, and counts.
-
-    The rows each stage produced are already on ``result``; only what no stage
-    could record there is passed in.
-    """
+    """Combine stage outcomes into the entry status, reason codes, and counts."""
     result.reason_codes = list(
         dict.fromkeys(
             result.reason_codes + identification_codes + bond_meta.partial_reason_codes
@@ -540,9 +502,7 @@ def _finalize_result(
     if status == EntryStatus.OK:
         result.retryable = False
     result.status = status
-    # Coordinate-model metal sites, not emitted statistics rows: a failed
-    # EDSTATS join leaves a diagnostic row without a site even where bond
-    # analysis found and evaluated the deposited metal.
+    # Count coordinate sites even when their EDSTATS joins failed.
     result.n_metals = len(structure.metal_atoms(METALS_SET, canonical=True))
     result.n_bonds = len(result.bond_rows)
     result.n_candidates = len(result.candidate_rows)
@@ -619,9 +579,7 @@ def _finish_if_no_analyzable_metals(
     if structure.metal_atoms(METALS_SET, canonical=True):
         return False
     if structure.unknown_element_atom_count:
-        # A missing or invalid deposited element could belong to a configured
-        # metal. Under the no-inference policy, zero recognized sites is
-        # therefore not proof of metal absence.
+        # Unknown elements prevent a reliable no-metals result.
         unknown_count = structure.unknown_element_atom_count
         result.status = EntryStatus.PARTIAL
         result.retryable = False
@@ -637,8 +595,7 @@ def _finish_if_no_analyzable_metals(
         )
         return True
 
-    # Neither density nor contact analysis can produce output without a
-    # canonical metal site, so avoid running two FFTs and EDSTATS.
+    # Skip map and contact calculations when no canonical metal site exists.
     result.status = EntryStatus.OK
     result.retryable = False
     result.n_metals = 0
@@ -676,20 +633,18 @@ def process(pdb_id: str) -> EntryResult:
     try:
         return _process_entry(pdb_id)
     finally:
-        # The analysis frame must be gone before attempting to return its
-        # allocations. Keep memory housekeeping from changing entry outcomes.
+        # Release allocations after the analysis frame exits; ignore housekeeping errors.
         with contextlib.suppress(Exception):
             release_idle_memory()
 
 
 def _process_entry(pdb_id: str) -> EntryResult:
-    """Own the analysis locals until the complete entry result is returned."""
+    """Run the analysis in a separate frame so its allocations can be released."""
     cfg = worker_config
     if cfg is None:
         raise RuntimeError("worker configuration has not been initialized")
     t0 = time.monotonic()
-    # Only a directory created by this invocation may be removed in ``finally``:
-    # a predictable <output-dir>/<pdbID> path could already hold user data.
+    # Remove only scratch created here; predictable entry paths may contain user data.
     work_dir: str | None = None
     manual_inputs = cfg.manual_inputs
     result = initial_result(pdb_id, cfg, manual_inputs)
@@ -704,8 +659,6 @@ def _process_entry(pdb_id: str) -> EntryResult:
             )
             entry = work_dir
         else:
-            # Resolved before any scratch space exists, so a missing entry
-            # leaves no temporary directory behind.
             entry = _resolve_entry_dir(pdb_id, cfg)
             if not os.path.isdir(entry):
                 result.status = EntryStatus.SKIP
@@ -747,9 +700,8 @@ def _process_entry(pdb_id: str) -> EntryResult:
         rows, header = _run_density_stage(result, cfg, inputs, structure)
         identification_reason_codes = _identification_reason_codes(rows)
         bond_analysis = run_bond_stage(result, cfg, inputs, structure, rows, header)
-        # An empty header means density production itself failed and already
-        # supplied the precise reason code. This comparison diagnoses a
-        # successful statistics table whose site selection is incomplete.
+        # An empty header already has a density-failure code; check completeness
+        # only for a successfully produced table.
         sites_without_density = (
             _sites_without_density_rows(rows, structure) if header else []
         )
@@ -782,11 +734,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = EntryStatus.ERROR
-        # Retryable regardless: the reason code says the failure will recur on
-        # the same inputs, but a resumed run cannot know the inputs are the
-        # same. A manual run may name a repaired file, and a mirror entry may
-        # have been re-downloaded, so skipping the entry could silently drop
-        # work the operator has already fixed.
+        # Resume may read repaired inputs, so even deterministic errors remain retryable.
         result.retryable = True
         result.reason_codes = [
             ReasonCode.DETERMINISTIC_PROCESSING_ERROR
@@ -796,11 +744,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
         result.error = truncate(
             f"{type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
-        # The manifest keeps one truncated line, which names the exception but
-        # not where it came from. Without this the only way to locate an
-        # unanticipated failure is to rerun the entry by hand with
-        # --keep-intermediates, so the traceback goes to the debug log that
-        # --log-file and -v already collect.
+        # Keep the traceback in the debug log; the manifest holds only a short summary.
         logger.debug(
             "%s: %s ended the entry (%s)",
             pdb_id,

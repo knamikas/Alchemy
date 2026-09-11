@@ -1,16 +1,4 @@
-"""Direct tests for the driver surfaces a batch run depends on.
-
-Scope: the functions that decide *what a run does to existing data* and *which
-entries it selects* -- resume-schema validation, the exit-code contract, ID
-parsing, mirror enumeration, input preparation, worker autoscaling, and the
-driver's requirement that CCP4 be complete before a run starts. Reached through
-``main.main()`` they would run only in the ``ccp4``+``slow`` lane, which CI does
-not run.
-
-Out of scope here (owned elsewhere): argument *parsing* rules
-(``test_cli_and_config``), manifest row content (``test_driver_manifest``), and
-the pipeline itself (``test_pipeline_integration``).
-"""
+"""Test driver selection, resource planning, setup, and resume policies offline."""
 
 from __future__ import annotations
 
@@ -43,8 +31,7 @@ from driver.memory_admission import MemoryAdmission
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
 if TYPE_CHECKING:
-    # Annotations only, so gemmi and numpy stay imported inside the handful of
-    # helpers that build MTZ files, and ``worker`` is never imported at all.
+    # Keep Gemmi and NumPy imports in MTZ helpers; use worker imports only for types.
     import numpy as np
     from numpy.typing import NDArray
 
@@ -1634,13 +1621,9 @@ def _d_spacing(mtz_path: str) -> NDArray[np.float32]:
 def test_map_column_resolution_spans_only_wholly_finite_reflections(
     tmp_path: Path,
 ) -> None:
-    """EDSTATS is given the range where all four coefficients exist.
+    """Verify map resolution uses reflections with all four finite coefficients.
 
-    ``docs/method.md`` states this deliberately: limits taken from the overall
-    MTZ would describe reflections the maps were not calculated from. A bug in
-    the whole-row mask would silently move the limits behind every RSZD in the
-    database, so the mask is checked against a row that is finite in three
-    columns and not the fourth.
+    A highest-resolution row missing DELFWT must not extend the map limits.
     """
     nan = float("nan")
     path = _map_coefficient_mtz(
@@ -1993,23 +1976,13 @@ def test_a_resumed_run_writes_new_entries_even_when_they_fail(
 
 
 def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> None:
-    """That run builds the reference, so it cannot be scored against one.
-
-    The flag was accepted in silence, leaving an operator believing their
-    reference had been used on the one run where it never could be. It is
-    reported rather than refused: passing the flag uniformly across capped and
-    uncapped runs is reasonable, and failing a multi-day run over an argument
-    that changes nothing would be worse than saying so.
-    """
+    """Verify a database run warns that it ignores an existing-reference option."""
     args = cli.parse_args(["--confidence-reference-dir", "/tmp/reference"])
-    # Captured with a handler on the logger itself rather than through caplog:
-    # the run configures ``alchemy`` not to propagate, so whether caplog sees
-    # anything depends on which tests ran first.
+    # Attach directly because Alchemy disables propagation to caplog's handler.
     messages: list[str] = []
 
     class _Capture(logging.Handler):
-        # No @override: typing.override arrived in 3.12 and this project still
-        # supports 3.11, where importing it would fail at run time.
+        # typing.override requires Python 3.12; this project supports 3.11.
         def emit(  # type: ignore[explicit-override]
             self, record: logging.LogRecord
         ) -> None:

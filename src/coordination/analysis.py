@@ -1,17 +1,13 @@
-"""Metal-ligand bond-distance analysis for one PDB entry.
+"""Identify metal-donor contacts and assess their bond distances.
 
-Discovers explicit, crystallographic and strict-NCS candidates within 4 A of
-every metal, supplements them with source ``struct_conn``/``LINK``
-declarations, decides first-sphere eligibility in a separate stage, and scores
-each contact against the literature reference distances in
-``metal_distances_info.txt`` (Harding 2006, and Zheng et al. 2008 for Ni):
+Combine proximity candidates within 4 A with source struct_conn and LINK
+declarations, then determine first-sphere eligibility and score geometry:
 
     z = (d_observed - mu) / sqrt(DPI**2 + sigma_lit**2)
 
-Adding the DPI (Blow 2002 eq. 7) in quadrature with the literature spread makes
-the same absolute deviation more significant in a high-resolution structure
-than in a low-resolution one. Missing inputs produce NaN derived values without
-discarding measured bond geometry.
+Distances come from Harding (2006) and Zheng et al. (2008, Ni); DPI follows
+Blow (2002), equation 7. Missing scoring inputs retain measured geometry
+with NaN derived values. See docs/method.md for the scientific policy.
 """
 
 from __future__ import annotations
@@ -296,14 +292,10 @@ def _bonding_key(
     if neighbor.is_water:
         return ("HOH", "O", metal_el)
     if name in N_TERMINAL_DONOR_ATOMS:
-        # No terminal-amine reference is bundled, so this key misses and falls
-        # through to the element fallback rather than borrowing the histidine
-        # side-chain nitrogen reference.
+        # No terminal-amine reference is bundled; use the element fallback for eligibility.
         return ("NTERM", "N", metal_el)
     if name in C_TERMINAL_DONOR_ATOMS:
-        # No terminal-carboxylate reference is bundled, so this key misses and
-        # falls through to the element fallback rather than borrowing a
-        # side-chain reference.
+        # No terminal-carboxylate reference is bundled; use the element fallback.
         return ("CTERM", "O", metal_el)
     if name == "O":
         return ("CA", "O", metal_el)  # backbone carbonyl O is keyed "CA"
@@ -328,13 +320,10 @@ def _parent_type(
 
 
 def zscore(dist: float, mu: float, stdev: float, dpi: float) -> float:
-    """Bond-distance z-score, ``(dist - mu)/sqrt(stdev^2 + dpi^2)``.
+    """Return the bond-distance z-score using sqrt(stdev**2 + dpi**2).
 
-    The denominator carries one DPI, not the ``sqrt(2) * DPI`` an
-    independent-error treatment of two atoms would give: the metal is a heavy
-    scatterer among the best-ordered atoms in the model, so the single DPI
-    stands for the donor. Widening it to ``2 * dpi ** 2`` would shrink every
-    z-score and change which contacts pass ZSCORE_OUTLIER_CUTOFF.
+    Use one DPI for donor uncertainty, treating the heavy metal as well ordered.
+    An independent two-atom error model would use a different denominator.
     """
     if not (math.isfinite(dpi) and math.isfinite(mu) and math.isfinite(stdev)):
         return NAN
@@ -668,8 +657,6 @@ def collect_proximal_candidates(
             continue
         if not neighbor.coordinates_valid:
             continue
-        # Cheapest test first: the residue lookup below only runs for the few
-        # marks that can still qualify.
         if neighbor.element not in DONOR_ELEMENTS:
             continue
         if not (neighbor.occupancy_valid and neighbor.occupancy > 0.0):
@@ -756,9 +743,7 @@ def _merge_candidates(*candidate_groups: Iterable[Candidate]) -> list[Candidate]
             key = _candidate_identity(candidate)
             existing = merged.get(key)
             if existing is None:
-                # The provenance collections are copied too: merging appends to
-                # them, and the caller's candidate must not gain the other
-                # group's sources.
+                # Copy provenance collections because merging appends to them.
                 merged[key] = replace(
                     candidate,
                     candidate_sources=set(candidate.candidate_sources),
@@ -1033,10 +1018,7 @@ def _site_summary(
         unavailable=not image_search_available,
     )
     primary = image_inclusive if image_search_available else explicit
-    # Whether the metal itself carries overfull alternate occupancy, rather than
-    # a residue elsewhere that the entry-level warning reports identically. Only
-    # the metal is tracked: it is the object of study, and a donor's presence is
-    # already answered empirically by its real-space density statistics.
+    # Report overfull occupancy on the metal itself, separately from entry-wide warnings.
     metal_overfull = (
         metal.chemical_site_identity in structure.overfull_occupancy_site_keys
     )
@@ -1063,9 +1045,7 @@ def _site_summary(
         if image_contacts is not None
         else NAN
     )
-    # Blank where symmetry was never searched, boolean where it was: "not
-    # assessed" and "assessed false" are different answers, and the columns
-    # keep them apart.
+    # Blank means symmetry was not assessed; False means it was assessed and absent.
     changed: str | bool
     depends_crystallographic: str | bool
     depends_strict_ncs: str | bool

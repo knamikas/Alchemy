@@ -1,23 +1,8 @@
-"""Source ``struct_conn`` / ``LINK`` declarations, resolved onto the model.
+"""Resolve source struct_conn and LINK contacts onto the analysis model.
 
-A deposition states its own coordination, but geometry is measured on the
-analysis model, which for an mmCIF entry is a converted PDB. Three properties
-of that join are load-bearing:
-
-* Partners are matched by author identity, never by atom serial. Gemmi's PDB
-  writer emits a TER record after each polymer and every TER consumes a serial,
-  so a converted model's serials run ahead of the source ``_atom_site.id``.
-* Both partners are re-pointed onto their residue's selected conformer, so a
-  declaration cannot introduce a second record for a chemical site the
-  proximity search already reports.
-* Whether a declaration names a metal is decided twice, once from the
-  declaration's own identifiers and again from the resolved atom's element.
-  See ``resolve_declared_partners``.
-
-``collect_declared_candidates`` never raises: every failure becomes a message
-in its ``issues`` list or a code in its ``warnings`` list. A declaration
-Alchemy cannot bind must leave an audit trail, because dropping it silently is
-indistinguishable from a metal that has no coordination at all.
+Match author identities rather than serials, which PDB conversion can change.
+Use each residue's selected conformer and retain unresolved declarations as
+issues or warnings. See resolve_declared_partners for metal identification.
 """
 
 from __future__ import annotations
@@ -50,12 +35,9 @@ if TYPE_CHECKING:
 
 
 class PartnerLocator(Protocol):
-    """The one thing declaration resolution asks of the source model.
+    """Define the source-model address lookup used during declaration resolution.
 
-    Narrower than ``gemmi.Model`` because the address lookup is all this needs,
-    and because the lookup raising is a resolution outcome the caller handles
-    rather than a fault. The address is positional-only: gemmi's binding names
-    that parameter ``arg0``.
+    The address is positional-only to match Gemmi's binding.
     """
 
     def find_cra(
@@ -274,7 +256,7 @@ def declared_candidate_geometry(
 
 
 class _PartnerResolution(NamedTuple):
-    """What binding one declaration's two partners to the model produced."""
+    """Results and failure details from resolving a declaration's two partners."""
 
     #: ``None`` exactly when ``failure_exception_name`` is set; otherwise the
     #: two partners in declaration order, each ``None`` if it did not resolve.
@@ -291,14 +273,11 @@ def resolve_declared_partners(
     connection: gemmi.Connection,
     chain_names: Mapping[str, str],
 ) -> _PartnerResolution:
-    """Bind both partners of one declaration to selected-conformer atoms.
+    """Resolve both declared partners to selected-conformer atoms.
 
-    The metal test runs twice. The first call reads the declaration's own
-    identifiers and must precede ``find_cra``, which can raise: without it a
-    declaration that failed to resolve loses the one piece of evidence saying
-    the failure matters. The second widens it from the resolved atom's element,
-    the better evidence where it exists. Never raises: a failure comes back as
-    ``failure_exception_name``.
+    Check declaration identifiers for metal evidence before find_cra can fail,
+    then refine that evidence using resolved atom elements. Return lookup failures
+    in failure_exception_name.
     """
     addresses = (connection.partner1, connection.partner2)
     declares_metal = any(
@@ -339,13 +318,10 @@ def declared_candidate_for_connection(
     resolved: _PartnerResolution,
     selected_metal_keys: Set[_MetalKey],
 ) -> tuple[Candidate | None, list[str], list[str]]:
-    """Return ``(candidate, issues, warnings)`` for one resolved declaration.
+    """Return a candidate, issues, and warnings for one resolved declaration.
 
-    ``candidate`` is ``None`` whenever the declaration does not describe a
-    metal-donor contact this model can measure. Each guard decides separately
-    whether that outcome is an issue (the declaration named a metal, so silence
-    would understate a coordination number), a warning code, or nothing at all
-    (a link between two amino acids is not Alchemy's subject).
+    Return candidate=None for unmeasurable contacts. Report unresolved metal
+    declarations as issues and ignore declarations unrelated to metals.
     """
     issues: list[str] = []
     warnings: list[str] = []
@@ -402,12 +378,8 @@ def declared_candidate_for_connection(
     if neighbor.element not in DONOR_ELEMENTS:
         warnings.append(WarningCode.DECLARED_DONOR_ELEMENT_UNSUPPORTED)
         return None, issues, warnings
-    # Nucleic acids, modified residues and organic ligands are genuine metal
-    # donors that no bundled literature reference covers, so their geometry can
-    # never be z-scored. They stay candidate evidence carrying the measured
-    # distance: dropping them is indistinguishable from a metal with no
-    # coordination at all. Promoting them to bond rows would raise coordination
-    # counts on the strength of a contact nothing can assess.
+    # Keep unsupported donor classes as candidates with measured distances.
+    # They cannot be scored or promoted to bond rows without a reference.
     donor_class_supported = bool(residue.is_water or residue.residue_name in AA)
     if not donor_class_supported:
         warnings.append(WarningCode.DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES)

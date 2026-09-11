@@ -1,8 +1,6 @@
-"""The batch run's one line of terminal output.
+"""Render batch progress from results collected by the driver.
 
-Rendered by the parent from results it has already collected, so a worker never
-pays for it. The throttle differs by consumer: a terminal wants a line that
-moves, a redirected log wants a file that does not grow by a megabyte an hour.
+Throttle terminal updates and redirected output separately.
 """
 
 import sys

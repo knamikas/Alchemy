@@ -1,8 +1,4 @@
-"""Extracting metal and cofactor real-space statistics from EDSTATS output.
-
-EDSTATS' ``stats.out`` is a whitespace-separated table whose first non-empty
-line is the column header.
-"""
+"""Extract metal and cofactor statistics from EDSTATS residue tables."""
 
 import math
 import statistics
@@ -198,17 +194,11 @@ def is_edstats_separator(fields: list[str]) -> bool:
 def normalize_edstats_row(
     fields: Sequence[str], header: Sequence[str], indices: Mapping[str, int]
 ) -> list[str]:
-    """Restore and normalize EDSTATS' valid blank-chain representation.
+    """Restore EDSTATS' omitted trailing field for a blank chain.
 
-    EDSTATS leaves the trailing chain field (CP) empty for a blank-chain
-    residue, so whitespace splitting removes it. CP is the only field EDSTATS
-    can legitimately omit, so restore it for that unambiguous shape -- one
-    field short, ending in the integer MN and NR values -- and leave every
-    other short row to fail row validation.
-
-    The leading CI field cannot gate the restoration: CI is EDSTATS' own group
-    label, reported as ``0`` for ordered waters whatever their actual chain,
-    while CP carries the deposited one.
+    Accept only a row one field short ending in integer MN and NR values. CI
+    cannot identify a blank chain because EDSTATS also uses CI=0 for waters;
+    CP carries the deposited chain.
     """
     normalized = list(fields)
     if (
@@ -286,12 +276,8 @@ def _row_matches_selected_altloc(
     selected = residue.selected_altloc
     if selected:
         if not row_altloc:
-            # EDSTATS 1.0.9 retains a pooled summary row alongside the
-            # conformer-specific rows requested by USEALT=true.  Ignore that
-            # summary: the selected conformer's row below is the only density
-            # observation Alchemy may use.  If it is absent for a metal or
-            # cofactor, the completeness check at the end of extraction still
-            # rejects the output.
+            # Ignore pooled USEALT summaries; use only the selected conformer's row.
+            # The completeness check detects missing selected rows.
             return False
         return row_altloc == selected
     if row_altloc:
@@ -365,12 +351,10 @@ def validate_edstats_row(
 def classify_residue(
     residue: ResidueSelection, metals_upper: set[str], cofactor_set: Iterable[str]
 ) -> tuple[str, list[AtomSite]]:
-    """Return ``(category, metal_sites)`` for one coordinate residue.
+    """Return the category and selected metal sites for a coordinate residue.
 
-    ``category`` is ``"cofactor"``, ``"metal"``, or ``""`` when the residue is
-    neither. The emitted rows and the EDSTATS completeness check below both
-    derive from this one rule, so the set of sites Alchemy demands EDSTATS
-    report cannot drift from the set it emits.
+    Category is "cofactor", "metal", or empty. Use this rule for both output
+    selection and EDSTATS completeness checks.
     """
     metal_sites = [
         atom
@@ -382,10 +366,8 @@ def classify_residue(
     if residue.residue_name in cofactor_set:
         return "cofactor", metal_sites
     if metal_sites:
-        # The catalog annotates known components; it must not hide a selected
-        # coordinate metal when the CCD introduces or renames a component.
-        # Multi-atom components retain residue-level (potentially shared)
-        # density, just like catalogued metal-containing components.
+        # Retain coordinate metals outside the catalog, with residue-level density
+        # for multi-atom components.
         category = "metal" if residue.chemical_atom_site_count == 1 else "cofactor"
         return category, metal_sites
     return "", metal_sites
@@ -471,13 +453,10 @@ def _resolve_coordinate_residues(
 def density_observation_id(
     pdb_id: str, fields: Sequence[str], indices: Mapping[str, int]
 ) -> str:
-    """Return a stable identifier for one residue-level EDSTATS observation.
+    """Return a stable ID for one residue-level density observation.
 
-    EDSTATS reports one observation per coordinate residue, which Alchemy can
-    expand into several metal-site rows, so the identifier derives from the
-    EDSTATS row rather than from an individual metal atom. ``NR`` disambiguates
-    repeated author residue identifiers within one chain, which is the scope it
-    is numbered over; the chain itself keeps rows from different chains apart.
+    Metal sites sharing a residue share this ID. The chain and chain-local NR
+    ordinal distinguish repeated author residue identifiers.
     """
     chain = fields[indices["CI"]] or "_"
     return "/".join(
@@ -583,13 +562,8 @@ def _resolve_edstats_row(
     _group_chain, row_altloc = _edstats_chain_and_altloc(
         normalized[indices["CI"]], line_number
     )
-    # CP is the actual PDB chain. CI is normally the same chain plus an
-    # optional altloc, but EDSTATS deliberately rewrites CI to ``0`` for every
-    # ordered water so it can estimate that group's map-noise distribution.
-    # Joining coordinates through CI therefore aliases equal-numbered waters
-    # from different chains, especially when one real chain is itself ``0``.
-    # Everything downstream addresses the deposited chain; the chosen altloc
-    # remains explicit on the selected coordinate site's fields.
+    # Join through CP, the deposited chain. EDSTATS sets CI=0 for ordered waters,
+    # which would merge equal-numbered waters from different chains.
     chain = chain_part
     normalized[indices["CI"]] = chain
     resnum = normalized[indices["RN"]]
@@ -707,27 +681,15 @@ def extract_metal_statistics(
     density_context_out: dict[str, Any] | None = None,
     warning_codes_out: list[str] | None = None,
 ) -> tuple[list[MetalStatsRow], list[str]]:
-    """Parse an EDSTATS ``stats.out``, returning ``(rows, header)``.
+    """Parse an EDSTATS table and return site-level rows and the header.
 
-    Cofactors match by CCD component name. A plain metal is a single-atom
-    residue whose element, read from ``structure``, is in ``metals_set``:
-    matching on the CCD id alone misclassifies RNA ``U`` and nitric oxide
-    ``NO``, and misses metal ids like ``FE2``. Where the analysis PDB came from
-    mmCIF the original component identifier is restored before matching, since
-    a CCD id need not fit the three-character PDB residue field.
+    Use coordinate elements to identify metals and source CCD names to classify
+    cofactors. Repeat shared residue statistics per selected metal, preserving
+    density_observation_id and multiplicity for deduplication. Retain unmatched
+    cofactor rows with site=None and an explanatory status.
 
-    Output is site-level: a multi-metal cofactor repeats its residue-level
-    EDSTATS values once per selected metal site, sharing a
-    ``density_observation_id`` and reporting the shared-site multiplicity so a
-    density observation is counted only once. A cofactor with no matching
-    coordinate residue or no selected metal site is retained once with
-    ``site=None``, its row status distinguishing a failed identifier join from
-    a matched cofactor that has no configured metal.
-
-    When ``density_context_out`` is supplied, it is cleared immediately and
-    populated only after the complete EDSTATS table passes validation. Its
-    entry-level aggregates retain the non-target residue observations that are
-    deliberately absent from the returned site-level rows.
+    Clear density_context_out on entry and populate it with non-target residue
+    aggregates only after the complete table passes validation.
     """
     metals_upper = {element.upper() for element in metals_set}
     cofactors = frozenset(cofactor_set)
@@ -845,9 +807,7 @@ def extract_metal_statistics(
     return rows, header
 
 
-# The density-sigma join reads Z-difference metrics back out of an extracted
-# EDSTATS row, so it lives beside ``EDSTATS_COLUMNS``: a column-order change
-# breaks both.
+# Keep density-sigma joins beside the column schema they depend on.
 def sigma_index(
     stats_rows: Iterable[Mapping[str, Any]],
 ) -> dict[str, dict[tuple[Any, ...], Sequence[str]]]:

@@ -1,16 +1,14 @@
-"""Recoverable memory admission with hysteresis around the protected reserve."""
+"""Adjust memory admission with delayed recovery after pressure subsides."""
 
 from __future__ import annotations
 
 
 class MemoryAdmission:
-    """Back off once per pressure episode and recover after sustained headroom.
+    """Reduce admission during memory pressure and recover after sustained headroom.
 
-    A brief crossing of the reserve must not repeatedly multiply the budget
-    down. Recovery requires 30 continuous seconds above the reserve plus a
-    margin, advances in small steps, and is bounded by both the original plan
-    and measured headroom. An explicitly oversized singleton may pause other
-    work without teaching the ordinary-entry scheduler a smaller budget.
+    Back off once per pressure episode. After 30 seconds above the reserve plus
+    a margin, recover in steps bounded by the original budget and live headroom.
+    An oversized single entry pauses admission without reducing the ordinary budget.
     """
 
     HEALTHY_SECONDS = 30.0

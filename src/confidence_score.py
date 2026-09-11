@@ -1,9 +1,7 @@
-"""Collect, classify, and rank Alchemy metal sites.
+"""Classify metal sites and rank their density and geometry support.
 
-The authoritative PASS/REVIEW/SUSPECT verdict is determined from raw density
-and geometry thresholds.  A complete database run also freezes independent
-density and geometry distributions so later runs can receive empirical support
-scores without ever defining their verdicts from the reference population.
+Raw thresholds determine verdicts. Frozen database distributions provide
+independent empirical rankings for later runs.
 """
 
 import argparse
@@ -221,12 +219,7 @@ def _true(value: object) -> bool:
 
 
 def _format_decimal(value: float, decimal_places: int = 6) -> str:
-    """Render a confidence number without trailing zeros, blanking non-finite.
-
-    Distinct from ``structure_analysis._format_number``, which renders a fixed
-    number of decimals and blanks ``None`` rather than non-finite values: the
-    two obey different contracts and must not be merged.
-    """
+    """Format a confidence number without trailing zeros; blank non-finite values."""
     if not math.isfinite(value):
         return ""
     return f"{value:.{decimal_places}f}".rstrip("0").rstrip(".")
@@ -775,11 +768,9 @@ def score_site(
 
 
 def _scoring_metadata() -> dict[str, Any]:
-    """Everything a score depends on that is not the cohort itself.
+    """Return scoring-policy and reference-data identity, excluding the cohort.
 
-    ``reference_data_id`` counts: every score in a distribution was measured
-    against one catalog and one distance table, so a changed table must produce
-    a different reference id rather than a quietly wrong empirical rank.
+    Include reference_data_id because changed reference tables change the metrics.
     """
     return {
         "confidence_method_version": CONFIDENCE_METHOD_VERSION,

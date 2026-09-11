@@ -25,12 +25,10 @@ def _allocator_trim() -> Callable[[], None] | None:
 
 
 def release_idle_memory() -> None:
-    """Collect unreachable objects and release free allocator pages if supported.
+    """Collect unreachable objects and release allocator pages when supported.
 
-    Call only after the entry's analysis frame has returned, so its large
-    structures and arrays are no longer live. Unsupported allocators retain
-    their normal behavior. Neither collection nor trimming frees live result
-    objects or changes scientific calculations.
+    Call after the analysis frame returns so large temporary objects are no
+    longer live. Unsupported allocators retain their normal behavior.
     """
     gc.collect()
     trim = _allocator_trim()

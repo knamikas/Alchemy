@@ -1,10 +1,4 @@
-"""Getting one PDB-REDO entry ready for analysis, and reading its metadata.
-
-Everything between "here is a PDB id" and "here are the two files the pipeline
-runs on": locating an entry in a mirror, downloading it into the cache when it
-is absent, decompressing what arrived, converting the coordinates, and reading
-the resolution limits off the result.
-"""
+"""Locate, download, and prepare entry files and read their metadata."""
 
 import contextlib
 import gzip
@@ -94,18 +88,11 @@ def first_existing(*paths: str) -> str | None:
     return next((path for path in paths if os.path.exists(path)), None)
 
 
-# A proxy notice or captive-portal login page is served with status 200, so the
-# transfer succeeds and the bytes land under the entry's own file name. Only
-# the opening bytes are inspected: enough to tell a document from a structure
-# file without reading a 100 MB MTZ to decide whether to keep it.
+# Detect HTML error pages returned with HTTP 200 before accepting cached data.
 _HTML_PREFIXES = (b"<!doctype", b"<html", b"<?xml")
 
-# A served notice is a page, and pages are small: the largest captive-portal or
-# proxy-error body is orders of magnitude under this. Size alone therefore
-# clears any bigger file without opening it, which is what makes enumerating a
-# full local mirror affordable -- probing the content of every candidate file
-# cost a ~195k-entry run about two hours of startup, because each open pulls a
-# readahead window off the filesystem to read 64 bytes.
+# Skip content probes for large files; opening every mirror entry adds
+# substantial I/O just to reject small proxy or login pages.
 _MAX_WEB_PAGE_BYTES = 1024 * 1024
 
 
@@ -126,12 +113,9 @@ def _looks_like_a_web_page(path: str, size: int | None = None) -> bool:
 
 
 def _is_usable_entry_file(path: str | None) -> bool:
-    """Whether a cached path is worth reading rather than re-fetching.
+    """Check that a cached file is usable before reusing it.
 
-    Existence alone is not enough. A truncated or wrong-status body written
-    under the right name would be cached permanently: every later run reads the
-    same unusable file, fails identically, and no ``--resume`` recovers it short
-    of deleting the cache by hand.
+    Reject empty files and served documents so failed downloads can be retried.
     """
     if path is None:
         return False
@@ -340,14 +324,10 @@ def _response_content_length(response: object, url: str) -> int | None:
 
 
 def download_stream(url: str, dst: str, timeout: float = 30) -> str:
-    """Download URL to dst. Raise FileNotFoundError if no usable file results.
+    """Download a URL to dst, raising FileNotFoundError if no usable file results.
 
-    A transfer that begins and then fails -- a reset connection, a read
-    timeout, a body shorter than its Content-Length -- leaves the caller in the
-    same position as a 404: no file. Guarding the opening request alone leaves
-    them raising out of the driver's pre-flight as a bare traceback, and
-    ``http.client.IncompleteRead`` is not even an ``OSError``, so it escapes
-    handlers written for one.
+    Handle both request failures and interrupted or truncated response bodies,
+    including IncompleteRead, which is not an OSError.
     """
     try:
         response = urlopen(url, timeout=timeout)
@@ -402,8 +382,7 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
             return False
 
     def fetch_variant(name: str) -> bool:
-        # Reuse a cached file only if it is worth reading: short-circuiting on
-        # existence alone makes an empty or served-document body permanent.
+        # Reject empty or served-document cache entries so downloads can be retried.
         cached = first_existing(
             os.path.join(entry, name), os.path.join(entry, name + ".gz")
         )
@@ -475,11 +454,7 @@ def infer_pdb_id_from_path(path: str | None) -> str | None:
 
 
 def enumerate_entries(root: str, limit: int | None = None) -> list[str]:
-    """All PDB ids under ``root`` that have final model files.
-
-    ``limit`` stops the walk once that many sorted ids are collected, so a
-    small --max-pdbs run does not traverse all ~24k entries.
-    """
+    """Return sorted PDB IDs with final model files, stopping at limit if supplied."""
     ids: list[str] = []
     skipped = 0
     for hashdir in sorted(os.listdir(root)):

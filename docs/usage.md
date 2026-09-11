@@ -87,7 +87,7 @@ reports an input error. It doesn't fall back to the no-metadata behavior.
 | `--density-map-scope {model-envelope,full}` | Set the map extent passed to EDSTATS. The default model envelope retains every coordinate plus a 10 ångström border; `full` selects the complete-map path. |
 | `--ccp4-timeout SECONDS` | Set the wall-clock limit for each CCP4 program; the default is 900 seconds per program. A timeout produces a retryable `partial` result and a log under `OUTPUT_DIR/ccp4_timeout_logs/`. |
 | `--workers COUNT` | Set the worker-process ceiling; the value must be at least 1. Memory-aware admission can lower the active count. |
-| `--memory-limit SIZE` | Override the memory capacity used for scheduling, such as `240G` or `16GiB`. A tighter host, cgroup, container, or scheduler limit still takes precedence. |
+| `--memory-limit SIZE` | Override the memory capacity used for scheduling, such as `8G` or `16GiB`. A tighter host, cgroup, container, or scheduler limit still takes precedence. |
 | `--memory-utilization FRACTION` | Set the maximum fraction of detected or configured memory used for worker estimates. The default is `0.8`, with a protected reserve where capacity permits. |
 | `--max-pdbs COUNT` | Limit a run for testing. |
 | `--resume` | Skip `ok` and terminal `partial` outcomes. Retry `skip`, `error`, and retryable `partial` outcomes without duplicating their previous rows. |

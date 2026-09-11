@@ -25,8 +25,7 @@ from typing import (
 import gemmi
 
 if TYPE_CHECKING:
-    # Annotations only, so that the deliberate per-function imports below stay
-    # the only place this module reaches into ``src`` at run time.
+    # Keep source imports lazy; these imports are for annotations only.
     from output_rows import MetalStatsRow
     from structure_analysis import StructureContext
 
@@ -37,8 +36,6 @@ SRC_DIR = os.path.join(REPO_ROOT, "src")
 
 Vec3 = tuple[float, float, float]
 
-# Callers pass ``tmp_path / "name"`` as readily as a plain string; every writer
-# below stringifies its argument.
 _StrPath = str | os.PathLike[str]
 
 
@@ -366,12 +363,7 @@ class StructureBuilder:
         icode: str = "",
         b_iso: float = 20.0,
     ) -> ResidueSpec:
-        """Add a single-atom hetero metal ion.
-
-        ``resname`` and ``atom_name`` default to the upper-cased element, which
-        is what the PDB uses for monatomic ions and what makes
-        ``metal_identification`` classify the residue as ``metal``.
-        """
+        """Add a single-atom metal ion, defaulting its names to the element symbol."""
         element = str(element).upper()
         resname = element if resname is None else str(resname).upper()
         atom_name = element if atom_name is None else str(atom_name)
@@ -691,13 +683,10 @@ def simple_metal_site(
     directions: Sequence[Vec3] = DONOR_DIRECTIONS,
     **builder_kwargs: Any,
 ) -> StructureBuilder:
-    """One metal ion surrounded by donors at exactly the requested distances.
+    """Build a metal site with donors at specified distances.
 
-    ``donors`` is a sequence of ``(resname, atom_name, distance)``. Each donor
-    gets its own residue, numbered from ``first_seqid``, with its named atom
-    ``distance`` Angstrom from the metal along a distinct direction, so
-    donor-donor separations stay large and no other atom of the residue comes
-    near the metal.
+    Each (resname, atom_name, distance) gets a separate residue and direction.
+    Other atoms remain outside the contact radius.
     """
     if len(donors) > len(directions):
         raise ValueError(f"{len(donors)} donors need at least as many directions")
@@ -777,9 +766,8 @@ def dpi_inputs(
     }
 
 
-# Literal EDSTATS 1.0.9 ``stats.out`` residue-table header, transcribed rather
-# than imported from ``metal_identification`` so that a production reorder
-# cannot update both the generated input and its own oracle at once.
+# Use an independent EDSTATS 1.0.9 header so production schema changes
+# cannot change both the fixture and its expected result.
 EDSTATS_HEADER: tuple[str, ...] = (
     "RT",
     "CI",
@@ -904,16 +892,10 @@ def edstats_rows_for_structure(
     model: int = 1,
     blank_chain_form: bool = False,
 ) -> list[list[str]]:
-    """One EDSTATS row per residue of a loaded :class:`StructureContext`.
+    """Build one EDSTATS row per coordinate residue.
 
-    Rows use each residue's coordinate name, chain and author residue number,
-    so the completeness check in ``extract_metal_statistics`` always passes.
-    ``metrics`` applies to every row; ``per_residue`` is keyed by
-    ``(coordinate_residue_name, chain_id, resnum)`` and overrides on top.
-
-    ``NR`` restarts at 1 for each deposited chain, which is how EDSTATS numbers
-    it. Numbering it across the whole model instead would make every row of a
-    multi-chain structure unrepresentative of real output.
+    Use coordinate author identities and chain-local NR ordinals. metrics sets
+    defaults; per_residue overrides them by (residue name, chain, residue number).
     """
     rows: list[list[str]] = []
     chain_ordinals: dict[str, int] = {}

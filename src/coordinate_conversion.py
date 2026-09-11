@@ -1,14 +1,7 @@
-"""Converting a deposited mmCIF into the legacy PDB that EDSTATS can read.
+"""Convert mmCIF coordinates to the legacy PDB format required by EDSTATS.
 
-EDSTATS consumes traditional PDB coordinates, whose chain field is one column
-wide and whose residue numbers are four decimal digits; deposited mmCIF models
-routinely exceed both. Conversion is therefore made reversible: each converted
-residue's source identity is recorded as a REMARK in the PDB that Alchemy then
-analyses, and every step that could silently change a residue's identity,
-ordering, or atom membership raises instead. mmCIF ``.``/``?`` occupancy
-becomes a blank PDB column rather than Gemmi's default 1.0, so missingness
-survives the round trip. If the entire occupancy item is absent, the dictionary
-default of 1.0 is retained and recorded as conversion provenance.
+Preserve source residue identities and occupancy provenance in REMARK records.
+Reject conversions that change atom membership, ordering, or residue identity.
 """
 
 from __future__ import annotations
@@ -26,8 +19,7 @@ from structure_analysis import (
 )
 
 if TYPE_CHECKING:
-    # Annotations only, so that the deliberate per-function ``import gemmi``
-    # below stays the only place this module imports Gemmi at run time.
+    # Keep Gemmi imports lazy; this import is for type checking only.
     import gemmi
 
 
@@ -289,14 +281,10 @@ def _source_residue_records(structure: gemmi.Structure) -> list[_SourceRecord]:
 
 
 def _legacy_identifiers_need_packing(structure: gemmi.Structure) -> bool:
-    """Whether the structure cannot round-trip through legacy PDB identities.
+    """Return whether residue identities need reversible PDB packing.
 
-    Besides one-character chain names, PDB requires every residue in a model
-    to have a unique ``(chain, number, insertion code)`` identity. Distinct
-    mmCIF residues can legitimately share that author identity, for example in
-    separate glycan branches. Gemmi merges such residues when it reads the PDB
-    back, so they need the same reversible packing used when chain names cannot
-    be shortened safely.
+    Legacy PDB requires one-character chains and unique chain, number, and
+    insertion-code keys. Gemmi merges residues sharing those keys on reread.
     """
     for model in structure:
         identities: set[tuple[str, int | None, str]] = set()
@@ -454,9 +442,7 @@ def _polymer_position_records(
         position = source[-1]
         previous = positions.get(converted)
         if previous is not None and previous != position:
-            # The legacy coordinate key cannot distinguish these source
-            # residues, so retain uncertainty instead of assigning either
-            # boundary classification to both.
+            # Ambiguous legacy keys cannot establish either source residue's boundary status.
             position = "?"
         positions[converted] = position
     return [(*converted, position) for converted, position in positions.items()]
@@ -578,8 +564,7 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
 
     structure.setup_entities()
     source_residues = _source_residue_records(structure)
-    # Shorten before writing and then analyse this exact PDB, so EDSTATS and
-    # Alchemy never join identifiers from two different representations.
+    # Analyze the exact PDB passed to EDSTATS so both use the same identifiers.
     structure.shorten_chain_names()
     identifiers_packed = _legacy_identifiers_need_packing(structure)
     if identifiers_packed:
@@ -593,10 +578,7 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
         if identifiers_packed
         else []
     )
-    # Every converted residue carries its source polymer position, even when
-    # its PDB identifiers did not need packing. This deliberately remains
-    # separate from reversible identity records: ordinary chain shortening is
-    # part of the analysis namespace and must not look like identifier packing.
+    # Preserve polymer position for every residue, independently of identity packing.
     polymer_records = _polymer_position_records(source_residues, converted_structure)
     _write_cif_conversion_provenance(
         dst,
@@ -652,8 +634,7 @@ def first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
         raise ValueError("the first PDB MODEL record has no matching ENDMDL")
     first_block = lines[first_start + 1 : first_end]
 
-    # NUMMDL describes the source ensemble and would be false here. The other
-    # header records stay: EDSTATS needs the same cell and symmetry metadata.
+    # Drop the source ensemble count; retain cell and symmetry headers for EDSTATS.
     header = [
         line for line in lines[:first_start] if line[:6].strip().upper() != "NUMMDL"
     ]

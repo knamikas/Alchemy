@@ -1322,12 +1322,9 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
     assert row["zscore_outlier_cutoff"] == approx(6.0)
 
 
-# DPI = 1.28 * ni**(1/2) * va**(1/3) * nobs**(-5/6) * rfree (Blow 2002 eq. 7).
-# It is the denominator of every Zbond, so a transposed exponent moves every
-# bond across the |Z| >= 6 boundary while every "isfinite(dpi)" assertion stays
-# happy. Every term below is exact: ni = 16 -> 4, va = 200**3 -> 200,
-# nobs = 2**12 -> 2**-10, rfree = 0.25, so
-# DPI = 1.28 * 4 * 200 * 2**-10 * 0.25 = 0.25 A exactly.
+# Check the Blow (2002, eq. 7) formula against exact inputs:
+# DPI = 1.28 * sqrt(16) * (200**3)**(1/3) * (2**12)**(-5/6) * 0.25
+#     = 0.25 A. A finiteness check alone would miss incorrect exponents.
 DPI_BASE: dict[str, float] = {
     "atom_count": 16,
     "cell_edge": 200.0,
@@ -1350,13 +1347,10 @@ def _atom_count_structure(
     occupancy: float = 1.0,
     donor_distance: float | None = None,
 ) -> str:
-    """A Zn plus waters totalling exactly ``atom_count`` non-hydrogen atoms.
+    """Build a Zn/water structure with a known occupancy-weighted atom count.
 
-    Every atom carries ``occupancy``, so ``ni`` is ``atom_count * occupancy``
-    without asking ``src``. The padding waters sit on a 3 A lattice starting
-    6 A out, outside the 4 A search radius, so they add to ``ni`` without
-    inventing coordination, and ``P 1`` in a cubic cell makes the ASU volume the
-    cell volume. ``donor_distance`` adds the one water the analysis can find.
+    Padding waters sit beyond the 4 A contact radius. P 1 makes ASU volume
+    equal cell volume; donor_distance optionally adds one nearby water.
     """
     assert atom_count >= 1
     builder = StructureBuilder(

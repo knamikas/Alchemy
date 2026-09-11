@@ -1,8 +1,6 @@
-"""The bundled reference data under ``src/data/``, and the only code reading it.
+"""Load and validate bundled reference data from src/data.
 
-Nothing here runs at import: a malformed file must raise where a caller can
-report it, not out of an import statement. Results are frozen because they are
-process-wide and shared by every worker.
+Load lazily so callers can handle failures. Cache immutable results for reuse.
 """
 
 import hashlib
@@ -18,9 +16,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
 DONOR_DISTANCE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
 
-# Each bundled file's sidecar and the key holding its SHA-256, both written by
-# the tool that produces the file: tools/build_metallocofactor_catalog.py for
-# the catalog, tools/stamp_distance_table.py for the literature distances.
+# Sidecar paths and checksum keys written by the reference-data maintenance tools.
 CHECKSUM_SIDECARS = {
     COFACTOR_CATALOG_PATH: (
         os.path.join(DATA_DIR, "metallocofactors_id.meta.json"),
@@ -34,7 +30,7 @@ CHECKSUM_SIDECARS = {
 
 
 class ReferenceDataError(RuntimeError):
-    """Bundled reference data is missing, unreadable, or not what it claims."""
+    """Bundled reference data is missing, unreadable, or inconsistent with its metadata."""
 
 
 def sha256(path: str) -> str:
@@ -47,11 +43,10 @@ def sha256(path: str) -> str:
 
 
 def _verify_checksum(path: str) -> None:
-    """Fail unless a bundled file still hashes to what its sidecar recorded.
+    """Verify a bundled file against its recorded checksum.
 
-    Only the two bundled paths are checked; a caller supplying their own path
-    owns it. This is identity, not correctness: it says the file is the one the
-    tool wrote, not that the tool was right.
+    Custom paths are not checked. The checksum establishes file identity, not
+    the scientific validity of its contents.
     """
     sidecar = CHECKSUM_SIDECARS.get(path)
     if sidecar is None:
@@ -128,18 +123,12 @@ def reference_data_checksums() -> Mapping[str, str]:
 
 @cache
 def reference_data_id() -> str:
-    """One short id for the reference data an entry was measured against.
-
-    Both files decide results, so two rows are comparable only if both matched.
-    Composed from the file hashes rather than the sidecars' recorded values, so
-    the id describes what was actually read.
-    """
+    """Return a reference-data ID derived from both files' current hashes."""
     checksums = reference_data_checksums()
     digest = hashlib.sha256()
     for name in sorted(checksums):
         digest.update(f"{name}:{checksums[name]}\n".encode())
-    # Twelve characters, matching the abbreviated alchemy_commit beside it in
-    # the manifest. This identifies a build, it does not authenticate one.
+    # Match the manifest's 12-character commit abbreviation; this is not authentication.
     return digest.hexdigest()[:12]
 
 
@@ -180,16 +169,13 @@ DISTANCE_TABLE_HEADER = ("residue", "atom", "metal", "avg_bond_dist", "st_dev")
 def load_literature(
     path: str,
 ) -> dict[tuple[str, str, str], tuple[float, float]]:
-    """Parse metal_distances_info.txt -> {(residue, atom, metal): (mu, stdev)}.
+    """Load literature distances as {(residue, atom, metal): (mean, stdev)}.
 
-    Space-delimited ``residue atom metal avg_bond_dist st_dev``, one row per
-    metal-donor pair. Column 1 is a residue name **except** ``CA``, the
-    backbone-carbonyl pseudo residue; column 3 ``CA`` is calcium. The two are
-    unrelated and the file says so nowhere -- see ``_bonding_key``.
+    The five columns are residue, atom, metal, mean distance, and standard
+    deviation. In the residue column, CA means backbone carbonyl; in the metal
+    column, CA means calcium. See _bonding_key.
 
-    Every non-blank, non-header line must parse. Skipping a malformed row would
-    disable the z-score for its pair, which is indistinguishable in the output
-    from a pair genuinely absent from the literature.
+    Reject malformed rows so damaged data cannot appear as missing references.
     """
     lit: dict[tuple[str, str, str], tuple[float, float]] = {}
     first_line_by_key: dict[tuple[str, str, str], int] = {}
@@ -201,9 +187,7 @@ def load_literature(
             if tuple(parts) == DISTANCE_TABLE_HEADER:
                 continue
             if len(parts) != 5:
-                # Exactly five, not "at least": a damaged row that gained a
-                # field would otherwise parse, silently replacing that pair's
-                # real numbers with whatever the damaged line held.
+                # Reject extra fields as well as missing ones to detect damaged rows.
                 raise ValueError(
                     f"{os.path.basename(path)} line {number} has "
                     f"{len(parts)} fields, expected 5: {line.strip()!r}"

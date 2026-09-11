@@ -1,8 +1,4 @@
-"""Which residues and atoms Alchemy will accept as a metal donor.
-
-Vocabulary only: the rules that consult these tables live with the code that
-measures geometry, in ``analysis`` and ``declared_connections``.
-"""
+"""Define donor residues and atoms used by coordination-analysis rules."""
 
 # Waters are recognized separately with Gemmi's Residue.is_water(), which also
 # handles WAT, H2O, and DOD.

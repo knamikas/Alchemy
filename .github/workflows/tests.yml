@@ -25,17 +25,13 @@ jobs:
         run: python -m pip install '.[test]'
       - name: Lint and check formatting
         run: |
-          # Pinned: an unpinned Ruff would reformat the tree on any release
-          # that changes its style, turning an upstream update into a CI
-          # failure on unrelated pull requests.
+          # Pin Ruff so upstream formatting changes cannot break unrelated builds.
           python -m pip install 'ruff==0.16.1'
           ruff check src tests tools
           ruff format --check src tests tools
       - name: Type-check
         run: |
-          # Pinned for the same reason as Ruff above: a new mypy release adds
-          # checks, and an unpinned one turns an upstream update into a CI
-          # failure on unrelated pull requests.
+          # Pin mypy so new checks are adopted explicitly.
           python -m pip install 'mypy==1.19.1'
           mypy src tests tools
       - name: Run the fast offline suite

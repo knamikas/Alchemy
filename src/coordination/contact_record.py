@@ -1,4 +1,4 @@
-"""One donor-like atom image near one metal, at each coordination stage."""
+"""Typed contact records and results for each coordination-analysis stage."""
 
 from dataclasses import dataclass, field
 from typing import TypedDict
