@@ -126,6 +126,7 @@ failure handling, see the [operations guide](docs/operations.md).
 
 ## Documentation
 
+- [Release notes](CHANGELOG.md): Features, tested software, and known limitations.
 - [Usage guide](docs/usage.md): Choose an input mode and configure the command.
 - [Method reference](docs/method.md): Understand each analysis stage, contact
   assignment, reference coverage, and confidence classification.
