@@ -128,6 +128,8 @@ failure handling, see the [operations guide](docs/operations.md).
 
 - [Release notes](CHANGELOG.md): Features, tested software, and known limitations.
 - [Usage guide](docs/usage.md): Choose an input mode and configure the command.
+- [Architecture](docs/architecture.md): Follow execution, process boundaries,
+  and module relationships with detailed pipeline diagrams.
 - [Method reference](docs/method.md): Understand each analysis stage, contact
   assignment, reference coverage, and confidence classification.
 - [Output schema](docs/output-schema.md): Interpret results and find the data

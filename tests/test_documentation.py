@@ -36,6 +36,7 @@ DOC_PATHS = [README_PATH, os.path.join(REPO_ROOT, "tests", "README.md")] + [
     os.path.join(DOCS_DIR, name)
     for name in (
         "usage.md",
+        "architecture.md",
         "method.md",
         "output-schema.md",
         "operations.md",
