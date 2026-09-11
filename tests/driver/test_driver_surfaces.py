@@ -456,6 +456,69 @@ def test_confidence_count_must_match_every_terminal_metal(
     )
 
 
+@pytest.mark.parametrize("outputs_present", [False, True])
+@pytest.mark.parametrize("scored", [False, True])
+def test_density_only_entries_can_resume_without_bond_or_confidence_rows(
+    resume_outputs: _ResumeOutputs,
+    tmp_path: Path,
+    outputs_present: bool,
+    scored: bool,
+) -> None:
+    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+    if scored:
+        columns.extend(confidence_score.ANALYSIS_COLUMNS)
+    path = _write_header(tmp_path / "confidence.csv", columns)
+    _append_terminal_manifest(resume_outputs, n_metals=1, n_bonds="", n_candidates="")
+    _append_selected_stats(resume_outputs)
+    if not outputs_present:
+        for output in (
+            path,
+            resume_outputs["bonds_path"],
+            resume_outputs["candidates_path"],
+        ):
+            os.unlink(output)
+
+    resume.validate_resume_schemas(
+        **resume_outputs, confidence_path=path, confidence_columns=columns
+    )
+    assert (
+        resume.load_done(resume_outputs["manifest_path"], bonds_required=True) == set()
+    )
+
+
+@pytest.mark.parametrize("confidence_present", [False, True])
+def test_density_only_entry_does_not_hide_missing_completed_confidence(
+    resume_outputs: _ResumeOutputs, tmp_path: Path, confidence_present: bool
+) -> None:
+    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+    path = str(tmp_path / "confidence.csv")
+    if confidence_present:
+        _write_header(Path(path), columns)
+    _append_terminal_manifest(resume_outputs, n_metals=1, n_bonds="", n_candidates="")
+    _append_selected_stats(resume_outputs)
+    _append_terminal_manifest(resume_outputs, pdb_id="2def", n_metals=1)
+    _append_selected_stats(resume_outputs, pdb_id="2def")
+
+    with pytest.raises(ValueError, match="confidence.csv"):
+        resume.validate_resume_schemas(
+            **resume_outputs, confidence_path=path, confidence_columns=columns
+        )
+
+    _write_header(Path(path), columns)
+    _append_csv_row(path, columns, pdbID="2def")
+    resume.validate_resume_schemas(
+        **resume_outputs, confidence_path=path, confidence_columns=columns
+    )
+
+
+def test_density_only_entry_still_requires_its_selected_stats(
+    resume_outputs: _ResumeOutputs,
+) -> None:
+    _append_terminal_manifest(resume_outputs, n_metals=1, n_bonds="", n_candidates="")
+    with pytest.raises(ValueError, match=r"n_metals=1.*has 0 selected row"):
+        resume.validate_resume_schemas(**resume_outputs)
+
+
 def test_duplicate_complete_manifest_ids_are_refused(
     resume_outputs: _ResumeOutputs,
 ) -> None:

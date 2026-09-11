@@ -148,6 +148,15 @@ def _is_terminal_manifest_row(row: _CsvRow) -> bool:
     return status == "ok" or (status == "partial" and retryable in ("false", "0", "no"))
 
 
+def _awaits_bond_stage(row: _CsvRow) -> bool:
+    """Identify successful density-only entries that need bond-enabled retry."""
+    return (
+        _csv_text(row, "status").strip().lower() == "ok"
+        and not _csv_text(row, "n_bonds").strip()
+        and not _csv_text(row, "n_candidates").strip()
+    )
+
+
 def _terminal_manifest_rows(path: str) -> dict[str, _CsvRow]:
     """Return protected rows, rejecting ambiguous duplicate manifest IDs."""
     terminal_rows: dict[str, _CsvRow] = {}
@@ -322,8 +331,16 @@ def _validate_terminal_artifacts(
         checks.append((confidence_path, "n_metals"))
 
     for path, manifest_column in checks:
-        counts = Counter(pdb_id for pdb_id, _row in _rows_for_ids(path, terminal_ids))
+        counts = (
+            Counter(pdb_id for pdb_id, _row in _rows_for_ids(path, terminal_ids))
+            if os.path.isfile(path)
+            else Counter[str]()
+        )
         for pdb_id, row in terminal_rows.items():
+            # Confidence is disabled with --no-bonds. These entries must run
+            # again before their confidence rows can be required or retained.
+            if path == confidence_path and _awaits_bond_stage(row):
+                continue
             expected = _manifest_count(
                 row,
                 manifest_column,
@@ -356,10 +373,11 @@ def validate_resume_schemas(
     Whole headers are compared, including the EDSTATS block of
     metal_sites_all.csv: a header from a different EDSTATS build would misalign
     every density column with no other symptom. Once the manifest contains a
-    terminal result, every enabled output is required and its per-entry rows
-    must agree with the manifest. Orphan rows without a complete manifest row
-    remain recoverable and are ignored here because retry replacement removes
-    them.
+    terminal result, completed stages require their outputs and matching row
+    counts. Successful density-only entries may lack bond and confidence files
+    because a bond-enabled resume will reprocess them. Orphan rows without a
+    complete manifest row remain recoverable and are ignored here because
+    retry replacement removes them.
     """
     checks = [(manifest_path, MANIFEST_COLUMNS), (stats_path, STATS_COLUMNS)]
     if bonds_enabled:
@@ -400,7 +418,11 @@ def validate_resume_schemas(
     if not terminal_rows:
         return
 
+    pending_bonds_only = all(_awaits_bond_stage(row) for row in terminal_rows.values())
+    bond_stage_paths = {bonds_path, candidates_path, confidence_path}
     for path, _expected in checks:
+        if pending_bonds_only and path in bond_stage_paths:
+            continue
         if _csv_header(path) is None:
             raise ValueError(
                 f"Existing {os.path.basename(path)} is missing or empty, but "

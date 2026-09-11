@@ -836,13 +836,6 @@ def _check_resume_is_compatible(
     """
     if not args.resume:
         return
-    if plan.enabled and (
-        plan.stream_path is None or not os.path.isfile(plan.stream_path)
-    ):
-        raise DriverError(
-            "Cannot resume confidence-aware output because "
-            f"{plan.stream_path} is missing; use a fresh output directory."
-        )
     try:
         validate_resume_schemas(
             *layout.core,
@@ -875,7 +868,7 @@ def _check_resume_is_compatible(
             "Cannot resume output produced with a different analysis "
             "configuration identity; use a fresh output directory."
         )
-    if plan.mode == "reference":
+    if plan.mode == "reference" and os.path.isfile(cast(str, plan.stream_path)):
         try:
             # ``plan_confidence`` sets the mode only once both of these are
             # bound, which no annotation on the plan can express.

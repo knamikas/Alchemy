@@ -743,9 +743,14 @@ def test_declared_connections_measure_their_own_reported_distance(
         # lattice-scale separation.
         assert 1.5 < measured < 3.0, where
         assert row["coordination_source"] == "struct_conn", where
-        zscore = float(row["zscore"])
-        if math.isfinite(zscore):
+        if row["reference_covered"] == "true":
+            zscore = float(row["zscore"])
+            assert math.isfinite(zscore), where
             assert abs(zscore) < float(row["zscore_outlier_cutoff"]), where
+        else:
+            assert row["reference_covered"] == "false", where
+            assert row["zscore"] == "", where
+            assert row["score_eligible"] == "false", where
 
     # Losing declarations is the other half of a broken partner lookup.
     assert len(declared) == 49, "declared connections went missing or duplicated"
@@ -1251,13 +1256,30 @@ def test_full_and_model_envelope_map_scopes_give_identical_statistics(
 
     # Without cropping on at least one entry both runs took the same path and
     # the comparison proves nothing.
-    cropped_log = read_text(log_paths(cropped.output_dir)[0])
-    full_log = read_text(log_paths(full.output_dir)[0])
-    assert re.search(r"density_map_scope=model-envelope\b", cropped_log), (
-        "no entry exercised model-envelope cropping"
+    def entry_diagnostics(output_dir: str) -> list[dict[str, str]]:
+        path = Path(log_paths(output_dir)[0]).with_suffix("")
+        with open(f"{path}_entries.csv", newline="") as handle:
+            return list(csv.DictReader(handle))
+
+    cropped_entries = entry_diagnostics(cropped.output_dir)
+    full_entries = entry_diagnostics(full.output_dir)
+    assert any(
+        row["density_map_scope"] == "model-envelope"
+        and int(row["edstats_map_bytes"]) < int(row["full_map_bytes"])
+        for row in cropped_entries
+    ), "no entry exercised model-envelope cropping"
+    mapped_ids = {
+        pdb_id for pdb_id, row in full.manifest.items() if row["no_metals"] == "false"
+    }
+    assert mapped_ids
+    assert {
+        row["pdbID"] for row in full_entries if row["density_map_scope"]
+    } == mapped_ids
+    assert all(
+        row["density_map_scope"] == "full"
+        for row in full_entries
+        if row["pdbID"] in mapped_ids
     )
-    assert not re.search(r"density_map_scope=model-envelope\b", full_log)
-    assert re.search(r"density_map_scope=full\b", full_log)
 
     def key(row: dict[str, str]) -> tuple[str, str, str, str]:
         return (row["pdbID"], row["RT"], row["CI"], row["RN"])
