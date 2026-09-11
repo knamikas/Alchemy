@@ -141,7 +141,15 @@ def _cgroup_tree_available(
             and usage is not None
             and (unlimited_threshold is None or limit < unlimited_threshold)
         ):
-            allowances.append(max(0, limit - usage))
+            # Clean inactive file cache can be reclaimed for allocations.
+            # Charging all mirror-enumeration cache as working memory can
+            # collapse worker selection before analysis even starts.
+            reclaimable = (
+                reclaimable_file_bytes(current, usage)
+                if limit_name == "memory.max"
+                else 0
+            )
+            allowances.append(max(0, limit - max(0, usage - reclaimable)))
         if current == root:
             break
         parent = os.path.dirname(current)
@@ -149,6 +157,32 @@ def _cgroup_tree_available(
             break
         current = parent
     return min(allowances) if allowances else None
+
+
+def reclaimable_file_bytes(directory: str, usage: int) -> int:
+    """Conservatively discount clean inactive cgroup-v2 filesystem cache.
+
+    Dirty, writeback, mapped and shared pages remain charged, as does all
+    anonymous memory. Missing or malformed counters disable the discount.
+    Kernel definitions: https://docs.kernel.org/admin-guide/cgroup-v2.html
+    """
+    try:
+        with open(os.path.join(directory, "memory.stat"), encoding="ascii") as handle:
+            stats = {
+                key: max(0, int(value))
+                for key, value in (line.split() for line in handle)
+            }
+    except (OSError, ValueError):
+        return 0
+    deductions = sum(
+        stats.get(key, 0)
+        for key in ("file_dirty", "file_writeback", "file_mapped", "shmem")
+    )
+    return min(
+        usage,
+        stats.get("file", 0),
+        max(0, stats.get("inactive_file", 0) - deductions),
+    )
 
 
 def _read_cgroup_available_memory() -> int | None:

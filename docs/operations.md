@@ -39,22 +39,35 @@ reference data, see [Reference-data maintenance](maintenance.md).
   is absent, MTZ size supplies a conservative fallback; otherwise the entry
   receives the 2 GiB floor. By default, Alchemy uses up to 80% of currently
   available memory while protecting at least 4 GiB for the OS and driver. All
+  detected host and cgroup limits remain in force. On cgroup v2, clean inactive
+  file cache is treated as reclaimable; anonymous, dirty, mapped and shared
+  memory remains charged. All
   entries share one estimated-byte budget; the high-memory label is diagnostic
   and does not impose a separate count or percentage ceiling. The dispatcher
   skips a blocked large entry to keep fitting smaller entries active, then
   starts an oversized entry alone after active work drains. It pauses new
   admission whenever measured headroom reaches the protected reserve. After a
   pressure event or unexplained worker death, it lowers the admission budget
-  for the rest of the run. `--memory-limit` can supply an allocation that
-  cannot be detected, and `--memory-utilization` can tune the usable fraction.
+  until sustained headroom permits gradual recovery. Reserve fluctuations
+  count as one pressure episode until availability stays above the reserve
+  plus a margin for 30 seconds. Recovery is bounded by the original budget
+  and current headroom; an explicitly oversized entry running alone does not
+  reduce the ordinary-entry budget. Workers collect unreachable objects after
+  each entry and, where glibc supports it, return unused allocator pages to the
+  OS. `--memory-limit` can supply an allocation that cannot be detected, and
+  `--memory-utilization` can tune the usable fraction.
   The run report records the initial and final budgets, estimate sources, peak
-  reservation, pressure pauses, and budget backoffs; its companion entry table
-  records every entry's estimate.
+  reservation, pressure pauses, budget backoffs and recoveries; its companion
+  entry table records every entry's estimate.
 
 ## Preserve and validate outputs
 
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
+- Resume staging is deleted only after a successful merge (or when it contains
+  no completed entries). If a merge fails, the log records the recovery path;
+  a later startup preserves that directory. Merges replace individual files
+  atomically, but a failed multi-file merge may require recovery from staging.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis
   was not run; `0` means it ran successfully but found no rows of that type.
   Resume uses this distinction to add bond-stage results after an earlier

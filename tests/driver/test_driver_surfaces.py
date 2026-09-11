@@ -39,6 +39,7 @@ import worker_contracts
 from codes import EntryStatus
 from coordination import schema as coordination_schema
 from driver import pool, resources, resume, runlog, writers
+from driver.memory_admission import MemoryAdmission
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
 if TYPE_CHECKING:
@@ -1416,9 +1417,15 @@ def test_high_memory_admission_uses_the_total_budget_without_a_class_cap() -> No
 def test_memory_budget_backoff_converges_without_dropping_below_one_worker() -> None:
     gib = 1024**3
 
-    assert pool.backed_off_memory_budget(None) is None
-    assert pool.backed_off_memory_budget(20 * gib) == 16 * gib
-    assert pool.backed_off_memory_budget(2 * gib) == 2 * gib
+    unknown = MemoryAdmission(None, 2 * gib, 4 * gib)
+    unknown.back_off(0)
+    assert unknown.budget is None
+    admission = MemoryAdmission(20 * gib, 2 * gib, 4 * gib)
+    admission.back_off(0)
+    assert admission.budget == 16 * gib
+    for second in range(100):
+        admission.back_off(second)
+    assert admission.budget == 2 * gib
 
 
 def test_explicit_memory_limit_tracks_consumption_from_the_starting_probe() -> None:

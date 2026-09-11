@@ -156,6 +156,9 @@ class ReasonCode(StrEnum):
 class WarningCode(StrEnum):
     """Non-fatal observations about an entry, carried to the manifest."""
 
+    #: Density was retained for a selected metal in a multi-atom component
+    #: absent from the frozen cofactor catalog; no structural class is inferred.
+    COFACTOR_CATALOG_FALLBACK = "cofactor_catalog_fallback"
     MULTI_MODEL_STRUCTURE = "multi_model_structure"
     DUPLICATE_ATOM_RECORDS = "duplicate_atom_records"
     DUPLICATE_ATOM_COORDINATE_CONFLICT = "duplicate_atom_coordinate_conflict"

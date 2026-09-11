@@ -653,8 +653,12 @@ def classification_context(
         pytest.param("ZN", set[str](), "metal", 1, id="monatomic-ion"),
         pytest.param("FE2", set[str](), "metal", 1, id="ion-ccd-id-is-not-an-element"),
         pytest.param("FES", {"FES"}, "cofactor", 2, id="catalogued-cluster"),
-        pytest.param("FES", set[str](), "", 2, id="cluster-absent-from-the-catalog"),
-        pytest.param("MZN", set[str](), "", 1, id="multi-atom-component-is-not-an-ion"),
+        pytest.param(
+            "FES", set[str](), "cofactor", 2, id="cluster-absent-from-the-catalog"
+        ),
+        pytest.param(
+            "MZN", set[str](), "cofactor", 1, id="multi-atom-component-is-not-an-ion"
+        ),
         pytest.param("MZN", {"MZN"}, "cofactor", 1, id="multi-atom-catalogued"),
         pytest.param(
             "NO", set[str](), "", 0, id="component-id-collides-with-an-element"
@@ -691,6 +695,61 @@ def test_an_element_outside_the_configured_set_is_not_a_metal(
     residue = next(r for r in classification_context.residues if r.residue_name == "ZN")
     assert classify_residue(residue, {"CU"}, set()) == ("", [])
     assert classify_residue(residue, {"ZN"}, set())[0] == "metal"
+
+
+def test_uncatalogued_components_keep_every_selected_metal_density(
+    tmp_path: Path, classification_context: StructureContext
+) -> None:
+    """A catalog gap cannot hide sites or put their density in the controls."""
+    context = classification_context
+    stats = helpers.write_edstats_for_structure(
+        tmp_path / "stats.out", context, metrics={"ZDa": 4.5}
+    )
+    controls: dict[str, Any] = {}
+    warnings = ["cofactor_catalog_fallback"]
+    rows, _ = extract_metal_statistics(
+        "test",
+        str(stats),
+        METAL_ELEMENTS,
+        (),
+        context,
+        density_context_out=controls,
+        warning_codes_out=warnings,
+    )
+    assert {row.site_key for row in rows} == {
+        atom.source_key for atom in context.metal_atoms(METAL_ELEMENTS)
+    }
+    assert warnings == ["cofactor_catalog_fallback"]
+    cluster_rows = [row for row in rows if row.resname == "FES"]
+    assert len(cluster_rows) == 2
+    assert {row.category for row in cluster_rows} == {"cofactor"}
+    assert {row.density_scope for row in cluster_rows} == {"cofactor_residue"}
+    assert len({row.density_observation_id for row in cluster_rows}) == 1
+    assert all(row.density_shared_site_count == 2 for row in cluster_rows)
+    assert all(row.density_is_shared for row in cluster_rows)
+    target_count = len({row.residue_key for row in rows})
+    assert controls["target_residue_count"] == target_count
+    assert controls["ordinary_residue_count"] == len(context.residues) - target_count
+
+
+def test_uncatalogued_component_density_is_required(
+    tmp_path: Path, classification_context: StructureContext
+) -> None:
+    """A missing component observation must fail instead of silently dropping it."""
+    stats = helpers.write_edstats_for_structure(
+        tmp_path / "stats.out", classification_context
+    )
+    path = Path(stats)
+    path.write_text(
+        "\n".join(
+            line
+            for line in path.read_text().splitlines()
+            if not line.split() or line.split()[0] != "MZN"
+        )
+        + "\n"
+    )
+    with pytest.raises(ValueError, match="missing expected residue.*MZN"):
+        _extract(path, classification_context)
 
 
 def test_an_ion_split_over_two_conformers_is_still_one_chemical_site(

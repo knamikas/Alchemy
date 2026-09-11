@@ -82,7 +82,11 @@ deposited PDB element field directly; blank or invalid fields are marked unknown
 rather than inferred from atom names. During mmCIF conversion, the explicit
 `_atom_site.type_symbol` is written into that PDB field. Metal-containing
 cofactors are matched against the Chemical Component Dictionary list maintained
-by `tools/build_metallocofactor_catalog.py`. A structure with unknown elements
+by `tools/build_metallocofactor_catalog.py`. A selected metal in an uncatalogued
+multi-atom component also receives its residue-level density observation and
+the entry warning `cofactor_catalog_fallback`. The catalog supplies known
+heme/cluster annotations; absence from it cannot suppress selected metal
+evidence, and the fallback does not infer those structural classes. A structure with unknown elements
 does not receive a DPI because its non-hydrogen atom count is indeterminate.
 EDSTATS' missing-chain markers are normalized before coordinate matching. When
 EDSTATS omits its empty trailing chain field for a blank-chain residue, Alchemy

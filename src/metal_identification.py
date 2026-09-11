@@ -381,8 +381,13 @@ def classify_residue(
     ]
     if residue.residue_name in cofactor_set:
         return "cofactor", metal_sites
-    if residue.chemical_atom_site_count == 1 and len(metal_sites) == 1:
-        return "metal", metal_sites
+    if metal_sites:
+        # The catalog annotates known components; it must not hide a selected
+        # coordinate metal when the CCD introduces or renames a component.
+        # Multi-atom components retain residue-level (potentially shared)
+        # density, just like catalogued metal-containing components.
+        category = "metal" if residue.chemical_atom_site_count == 1 else "cofactor"
+        return category, metal_sites
     return "", metal_sites
 
 
@@ -737,6 +742,11 @@ def extract_metal_statistics(
     observed_edstats_rows: set[tuple[int, str, int]] = set()
     residue_observations: dict[tuple[int, int, int], tuple[str, int]] = {}
     grid_point_overflow_columns: set[str] = set()
+    catalog_fallback = any(
+        residue.residue_name not in cofactors
+        and classify_residue(residue, metals_upper, cofactors)[0] == "cofactor"
+        for residue in structure.residues
+    )
     residues_by_chain_part = _coordinate_residues_by_chain_part(structure)
     with open(stats_out, encoding="utf-8", errors="strict") as f:
         for line_number, line in enumerate(f, 1):
@@ -826,12 +836,12 @@ def extract_metal_statistics(
         )
     if density_context_out is not None:
         density_context_out.update(density_context.as_row(pdb_id))
-    if grid_point_overflow_columns and warning_codes_out is not None:
-        warning_codes_out[:] = list(
-            dict.fromkeys(
-                warning_codes_out + [WarningCode.EDSTATS_GRID_POINT_COUNT_OVERFLOW]
-            )
-        )
+    if warning_codes_out is not None:
+        if grid_point_overflow_columns:
+            warning_codes_out.append(WarningCode.EDSTATS_GRID_POINT_COUNT_OVERFLOW)
+        if catalog_fallback:
+            warning_codes_out.append(WarningCode.COFACTOR_CATALOG_FALLBACK)
+        warning_codes_out[:] = list(dict.fromkeys(warning_codes_out))
     return rows, header
 
 

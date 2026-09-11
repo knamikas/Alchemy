@@ -301,17 +301,10 @@ def test_manifest_twin_flag_uses_the_density_routing_metadata(
 
 
 @pytest.mark.parametrize("bonds", [True, False], ids=["bonds", "no-bonds"])
-def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
+def test_a_metal_outside_the_catalog_retains_density_with_or_without_bonds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bonds: bool
 ) -> None:
-    """The two stages select metals by different rules, and must say when they differ.
-
-    Coordinate analysis takes every metal atom by element; statistics reports
-    a residue only when it is a catalog cofactor or a single-atom ion. A metal
-    inside a multi-atom residue absent from the bundled catalog therefore has
-    no density evidence. The mismatch must be reported whether or not bond
-    analysis was requested.
-    """
+    """Coordinate and density selection must agree despite a catalog gap."""
     builder = helpers.StructureBuilder()
     builder.add_hetero_residue(
         "ZZZ",
@@ -332,18 +325,20 @@ def test_a_metal_outside_the_catalog_is_reported_not_half_measured(
         bonds=bonds,
     )
 
-    assert "metal_site_without_density" in result.reason_codes
-    assert result.status == "partial"
+    assert "metal_site_without_density" not in result.reason_codes
+    assert "cofactor_catalog_fallback" in result.warning_codes
+    assert result.status == ("partial" if bonds else "ok")
     assert result.retryable is False
-    # The manifest counts the coordinate-model site while metal_sites_all.csv
-    # carries no row for it, so a join on statistics would silently lose it.
-    # When requested, bond analysis still retains the site's contact evidence.
     assert result.n_metals == 1
     if bonds:
         assert result.n_bonds, "bond analysis should retain the measured contact"
     else:
         assert result.n_bonds == 0
-    assert result.rows == []
+    assert len(result.rows) == 1
+    assert result.rows[0].category == "cofactor"
+    assert result.rows[0].resname == "ZZZ"
+    assert result.rows[0].selected_metal_site_status == "selected"
+    assert result.rows[0].density_scope == "cofactor_residue"
 
 
 def test_a_zero_occupancy_metal_is_excluded_but_not_silently(
@@ -1683,8 +1678,9 @@ class TestResumeStaging:
             staging.discard()
         assert {p: open(p, "rb").read() for p in targets} == before
 
+    @pytest.mark.parametrize("fail_merge", [False, True])
     def test_an_interrupted_batch_commits_the_entries_it_finished(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_merge: bool
     ) -> None:
         """The halted-run path is reached from ``process_entries`` itself.
 
@@ -1723,20 +1719,28 @@ class TestResumeStaging:
             prior: set[str],
             run_log: RunLog,
             memory_plan: driver_pool.MemoryPlan,
-        ) -> None:
+        ) -> driver_pool._BatchTally:  # pyright: ignore[reportPrivateUsage]
             del memory_plan
             for pdb_id in ids:
                 row = dict.fromkeys(MANIFEST_COLUMNS, "")
                 row.update(pdbID=pdb_id, status="ok", retryable="False")
                 writers.write_manifest_row(row)
                 staging.replacement_ids.add(pdb_id)
-            raise KeyboardInterrupt
+            if not fail_merge:
+                raise KeyboardInterrupt
+            return driver_pool._BatchTally()  # pyright: ignore[reportPrivateUsage]
 
         monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
+        if fail_merge:
+
+            def failed_commit(*_args: object, **_kwargs: object) -> None:
+                raise OSError("simulated full disk during resume merge")
+
+            monkeypatch.setattr(resume.ResumeStaging, "commit", failed_commit)
         args = _run_config(resume=True, bonds=True, output_dir=str(output_dir))
         run_log = RunLog(args, "pytest")
 
-        with pytest.raises(KeyboardInterrupt):
+        with pytest.raises(OSError if fail_merge else KeyboardInterrupt):
             driver_pool.process_entries(
                 args,
                 ["bbbb", "cccc"],
@@ -1756,6 +1760,17 @@ class TestResumeStaging:
                     None,
                 ),
             )
+
+        if fail_merge:
+            recovery = Path(run_log.summary["resume_staging_recovery_dir"])
+            assert recovery.is_dir()
+            driver_pool.sweep_owned_scratch_dirs(str(output_dir))
+            assert recovery.is_dir()
+            assert [r[0] for r in _read_csv(str(recovery / "manifest.csv"))[1:]] == [
+                "bbbb",
+                "cccc",
+            ]
+            return
 
         assert [row[0] for row in _read_csv(layout.manifest)[1:]] == [
             "aaaa",
@@ -1848,6 +1863,8 @@ class TestResumeStaging:
             assert os.path.isdir(staging.dir)
             assert summary["resume_staging_recovery_dir"] == staging.dir
             assert "staged CSV schema" in summary["resume_staging_commit_error"]
+            driver_pool.sweep_owned_scratch_dirs(str(tmp_path))
+            assert os.path.isdir(staging.dir)
         finally:
             staging.discard()
 

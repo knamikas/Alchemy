@@ -98,7 +98,7 @@ PASS/REVIEW/SUSPECT verdict.
 `density_context_status` is `available` when EDSTATS completed and
 `not_computed` otherwise. `edstats_residue_count` counts coherent residue
 observations retained after alternate-conformer selection;
-`target_residue_count` counts the metal and catalog-cofactor observations
+`target_residue_count` counts the selected-metal and catalog-cofactor observations
 excluded from the control distribution.
 
 The prefixes ordinary_, ordinary_nonwater_, and water_ identify the full
@@ -163,7 +163,7 @@ The concrete metric columns are:
 | Columns | Meaning |
 | --- | --- |
 | `metal_site_id` | Stable join key for the selected coordinate metal site. |
-| `category` | `metal` for a single-atom ion or `cofactor` for a cataloged metal-containing residue. |
+| `category` | `metal` for a single-atom ion or `cofactor` for a metal-containing multi-atom residue (including catalogued components). Uncatalogued components with selected metals retain their residue density and add the entry warning `cofactor_catalog_fallback`; this does not infer a heme/cluster structural class. |
 | `model_policy`, `input_model_count`, `model_analyzed`, `model_id`, `multi_model_structure` | Model-selection policy, deposited model count, selected model, its source identifier, and whether additional models existed. |
 | `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location used by `metal_site_id`. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited identity of the selected metal atom. |

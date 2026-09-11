@@ -524,6 +524,10 @@ class ResumeStaging:
             output_dir,
             prefix=".alchemy-resume-",
             kind="resume",
+            # Staging can be the only copy of completed work after a failed
+            # merge. Remove it explicitly after success, never in a startup
+            # sweep following an interruption or I/O error.
+            preserve=True,
         )
         self.staged = tuple(
             os.path.join(self.dir, os.path.basename(path)) for path in targets

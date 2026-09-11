@@ -57,6 +57,7 @@ from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
 from structure_analysis import NAN, StructureContext, load_structure
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult, WorkerConfig
+from worker_memory import release_idle_memory
 
 METALS_SET = set(METAL_ELEMENTS)
 
@@ -672,6 +673,17 @@ def _finish_if_metal_site_limit_exceeded(
 
 def process(pdb_id: str) -> EntryResult:
     """Run one entry in an initialized worker and return its result."""
+    try:
+        return _process_entry(pdb_id)
+    finally:
+        # The analysis frame must be gone before attempting to return its
+        # allocations. Keep memory housekeeping from changing entry outcomes.
+        with contextlib.suppress(Exception):
+            release_idle_memory()
+
+
+def _process_entry(pdb_id: str) -> EntryResult:
+    """Own the analysis locals until the complete entry result is returned."""
     cfg = worker_config
     if cfg is None:
         raise RuntimeError("worker configuration has not been initialized")

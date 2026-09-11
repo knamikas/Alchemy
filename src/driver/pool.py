@@ -67,6 +67,7 @@ from crystallization_conditions import (
     prefetch_rcsb_crystallization_metadata,
     write_review_queue,
 )
+from driver.memory_admission import MemoryAdmission
 from driver.output_lock import (
     OutputDirectoryBusyError,
     OutputDirectoryLock,
@@ -135,12 +136,6 @@ WORKER_STALL_GRACE_S = 600.0
 # outright. Every result has been collected by then, so only a wedged pool ever
 # reaches the deadline.
 WORKER_SHUTDOWN_GRACE_S = 5.0
-
-# A measured pressure event or unexplained worker death is evidence that the
-# estimates are optimistic on this machine. Reduce only future admission; work
-# already running is allowed to drain. Repeated events converge toward one
-# ordinary worker without turning a single oversized entry into a deadlock.
-MEMORY_BUDGET_BACKOFF_FACTOR = 0.80
 
 # Budget for the `git` probes that stamp run provenance. Exceeding it costs the
 # commit hash, which degrades to "unknown", rather than the run.
@@ -1429,16 +1424,6 @@ def pop_admissible_estimate(
     return None
 
 
-def backed_off_memory_budget(current_budget_bytes: int | None) -> int | None:
-    """Reduce a known admission budget after observed memory trouble."""
-    if current_budget_bytes is None or current_budget_bytes <= AUTO_WORKER_MEMORY_BYTES:
-        return current_budget_bytes
-    return max(
-        AUTO_WORKER_MEMORY_BYTES,
-        int(current_budget_bytes * MEMORY_BUDGET_BACKOFF_FACTOR),
-    )
-
-
 def guarded_available_memory(
     memory_plan: MemoryPlan, current_available_bytes: int | None
 ) -> int | None:
@@ -1518,10 +1503,11 @@ def _dispatch_entries(
         peak_reserved_bytes = 0
         max_active = 0
         oversized_entries: set[str] = set()
-        memory_pressure_pauses = 0
-        memory_pressure_active = False
-        admission_budget_bytes = memory_plan.budget_bytes
-        memory_budget_backoffs = 0
+        admission = MemoryAdmission(
+            memory_plan.budget_bytes,
+            AUTO_WORKER_MEMORY_BYTES,
+            memory_plan.reserve_bytes,
+        )
         completed = 0
         progress.render(
             completed,
@@ -1533,6 +1519,39 @@ def _dispatch_entries(
         while completed < len(ids):
             batch: list[EntryResult] = []
 
+            current_available = guarded_available_memory(
+                memory_plan, available_memory_bytes()
+            )
+            old_budget = admission.budget
+            old_pauses = admission.pauses
+            pause = admission.observe(
+                current_available,
+                reserved_bytes,
+                time.monotonic(),
+                active=bool(active),
+                oversized=(
+                    len(active) == 1
+                    and memory_plan.budget_bytes is not None
+                    and reserved_bytes > memory_plan.budget_bytes
+                ),
+            )
+            if admission.budget != old_budget:
+                logger.warning(
+                    "%s memory admission from %.2f GiB to %.2f GiB",
+                    "recovering"
+                    if cast(int, admission.budget) > cast(int, old_budget)
+                    else "reducing",
+                    cast(int, old_budget) / (1024**3),
+                    cast(int, admission.budget) / (1024**3),
+                )
+            if admission.pauses != old_pauses:
+                logger.warning(
+                    "pausing new entries: %.2f GiB available has reached the "
+                    "%.2f GiB protected reserve",
+                    cast(int, current_available) / (1024**3),
+                    cast(int, memory_plan.reserve_bytes) / (1024**3),
+                )
+
             while pending and len(active) < workers:
                 current_available = guarded_available_memory(
                     memory_plan, available_memory_bytes()
@@ -1543,48 +1562,25 @@ def _dispatch_entries(
                     and current_available is not None
                     and current_available <= memory_plan.reserve_bytes
                 ):
-                    if not memory_pressure_active:
-                        memory_pressure_pauses += 1
-                        reduced_budget = backed_off_memory_budget(
-                            admission_budget_bytes
-                        )
-                        if reduced_budget != admission_budget_bytes:
-                            logger.warning(
-                                "reducing future memory admission from %.2f GiB "
-                                "to %.2f GiB after measured pressure",
-                                cast(int, admission_budget_bytes) / (1024**3),
-                                cast(int, reduced_budget) / (1024**3),
-                            )
-                            admission_budget_bytes = reduced_budget
-                            memory_budget_backoffs += 1
-                        logger.warning(
-                            "pausing new entries: %.2f GiB available has reached "
-                            "the %.2f GiB protected reserve",
-                            current_available / (1024**3),
-                            memory_plan.reserve_bytes / (1024**3),
-                        )
-                    memory_pressure_active = True
                     break
-                memory_pressure_active = False
+                if pause:
+                    break
                 estimate = pop_admissible_estimate(
                     pending,
                     reserved_bytes,
-                    admission_budget_bytes,
+                    admission.budget,
                     [item[1] for item in active.values()],
                 )
                 if estimate is None:
                     break
-                if (
-                    admission_budget_bytes is not None
-                    and estimate.bytes > admission_budget_bytes
-                ):
+                if admission.budget is not None and estimate.bytes > admission.budget:
                     oversized_entries.add(estimate.pdb_id)
                     logger.warning(
                         "%s has a %.2f GiB memory estimate above the %.2f GiB "
                         "worker budget; admitting it alone",
                         estimate.pdb_id,
                         estimate.bytes / (1024**3),
-                        admission_budget_bytes / (1024**3),
+                        admission.budget / (1024**3),
                     )
                 deaths.track_submitted_entry(estimate.pdb_id)
                 active[estimate.pdb_id] = (
@@ -1632,16 +1628,15 @@ def _dispatch_entries(
                     if active_item is not None:
                         reserved_bytes -= active_item[1].bytes
             if any(loss.reason_codes == ["worker_process_died"] for loss in batch):
-                reduced_budget = backed_off_memory_budget(admission_budget_bytes)
-                if reduced_budget != admission_budget_bytes:
+                old_budget = admission.budget
+                admission.back_off(time.monotonic())
+                if admission.budget != old_budget:
                     logger.warning(
                         "reducing future memory admission from %.2f GiB to "
                         "%.2f GiB after a worker process died",
-                        cast(int, admission_budget_bytes) / (1024**3),
-                        cast(int, reduced_budget) / (1024**3),
+                        cast(int, old_budget) / (1024**3),
+                        cast(int, admission.budget) / (1024**3),
                     )
-                    admission_budget_bytes = reduced_budget
-                    memory_budget_backoffs += 1
             last_progress = time.monotonic()
             for r in batch:
                 if deaths.superseded(r, completed_ids):
@@ -1667,12 +1662,11 @@ def _dispatch_entries(
             memory_scheduler_peak_reserved_bytes=peak_reserved_bytes,
             memory_scheduler_max_active_entries=max_active,
             memory_scheduler_oversized_entries=len(oversized_entries),
-            memory_scheduler_pressure_pauses=memory_pressure_pauses,
-            memory_scheduler_budget_backoffs=memory_budget_backoffs,
+            memory_scheduler_pressure_pauses=admission.pauses,
+            memory_scheduler_budget_backoffs=admission.backoffs,
+            memory_scheduler_budget_recoveries=admission.recoveries,
             memory_scheduler_final_budget_bytes=(
-                admission_budget_bytes
-                if admission_budget_bytes is not None
-                else "unavailable"
+                admission.budget if admission.budget is not None else "unavailable"
             ),
         )
     finally:
@@ -1825,8 +1819,16 @@ def process_entries(
     if staging is not None:
         try:
             staging.commit(args.bonds, confidence_enabled=plan.enabled)
-        finally:
-            staging.discard()
+        except BaseException as exc:
+            run_log.summary["resume_staging_recovery_dir"] = staging.dir
+            run_log.summary["resume_staging_commit_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+            logger.error(
+                "resume merge failed; completed rows retained in %s", staging.dir
+            )
+            raise
+        staging.discard()
     return tally, opened_writers
 
 
