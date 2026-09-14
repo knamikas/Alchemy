@@ -7,6 +7,15 @@ z-score. Alchemy verifies both files against their checksums when a run first
 reads them, and every manifest row records the `reference_data_id` that they
 compose.
 
+The bundled [confidence reference](../src/data/confidence_reference/README.md)
+is verified differently. Its `reference_id` is a digest over the scoring policy
+and every distribution value and count, and the loader recomputes it from the
+file on every load, alongside the size, distinct-value, and policy fields in
+`metadata.json`. A changed distribution or an incompatible policy is rejected
+before any site is scored. The archived byte checksums are pinned by the test
+suite rather than by the loader, because the same loader also reads references
+that database runs build under their own output directory.
+
 ## Cofactor reference maintenance
 
 Normal analysis always loads the fixed catalog bundled in `src/data`. It never

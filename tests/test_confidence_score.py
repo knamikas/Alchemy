@@ -32,6 +32,23 @@ def test_bundled_reference_matches_the_archived_manuscript_bytes() -> None:
         assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == digest
 
 
+def test_bundled_reference_loads_under_runtime_verification() -> None:
+    """The shipped bytes still satisfy every check ``load_reference`` applies.
+
+    ``reference_id`` is a digest over the scoring policy and every parsed
+    distribution value and count, so this proves the bundled distributions,
+    metadata, and current code agree, not only that the bytes are unchanged.
+    """
+    directory = Path(helpers.SRC_DIR) / "data" / "confidence_reference"
+    reference = cs.load_reference(str(directory))
+    assert reference.reference_id == "alchemy-confidence-8ba6808c816791ffbb87"
+    assert reference.metadata["cohort_id"] == "alchemy-cohort-2e97cf013eefa9d8e0b4"
+    assert reference.metadata["input_row_count"] == 330978
+    assert reference.metadata["input_entry_count"] == 76954
+    assert reference.density_reference_size == 330887
+    assert reference.geometry_reference_size == 275870
+
+
 STATS_ID_COLUMNS = ["pdbID", "category"]
 STATS_FIELD_COLUMNS = (
     list(helpers.EDSTATS_HEADER) + ["aa_geometry_coverage"] + list(STATS_EXTRA_COLUMNS)

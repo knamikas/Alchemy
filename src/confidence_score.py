@@ -19,7 +19,7 @@ from typing import Any, TextIO
 
 from analysis_config import analysis_config_id
 from output_rows import MetalStatsRow, scientific_csv_value
-from reference_data import cofactor_ids, reference_data_id
+from reference_data import cofactor_ids, reference_data_id, sha256
 from worker_contracts import MAX_ANALYZED_METAL_SITES
 
 REFERENCE_METADATA_FILE = "metadata.json"
@@ -251,14 +251,6 @@ def _read_csv(path: str, label: str) -> tuple[tuple[str, ...], list[dict[str, An
         return tuple(reader.fieldnames), list(reader)
 
 
-def _file_sha256(path: str) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _manifest_provenance(path: str) -> dict[str, Any]:
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
@@ -289,7 +281,7 @@ def _manifest_provenance(path: str) -> dict[str, Any]:
     }
     return {
         "source_manifest_file": os.path.basename(path),
-        "source_manifest_sha256": _file_sha256(path),
+        "source_manifest_sha256": sha256(path),
         "source_entry_count": len(rows),
         "manifest_status_counts": dict(sorted(status_counts.items())),
         "no_metals_entry_count": sum(_true(row.get("no_metals", "")) for row in rows),
@@ -1105,7 +1097,7 @@ def finalize_database_confidence(
                 geometry_counts[geometry_rms] += 1
             if (math.isfinite(rszd) or math.isfinite(geometry_rms)) and pdb_id:
                 scorable_entry_ids.add(pdb_id)
-    inputs_sha256 = _file_sha256(input_path)
+    inputs_sha256 = sha256(input_path)
     provenance: dict[str, Any] = {
         "cohort_id": "alchemy-cohort-" + inputs_sha256[:20],
         "confidence_inputs_file": os.path.basename(input_path),

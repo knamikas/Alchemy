@@ -26,6 +26,12 @@ The numerical scores rank available density and geometry evidence against this
 cohort. Missing evidence can leave component scores blank; classifications
 continue to follow the documented thresholds and combination rule.
 
+`software_versions` in `metadata.json` lists every Alchemy commit that
+contributed rows to the manuscript run, including one working tree recorded as
+`+dirty` and one recorded as `unknown`. The reference is identified by its
+cohort and reference IDs and by the checksums below, not by those commits; the
+dataset archive is the authoritative copy.
+
 Do not regenerate or replace these files during routine analysis. Their
 SHA-256 checksums are:
 

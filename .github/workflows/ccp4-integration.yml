@@ -1,0 +1,35 @@
+name: ccp4-integration
+
+# The CCP4-backed lane: real mtzfix, fft, mapmask, and edstats runs against the
+# checksum-pinned PDB-REDO entries. CCP4 cannot be redistributed through a
+# public action or container image, so this job runs only on a self-hosted
+# runner registered with the `ccp4` label and CCP4 available on its PATH, or
+# reachable through a setup script named by the CCP4_SETUP repository variable.
+
+on:
+  schedule:
+    # Weekly, so the pinned regression values cannot rot unnoticed.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ccp4-lane:
+    runs-on: [self-hosted, ccp4]
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Alchemy's dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install '.[test]'
+      - name: Run the CCP4-backed lane
+        env:
+          CCP4_SETUP: ${{ vars.CCP4_SETUP }}
+          ALCHEMY_TESTS_CACHE: ${{ runner.temp }}/alchemy-test-entries
+        run: |
+          if [ -n "$CCP4_SETUP" ]; then . "$CCP4_SETUP"; fi
+          .venv/bin/python -m pytest --require-ccp4 --require-entry-data

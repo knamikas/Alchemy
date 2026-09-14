@@ -54,6 +54,12 @@ Windows, and macOS, with Linux additionally enforcing `ruff check`,
 `ruff format --check`, Mypy, and the coverage floor. CI doesn't provision CCP4
 or the pinned entry data because of the setup cost.
 
+A second workflow, `ccp4-integration.yml`, runs the full lane weekly and on
+demand, but only on a self-hosted runner registered with the `ccp4` label and
+CCP4 on its `PATH` (or a setup script named by the `CCP4_SETUP` repository
+variable). CCP4 cannot be redistributed through a public action or image, so
+until such a runner exists the workflow is queued and never runs.
+
 The consequence is worth stating plainly, because it is not visible from a green
 run. Nothing in CI executes `mtzfix`, `fft`, `mapmask`, or `edstats`, and nothing
 runs the pipeline end to end. Every `slow` test is also `ccp4`-marked, so
