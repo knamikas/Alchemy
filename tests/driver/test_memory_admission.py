@@ -18,7 +18,7 @@ import cli
 import worker
 import worker_memory
 from codes import EntryStatus
-from driver import pool, resources
+from driver import dispatch, pool, resources
 from driver.memory_admission import MemoryAdmission
 from driver.runlog import RunLog
 from worker_contracts import EntryResult, WorkerConfig
@@ -270,16 +270,16 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
             superseded=always_false,
         )
 
-    monkeypatch.setattr(pool, "Pool", thread_pool)
-    monkeypatch.setattr(pool, "SimpleQueue", lambda: None)
-    monkeypatch.setattr(pool, "create_worker_log_queue", lambda: None)
-    monkeypatch.setattr(pool, "start_worker_log_listener", no_op)
-    monkeypatch.setattr(pool, "stop_log_listener", always_false)
-    monkeypatch.setattr(pool, "_shutdown_pool", always_false)
-    monkeypatch.setattr(pool, "process", analyze)
-    monkeypatch.setattr(pool, "available_memory_bytes", available)
+    monkeypatch.setattr(dispatch, "Pool", thread_pool)
+    monkeypatch.setattr(dispatch, "SimpleQueue", lambda: None)
+    monkeypatch.setattr(dispatch, "create_worker_log_queue", lambda: None)
+    monkeypatch.setattr(dispatch, "start_worker_log_listener", no_op)
+    monkeypatch.setattr(dispatch, "stop_log_listener", always_false)
+    monkeypatch.setattr(dispatch, "_shutdown_pool", always_false)
+    monkeypatch.setattr(dispatch, "process", analyze)
+    monkeypatch.setattr(dispatch, "available_memory_bytes", available)
     monkeypatch.setattr(MemoryAdmission, "HEALTHY_SECONDS", 0.01)
-    monkeypatch.setattr(pool, "_WorkerDeathWatch", death_watch)
+    monkeypatch.setattr(dispatch, "_WorkerDeathWatch", death_watch)
     args = cli.parse_args(["--output-dir", str(tmp_path), "--workers", "4"])
     ids = [f"x{i:03}" for i in range(40)]
     log = RunLog(args, "pytest")
@@ -292,7 +292,7 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
             pool.OutputLayout(str(tmp_path)),
             pool.ConfidencePlan(),
             log,
-            pool.MemoryPlan(
+            resources.MemoryPlan(
                 [
                     resources.EntryMemoryEstimate(p, entry_gib * GIB, "test")
                     for p in ids

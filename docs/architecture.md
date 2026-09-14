@@ -13,56 +13,21 @@ the [operations guide](operations.md).
 
 ## Execution and data flow
 
-Solid arrows show execution or returned results. Dashed arrows show supporting
-data dependencies. The worker section is repeated for each entry; several
-entries can run concurrently, while the stages within an entry run in order.
-The diagram shows the normal path, with exceptions described below.
+The driver prepares the batch and schedules entries across worker processes.
+Each worker prepares inputs, loads the structure and crystallization context,
+checks whether metals can be analyzed, then runs density, identification, and
+coordination analysis in order. Entries without analyzable metals or above the
+site limit return early; `--no-bonds` skips coordination analysis. The driver
+collects results, prepares confidence scores, writes outputs, finalizes the
+batch, builds the review queue, and writes the run report. Several entries can
+run concurrently, while the stages within each entry run in order.
 
-```mermaid
-flowchart TD
-    subgraph startup["Launch and batch preparation — driver process"]
-        launch["alchemy → src/main.py"] --> cli["cli.py: main()<br/>Parse RunConfig; configure logging"]
-        cli --> pool["driver/pool.py: run()<br/>Load catalog; resolve CCP4 environment"]
-        pool --> lock["driver/output_lock.py<br/>Acquire exclusive output-directory lock"]
-        lock --> plan["driver/pool.py<br/>Plan confidence mode; validate resume;<br/>select entries"]
-        plan --> metadata["crystallization_conditions.py<br/>Prefetch original-PDB metadata cache"]
-        metadata --> schedule["driver/resources.py + memory_admission.py<br/>Plan memory and worker count;<br/>admit entries through driver/pool.py"]
-    end
-
-    subgraph entry["Per-entry analysis — worker process"]
-        init["worker.py: initialize_worker()<br/>Once per worker process"] --> process["worker.py: process()<br/>One task per entry"]
-        process --> inputs["inputs.py + coordinate_conversion.py<br/>Resolve coordinates and MTZ;<br/>prepare first-model PDB"]
-        inputs --> structure["structure_analysis.py<br/>Load shared StructureContext;<br/>select canonical metal atoms"]
-        structure --> context["crystallization_conditions.py<br/>Extract conditions and entry summary"]
-        context --> gate{"Analyzable metals within site limit?"}
-        gate -->|yes| density["density_analysis.py<br/>MTZ validation → maps → EDSTATS"]
-        density --> identify["metal_identification.py<br/>Join density observations to metal sites;<br/>collect non-target density context"]
-        identify --> bonds["coordination/analysis.py<br/>Contact discovery, chemistry,<br/>precision and geometry; unless --no-bonds"]
-        bonds --> result["worker.py<br/>Append site summaries; finalize EntryResult;<br/>clean scratch files"]
-        gate -->|no: early result| result
-    end
-
-    schedule --> init
-
-    subgraph finish["Result collection and finalization — driver process"]
-        receive["driver/pool.py<br/>Collect completed EntryResult"] --> score["confidence_score.py<br/>Prepare confidence inputs;<br/>score or classify when applicable"]
-        score --> write["driver/writers.py<br/>Stream entry rows;<br/>write manifest row last"]
-        write --> finalize["driver/pool.py + confidence_score.py<br/>After batch: finalize eligible database reference<br/>and confidence scores"]
-        finalize --> review["crystallization_conditions.py<br/>Join REVIEW/SUSPECT scores with<br/>crystallization summary → review queue"]
-        review --> report["cli.py + driver/runlog.py<br/>Write run report; return exit code"]
-    end
-
-    result --> receive
-    sources["Mirror / downloaded cache / manual files"] -.-> inputs
-    cache["Original-PDB metadata cache"] -.-> context
-    metadata -.-> cache
-    reference["reference_data.py + src/data/<br/>Cofactor catalog and distance table"] -.-> pool
-    reference -.-> identify
-    reference -.-> bonds
-    structure -.-> identify
-    structure -.-> bonds
-    frozen["Frozen confidence reference"] -.-> score
-```
+Inputs come from the mirror, downloaded cache, or manual files. The original-PDB
+metadata cache supplies crystallization context. `reference_data.py` and
+`src/data/` provide the cofactor catalog and distance table used in batch
+preparation, metal identification, and coordination analysis. Identification
+and coordination share the loaded structure context; confidence scoring uses a
+frozen reference when applicable.
 
 ### Startup and scheduling
 
@@ -71,7 +36,9 @@ flowchart TD
    [cli.py](../src/cli.py). The CLI validates arguments into an immutable
    `RunConfig`, configures diagnostics, and creates the run report object.
 2. [driver/pool.py](../src/driver/pool.py) loads the bundled cofactor catalog
-   and resolves the CCP4 environment through [ccp4_setup.py](../src/ccp4_setup.py).
+   and resolves the CCP4 environment through
+   [driver/environment.py](../src/driver/environment.py), which also records
+   the Alchemy, Gemmi, and CCP4 versions for provenance.
    `--configure-ccp4` saves the setup path and exits before analysis.
 3. The driver acquires the output-directory lock before reading or changing
    run outputs. It determines the confidence mode, checks resume compatibility,
@@ -114,25 +81,19 @@ timings, warnings, and provenance.
 ## External CCP4 execution
 
 [density_analysis.py](../src/density_analysis.py) invokes CCP4 as subprocesses.
-The default model-envelope path has the following order:
+Map generation and density extraction proceed as follows:
 
-```mermaid
-flowchart TD
-    mtz["Input MTZ"] --> fix["mtzfix<br/>Validate or correct map coefficients"]
-    fix --> selected["Select original, corrected, or guarded<br/>twin-normalized coefficients"]
-    selected --> mode{"Map scope"}
-    mode -->|model-envelope| fft1["fft: 2mFo-DFc full map"]
-    fft1 --> mask1["mapmask: crop around model"]
-    mask1 --> safe{"Crop smaller and safe?"}
-    safe -->|yes| fft2["fft: mFo-DFc full map"]
-    fft2 --> mask2["mapmask: matching model crop"]
-    mask2 --> stats["edstats<br/>Prepared model + both maps → residue statistics"]
-    safe -->|no| fallback["Retain full 2mFo-DFc map;<br/>fft: full mFo-DFc map"]
-    fallback --> stats
-    mode -->|full| full["fft: full 2mFo-DFc map;<br/>fft: full mFo-DFc map"]
-    full --> stats
-    stats --> identify["metal_identification.py<br/>Metal-site rows + density context"]
-```
+1. `mtzfix` validates or corrects the input MTZ map coefficients. The pipeline
+   selects the original, corrected, or guarded twin-normalized coefficients.
+2. With the default model-envelope scope, `fft` generates a full 2mFo-DFc map
+   and `mapmask` crops it around the model. If the crop is smaller and safe,
+   `fft` generates the mFo-DFc map and `mapmask` applies a matching model crop.
+   Otherwise, the pipeline retains the full 2mFo-DFc map and generates a full
+   mFo-DFc map. With full-map scope, `fft` generates both full maps directly.
+3. `edstats` combines the prepared model and both maps to produce residue
+   statistics.
+4. `metal_identification.py` extracts metal-site rows and density context from
+   those statistics.
 
 Twin normalization is a guarded recovery path after MTZFIX validation fails
 for an entry explicitly marked twinned in PDB-REDO metadata. Each CCP4 invocation
@@ -189,8 +150,10 @@ Recovery spans several layers:
   timeouts or MTZFIX validation failures. A bond-stage failure preserves density
   rows already produced. Other entry exceptions become entry outcomes rather
   than stopping the whole batch.
-- The driver monitors worker deaths and records retryable failures for tasks
-  that cannot return a result. It manages worker and CCP4 process shutdown.
+- [driver/dispatch.py](../src/driver/dispatch.py) runs the worker pool,
+  admits entries as memory permits, monitors worker deaths, and records
+  retryable failures for tasks that cannot return a result. It manages worker
+  and CCP4 process shutdown.
 - [driver/resume.py](../src/driver/resume.py) validates existing outputs and
   stages replacements; an unsuccessful retry does not overwrite a protected
   previous result.

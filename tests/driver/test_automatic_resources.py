@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from driver import pool, resources
+from driver import dispatch, resources
 
 GIB = 1024**3
 
@@ -120,13 +120,13 @@ def test_idle_workers_prevent_over_admission_but_allow_small_entries() -> None:
     ]
     # Six other idle workers consume 3 GiB after the candidate starts. Only
     # the small candidate fits, although both fit if idle overhead is ignored.
-    admitted = pool.pop_admissible_estimate(
+    admitted = dispatch.pop_admissible_estimate(
         pending, 2 * GIB, 6 * GIB, active, workers=8
     )
     assert admitted is not None and admitted.pdb_id == "small"
     assert [entry.pdb_id for entry in pending] == ["large"]
     # An oversized singleton must still make progress after the pool drains.
-    assert pool.pop_admissible_estimate(pending, 0, GIB, [], workers=8) is not None
+    assert dispatch.pop_admissible_estimate(pending, 0, GIB, [], workers=8) is not None
 
 
 def test_missing_inputs_keep_conservative_fallback(tmp_path: Path) -> None:

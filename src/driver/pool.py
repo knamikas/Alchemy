@@ -1,11 +1,8 @@
 """Manage a batch of entry analyses from setup to final results.
 
 Prepare the environment, select entries, and check whether a previous run
-can be resumed. Assign entries to worker processes as memory permits,
-collect their results, and write outputs and confidence scores.
-
-Handle worker crashes and limit shutdown waits so failed workers do not
-leave the batch stuck.
+can be resumed. Open the outputs, hand the batch to the dispatcher, and
+write results, confidence scores, and the final report.
 """
 
 from __future__ import annotations
@@ -14,36 +11,12 @@ import contextlib
 import json
 import os
 import re
-import signal
-import subprocess
-import threading
-import time
-from collections.abc import Collection, Mapping, Sequence
-from multiprocessing import (
-    Pool,
-    SimpleQueue,
-)
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    TextIO,
-    cast,
-)
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass, fields, replace
+from typing import Any, ClassVar, Literal, NamedTuple, TextIO
 
-from _version import __version__
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
-from ccp4_setup import (
-    REPO_DIR,
-    REQUIRED_CCP4_TOOLS,
-    Ccp4SetupError,
-    ccp4_tools_available,
-    find_ccp4_setup,
-    load_ccp4_setup_config,
-    resolve_env,
-    save_ccp4_setup,
-    verify_ccp4,
-)
-from codes import EntryStatus, ReasonCode
+from ccp4_setup import REPO_DIR
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
 )
@@ -68,17 +41,17 @@ from crystallization_conditions import (
     prefetch_rcsb_crystallization_metadata,
     write_review_queue,
 )
-from driver.memory_admission import MemoryAdmission
+from driver import dispatch, environment
+from driver.dispatch import BatchTally
+from driver.errors import DriverError
 from driver.output_lock import (
     OutputDirectoryBusyError,
     OutputDirectoryLock,
     OutputDirectoryLockError,
     sweep_owned_scratch_directories,
 )
-from driver.progress import ProgressReporter
 from driver.resources import (
-    WORKER_FIXED_OVERHEAD_BYTES,
-    EntryMemoryEstimate,
+    MemoryPlan,
     automatic_worker_limits,
     available_memory_bytes,
     estimate_entry_memory,
@@ -107,260 +80,14 @@ from reference_data import (
     reference_data_id,
 )
 from run_config import RunConfig
-from run_logging import (
-    create_worker_log_queue,
-    level_for_verbosity,
-    logger_for,
-    start_worker_log_listener,
-    worker_level,
-)
-from worker import initialize_worker, process, worker_death_result
+from run_logging import level_for_verbosity, logger_for, worker_level
 from worker_contracts import EntryResult, WorkerConfig
-
-if TYPE_CHECKING:
-    # Import the actual Pool and Queue classes for type annotations.
-    from logging.handlers import QueueListener
-    from multiprocessing.pool import Pool as WorkerPool
-    from multiprocessing.queues import Queue as WorkerLogQueue
-
 
 DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
     REPO_DIR, "src", "data", "confidence_reference"
 )
 
-ALCHEMY_VERSION = __version__
-# If checking the Git commit takes too long, record it as unknown
-# and continue the analysis.
-PROVENANCE_COMMAND_TIMEOUT_S = 1
-
-# If a worker dies and its entry is unknown, wait this many seconds
-# without any new results before marking all unfinished entries as failed.
-# Those entries can be retried on a later run.
-WORKER_STALL_GRACE_S = 600.0
-# Bound clean shutdown before forcefully stopping remaining workers.
-WORKER_SHUTDOWN_GRACE_S = 5.0
-
 logger = logger_for(__name__)
-
-
-def _verify_resolved_ccp4(env: Mapping[str, str], setup_path: str) -> None:
-    """Verify CCP4 tools and include the setup path in any failure message."""
-    try:
-        verify_ccp4(env)
-    except Ccp4SetupError as exc:
-        raise Ccp4SetupError(
-            f"Ran {setup_path}, but CCP4 tools are still not available. {exc}"
-        ) from None
-
-
-def _resolve_ccp4_environment(
-    args: RunConfig,
-) -> tuple[dict[str, str] | None, str | None]:
-    """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
-    config = load_ccp4_setup_config()
-    if args.configure_ccp4:
-        setup_path = os.path.abspath(os.path.expanduser(args.configure_ccp4))
-        if not os.path.exists(setup_path):
-            raise Ccp4SetupError(f"CCP4 setup file not found: {setup_path}")
-
-        env = resolve_env(setup_path)
-        _verify_resolved_ccp4(env, setup_path)
-
-        saved = save_ccp4_setup(setup_path)
-        logger.info(
-            "verified %s are available; saved CCP4 setup path to %s",
-            ", ".join(REQUIRED_CCP4_TOOLS),
-            ", ".join(saved),
-        )
-        return None, None
-
-    environment = os.environ.copy()
-
-    # Validate explicit setup before PATH so a bad override cannot select another install.
-    if args.ccp4_setup:
-        setup_path = os.path.abspath(os.path.expanduser(args.ccp4_setup))
-        if not os.path.exists(setup_path):
-            raise Ccp4SetupError(f"CCP4 setup file not found: {args.ccp4_setup}")
-        env = resolve_env(setup_path)
-        _verify_resolved_ccp4(env, setup_path)
-        return env, setup_path
-
-    if ccp4_tools_available(environment):
-        return environment, None
-
-    ccp4_setup = find_ccp4_setup(env=environment, config=config)
-    if ccp4_setup is None:
-        raise Ccp4SetupError(
-            f"Required CCP4 tools ({', '.join(REQUIRED_CCP4_TOOLS)}) were not "
-            "found on PATH and no setup file could be auto-detected. "
-            "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in\n"
-            "your shell before running."
-        )
-    env = resolve_env(ccp4_setup)
-    verify_ccp4(env)
-    return env, ccp4_setup
-
-
-def resolve_ccp4_environment(
-    args: RunConfig,
-) -> tuple[dict[str, str] | None, str | None]:
-    """Return ``(env, setup_path)`` for this run, or raise ``DriverError``."""
-    try:
-        return _resolve_ccp4_environment(args)
-    except Ccp4SetupError as exc:
-        raise DriverError(str(exc)) from None
-
-
-def alchemy_commit() -> str:
-    """Return the abbreviated source commit with a dirty-worktree marker."""
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--short=12", "HEAD"],
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=PROVENANCE_COMMAND_TIMEOUT_S,
-        )
-        commit = completed.stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=PROVENANCE_COMMAND_TIMEOUT_S,
-        )
-        return commit + ("+dirty" if dirty.stdout.strip() else "")
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-
-
-def gemmi_version() -> str:
-    """Return the installed Gemmi version, or ``unknown``."""
-    try:
-        import gemmi
-
-        return str(getattr(gemmi, "__version__", "unknown"))
-    except Exception:
-        return "unknown"
-
-
-def ccp4_version(env: Mapping[str, str]) -> str:
-    """Return the CCP4 version exposed by a resolved environment."""
-    for key in ("CCP4_VERSION", "CCP4_VERSION_CODE", "CCP4VER"):
-        if env.get(key):
-            return env[key]
-    ccp4_root = env.get("CCP4", "")
-    return os.path.basename(ccp4_root.rstrip(os.sep)) if ccp4_root else "unknown"
-
-
-def drain_inflight(
-    inflight: SimpleQueue[tuple[str, int, str]], assignments: dict[int, str]
-) -> None:
-    """Apply pending worker notifications to the pid -> entry assignment map."""
-    while True:
-        try:
-            if inflight.empty():
-                return
-            state, pid, pdb_id = inflight.get()
-        except (OSError, EOFError):  # pragma: no cover - pipe torn down
-            return
-        if state == "start":
-            assignments[pid] = pdb_id
-        else:
-            assignments.pop(pid, None)
-
-
-def dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:
-    """Return worker pids that have disappeared since the last check."""
-    current = {
-        child.pid for child in getattr(pool, "_pool", ()) or () if child.pid is not None
-    }
-    if not current:
-        return set()
-    dead = known_pids - current
-    known_pids.clear()
-    known_pids.update(current)
-    return dead
-
-
-def _signal_worker_process_group(pid: int, sig: int) -> None:
-    """Signal a worker group even if its leader has already exited.
-
-    CCP4 children can remain in that group after the worker is reaped, so a
-    leader-existence check would skip required cleanup. A reused process-group
-    ID could target an unrelated group.
-    """
-    if os.name != "posix" or not hasattr(os, "killpg") or not pid:
-        return
-    with contextlib.suppress(OSError, ValueError):
-        os.killpg(pid, sig)
-
-
-def stop_log_listener(listener: QueueListener, queue: WorkerLogQueue[Any]) -> bool:
-    """Stop the logging listener within a deadline and close its queue.
-
-    A killed worker may leave the write lock held, blocking the stop sentinel.
-    Return True if the daemon listener had to be abandoned.
-    """
-    stopper = threading.Thread(target=listener.stop, daemon=True)
-    stopper.start()
-    stopper.join(WORKER_SHUTDOWN_GRACE_S)
-    abandoned = stopper.is_alive()
-    # Do not join the queue feeder; it may be blocked on the same lock.
-    with contextlib.suppress(Exception):
-        queue.close()
-    return abandoned
-
-
-def sweep_owned_scratch_dirs(output_dir: str) -> int:
-    """Remove stale Alchemy-owned scratch directories beneath an output path."""
-    return sweep_owned_scratch_directories(output_dir)
-
-
-def _shutdown_pool(pool: WorkerPool) -> bool:
-    """Close a worker pool, killing its children if a clean shutdown hangs.
-
-    A worker killed while blocked in the task queue's ``get()`` never releases
-    that queue's lock, and ``Pool.terminate`` then blocks acquiring it, so the
-    clean shutdown runs on a deadline. Returns ``True`` when it had to be
-    forced.
-    """
-    children = [
-        child
-        for child in getattr(pool, "_pool", ()) or ()
-        if getattr(child, "pid", None)
-    ]
-    closer = threading.Thread(target=pool.terminate, daemon=True)
-    closer.start()
-    closer.join(WORKER_SHUTDOWN_GRACE_S)
-    # Terminate workers before killing surviving CCP4 groups to avoid task-queue races.
-    current_children = [
-        child
-        for child in getattr(pool, "_pool", ()) or ()
-        if getattr(child, "pid", None)
-    ]
-    children_by_pid = {child.pid: child for child in [*children, *current_children]}
-    if os.name == "posix":
-        for child in children_by_pid.values():
-            _signal_worker_process_group(child.pid, signal.SIGKILL)
-    if not closer.is_alive():
-        return False
-
-    # Cancel the at-exit finalizer, which would repeat the same blocked wait.
-    finalizer = getattr(pool, "_terminate", None)
-    if finalizer is not None:
-        with contextlib.suppress(Exception):  # best effort; shutdown must proceed
-            finalizer.cancel()
-    for child in children_by_pid.values():
-        with contextlib.suppress(OSError, ValueError, AttributeError):
-            # Process.kill is SIGKILL on POSIX and TerminateProcess on Windows,
-            # where signal.SIGKILL does not exist.
-            child.kill()
-    # A daemon closer can be abandoned if a dead worker left its lock held.
-    return True
 
 
 def resolve_confidence_reference_dir(
@@ -382,11 +109,6 @@ def resolve_confidence_reference_dir(
     return None, candidates
 
 
-def batch_exit_code(incomplete_entry_count: int) -> int:
-    """Return failure exactly when one or more entries remain recoverable."""
-    return 1 if incomplete_entry_count else 0
-
-
 def load_ids_from_file(path: str) -> list[str]:
     """Read PDB IDs from comma- or newline-separated text.
 
@@ -401,17 +123,12 @@ def load_ids_from_file(path: str) -> list[str]:
             if not line:
                 continue
             for token in re.split(r"[,\s]+", line):
-                token = token.strip()
                 if not token:
                     continue
                 if not re.fullmatch(r"[A-Za-z0-9]{4}", token):
                     raise ValueError(f"invalid PDB id {token!r} at {path}:{lineno}")
                 ids.append(token.lower())
     return list(dict.fromkeys(ids))
-
-
-class DriverError(Exception):
-    """A user-facing driver failure: the message is reported and the run exits 1."""
 
 
 def select_entry_ids(
@@ -516,6 +233,9 @@ class OutputLayout:
         return (self.manifest, self.stats, self.bonds, self.candidates)
 
 
+ConfidenceMode = Literal["database", "reference", "classification"]
+
+
 class ConfidencePlan:
     """Whether this run scores confidence, and against what.
 
@@ -527,10 +247,12 @@ class ConfidencePlan:
 
     def __init__(self) -> None:
         """Initialize a disabled confidence-analysis plan."""
-        self.mode: str | None = None
+        self.mode: ConfidenceMode | None = None
         self.reference: ConfidenceReference | None = None
         self.stream_path: str | None = None
         self.columns: Sequence[str] | None = None
+        # A resumed ``reference`` run also extends the inputs stream a prior
+        # database run left behind, so the two stay row-for-row aligned.
         self.synchronize_inputs: bool = False
 
     @property
@@ -538,99 +260,86 @@ class ConfidencePlan:
         """Return whether confidence analysis is enabled."""
         return self.mode is not None
 
+    @property
+    def output_path(self) -> str:
+        """The confidence stream this run writes; set whenever a mode is."""
+        if self.stream_path is None:
+            raise RuntimeError("confidence output path is not configured")
+        return self.stream_path
 
-class _BatchTally:
-    """Running totals for the batch and the exit code they imply."""
+    @property
+    def scored_reference(self) -> ConfidenceReference:
+        """The frozen reference a ``reference`` run scores against."""
+        if self.reference is None:
+            raise RuntimeError("confidence reference is not configured")
+        return self.reference
 
-    def __init__(self) -> None:
-        self.counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
-        self.no_metals = 0
-        self.metal_site_limit_exceeded = 0
-        self.retryable_partials = 0
-        self.terminal_errors = 0
-        self.recoverable_errors = 0
 
-    def record(self, result: EntryResult) -> None:
-        status = result.status
-        self.counts[status] = self.counts.get(status, 0) + 1
-        if result.no_metals:
-            self.no_metals += 1
-        if result.metal_site_limit_exceeded:
-            self.metal_site_limit_exceeded += 1
-        if status == EntryStatus.PARTIAL and result.retryable:
-            self.retryable_partials += 1
-        if status == EntryStatus.ERROR:
-            if self._terminal_error(result):
-                self.terminal_errors += 1
-            else:
-                self.recoverable_errors += 1
+@dataclass(frozen=True)
+class OutputTargets:
+    """The files one run writes, each by name.
 
-    @staticmethod
-    def _terminal_error(result: EntryResult) -> bool:
-        """Whether identical inputs will reproduce this entry failure.
+    Resume staging sees the same files as one flat sequence: the four core
+    outputs, the always-written extras, then whichever confidence streams
+    this run keeps. Field order here is that sequence, so ``ordered`` and
+    ``rebound`` are the only places it is spelled out.
+    """
 
-        Errors remain eligible for ``--resume`` because the operator may repair
-        an input or update a tool. For completion of the current database
-        snapshot, however, only an explicitly deterministic reason is a known
-        terminal exclusion. Unknown, mixed, worker, and unexpected errors are
-        recoverable so a new failure mode cannot silently enter a reference.
-        """
-        return bool(result.reason_codes) and all(
-            code == ReasonCode.DETERMINISTIC_PROCESSING_ERROR
-            for code in result.reason_codes
+    manifest: str
+    stats: str
+    bonds: str
+    candidates: str
+    crystallization_conditions: str
+    crystallization_summary: str
+    density_context: str
+    confidence: str | None = None
+    confidence_inputs: str | None = None
+
+    ALWAYS_WRITTEN_EXTRAS: ClassVar[tuple[str, ...]] = (
+        "crystallization_conditions",
+        "crystallization_summary",
+        "density_context",
+    )
+
+    @classmethod
+    def for_run(cls, layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
+        """The targets a run with this layout and confidence plan writes."""
+        return cls(
+            manifest=layout.manifest,
+            stats=layout.stats,
+            bonds=layout.bonds,
+            candidates=layout.candidates,
+            crystallization_conditions=layout.crystallization_conditions,
+            crystallization_summary=layout.crystallization_summary,
+            density_context=layout.density_context,
+            confidence=plan.output_path if plan.enabled else None,
+            confidence_inputs=(
+                layout.confidence_inputs if plan.synchronize_inputs else None
+            ),
         )
 
-    def exit_code(self, *, database_run: bool = False) -> int:
-        """Return success for a complete run under the requested run policy.
+    def _present(self) -> list[str]:
+        return [
+            field.name
+            for field in fields(self)
+            if getattr(self, field.name) is not None
+        ]
 
-        A full database may complete with documented deterministic exclusions.
-        A targeted run remains strict: asking for one entry and receiving an
-        error still exits nonzero even when that error will recur.
-        """
-        incomplete = (
-            self.recoverable_incompleteness()
-            if database_run
-            else self.counts.get("error", 0)
-            + self.counts.get("skip", 0)
-            + self.retryable_partials
-        )
-        return batch_exit_code(incomplete)
+    def ordered(self) -> tuple[str, ...]:
+        """Every path this run writes, in the order resume staging expects."""
+        return tuple(getattr(self, name) for name in self._present())
 
-    def recoverable_incompleteness(self) -> int:
-        """Return the count of entries that may succeed on a later attempt.
-
-        Only explicitly deterministic failures are terminal for database completion.
-        """
-        return (
-            self.counts.get("skip", 0)
-            + self.retryable_partials
-            + self.recoverable_errors
-        )
-
-
-class MemoryPlan:
-    """Record per-entry estimates and the run's memory admission budget."""
-
-    def __init__(
-        self,
-        estimates: Sequence[EntryMemoryEstimate],
-        budget_bytes: int | None,
-        reserve_bytes: int | None,
-        initial_available_bytes: int | None = None,
-        configured_limit_bytes: int | None = None,
-    ) -> None:
-        """Initialize an immutable view of memory-planning inputs."""
-        self.estimates = tuple(estimates)
-        self.budget_bytes = budget_bytes
-        self.reserve_bytes = reserve_bytes
-        self.initial_available_bytes = initial_available_bytes
-        self.configured_limit_bytes = configured_limit_bytes
+    def rebound(self, paths: Sequence[str]) -> OutputTargets:
+        """The same targets pointed at a parallel sequence of paths."""
+        return replace(self, **dict(zip(self._present(), paths, strict=True)))
 
 
 def plan_entry_memory(
     args: RunConfig, ids: Sequence[str], cfg: WorkerConfig, run_log: RunLog
 ) -> MemoryPlan:
     """Estimate entry memory and record the resulting admission budget."""
+    if not ids:
+        raise ValueError("memory planning needs at least one entry")
     estimates = tuple(
         estimate_entry_memory(pdb_id, cfg.root, cfg.manual_inputs) for pdb_id in ids
     )
@@ -664,7 +373,7 @@ def plan_entry_memory(
         memory_estimate_max_entry=largest.pdb_id,
         memory_high_memory_entries=high_memory_entries,
     )
-    if budget is None:
+    if budget is None or reserve is None:
         logger.warning(
             "available memory could not be measured; per-entry estimates were "
             "computed, but weighted admission has no byte budget"
@@ -675,7 +384,7 @@ def plan_entry_memory(
             "protected reserve; largest estimate %.2f GiB (%s); all entries "
             "share the byte budget",
             budget / (1024**3),
-            cast(int, reserve) / (1024**3),
+            reserve / (1024**3),
             largest.bytes / (1024**3),
             largest.pdb_id,
         )
@@ -788,6 +497,9 @@ def plan_confidence(
     plan.mode = "reference"
     plan.stream_path = layout.confidence_scores
     plan.columns = (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
+    plan.synchronize_inputs = bool(args.resume) and os.path.isfile(
+        layout.confidence_inputs
+    )
     return plan
 
 
@@ -797,10 +509,7 @@ def _check_resume_is_compatible(
     plan: ConfidencePlan,
     current_analysis_config_id: str,
 ) -> None:
-    """Refuse to resume onto output this run cannot safely extend.
-
-    Sets ``plan.synchronize_inputs`` as a side effect.
-    """
+    """Refuse to resume onto output this run cannot safely extend."""
     if not args.resume:
         return
     try:
@@ -814,9 +523,6 @@ def _check_resume_is_compatible(
                 (layout.crystallization_conditions, CONDITION_COLUMNS),
                 (layout.crystallization_summary, SUMMARY_COLUMNS),
             ),
-        )
-        plan.synchronize_inputs = plan.mode == "reference" and os.path.isfile(
-            layout.confidence_inputs
         )
         if plan.synchronize_inputs:
             validate_resume_schemas(
@@ -835,13 +541,9 @@ def _check_resume_is_compatible(
             "Cannot resume output produced with a different analysis "
             "configuration identity; use a fresh output directory."
         )
-    if plan.mode == "reference" and os.path.isfile(cast(str, plan.stream_path)):
+    if plan.mode == "reference" and os.path.isfile(plan.output_path):
         try:
-            # ``plan_confidence`` sets the mode only once both of these are
-            # bound, which no annotation on the plan can express.
-            validate_scored_reference(
-                cast(str, plan.stream_path), cast(ConfidenceReference, plan.reference)
-            )
+            validate_scored_reference(plan.output_path, plan.scored_reference)
         except (OSError, ValueError) as exc:
             raise DriverError(f"Cannot resume confidence output: {exc}") from None
 
@@ -980,42 +682,29 @@ def choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> i
     A Pool creates every worker up front, and under the spawn start method each
     one re-imports gemmi into its own interpreter.
     """
+    cpu_limit, memory_limit = automatic_worker_limits(
+        memory_limit_bytes=args.memory_limit,
+        utilization=args.memory_utilization,
+    )
+    requested = cpu_limit if args.workers is None else args.workers
+    workers = min(requested, entry_count)
+    if memory_limit is not None:
+        workers = min(workers, memory_limit)
+    memory_limit_detail = memory_limit if memory_limit is not None else "unavailable"
     if args.workers is None:
-        cpu_limit, memory_limit = automatic_worker_limits(
-            memory_limit_bytes=args.memory_limit,
-            utilization=args.memory_utilization,
-        )
-        automatic_limit = cpu_limit
-        if memory_limit is not None:
-            automatic_limit = min(automatic_limit, memory_limit)
-        workers = min(automatic_limit, entry_count)
         run_log.details["worker_selection"] = "automatic"
-        run_log.details["CPU worker limit"] = cpu_limit
-        run_log.details["Memory worker limit"] = (
-            memory_limit if memory_limit is not None else "unavailable"
-        )
-        run_log.details["Selected workers"] = workers
+        run_log.details["cpu_worker_limit"] = cpu_limit
+        run_log.details["memory_worker_limit"] = memory_limit_detail
+        run_log.details["selected_workers"] = workers
         logger.info("automatic worker selection:")
         logger.info("  CPU worker limit: %s", cpu_limit)
-        logger.info(
-            "  memory worker limit: %s",
-            memory_limit if memory_limit is not None else "unavailable",
-        )
+        logger.info("  memory worker limit: %s", memory_limit_detail)
         logger.info("  selected workers: %s", workers)
     else:
-        _cpu_limit, memory_limit = automatic_worker_limits(
-            memory_limit_bytes=args.memory_limit,
-            utilization=args.memory_utilization,
-        )
-        workers = min(args.workers, entry_count)
-        if memory_limit is not None:
-            workers = min(workers, memory_limit)
         run_log.details["worker_selection"] = "explicit"
-        run_log.details["Requested workers"] = args.workers
-        run_log.details["Memory worker limit"] = (
-            memory_limit if memory_limit is not None else "unavailable"
-        )
-        run_log.details["Selected workers"] = workers
+        run_log.details["requested_workers"] = args.workers
+        run_log.details["memory_worker_limit"] = memory_limit_detail
+        run_log.details["selected_workers"] = workers
         if workers < min(args.workers, entry_count):
             logger.info(
                 "capped the requested %d workers at %d to protect process "
@@ -1032,6 +721,22 @@ def choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> i
     return workers
 
 
+class AnalysisIdentity(NamedTuple):
+    """The reference-data and analysis-policy identities of this checkout."""
+
+    reference_data_id: str
+    analysis_config_id: str
+
+    @classmethod
+    def current(cls) -> AnalysisIdentity:
+        """Hash the bundled reference data once and derive both identities."""
+        current_reference_data_id = reference_data_id()
+        return cls(
+            current_reference_data_id,
+            analysis_config_id(reference_data_id=current_reference_data_id),
+        )
+
+
 def worker_config_from_args(
     args: RunConfig,
     env: dict[str, str],
@@ -1041,12 +746,10 @@ def worker_config_from_args(
     manual_inputs: dict[str, str | None] | None,
     plan: ConfidencePlan,
     run_log: RunLog,
+    *,
+    identity: AnalysisIdentity,
 ) -> WorkerConfig:
     """Build the config every worker is initialized with, once per run."""
-    current_reference_data_id = reference_data_id()
-    current_analysis_config_id = analysis_config_id(
-        reference_data_id=current_reference_data_id,
-    )
     cfg = WorkerConfig(
         root=root,
         mirror_root=args.pdb_redo_root,
@@ -1063,15 +766,15 @@ def worker_config_from_args(
         ),
         allow_download=bool(args.id or args.id_file),
         manual_inputs=manual_inputs,
-        alchemy_commit=alchemy_commit(),
-        gemmi_version=gemmi_version(),
-        ccp4_version=ccp4_version(env),
-        reference_data_id=current_reference_data_id,
-        analysis_config_id=current_analysis_config_id,
+        alchemy_commit=environment.alchemy_commit(),
+        gemmi_version=environment.gemmi_version(),
+        ccp4_version=environment.ccp4_version(env),
+        reference_data_id=identity.reference_data_id,
+        analysis_config_id=identity.analysis_config_id,
         pdb_metadata_cache=args.pdb_metadata_cache,
     )
     run_log.details.update(
-        alchemy_version=ALCHEMY_VERSION,
+        alchemy_version=environment.ALCHEMY_VERSION,
         alchemy_commit=cfg.alchemy_commit,
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
@@ -1131,51 +834,32 @@ def prepare_crystallization_metadata(
     )
 
 
-def _output_targets(layout: OutputLayout, plan: ConfidencePlan) -> tuple[str, ...]:
-    """The output files this run writes, in the order staging expects them."""
-    paths = [
-        *layout.core,
-        layout.crystallization_conditions,
-        layout.crystallization_summary,
-        layout.density_context,
-    ]
-    if plan.enabled:
-        if plan.stream_path is None:
-            raise RuntimeError("confidence output path is not configured")
-        paths.append(plan.stream_path)
-    if plan.synchronize_inputs:
-        paths.append(layout.confidence_inputs)
-    return tuple(paths)
-
-
 def _open_writers(
     handles: contextlib.ExitStack,
-    args: RunConfig,
-    plan: ConfidencePlan,
-    write_paths: Sequence[str],
+    targets: OutputTargets,
+    *,
+    bonds: bool,
+    confidence_columns: Sequence[str] | None,
 ) -> OutputWriters:
     """Open every output stream this run writes and give them their headers."""
-    manifest_path, stats_path, bonds_path, candidates_path = write_paths[:4]
-    crystallization_conditions_path = write_paths[4]
-    crystallization_summary_path = write_paths[5]
-    density_context_path = write_paths[6]
-    confidence_path = write_paths[7] if plan.enabled else None
-    confidence_inputs_path = write_paths[8] if plan.synchronize_inputs else None
 
     def opened(path: str) -> TextIO:
         return handles.enter_context(open(path, "w", newline=""))
 
+    def opened_if(path: str | None) -> TextIO | None:
+        return opened(path) if path is not None else None
+
     return OutputWriters(
-        opened(manifest_path),
-        opened(stats_path),
-        opened(bonds_path) if args.bonds else None,
-        opened(candidates_path) if args.bonds else None,
-        opened(confidence_path) if confidence_path is not None else None,
-        plan.columns,
-        opened(confidence_inputs_path) if confidence_inputs_path is not None else None,
-        opened(crystallization_conditions_path),
-        opened(crystallization_summary_path),
-        opened(density_context_path),
+        opened(targets.manifest),
+        opened(targets.stats),
+        opened(targets.bonds) if bonds else None,
+        opened(targets.candidates) if bonds else None,
+        opened_if(targets.confidence),
+        confidence_columns,
+        opened_if(targets.confidence_inputs),
+        opened(targets.crystallization_conditions),
+        opened(targets.crystallization_summary),
+        opened(targets.density_context),
     )
 
 
@@ -1218,11 +902,13 @@ def should_write_entry(
 
 def write_entry(
     result: EntryResult,
-    args: RunConfig,
     plan: ConfidencePlan,
     writers: OutputWriters,
     staging: ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
+    *,
+    resume: bool,
+    bonds: bool,
 ) -> None:
     """Write one entry's rows, manifest row last.
 
@@ -1238,406 +924,10 @@ def write_entry(
     if plan.enabled:
         writers.write_confidence_rows(confidence_rows_for(result, plan))
     writers.write_manifest_row(
-        manifest_row(
-            result, args.resume, args.bonds, prior_bond_counts, prior_candidate_counts
-        )
+        manifest_row(result, resume, bonds, prior_bond_counts, prior_candidate_counts)
     )
     if staging is not None:
         staging.replacement_ids.add(result.pdb_id.lower())
-
-
-class _WorkerDeathWatch:
-    """Track dead workers and synthesize results for their unfinished entries.
-
-    Use worker notifications to identify lost entries. Resolve unattributed
-    deaths only after the grace period and stalled-work checks.
-    """
-
-    def __init__(
-        self,
-        pool: WorkerPool,
-        inflight: SimpleQueue[tuple[str, int, str]],
-        ids: Sequence[str],
-        cfg: WorkerConfig,
-    ) -> None:
-        self._pool = pool
-        self._inflight = inflight
-        self._ids = list(ids)
-        self._submitted_ids = set(ids)
-        self._cfg = cfg
-        self._assignments: dict[int, str] = {}
-        self._worker_pids: set[int] = set()
-        self._lost_ids: set[str] = set()
-        self._unattributed_deaths = 0
-        # Snapshot workers before submitting tasks so an early death cannot go unnoticed.
-        dead_worker_pids(self._pool, self._worker_pids)
-
-    def track_submitted_entry(self, pdb_id: str) -> None:
-        if pdb_id not in self._submitted_ids:
-            self._submitted_ids.add(pdb_id)
-            self._ids.append(pdb_id)
-
-    def poll(self) -> list[EntryResult]:
-        """Results for the entries whose worker has died since the last call."""
-        drain_inflight(self._inflight, self._assignments)
-        losses: list[EntryResult] = []
-        for dead_pid in dead_worker_pids(self._pool, self._worker_pids):
-            if os.name == "posix":
-                _signal_worker_process_group(dead_pid, signal.SIGKILL)
-            dead_id = self._assignments.pop(dead_pid, None)
-            if dead_id is None:
-                self._unattributed_deaths += 1
-            elif dead_id not in self._lost_ids:
-                losses.append(self._lose(dead_id, dead_pid))
-        return losses
-
-    def stalled_losses(
-        self, completed_ids: set[str], stalled_for: float, remaining: int
-    ) -> list[EntryResult] | None:
-        """Results for the outstanding entries an unattributed death held.
-
-        ``None`` until every unassigned outstanding entry can be accounted for
-        by a death that named no entry and the run has been quiet for the grace
-        period. Entries assigned to pids still in the pool are known to be
-        alive and cannot be blamed on an older, unrelated death.
-        """
-        if not (
-            self._unattributed_deaths
-            and stalled_for > WORKER_STALL_GRACE_S
-            and remaining <= self._unattributed_deaths
-        ):
-            return None
-        live_ids = {
-            pdb_id
-            for pid, pdb_id in self._assignments.items()
-            if pid in self._worker_pids
-        }
-        # Only unassigned entries that never returned a result can still be
-        # held by a process that died before naming its entry. A live assigned
-        # entry may legitimately spend longer than the fallback grace period
-        # inside CCP4, while a completed one already has its real output row.
-        losses: list[EntryResult] = []
-        for stuck_id in self._ids:
-            if (
-                stuck_id in self._lost_ids
-                or stuck_id in completed_ids
-                or stuck_id in live_ids
-            ):
-                continue
-            losses.append(self._lose(stuck_id, 0))
-            if len(losses) >= remaining:
-                break
-        return losses or None
-
-    def superseded(self, result: EntryResult, completed_ids: Collection[str]) -> bool:
-        """Ignore delayed real or death results rather than write an entry twice."""
-        if result.pdb_id in completed_ids:
-            return True
-        died = result.reason_codes == ["worker_process_died"]
-        return result.pdb_id in self._lost_ids and not died
-
-    def _lose(self, pdb_id: str, pid: int) -> EntryResult:
-        self._lost_ids.add(pdb_id)
-        return worker_death_result(pdb_id, self._cfg, pid)
-
-
-def pop_admissible_estimate(
-    pending: list[EntryMemoryEstimate],
-    reserved_bytes: int,
-    budget_bytes: int | None,
-    active_estimates: Collection[EntryMemoryEstimate],
-    *,
-    workers: int = 0,
-) -> EntryMemoryEstimate | None:
-    """Admit the first pending entry whose estimated memory fits the budget.
-
-    Scan past oversized entries to use available capacity. Live pressure checks
-    handle underestimated peaks.
-    """
-    if not pending:
-        return None
-    if not active_estimates:
-        # Nothing is running, so the head is admitted even when it is oversized:
-        # refusing an entry larger than the whole budget would deadlock the batch.
-        return pending.pop(0)
-    # The candidate occupies one idle worker; its estimate already includes
-    # that worker's overhead. Other idle processes remain resident as well.
-    idle_bytes = (
-        max(0, workers - len(active_estimates) - 1) * WORKER_FIXED_OVERHEAD_BYTES
-    )
-    for index, estimate in enumerate(pending):
-        if (
-            budget_bytes is not None
-            and reserved_bytes + estimate.bytes + idle_bytes > budget_bytes
-        ):
-            continue
-        return pending.pop(index)
-    return None
-
-
-def guarded_available_memory(
-    memory_plan: MemoryPlan, current_available_bytes: int | None
-) -> int | None:
-    """Measure remaining headroom against host and explicit limits.
-
-    ``available_memory_bytes`` already tracks changing host/cgroup allowance.
-    For a smaller explicit limit, approximate this run's consumption from the
-    availability observed immediately before the pool started.
-    """
-    if current_available_bytes is None:
-        return None
-    if (
-        memory_plan.configured_limit_bytes is None
-        or memory_plan.initial_available_bytes is None
-    ):
-        return current_available_bytes
-    consumed = max(0, memory_plan.initial_available_bytes - current_available_bytes)
-    configured_remaining = max(0, memory_plan.configured_limit_bytes - consumed)
-    return min(current_available_bytes, configured_remaining)
-
-
-def _dispatch_entries(
-    args: RunConfig,
-    ids: Sequence[str],
-    cfg: WorkerConfig,
-    workers: int,
-    writers: OutputWriters,
-    plan: ConfidencePlan,
-    staging: ResumeStaging | None,
-    prior_counts: tuple[dict[str, str], dict[str, str]],
-    prior_ids: set[str],
-    run_log: RunLog,
-    memory_plan: MemoryPlan,
-) -> _BatchTally:
-    """Run every entry across a worker pool and write the results as they land.
-
-    The loop polls rather than iterating the pool's results, because waiting on
-    the pool alone would hang forever on an entry a killed worker was holding.
-    """
-    tally = _BatchTally()
-    progress = ProgressReporter(len(ids))
-    inflight: SimpleQueue[tuple[str, int, str]] = SimpleQueue()
-    completed_ids: set[str] = set()
-    last_progress = time.monotonic()
-    # Use Python's default start method for platform compatibility.
-    # Avoid Pool's context manager: its unbounded terminate can hang after a
-    # worker dies with a queue lock held. The finally block bounds shutdown.
-    # Start the log listener after the pool to avoid forking with active threads.
-    log_queue = create_worker_log_queue()
-    pool = Pool(
-        workers, initializer=initialize_worker, initargs=(cfg, inflight, log_queue)
-    )
-    log_listener = start_worker_log_listener(log_queue)
-    # Death fallback must never blame an entry that the admission controller
-    # has not submitted; doing so would record a failure for work that never ran.
-    deaths = _WorkerDeathWatch(pool, inflight, (), cfg)
-    try:
-        pending = list(memory_plan.estimates)
-        estimates_by_id = {
-            estimate.pdb_id: estimate for estimate in memory_plan.estimates
-        }
-        active: dict[str, tuple[Any, EntryMemoryEstimate]] = {}
-        reserved_bytes = 0
-        peak_reserved_bytes = 0
-        max_active = 0
-        oversized_entries: set[str] = set()
-        admission = MemoryAdmission(
-            memory_plan.budget_bytes,
-            WORKER_FIXED_OVERHEAD_BYTES,
-            memory_plan.reserve_bytes,
-        )
-        completed = 0
-        progress.render(
-            completed,
-            tally.counts,
-            tally.no_metals,
-            tally.metal_site_limit_exceeded,
-            force=True,
-        )
-        while completed < len(ids):
-            batch: list[EntryResult] = []
-
-            current_available = guarded_available_memory(
-                memory_plan, available_memory_bytes()
-            )
-            old_budget = admission.budget
-            old_pauses = admission.pauses
-            pause = admission.observe(
-                current_available,
-                reserved_bytes + (workers - len(active)) * WORKER_FIXED_OVERHEAD_BYTES,
-                time.monotonic(),
-                active=bool(active),
-                oversized=(
-                    len(active) == 1
-                    and memory_plan.budget_bytes is not None
-                    and reserved_bytes + (workers - 1) * WORKER_FIXED_OVERHEAD_BYTES
-                    > memory_plan.budget_bytes
-                ),
-            )
-            if admission.budget != old_budget:
-                logger.warning(
-                    "%s memory admission from %.2f GiB to %.2f GiB",
-                    "recovering"
-                    if cast(int, admission.budget) > cast(int, old_budget)
-                    else "reducing",
-                    cast(int, old_budget) / (1024**3),
-                    cast(int, admission.budget) / (1024**3),
-                )
-            if admission.pauses != old_pauses:
-                logger.warning(
-                    "pausing new entries: %.2f GiB available has reached the "
-                    "%.2f GiB protected reserve",
-                    cast(int, current_available) / (1024**3),
-                    cast(int, memory_plan.reserve_bytes) / (1024**3),
-                )
-
-            while pending and len(active) < workers:
-                current_available = guarded_available_memory(
-                    memory_plan, available_memory_bytes()
-                )
-                if (
-                    active
-                    and memory_plan.reserve_bytes is not None
-                    and current_available is not None
-                    and current_available <= memory_plan.reserve_bytes
-                ):
-                    break
-                if pause:
-                    break
-                estimate = pop_admissible_estimate(
-                    pending,
-                    reserved_bytes,
-                    admission.budget,
-                    [item[1] for item in active.values()],
-                    workers=workers,
-                )
-                if estimate is None:
-                    break
-                required_bytes = (
-                    reserved_bytes
-                    + estimate.bytes
-                    + (workers - len(active) - 1) * WORKER_FIXED_OVERHEAD_BYTES
-                )
-                if admission.budget is not None and required_bytes > admission.budget:
-                    oversized_entries.add(estimate.pdb_id)
-                    logger.warning(
-                        "%s needs an estimated %.2f GiB including resident workers, "
-                        "above the %.2f GiB worker budget; admitting it alone",
-                        estimate.pdb_id,
-                        required_bytes / (1024**3),
-                        admission.budget / (1024**3),
-                    )
-                deaths.track_submitted_entry(estimate.pdb_id)
-                active[estimate.pdb_id] = (
-                    pool.apply_async(process, (estimate.pdb_id,)),
-                    estimate,
-                )
-                reserved_bytes += estimate.bytes
-                peak_reserved_bytes = max(
-                    peak_reserved_bytes,
-                    reserved_bytes
-                    + (workers - len(active)) * WORKER_FIXED_OVERHEAD_BYTES,
-                )
-                max_active = max(max_active, len(active))
-
-            ready_ids: list[str] = []
-            for pdb_id, (result, _estimate) in tuple(active.items()):
-                if result.ready():
-                    batch.append(result.get())
-                    ready_ids.append(pdb_id)
-            for pdb_id in ready_ids:
-                _result, estimate = active.pop(pdb_id)
-                reserved_bytes -= estimate.bytes
-
-            batch.extend(deaths.poll())
-            for loss in batch:
-                if loss.reason_codes != ["worker_process_died"]:
-                    continue
-                active_item = active.pop(loss.pdb_id, None)
-                if active_item is not None:
-                    reserved_bytes -= active_item[1].bytes
-            if not batch:
-                losses = deaths.stalled_losses(
-                    completed_ids,
-                    time.monotonic() - last_progress,
-                    len(active),
-                )
-                if losses is None:
-                    progress.render(
-                        completed,
-                        tally.counts,
-                        tally.no_metals,
-                        tally.metal_site_limit_exceeded,
-                    )
-                    time.sleep(0.05)
-                    continue
-                batch = losses
-                for loss in losses:
-                    active_item = active.pop(loss.pdb_id, None)
-                    if active_item is not None:
-                        reserved_bytes -= active_item[1].bytes
-            if any(loss.reason_codes == ["worker_process_died"] for loss in batch):
-                old_budget = admission.budget
-                admission.back_off(time.monotonic())
-                if admission.budget != old_budget:
-                    logger.warning(
-                        "reducing future memory admission from %.2f GiB to "
-                        "%.2f GiB after a worker process died",
-                        cast(int, old_budget) / (1024**3),
-                        cast(int, admission.budget) / (1024**3),
-                    )
-            last_progress = time.monotonic()
-            for r in batch:
-                if deaths.superseded(r, completed_ids):
-                    continue
-                completed += 1
-                completed_ids.add(r.pdb_id)
-                run_log.record_entry(
-                    r, memory_estimate_bytes=estimates_by_id[r.pdb_id].bytes
-                )
-                if should_write_entry(args.resume, r, prior_ids):
-                    write_entry(r, args, plan, writers, staging, prior_counts)
-                tally.record(r)
-                finished = completed == len(ids)
-                progress.render(
-                    completed,
-                    tally.counts,
-                    tally.no_metals,
-                    tally.metal_site_limit_exceeded,
-                    force=progress.terminal or finished,
-                    final=finished,
-                )
-        run_log.summary.update(
-            memory_scheduler_worker_overhead_bytes=workers
-            * WORKER_FIXED_OVERHEAD_BYTES,
-            memory_scheduler_peak_reserved_bytes=peak_reserved_bytes,
-            memory_scheduler_max_active_entries=max_active,
-            memory_scheduler_oversized_entries=len(oversized_entries),
-            memory_scheduler_pressure_pauses=admission.pauses,
-            memory_scheduler_budget_backoffs=admission.backoffs,
-            memory_scheduler_budget_recoveries=admission.recoveries,
-            memory_scheduler_final_budget_bytes=(
-                admission.budget if admission.budget is not None else "unavailable"
-            ),
-        )
-    finally:
-        forced = _shutdown_pool(pool)
-        # Keep forwarding logs until worker shutdown completes.
-        if stop_log_listener(log_listener, log_queue):
-            run_log.summary["worker_log_listener_abandoned"] = True
-            logger.warning(
-                "the worker log listener did not stop within %gs and was "
-                "abandoned; some worker records may be missing from this log",
-                WORKER_SHUTDOWN_GRACE_S,
-            )
-        if forced:
-            run_log.summary["worker_pool_forced_shutdown"] = True
-            logger.warning(
-                "a worker pool shutdown had to be forced after a worker died "
-                "holding the task-queue lock; results above are complete"
-            )
-        progress.close()
-    return tally
 
 
 def keep_completed_staging(
@@ -1677,6 +967,18 @@ def keep_completed_staging(
     )
 
 
+def _prior_manifest_counts(
+    args: RunConfig, layout: OutputLayout
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Bond and candidate counts a bond-less resume carries over per entry."""
+    if not (args.resume and not args.bonds):
+        return {}, {}
+    return (
+        manifest_values_by_id(layout.manifest, "n_bonds"),
+        manifest_values_by_id(layout.manifest, "n_candidates"),
+    )
+
+
 def process_entries(
     args: RunConfig,
     ids: Sequence[str],
@@ -1686,21 +988,14 @@ def process_entries(
     plan: ConfidencePlan,
     run_log: RunLog,
     memory_plan: MemoryPlan | None = None,
-) -> tuple[_BatchTally, OutputWriters]:
+) -> tuple[BatchTally, OutputWriters]:
     """Open the outputs, run the batch, and commit any staged retry rows.
 
     An interrupted batch still commits the entries that completed, so the work
     already done survives; a retried entry that did not finish leaves the
     previous run's rows exactly as they were.
     """
-    prior_counts = (
-        manifest_values_by_id(layout.manifest, "n_bonds")
-        if args.resume and not args.bonds
-        else {},
-        manifest_values_by_id(layout.manifest, "n_candidates")
-        if args.resume and not args.bonds
-        else {},
-    )
+    prior_counts = _prior_manifest_counts(args, layout)
     if memory_plan is None:
         memory_plan = plan_entry_memory(args, ids, cfg, run_log)
     # Which ids the manifest already describes; see ``should_write_entry``,
@@ -1708,50 +1003,56 @@ def process_entries(
     prior_ids: set[str] = (
         set(manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
-    output_paths = _output_targets(layout, plan)
+    targets = OutputTargets.for_run(layout, plan)
     staging = (
-        ResumeStaging(args.output_dir, output_paths, always_extra_count=3)
+        ResumeStaging(
+            args.output_dir,
+            targets.ordered(),
+            always_extra_count=len(OutputTargets.ALWAYS_WRITTEN_EXTRAS),
+        )
         if args.resume
         else None
     )
-    write_paths = staging.staged if staging is not None else output_paths
+    write_targets = targets.rebound(staging.staged) if staging is not None else targets
 
-    writers: OutputWriters | None = None
     processing_completed = False
     try:
         with contextlib.ExitStack() as handles:
-            writers = _open_writers(handles, args, plan, write_paths)
-            tally = _dispatch_entries(
-                args,
-                ids,
-                cfg,
-                workers,
-                writers,
-                plan,
-                staging,
-                prior_counts,
-                prior_ids,
-                run_log,
-                memory_plan,
+            writers = _open_writers(
+                handles,
+                write_targets,
+                bonds=args.bonds,
+                confidence_columns=plan.columns,
+            )
+
+            def deliver(result: EntryResult) -> None:
+                if should_write_entry(args.resume, result, prior_ids):
+                    write_entry(
+                        result,
+                        plan,
+                        writers,
+                        staging,
+                        prior_counts,
+                        resume=args.resume,
+                        bonds=args.bonds,
+                    )
+
+            tally = dispatch.dispatch_entries(
+                ids, cfg, workers, memory_plan, run_log, deliver
             )
             processing_completed = True
-            opened_writers = writers
     finally:
         if staging is not None and not processing_completed:
             keep_completed_staging(staging, args, plan, run_log)
 
     run_log.summary.update(
-        metal_rows_written=opened_writers.n_rows,
-        bond_rows_written=opened_writers.n_bonds,
-        candidate_rows_written=opened_writers.n_candidates,
-        confidence_rows_written=opened_writers.n_confidence,
-        crystallization_condition_rows_written=(
-            opened_writers.n_crystallization_conditions
-        ),
-        crystallization_summary_rows_written=(
-            opened_writers.n_crystallization_summaries
-        ),
-        density_context_rows_written=opened_writers.n_density_contexts,
+        metal_rows_written=writers.n_rows,
+        bond_rows_written=writers.n_bonds,
+        candidate_rows_written=writers.n_candidates,
+        confidence_rows_written=writers.n_confidence,
+        crystallization_condition_rows_written=writers.n_crystallization_conditions,
+        crystallization_summary_rows_written=writers.n_crystallization_summaries,
+        density_context_rows_written=writers.n_density_contexts,
         manifest_path=layout.manifest,
         metal_sites_path=layout.stats,
         metal_bonds_path=layout.bonds if args.bonds else "disabled",
@@ -1773,7 +1074,7 @@ def process_entries(
             )
             raise
         staging.discard()
-    return tally, opened_writers
+    return tally, writers
 
 
 def _finalize_review_queue(layout: OutputLayout) -> int:
@@ -1793,7 +1094,7 @@ def _report_batch(
     args: RunConfig,
     layout: OutputLayout,
     plan: ConfidencePlan,
-    tally: _BatchTally,
+    tally: BatchTally,
     writers: OutputWriters,
     run_log: RunLog,
 ) -> int:
@@ -1873,17 +1174,16 @@ def _report_batch(
                 flush=True,
             )
     elif plan.mode == "reference":
-        if plan.reference is None:
-            raise RuntimeError("confidence reference is not configured")
+        cohort_size = plan.scored_reference.cohort_size
         print(
             f"      {writers.n_confidence} confidence rows compared with "
-            f"database cohort {plan.reference.cohort_size} -> "
+            f"database cohort {cohort_size} -> "
             f"{layout.confidence_scores}",
             flush=True,
         )
         run_log.summary.update(
             confidence_status="scored_against_reference",
-            confidence_reference_cohort=plan.reference.cohort_size,
+            confidence_reference_cohort=cohort_size,
             confidence_scores_path=layout.confidence_scores,
         )
     elif plan.mode == "classification":
@@ -1937,17 +1237,15 @@ def _execute_with_output_lock(
     env: dict[str, str],
 ) -> int:
     """Run every output-reading and output-writing phase under one lease."""
-    sweep_owned_scratch_dirs(args.output_dir)
+    sweep_owned_scratch_directories(args.output_dir)
     layout = OutputLayout(args.output_dir)
     run_mode, database_run = _classify_run(args)
     run_log.details["run_mode"] = run_mode
 
     plan = plan_confidence(args, layout, database_run, run_log)
-    current_analysis_config_id = analysis_config_id(
-        reference_data_id=reference_data_id(),
-    )
-    run_log.details["analysis_config_id"] = current_analysis_config_id
-    _check_resume_is_compatible(args, layout, plan, current_analysis_config_id)
+    identity = AnalysisIdentity.current()
+    run_log.details["analysis_config_id"] = identity.analysis_config_id
+    _check_resume_is_compatible(args, layout, plan, identity.analysis_config_id)
 
     ids, root, manual_inputs = schedule_entries(
         args, layout, args.pdb_redo_cache, run_log
@@ -1962,7 +1260,15 @@ def _execute_with_output_lock(
     )
     _clear_stale_outputs(args, layout, plan)
     cfg = worker_config_from_args(
-        args, env, root, args.pdb_redo_cache, cofactors, manual_inputs, plan, run_log
+        args,
+        env,
+        root,
+        args.pdb_redo_cache,
+        cofactors,
+        manual_inputs,
+        plan,
+        run_log,
+        identity=identity,
     )
     memory_plan = plan_entry_memory(args, ids, cfg, run_log)
     workers = choose_worker_count(args, len(ids), run_log)
@@ -1976,7 +1282,7 @@ def _execute_with_output_lock(
 def _execute(args: RunConfig, run_log: RunLog) -> int:
     """Resolve prerequisites, then exclusively own the output for the run."""
     cofactors = _load_cofactor_catalog()
-    env, _ = resolve_ccp4_environment(args)
+    env, _ = environment.resolve_ccp4_environment(args)
     if env is None:
         return 0  # --configure-ccp4 saved a setup path and ran nothing else.
     _prepare_output_directory(args.output_dir)

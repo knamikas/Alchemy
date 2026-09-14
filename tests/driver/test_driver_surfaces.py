@@ -26,7 +26,7 @@ import inputs
 import worker_contracts
 from codes import EntryStatus
 from coordination import schema as coordination_schema
-from driver import pool, resources, resume, runlog, writers
+from driver import dispatch, errors, pool, resources, resume, runlog, writers
 from driver.memory_admission import MemoryAdmission
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
@@ -57,7 +57,7 @@ class _PytestApi(Protocol):
 approx = cast(_PytestApi, pytest).approx
 
 # This module deliberately exercises these implementation-level policy seams.
-_BatchTally = pool._BatchTally  # pyright: ignore[reportPrivateUsage]
+_BatchTally = dispatch.BatchTally
 _report_batch = pool._report_batch  # pyright: ignore[reportPrivateUsage]
 _MAX_WEB_PAGE_BYTES = inputs._MAX_WEB_PAGE_BYTES  # pyright: ignore[reportPrivateUsage]
 
@@ -547,7 +547,7 @@ def test_the_exit_code_reports_operational_incompleteness(
     incomplete_entries: int, expected: int
 ) -> None:
     """Nonzero exactly when the caller has recoverable work outstanding."""
-    assert pool.batch_exit_code(incomplete_entries) == expected
+    assert dispatch.batch_exit_code(incomplete_entries) == expected
 
 
 def _entry(
@@ -1062,8 +1062,8 @@ def test_explicit_workers_are_still_capped_for_process_overhead(
     workers = pool.choose_worker_count(args, entry_count=20, run_log=run_log)
 
     assert workers == 3
-    assert run_log.details["Requested workers"] == 50
-    assert run_log.details["Selected workers"] == 3
+    assert run_log.details["requested_workers"] == 50
+    assert run_log.details["selected_workers"] == 3
 
 
 class _FailingResponse:
@@ -1195,7 +1195,7 @@ def test_a_body_matching_content_length_is_promoted(
 def test_mirror_batch_requires_an_explicit_root(tmp_path: Path) -> None:
     args = cli.parse_args([])
     assert args.pdb_redo_root is None
-    with pytest.raises(pool.DriverError, match="Supply --pdb-redo-root"):
+    with pytest.raises(errors.DriverError, match="Supply --pdb-redo-root"):
         pool.select_entry_ids(args, str(tmp_path / "cache"))
 
 
@@ -1249,7 +1249,7 @@ def test_an_unwritable_cache_is_reported_as_a_driver_error(
     monkeypatch.setattr(pool, "ensure_entry_available", unwritable)
     args = cli.parse_args(["--id", "9myr", "--pdb-redo-root", str(tmp_path / "mirror")])
 
-    with pytest.raises(pool.DriverError) as excinfo:
+    with pytest.raises(errors.DriverError) as excinfo:
         pool.select_entry_ids(args, str(tmp_path / "cache"))
 
     message = str(excinfo.value)
@@ -1436,7 +1436,7 @@ def test_weighted_admission_skips_a_blocked_large_entry() -> None:
         resources.EntryMemoryEstimate("small", gib, "test"),
     ]
 
-    admitted = pool.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active)
+    admitted = dispatch.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active)
 
     assert admitted is not None and admitted.pdb_id == "small"
     assert [estimate.pdb_id for estimate in pending] == ["large"]
@@ -1447,8 +1447,8 @@ def test_oversized_entry_is_admitted_only_after_active_work_drains() -> None:
     active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
     pending = [resources.EntryMemoryEstimate("large", 7 * gib, "test")]
 
-    assert pool.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active) is None
-    admitted = pool.pop_admissible_estimate(pending, 0, 5 * gib, [])
+    assert dispatch.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active) is None
+    admitted = dispatch.pop_admissible_estimate(pending, 0, 5 * gib, [])
     assert admitted is not None and admitted.pdb_id == "large"
 
 
@@ -1459,10 +1459,12 @@ def test_high_memory_entry_allows_two_ordinary_companions() -> None:
     second = resources.EntryMemoryEstimate("second", 2 * gib, "test")
     pending = [first, second]
 
-    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, [large])
+    admitted = dispatch.pop_admissible_estimate(pending, 3 * gib, 20 * gib, [large])
     assert admitted == first
 
-    admitted = pool.pop_admissible_estimate(pending, 5 * gib, 20 * gib, [large, first])
+    admitted = dispatch.pop_admissible_estimate(
+        pending, 5 * gib, 20 * gib, [large, first]
+    )
     assert admitted == second
 
 
@@ -1481,11 +1483,13 @@ def test_ordinary_companions_are_bounded_by_the_budget_not_a_count() -> None:
     ]
     pending = [resources.EntryMemoryEstimate("third", 2 * gib, "test")]
 
-    admitted = pool.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active)
+    admitted = dispatch.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active)
     assert admitted is not None and admitted.pdb_id == "third"
 
     exhausted = [resources.EntryMemoryEstimate("fourth", 2 * gib, "test")]
-    assert pool.pop_admissible_estimate(exhausted, 19 * gib, 20 * gib, active) is None
+    assert (
+        dispatch.pop_admissible_estimate(exhausted, 19 * gib, 20 * gib, active) is None
+    )
 
 
 def test_high_memory_entries_overlap_within_the_total_byte_budget() -> None:
@@ -1493,7 +1497,7 @@ def test_high_memory_entries_overlap_within_the_total_byte_budget() -> None:
     active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
     pending = [resources.EntryMemoryEstimate("another-large", 4 * gib, "test")]
 
-    admitted = pool.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
+    admitted = dispatch.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
     assert admitted is not None and admitted.pdb_id == "another-large"
 
 
@@ -1506,7 +1510,7 @@ def test_high_memory_admission_uses_the_total_budget_without_a_class_cap() -> No
         resources.EntryMemoryEstimate("ordinary", 2 * gib, "test"),
     ]
 
-    admitted = pool.pop_admissible_estimate(pending, 9 * gib, 20 * gib, active)
+    admitted = dispatch.pop_admissible_estimate(pending, 9 * gib, 20 * gib, active)
     assert admitted is not None and admitted.pdb_id == "another-large"
     assert [estimate.pdb_id for estimate in pending] == ["ordinary"]
 
@@ -1527,7 +1531,7 @@ def test_memory_budget_backoff_converges_without_dropping_below_one_worker() -> 
 
 def test_explicit_memory_limit_tracks_consumption_from_the_starting_probe() -> None:
     gib = 1024**3
-    plan = pool.MemoryPlan(
+    plan = resources.MemoryPlan(
         [],
         16 * gib,
         4 * gib,
@@ -1535,8 +1539,8 @@ def test_explicit_memory_limit_tracks_consumption_from_the_starting_probe() -> N
         configured_limit_bytes=20 * gib,
     )
 
-    assert pool.guarded_available_memory(plan, 60 * gib) == 16 * gib
-    assert pool.guarded_available_memory(plan, 42 * gib) == 0
+    assert dispatch.guarded_available_memory(plan, 60 * gib) == 16 * gib
+    assert dispatch.guarded_available_memory(plan, 42 * gib) == 0
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(
@@ -1833,7 +1837,7 @@ def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(
         ]
     )
 
-    with pytest.raises(pool.DriverError, match=r"Invalid --data-json:.*not found"):
+    with pytest.raises(errors.DriverError, match=r"Invalid --data-json:.*not found"):
         pool.select_entry_ids(args, str(tmp_path / "cache"))
 
 

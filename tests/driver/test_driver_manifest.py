@@ -36,7 +36,7 @@ import worker_contracts
 from codes import EntryStatus
 from coordination import declared_connections
 from coordination import schema as coordination_schema
-from driver import output_lock, pool, resources, resume, runlog
+from driver import dispatch, environment, output_lock, pool, resources, resume, runlog
 from driver import pool as driver_pool
 from driver.progress import ProgressReporter
 from driver.runlog import RunLog
@@ -1302,7 +1302,7 @@ class TestInitialResult:
 
     def test_carries_run_provenance_from_the_config(self) -> None:
         result = worker.initial_result("109m", CFG, None)
-        assert result.alchemy_version == pool.ALCHEMY_VERSION
+        assert result.alchemy_version == environment.ALCHEMY_VERSION
         assert result.alchemy_commit == CFG.alchemy_commit
         assert result.gemmi_version == CFG.gemmi_version
         assert result.ccp4_version == CFG.ccp4_version
@@ -1696,29 +1696,21 @@ class TestResumeStaging:
             csv.writer(handle).writerow([prior[name] for name in MANIFEST_COLUMNS])
 
         def _dispatch(
-            args: RunConfig,
             ids: Sequence[str],
             cfg: worker_contracts.WorkerConfig,
             workers: int,
-            writers: OutputWriters,
-            plan: driver_pool.ConfidencePlan,
-            staging: resume.ResumeStaging,
-            counts: tuple[dict[str, str], dict[str, str]],
-            prior: set[str],
+            memory_plan: resources.MemoryPlan,
             run_log: RunLog,
-            memory_plan: driver_pool.MemoryPlan,
-        ) -> driver_pool._BatchTally:  # pyright: ignore[reportPrivateUsage]
-            del memory_plan
+            sink: dispatch.ResultSink,
+        ) -> dispatch.BatchTally:
+            del cfg, workers, memory_plan, run_log
             for pdb_id in ids:
-                row = dict.fromkeys(MANIFEST_COLUMNS, "")
-                row.update(pdbID=pdb_id, status="ok", retryable="False")
-                writers.write_manifest_row(row)
-                staging.replacement_ids.add(pdb_id)
+                sink(_result(pdb_id, status="ok", retryable=False))
             if not fail_merge:
                 raise KeyboardInterrupt
-            return driver_pool._BatchTally()  # pyright: ignore[reportPrivateUsage]
+            return dispatch.BatchTally()
 
-        monkeypatch.setattr(driver_pool, "_dispatch_entries", _dispatch)
+        monkeypatch.setattr(dispatch, "dispatch_entries", _dispatch)
         if fail_merge:
 
             def failed_commit(*_args: object, **_kwargs: object) -> None:
@@ -1739,7 +1731,7 @@ class TestResumeStaging:
                 layout,
                 driver_pool.ConfidencePlan(),
                 run_log,
-                driver_pool.MemoryPlan(
+                resources.MemoryPlan(
                     [
                         resources.EntryMemoryEstimate("bbbb", 1, "test"),
                         resources.EntryMemoryEstimate("cccc", 1, "test"),
@@ -1752,7 +1744,7 @@ class TestResumeStaging:
         if fail_merge:
             recovery = Path(run_log.summary["resume_staging_recovery_dir"])
             assert recovery.is_dir()
-            driver_pool.sweep_owned_scratch_dirs(str(output_dir))
+            output_lock.sweep_owned_scratch_directories(str(output_dir))
             assert recovery.is_dir()
             assert [r[0] for r in _read_csv(str(recovery / "manifest.csv"))[1:]] == [
                 "bbbb",
@@ -1851,7 +1843,7 @@ class TestResumeStaging:
             assert os.path.isdir(staging.dir)
             assert summary["resume_staging_recovery_dir"] == staging.dir
             assert "staged CSV schema" in summary["resume_staging_commit_error"]
-            driver_pool.sweep_owned_scratch_dirs(str(tmp_path))
+            output_lock.sweep_owned_scratch_directories(str(tmp_path))
             assert os.path.isdir(staging.dir)
         finally:
             staging.discard()
@@ -2576,11 +2568,12 @@ class TestWriteEntry:
         plan = pool.ConfidencePlan()
         pool.write_entry(
             _result(),
-            self._args(),
             plan,
             cast(OutputWriters, writers),
             None,
             ({}, {}),
+            resume=False,
+            bonds=True,
         )
         assert writers.calls[-1] == "write_manifest_row"
         assert set(writers.calls[:-1]) == {
@@ -2598,11 +2591,12 @@ class TestWriteEntry:
         staging = cast(resume.ResumeStaging, SimpleNamespace(replacement_ids=set()))
         pool.write_entry(
             _result(),
-            self._args(resume=True),
             pool.ConfidencePlan(),
             cast(OutputWriters, self._RecordingWriters()),
             staging,
             ({}, {}),
+            resume=True,
+            bonds=True,
         )
         assert staging.replacement_ids == {"109m"}
 
@@ -3639,7 +3633,7 @@ class TestOutputDirectoryLock:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         monkeypatch.setattr(
-            pool, "resolve_ccp4_environment", _resolved_ccp4_environment
+            environment, "resolve_ccp4_environment", _resolved_ccp4_environment
         )
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -3693,7 +3687,7 @@ class TestLeakedWorkDirectorySweep:
         staging = tmp_path / os.path.basename(staging)
         (staging / "manifest.csv").write_text("stale", encoding="utf-8")
 
-        removed = pool.sweep_owned_scratch_dirs(str(tmp_path))
+        removed = output_lock.sweep_owned_scratch_directories(str(tmp_path))
 
         assert removed == 2
         assert sorted(os.listdir(tmp_path)) == []
@@ -3710,7 +3704,7 @@ class TestLeakedWorkDirectorySweep:
         (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
         (tmp_path / ".alchemy-109m-unmarked").mkdir()
 
-        assert pool.sweep_owned_scratch_dirs(str(tmp_path)) == 0
+        assert output_lock.sweep_owned_scratch_directories(str(tmp_path)) == 0
         assert sorted(os.listdir(tmp_path)) == [
             ".alchemy-109m-unmarked",
             ".alchemyrc",
@@ -3727,7 +3721,7 @@ class TestLeakedWorkDirectorySweep:
             preserve=True,
         )
 
-        assert pool.sweep_owned_scratch_dirs(str(tmp_path)) == 0
+        assert output_lock.sweep_owned_scratch_directories(str(tmp_path)) == 0
         assert os.path.isdir(kept)
 
     def test_symlink_is_not_followed_even_if_its_target_is_marked(
@@ -3741,12 +3735,14 @@ class TestLeakedWorkDirectorySweep:
         link = tmp_path / ".alchemy-109m-link"
         link.symlink_to(target, target_is_directory=True)
 
-        assert pool.sweep_owned_scratch_dirs(str(tmp_path)) == 0
+        assert output_lock.sweep_owned_scratch_directories(str(tmp_path)) == 0
         assert link.is_symlink()
         assert os.path.isdir(target)
 
     def test_missing_directory_is_not_an_error(self, tmp_path: Path) -> None:
-        assert pool.sweep_owned_scratch_dirs(str(tmp_path / "absent")) == 0
+        assert (
+            output_lock.sweep_owned_scratch_directories(str(tmp_path / "absent")) == 0
+        )
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
@@ -3761,7 +3757,9 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     if os.geteuid() == 0:
         pytest.skip("root ignores directory permissions")
 
-    monkeypatch.setattr(pool, "resolve_ccp4_environment", _resolved_ccp4_environment)
+    monkeypatch.setattr(
+        environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+    )
     parent = tmp_path / "readonly"
     parent.mkdir()
     parent.chmod(0o500)
@@ -3802,7 +3800,9 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
     The run itself fails for want of a mirror: sweeping happens at startup, so
     even a failing run must leave the directory clean.
     """
-    monkeypatch.setattr(pool, "resolve_ccp4_environment", _resolved_ccp4_environment)
+    monkeypatch.setattr(
+        environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+    )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     leaked: str | Path = output_lock.create_owned_scratch_directory(

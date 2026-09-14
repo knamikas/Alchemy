@@ -183,6 +183,11 @@ def worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult
     return result
 
 
+def is_worker_death_result(result: EntryResult) -> bool:
+    """Whether ``result`` was synthesized by ``worker_death_result``."""
+    return result.reason_codes == [ReasonCode.WORKER_PROCESS_DIED]
+
+
 def _coordinate_provenance(
     cfg: WorkerConfig, source_path: str
 ) -> tuple[str, str, bool]:

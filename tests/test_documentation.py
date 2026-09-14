@@ -16,7 +16,7 @@ import pytest
 from helpers import REPO_ROOT, SRC_DIR
 
 from codes import ReasonCode
-from driver import pool
+from driver import environment
 from driver.writers import STATS_COLUMNS
 
 README_PATH = os.path.join(REPO_ROOT, "README.md")
@@ -369,8 +369,8 @@ def test_version_has_a_single_definition() -> None:
         "attr": "_version.__version__"
     }
 
-    assert _version.__version__ == pool.ALCHEMY_VERSION, (
-        "driver.pool.ALCHEMY_VERSION must come from _version.py, not a second literal"
+    assert _version.__version__ == environment.ALCHEMY_VERSION, (
+        "driver.environment.ALCHEMY_VERSION must come from _version.py, not a second literal"
     )
 
 

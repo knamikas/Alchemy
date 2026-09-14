@@ -34,8 +34,8 @@ import reference_data
 import worker
 import worker_contracts
 from codes import EntryStatus
+from driver import dispatch, environment, runlog, writers
 from driver import pool as driver_pool
-from driver import runlog, writers
 from driver.writers import MANIFEST_COLUMNS
 
 if TYPE_CHECKING:
@@ -108,9 +108,9 @@ def _reference_cfg(
         log_level=logging.INFO,
         allow_download=False,
         manual_inputs=manual_inputs,
-        alchemy_commit=driver_pool.alchemy_commit(),
-        gemmi_version=driver_pool.gemmi_version(),
-        ccp4_version=driver_pool.ccp4_version(env),
+        alchemy_commit=environment.alchemy_commit(),
+        gemmi_version=environment.gemmi_version(),
+        ccp4_version=environment.ccp4_version(env),
         reference_data_id=reference_data.reference_data_id(),
         analysis_config_id=analysis_config.analysis_config_id(
             reference_data_id=reference_data.reference_data_id(),
@@ -159,7 +159,7 @@ def test_drain_inflight_applies_notifications_in_order(
         for notification in notifications:
             inflight.put(notification)
         assignments: dict[int, str] = {}
-        driver_pool.drain_inflight(inflight, assignments)
+        dispatch.drain_inflight(inflight, assignments)
         assert assignments == expected, label
     finally:
         inflight.close()
@@ -173,7 +173,7 @@ def test_drain_inflight_preserves_unrelated_existing_assignments() -> None:
     try:
         inflight.put(("start", 22, "2xyz"))
         assignments = {11: "1abc"}
-        driver_pool.drain_inflight(inflight, assignments)
+        dispatch.drain_inflight(inflight, assignments)
         assert assignments == {11: "1abc", 22: "2xyz"}
     finally:
         inflight.close()
@@ -192,7 +192,7 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue() -> None:
     assignments: dict[int, str] = {}
 
     def drain() -> None:
-        driver_pool.drain_inflight(inflight, assignments)
+        dispatch.drain_inflight(inflight, assignments)
         returned.set()
 
     drainer = threading.Thread(target=drain, daemon=True)
@@ -219,7 +219,7 @@ def test_drain_inflight_survives_a_torn_down_queue(error: Exception) -> None:
     raised error here would abort a batch the driver could still finish.
     """
     assignments = {11: "1abc"}
-    driver_pool.drain_inflight(
+    dispatch.drain_inflight(
         cast("multiprocessing.SimpleQueue[tuple[str, int, str]]", _BrokenQueue(error)),
         assignments,
     )
@@ -236,14 +236,14 @@ def test_dead_worker_pids_reports_only_newly_missing_workers() -> None:
     known: set[int] = set()
     pool = _FakePool([101, 102])
 
-    assert driver_pool.dead_worker_pids(cast("Pool", pool), known) == set()
+    assert dispatch.dead_worker_pids(cast("Pool", pool), known) == set()
     assert known == {101, 102}
 
     pool.set_roster([101, 103])
-    assert driver_pool.dead_worker_pids(cast("Pool", pool), known) == {102}
+    assert dispatch.dead_worker_pids(cast("Pool", pool), known) == {102}
     assert known == {101, 103}
 
-    assert driver_pool.dead_worker_pids(cast("Pool", pool), known) == set()
+    assert dispatch.dead_worker_pids(cast("Pool", pool), known) == set()
     assert known == {101, 103}
 
 
@@ -254,7 +254,7 @@ def test_dead_worker_pids_reports_several_simultaneous_deaths() -> None:
     """
     known = {1, 2, 3}
     pool = _FakePool([1, 4, 5])
-    assert driver_pool.dead_worker_pids(cast("Pool", pool), known) == {2, 3}
+    assert dispatch.dead_worker_pids(cast("Pool", pool), known) == {2, 3}
     assert known == {1, 4, 5}
 
 
@@ -277,7 +277,7 @@ def test_dead_worker_pids_treats_an_unavailable_roster_as_no_news(
     worker that ever ran.
     """
     known = {101, 102}
-    assert driver_pool.dead_worker_pids(cast("Pool", pool), known) == set(), label
+    assert dispatch.dead_worker_pids(cast("Pool", pool), known) == set(), label
     assert known == {101, 102}, "the known set must be left alone"
 
 
@@ -513,18 +513,20 @@ def _driver_child(
     _stub_script = script
     _stub_marker_dir = marker_dir
     try:
-        driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+        environment.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
         # These scenarios require the requested process topology; inheriting a
         # CI container's memory cap can serialize them and test a different case.
         driver_pool.automatic_worker_limits = lambda **_kwargs: (  # type: ignore[attr-defined]
             max(1, len(script)),
             None,
         )
+        # Both the memory planner and the dispatcher probe available memory.
         driver_pool.available_memory_bytes = lambda: None  # type: ignore[attr-defined]
-        # Patch process where driver.pool imported it; strict typing rejects this re-export.
-        driver_pool.process = _stub_process  # type: ignore[attr-defined]
+        dispatch.available_memory_bytes = lambda: None  # type: ignore[attr-defined]
+        # Patch process where driver.dispatch imported it; strict typing rejects this re-export.
+        dispatch.process = _stub_process  # type: ignore[attr-defined]
         if stall_grace is not None:
-            driver_pool.WORKER_STALL_GRACE_S = stall_grace
+            dispatch.WORKER_STALL_GRACE_S = stall_grace
         args = cli.parse_args(argv)
         run_log = runlog.RunLog(args, "pytest")
         channel.put(("exit_code", driver_pool.run(args, run_log)))
@@ -963,7 +965,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(
         2, initializer=worker.initialize_worker, initargs=(cfg, inflight)
     ) as pool:
         # Prime the roster, as the driver's first loop iteration does.
-        driver_pool.dead_worker_pids(pool, worker_pids)
+        dispatch.dead_worker_pids(pool, worker_pids)
         results = pool.imap_unordered(
             _spawn_task, [("ok", "1abc"), ("die", "2xyz")], chunksize=1
         )
@@ -971,8 +973,8 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(
         while time.monotonic() < deadline and not (finished and dead_pids):
             with contextlib.suppress(multiprocessing.TimeoutError):
                 finished.append(results.next(timeout=0.5))
-            driver_pool.drain_inflight(inflight, assignments)
-            dead_pids |= driver_pool.dead_worker_pids(pool, worker_pids)
+            dispatch.drain_inflight(inflight, assignments)
+            dead_pids |= dispatch.dead_worker_pids(pool, worker_pids)
         pool.terminate()
 
     assert finished, "the healthy spawn worker returned no result"
@@ -1066,6 +1068,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         None,
         driver_pool.ConfidencePlan(),
         run_log,
+        identity=driver_pool.AnalysisIdentity.current(),
     )
 
     assert isinstance(cfg, worker_contracts.WorkerConfig)
@@ -1115,6 +1118,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
         driver_pool.ConfidencePlan(),
         runlog.RunLog(manual, "pytest"),
+        identity=driver_pool.AnalysisIdentity.current(),
     )
     assert manual_cfg.allow_download is False
     assert manual_cfg.manual_inputs is not None
@@ -1148,9 +1152,9 @@ def _sigterm_driver_child(
     if hasattr(os, "setsid"):
         os.setsid()
 
-    driver_pool.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
-    # Replaced as driver.pool sees it; see _driver_child.
-    driver_pool.process = _never_finishing_process  # type: ignore[attr-defined]
+    environment.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+    # Replaced as driver.dispatch sees it; see _driver_child.
+    dispatch.process = _never_finishing_process  # type: ignore[attr-defined]
     ready.set()
     try:
         channel.put(("exit_code", main.main(list(argv))))
@@ -1254,7 +1258,7 @@ def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(
     worker SIGKILLed mid-write never released. Unbounded, the process would sit
     there complete, with no run log and no exit status.
     """
-    monkeypatch.setattr(driver_pool, "WORKER_SHUTDOWN_GRACE_S", 0.2)
+    monkeypatch.setattr(dispatch, "WORKER_SHUTDOWN_GRACE_S", 0.2)
     release = threading.Event()
 
     class _WedgedListener:
@@ -1264,7 +1268,7 @@ def test_a_wedged_log_listener_is_abandoned_instead_of_hanging_the_run(
     log_queue = _FakeLogQueue()
     started = time.monotonic()
     try:
-        abandoned = driver_pool.stop_log_listener(
+        abandoned = dispatch.stop_log_listener(
             cast("QueueListener", _WedgedListener()),
             cast("multiprocessing.Queue[Any]", log_queue),
         )
@@ -1288,7 +1292,7 @@ def test_a_healthy_log_listener_stops_without_being_abandoned() -> None:
     log_queue = _FakeLogQueue()
 
     assert (
-        driver_pool.stop_log_listener(
+        dispatch.stop_log_listener(
             cast("QueueListener", _Listener()),
             cast("multiprocessing.Queue[Any]", log_queue),
         )

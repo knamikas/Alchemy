@@ -11,7 +11,7 @@ import math
 import os
 import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from multiprocessing import cpu_count
 from typing import Any, TextIO, cast
@@ -61,6 +61,21 @@ class EntryMemoryEstimate:
     def is_high_memory(self) -> bool:
         """Return whether the estimate exceeds the ordinary worker floor."""
         return self.bytes > AUTO_WORKER_MEMORY_BYTES
+
+
+@dataclass(frozen=True)
+class MemoryPlan:
+    """Per-entry estimates and the run's memory admission budget."""
+
+    estimates: Sequence[EntryMemoryEstimate]
+    budget_bytes: int | None
+    reserve_bytes: int | None
+    initial_available_bytes: int | None = None
+    configured_limit_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        """Snapshot the estimates so later list edits cannot change the plan."""
+        object.__setattr__(self, "estimates", tuple(self.estimates))
 
 
 def available_cpu_count() -> int:

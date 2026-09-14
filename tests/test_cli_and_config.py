@@ -19,7 +19,7 @@ import ccp4_setup
 import cli
 import confidence_score
 import density_analysis as density
-from driver import pool
+from driver import environment, errors, pool
 
 
 def _option_help(option: str) -> str:
@@ -314,22 +314,22 @@ def test_the_driver_reads_the_setup_path_configuration_writes(
     def verify_ccp4(_env: Mapping[str, str]) -> None:
         return None
 
-    monkeypatch.setattr(pool, "resolve_env", resolve_env)
-    monkeypatch.setattr(pool, "verify_ccp4", verify_ccp4)
+    monkeypatch.setattr(environment, "resolve_env", resolve_env)
+    monkeypatch.setattr(environment, "verify_ccp4", verify_ccp4)
 
     configure = cli.parse_args(["--configure-ccp4", str(setup)])
-    assert pool.resolve_ccp4_environment(configure) == (None, None)
+    assert environment.resolve_ccp4_environment(configure) == (None, None)
     assert primary.exists(), "--configure-ccp4 wrote outside the configured list"
 
     def tools_unavailable(_env: Mapping[str, str] | None = None) -> bool:
         return False
 
     monkeypatch.setattr(ccp4_setup, "ccp4_tools_available", tools_unavailable)
-    monkeypatch.setattr(pool, "ccp4_tools_available", tools_unavailable)
+    monkeypatch.setattr(environment, "ccp4_tools_available", tools_unavailable)
     monkeypatch.delenv("CCP4_SETUP", raising=False)
 
     run = cli.parse_args([])
-    _, used = pool.resolve_ccp4_environment(run)
+    _, used = environment.resolve_ccp4_environment(run)
 
     assert used == str(setup)
 
@@ -360,8 +360,8 @@ def test_nonexistent_ccp4_setup_is_an_error_even_with_ccp4_on_path(
     )
 
     args = cli.parse_args(["--ccp4-setup", "/nonexistent/ccp4.setup-sh"])
-    with pytest.raises(pool.DriverError, match="not found"):
-        pool.resolve_ccp4_environment(args)
+    with pytest.raises(errors.DriverError, match="not found"):
+        environment.resolve_ccp4_environment(args)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
@@ -383,7 +383,7 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     setup.write_text(f'export PATH="{requested}:$PATH"\n', encoding="utf-8")
 
     args = cli.parse_args(["--ccp4-setup", str(setup)])
-    env, used = pool.resolve_ccp4_environment(args)
+    env, used = environment.resolve_ccp4_environment(args)
 
     assert env is not None
     assert used == str(setup)
@@ -435,7 +435,7 @@ def test_windows_ccp4_setup_output_is_authoritative(
 def test_the_three_timeout_budgets_are_distinct_and_ordered() -> None:
     """Each class of subprocess gets a budget matched to its own work."""
     assert (
-        pool.PROVENANCE_COMMAND_TIMEOUT_S
+        environment.PROVENANCE_COMMAND_TIMEOUT_S
         < ccp4_setup.SETUP_SHELL_TIMEOUT_S
         < density.CCP4_TOOL_TIMEOUT_S
     )
@@ -480,10 +480,10 @@ def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(
         assert timeout is not None, "provenance probes must be bounded"
         raise subprocess.TimeoutExpired(cmd, float(timeout))
 
-    monkeypatch.setattr("driver.pool.subprocess.run", fake_run)
+    monkeypatch.setattr("driver.environment.subprocess.run", fake_run)
 
-    assert pool.alchemy_commit() == "unknown"
-    assert calls and set(calls) == {pool.PROVENANCE_COMMAND_TIMEOUT_S}
+    assert environment.alchemy_commit() == "unknown"
+    assert calls and set(calls) == {environment.PROVENANCE_COMMAND_TIMEOUT_S}
 
 
 def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense() -> None:
