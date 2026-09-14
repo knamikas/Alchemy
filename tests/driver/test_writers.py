@@ -10,7 +10,7 @@ import pytest
 from helpers import entry_result, read_csv
 
 import confidence_score
-import metal_identification
+import edstats_statistics
 from coordination import schema as coordination_schema
 from driver import resume
 from driver.writers import (
@@ -131,7 +131,7 @@ class TestOutputWriters:
         writers = OutputWriters({**handles, "density_context": context_handle})
         writers.write_density_context_row(entry_result("109m"))
         measured: dict[str, Any] = dict.fromkeys(
-            metal_identification.DENSITY_CONTEXT_COLUMNS, ""
+            edstats_statistics.DENSITY_CONTEXT_COLUMNS, ""
         )
         measured.update(
             pdbID="1cll",

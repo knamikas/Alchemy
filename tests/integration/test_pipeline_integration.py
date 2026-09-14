@@ -37,9 +37,9 @@ import inputs
 import main
 import reference_data
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
-from driver import runlog
+from driver import review_queue, runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
-from metal_identification import DENSITY_CONTEXT_COLUMNS
+from edstats_statistics import DENSITY_CONTEXT_COLUMNS
 
 _StrPath = str | os.PathLike[str]
 
@@ -468,7 +468,7 @@ def test_single_entry_run_writes_documented_outputs(
     )
     assert read_header(output_dir, "review_queue_all.csv") == [
         *CONFIDENCE_COLUMNS,
-        *crystallization_conditions.REVIEW_CONTEXT_COLUMNS,
+        *review_queue.REVIEW_CONTEXT_COLUMNS,
     ]
 
     # Columns the README names must be present, not merely equal to the code's

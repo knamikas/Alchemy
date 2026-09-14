@@ -8,15 +8,15 @@ import re
 import shutil
 from dataclasses import dataclass
 from http.client import HTTPException
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
 import gemmi
 import numpy as np
-import numpy.typing as npt
 
 from coordinate_conversion import cif_to_pdb
+from gemmi_typing import mtz_column_data
 from run_logging import logger_for
 
 # The four Fourier coefficients EDSTATS' two maps are calculated from; a
@@ -35,10 +35,13 @@ class PdbRedoMetadata:
     date: str = ""
 
 
-class _MtzColumnArray(Protocol):
-    """The concrete array member omitted from part of Gemmi's column stub."""
+class MissingInputError(FileNotFoundError):
+    """An entry's input file could not be located, downloaded, or read.
 
-    array: npt.NDArray[np.float32]
+    Raised as a domain signal, distinct from an OS-level ``FileNotFoundError``,
+    so the worker can skip the entry as missing input. It subclasses
+    ``FileNotFoundError`` so existing handlers keep working.
+    """
 
 
 def read_data_json_properties(data_json_path: str) -> dict[str, Any]:
@@ -78,7 +81,7 @@ def entry_dir_for(root: str, pdb_id: str) -> str:
 
 def _gunzip_to(src_gz: str, dst: str) -> str:
     if not os.path.exists(src_gz):
-        raise FileNotFoundError(src_gz)
+        raise MissingInputError(src_gz)
     with gzip.GzipFile(src_gz, "rb") as fi, open(dst, "wb") as fo:
         shutil.copyfileobj(fi, fo)
     return dst
@@ -87,6 +90,23 @@ def _gunzip_to(src_gz: str, dst: str) -> str:
 def first_existing(*paths: str) -> str | None:
     """Return the first existing path, or ``None`` when none exists."""
     return next((path for path in paths if os.path.exists(path)), None)
+
+
+def final_file_candidates(
+    entry_dir: str, pdb_id: str, kind: Literal["mtz", "coordinates"]
+) -> tuple[str, ...]:
+    """Return the paths a final PDB-REDO file may be stored under, in priority order.
+
+    Plain files win over their gzipped mirrors, and for coordinates the
+    authoritative mmCIF wins over the PDB compatibility export. The first
+    existing candidate is the one an analysis uses, so the order matters.
+    """
+    extensions = ("mtz",) if kind == "mtz" else ("cif", "pdb")
+    return tuple(
+        os.path.join(entry_dir, f"{pdb_id}_final.{extension}{suffix}")
+        for extension in extensions
+        for suffix in ("", ".gz")
+    )
 
 
 # Detect HTML error pages returned with HTTP 200 before accepting cached data.
@@ -139,33 +159,28 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str
     PDB compatibility export is used only when no mmCIF exists. Compressed
     mirrors are accepted for either format.
     """
-    mtz = first_existing(
-        os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
-        os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
-    )
+    mtz_candidates = final_file_candidates(entry_dir, pdb_id, "mtz")
+    mtz = first_existing(*mtz_candidates)
     if mtz is None:
-        raise FileNotFoundError(os.path.join(entry_dir, f"{pdb_id}_final.mtz"))
+        raise MissingInputError(mtz_candidates[0])
     if mtz.endswith(".gz"):
         mtz = _gunzip_to(mtz, os.path.join(work_dir, f"{pdb_id}_final.mtz"))
 
-    cif = first_existing(
-        os.path.join(entry_dir, f"{pdb_id}_final.cif"),
-        os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
+    coordinates = first_existing(
+        *final_file_candidates(entry_dir, pdb_id, "coordinates")
     )
-    pdb: str | None
-    if cif is not None:
-        pdb = cif_to_pdb(cif, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb"))
+    if coordinates is None:
+        raise MissingInputError(f"{pdb_id}_final.cif or {pdb_id}_final.pdb")
+    if coordinates.endswith((".cif", ".cif.gz")):
+        pdb = cif_to_pdb(
+            coordinates, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb")
+        )
         return mtz, pdb
-
-    pdb = first_existing(
-        os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
-        os.path.join(entry_dir, f"{pdb_id}_final.pdb.gz"),
-    )
-    if pdb is None:
-        raise FileNotFoundError(f"{pdb_id}_final.cif or {pdb_id}_final.pdb")
-    if pdb.endswith(".gz"):
-        pdb = _gunzip_to(pdb, os.path.join(work_dir, f"{pdb_id}_final.pdb"))
-    return mtz, pdb
+    if coordinates.endswith(".gz"):
+        coordinates = _gunzip_to(
+            coordinates, os.path.join(work_dir, f"{pdb_id}_final.pdb")
+        )
+    return mtz, coordinates
 
 
 def read_resolution(
@@ -264,7 +279,7 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
     # are finite, so the mask spans whole rows.
     usable = np.isfinite(d_values) & (d_values > 0.0)
     for column in columns:
-        usable &= np.isfinite(cast(_MtzColumnArray, column).array)
+        usable &= np.isfinite(mtz_column_data(column).array)
     usable_d = d_values[usable]
     if usable_d.size == 0:
         raise ValueError(
@@ -275,15 +290,9 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
 
 def has_final_files(entry_dir: str, pdb_id: str) -> bool:
     """Whether an entry has final map coefficients and usable coordinates."""
-    mtz = first_existing(
-        os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
-        os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
-    )
+    mtz = first_existing(*final_file_candidates(entry_dir, pdb_id, "mtz"))
     coordinates = first_existing(
-        os.path.join(entry_dir, f"{pdb_id}_final.cif"),
-        os.path.join(entry_dir, f"{pdb_id}_final.cif.gz"),
-        os.path.join(entry_dir, f"{pdb_id}_final.pdb"),
-        os.path.join(entry_dir, f"{pdb_id}_final.pdb.gz"),
+        *final_file_candidates(entry_dir, pdb_id, "coordinates")
     )
     return _is_usable_entry_file(mtz) and _is_usable_entry_file(coordinates)
 
@@ -309,16 +318,16 @@ def _response_content_length(response: _HttpResponse, url: str) -> int | None:
     try:
         length = int(text)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise FileNotFoundError(
+        raise MissingInputError(
             f"{url}: invalid Content-Length header {value!r}"
         ) from exc
     if length < 0:
-        raise FileNotFoundError(f"{url}: invalid Content-Length header {value!r}")
+        raise MissingInputError(f"{url}: invalid Content-Length header {value!r}")
     return length
 
 
 def download_stream(url: str, dst: str, timeout: float = DOWNLOAD_TIMEOUT_S) -> str:
-    """Download a URL to dst, raising FileNotFoundError if no usable file results.
+    """Download a URL to dst, raising MissingInputError if no usable file results.
 
     Handle both request failures and interrupted or truncated response bodies,
     including IncompleteRead, which is not an OSError.
@@ -326,16 +335,16 @@ def download_stream(url: str, dst: str, timeout: float = DOWNLOAD_TIMEOUT_S) -> 
     try:
         response = urlopen(url, timeout=timeout)
     except HTTPError as e:
-        raise FileNotFoundError(f"{url}: status {e.code}") from e
+        raise MissingInputError(f"{url}: status {e.code}") from e
     except (OSError, ValueError) as e:
-        raise FileNotFoundError(f"{url}: {e}") from e
+        raise MissingInputError(f"{url}: {e}") from e
 
     tmp = f"{dst}.{os.getpid()}.part"
     try:
         with response:
             status = response.getcode()
             if status != 200:
-                raise FileNotFoundError(f"{url}: status {status}")
+                raise MissingInputError(f"{url}: status {status}")
             expected_bytes = _response_content_length(response, url)
             received_bytes = 0
             with open(tmp, "wb") as fh:
@@ -343,17 +352,17 @@ def download_stream(url: str, dst: str, timeout: float = DOWNLOAD_TIMEOUT_S) -> 
                     fh.write(chunk)
                     received_bytes += len(chunk)
             if expected_bytes is not None and received_bytes != expected_bytes:
-                raise FileNotFoundError(
+                raise MissingInputError(
                     f"{url}: incomplete response body: expected "
                     f"{expected_bytes} bytes, received {received_bytes}"
                 )
         os.replace(tmp, dst)
-    except FileNotFoundError:
+    except MissingInputError:
         _remove_partial_download(tmp)
         raise
     except (OSError, HTTPException) as e:
         _remove_partial_download(tmp)
-        raise FileNotFoundError(f"{url}: {type(e).__name__}: {e}") from e
+        raise MissingInputError(f"{url}: {type(e).__name__}: {e}") from e
     except Exception:
         _remove_partial_download(tmp)
         raise
@@ -372,7 +381,7 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
         try:
             download_stream(url, dst)
             return True
-        except FileNotFoundError:
+        except MissingInputError:
             return False
 
     def fetch_variant(name: str) -> bool:
@@ -391,7 +400,7 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
         try_fetch("data.json")
 
     if not has_final_files(entry, pdb_id):
-        raise FileNotFoundError(f"PDB-REDO entry {pdb_id} is missing final model files")
+        raise MissingInputError(f"PDB-REDO entry {pdb_id} is missing final model files")
 
 
 def ensure_entry_available(
@@ -411,7 +420,7 @@ def ensure_entry_available(
     download_entry_to_cache(pdb_id, cache_root)
     if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
         return cache_root
-    raise FileNotFoundError(pdb_id)
+    raise MissingInputError(pdb_id)
 
 
 def resolve_manual_inputs(
@@ -425,17 +434,17 @@ def resolve_manual_inputs(
     if not mtz_file:
         raise ValueError("manual mode requires --mtz-file")
     if not os.path.exists(mtz_file):
-        raise FileNotFoundError(f"mtz file not found: {mtz_file}")
+        raise MissingInputError(f"mtz file not found: {mtz_file}")
 
     if cif_file:
         if not os.path.exists(cif_file):
-            raise FileNotFoundError(f"cif file not found: {cif_file}")
+            raise MissingInputError(f"cif file not found: {cif_file}")
         target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdb_id}.pdb")
         return mtz_file, cif_to_pdb(cif_file, target_pdb)
 
     if pdb_file:
         if not os.path.exists(pdb_file):
-            raise FileNotFoundError(f"pdb file not found: {pdb_file}")
+            raise MissingInputError(f"pdb file not found: {pdb_file}")
         return mtz_file, pdb_file
 
     raise ValueError("manual mode requires --pdb-file or --cif-file")

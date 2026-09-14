@@ -90,6 +90,25 @@ def test_a_legacy_pdb_export_counts_as_usable_coordinates(
     assert inputs.has_final_files(entry_dir, "9myr")
 
 
+def test_final_file_candidates_rank_plain_over_gzipped_and_mmcif_over_pdb() -> None:
+    """The first existing candidate is the file an analysis uses.
+
+    Every caller that probes for an entry's final files shares this order, so
+    the mirror, the worker's provenance path, and the driver's memory estimate
+    all agree on which file wins.
+    """
+    assert inputs.final_file_candidates("/mirror/my/9myr", "9myr", "mtz") == (
+        "/mirror/my/9myr/9myr_final.mtz",
+        "/mirror/my/9myr/9myr_final.mtz.gz",
+    )
+    assert inputs.final_file_candidates("/mirror/my/9myr", "9myr", "coordinates") == (
+        "/mirror/my/9myr/9myr_final.cif",
+        "/mirror/my/9myr/9myr_final.cif.gz",
+        "/mirror/my/9myr/9myr_final.pdb",
+        "/mirror/my/9myr/9myr_final.pdb.gz",
+    )
+
+
 def test_enumeration_returns_only_complete_entries(tmp_path: Path) -> None:
     """Incomplete entries are skipped, and the order follows the mirror layout.
 
@@ -137,7 +156,7 @@ def test_missing_map_coefficients_are_reported_by_path(tmp_path: Path) -> None:
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
-    with pytest.raises(FileNotFoundError, match="9myr_final.mtz"):
+    with pytest.raises(inputs.MissingInputError, match="9myr_final.mtz"):
         inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
 
@@ -196,7 +215,9 @@ def test_an_entry_with_neither_coordinate_format_names_both(tmp_path: Path) -> N
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
-    with pytest.raises(FileNotFoundError, match=r"9myr_final\.cif or 9myr_final\.pdb"):
+    with pytest.raises(
+        inputs.MissingInputError, match=r"9myr_final\.cif or 9myr_final\.pdb"
+    ):
         inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
 
@@ -380,7 +401,7 @@ def test_a_transfer_that_fails_midway_reports_no_usable_file(
     monkeypatch.setattr(inputs, "urlopen", failing_response)
     destination = tmp_path / "9myr_final.mtz"
 
-    with pytest.raises(FileNotFoundError) as excinfo:
+    with pytest.raises(inputs.MissingInputError) as excinfo:
         inputs.download_stream(
             "https://example.invalid/9myr_final.mtz", str(destination)
         )
@@ -403,13 +424,34 @@ def test_a_clean_early_eof_is_not_promoted_into_the_cache(
     monkeypatch.setattr(inputs, "urlopen", short_response)
     destination = tmp_path / "9myr_final.mtz"
 
-    with pytest.raises(FileNotFoundError, match=r"expected .* received"):
+    with pytest.raises(inputs.MissingInputError, match=r"expected .* received"):
         inputs.download_stream(
             "https://example.invalid/9myr_final.mtz", str(destination)
         )
 
     assert not destination.exists()
     assert list(tmp_path.glob("*.part")) == []
+
+
+def test_a_missing_manual_file_is_reported_as_missing_input(tmp_path: Path) -> None:
+    """A manual path that does not exist is a domain signal, not an OS error.
+
+    The worker skips the entry on ``MissingInputError`` alone, so the manual
+    readers must raise that class rather than a bare ``FileNotFoundError``.
+    """
+    mtz = tmp_path / "entry.mtz"
+    mtz.write_bytes(b"MTZ ")
+
+    with pytest.raises(inputs.MissingInputError, match="mtz file not found"):
+        inputs.resolve_manual_inputs("9myr", mtz_file=str(tmp_path / "absent.mtz"))
+    with pytest.raises(inputs.MissingInputError, match="pdb file not found"):
+        inputs.resolve_manual_inputs(
+            "9myr", mtz_file=str(mtz), pdb_file=str(tmp_path / "absent.pdb")
+        )
+    with pytest.raises(inputs.MissingInputError, match="cif file not found"):
+        inputs.resolve_manual_inputs(
+            "9myr", mtz_file=str(mtz), cif_file=str(tmp_path / "absent.cif")
+        )
 
 
 def test_a_body_matching_content_length_is_promoted(

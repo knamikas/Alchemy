@@ -22,8 +22,11 @@ collects results, prepares confidence scores, writes outputs, finalizes the
 batch, builds the review queue, and writes the run report. Several entries can
 run concurrently, while the stages within each entry run in order.
 
-Inputs come from the mirror, downloaded cache, or manual files. The original-PDB
-metadata cache supplies crystallization context. `reference_data.py` and
+Inputs come from the mirror, downloaded cache, or manual files.
+[rcsb_metadata_cache.py](../src/rcsb_metadata_cache.py) warms the original-PDB
+metadata cache before workers start, and
+[crystallization_conditions.py](../src/crystallization_conditions.py) reads it
+for crystallization context. `reference_data.py` and
 `src/data/` provide the cofactor catalog and distance table used in batch
 preparation, metal identification, and coordination analysis. Identification
 and coordination share the loaded structure context; confidence scoring uses a
@@ -65,7 +68,9 @@ each process; subsequent tasks call `process()` with a PDB ID.
 Input preparation uses [inputs.py](../src/inputs.py) to locate or retrieve
 files and read reflection limits and PDB-REDO metadata.
 [coordinate_conversion.py](../src/coordinate_conversion.py) handles coordinate
-conversion and first-model extraction. Both EDSTATS and
+conversion and first-model extraction, recording source-residue provenance in
+`REMARK 950` records whose format [pdb_remarks.py](../src/pdb_remarks.py) owns,
+writer and parser alike. Both EDSTATS and
 [structure_analysis.py](../src/structure_analysis.py) use that prepared model.
 The original coordinate path is retained for deposited connection records,
 crystallization context, and provenance.
@@ -97,7 +102,7 @@ Map generation and density extraction proceed as follows:
    mFo-DFc map. With full-map scope, `fft` generates both full maps directly.
 3. `edstats` combines the prepared model and both maps to produce residue
    statistics.
-4. `metal_identification.py` extracts metal-site rows and density context from
+4. `edstats_statistics.py` extracts metal-site rows and density context from
    those statistics.
 
 Twin normalization is a guarded recovery path after MTZFIX validation fails
@@ -120,7 +125,7 @@ metadata. Its collaborators have distinct responsibilities:
 | [dpi.py](../src/coordination/dpi.py) | Calculate coordinate-precision components used in geometry assessment. |
 | [contact_record.py](../src/coordination/contact_record.py) | Carry candidate provenance, eligibility, geometry, and multi-donor assessments. |
 | [reference_data.py](../src/reference_data.py) | Load and verify reference distances and cofactor classifications. |
-| [metal_identification.py](../src/metal_identification.py) | Supply density-statistics lookup helpers used by contact analysis. |
+| [edstats_statistics.py](../src/edstats_statistics.py) | Validate the EDSTATS residue table, join its rows to coordinate residues, and aggregate the density-context row; contact analysis builds its per-site density z-score index from those rows. |
 | [schema.py](../src/coordination/schema.py) | Define contact/site output columns and serialize their values. |
 
 Proximity candidates and declared connections are merged before assessment.
@@ -144,10 +149,10 @@ the returned site and bond evidence:
 | Uncapped database run | Stream compact confidence inputs, then finalize scores and a reusable reference when the batch has no recoverable unfinished entries. |
 | `--no-bonds` | Skip contact analysis and disable confidence output. |
 
-When confidence scores are available, the driver calls
-[crystallization_conditions.py](../src/crystallization_conditions.py) to build
-the review queue by joining `REVIEW`/`SUSPECT` sites to the crystallization
-summary. Crystallization metadata does not participate in scoring.
+When confidence scores are available,
+[driver/review_queue.py](../src/driver/review_queue.py) builds the review queue
+by joining `REVIEW`/`SUSPECT` sites to the crystallization summary.
+Crystallization metadata does not participate in scoring.
 
 Recovery spans several layers:
 
@@ -181,6 +186,8 @@ Recovery spans several layers:
 | [codes.py](../src/codes.py) | Status, reason, warning, and contact vocabulary. |
 | [analysis_config.py](../src/analysis_config.py) | Analysis-policy identity and compatibility. |
 | [metal_elements.py](../src/metal_elements.py) | Recognized metal elements. |
+| [pdb_remarks.py](../src/pdb_remarks.py) | The `REMARK 950 ALCHEMY` provenance records of converted PDB files: record layouts, writer, and parser. |
+| [gemmi_typing.py](../src/gemmi_typing.py) | Typed views of Gemmi members its stub leaves untyped. |
 | [driver/progress.py](../src/driver/progress.py) | Batch progress reporting. |
 | [worker_memory.py](../src/worker_memory.py) | Release idle memory after an entry's analysis frame is gone. |
 | [_version.py](../src/_version.py) | Software version used in provenance. |

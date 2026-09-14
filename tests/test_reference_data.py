@@ -21,7 +21,7 @@ from metal_elements import METAL_ELEMENTS
 
 _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
     "coordination.analysis",
-    "metal_identification",
+    "edstats_statistics",
     "reference_data",
 )
 

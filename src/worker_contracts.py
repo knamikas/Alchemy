@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from _version import __version__
 from codes import EntryStatus
-
-if TYPE_CHECKING:
-    from coordination.schema import BondRow, CandidateRow
-    from output_rows import MetalStatsRow
+from coordination.schema import BondRow, CandidateRow
+from output_rows import MetalStatsRow
 
 
 class InflightEvent(NamedTuple):
@@ -126,16 +124,18 @@ class EntryResult:
     no_metals: bool = False
     metal_site_limit_exceeded: bool = False
 
-    rows: list[MetalStatsRow] = field(default_factory=list)
-    bond_rows: list[BondRow] = field(default_factory=list)
-    candidate_rows: list[CandidateRow] = field(default_factory=list)
-    crystallization_condition_rows: list[dict[str, Any]] = field(default_factory=list)
-    crystallization_summary_row: dict[str, Any] = field(default_factory=dict)
-    density_context_row: dict[str, Any] = field(default_factory=dict)
+    rows: list[MetalStatsRow] = field(default_factory=list[MetalStatsRow])
+    bond_rows: list[BondRow] = field(default_factory=list[BondRow])
+    candidate_rows: list[CandidateRow] = field(default_factory=list[CandidateRow])
+    crystallization_condition_rows: list[dict[str, Any]] = field(
+        default_factory=list[dict[str, Any]]
+    )
+    crystallization_summary_row: dict[str, Any] = field(default_factory=dict[str, Any])
+    density_context_row: dict[str, Any] = field(default_factory=dict[str, Any])
     n_bonds: int | None = None
     n_candidates: int | None = None
 
-    reason_codes: list[str] = field(default_factory=list)
-    warning_codes: list[str] = field(default_factory=list)
-    timings: dict[str, float] = field(default_factory=dict)
+    reason_codes: list[str] = field(default_factory=list[str])
+    warning_codes: list[str] = field(default_factory=list[str])
+    timings: dict[str, float] = field(default_factory=dict[str, float])
     confidence_inputs_missing_reason: str = ""

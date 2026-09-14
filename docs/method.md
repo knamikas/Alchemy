@@ -75,7 +75,7 @@ receives both complete unit-cell maps without model-envelope cropping.
 
 The MTZ input must contain `FWT`, `PHWT`, `DELFWT`, and `PHDELWT` columns.
 
-### 3. Metal and cofactor identification — `src/metal_identification.py`
+### 3. Metal and cofactor identification — `src/edstats_statistics.py`
 
 `extract_metal_statistics()` parses the edstats table. Alchemy reads the
 deposited PDB element field directly; blank or invalid fields are marked unknown

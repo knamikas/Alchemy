@@ -276,7 +276,7 @@ def test_edstats_row_matches_the_documented_schema() -> None:
     EDSTATS writes 42 columns for a residue row, 41 for a blank-chain row and
     39 for a separator row, and the helper must reproduce all three.
     """
-    from metal_identification import EDSTATS_COLUMNS
+    from edstats_statistics import EDSTATS_COLUMNS
 
     assert EDSTATS_HEADER == EDSTATS_COLUMNS
     assert len(EDSTATS_HEADER) == 42
@@ -352,8 +352,8 @@ def test_blank_chain_rows_round_trip_through_the_parser(tmp_path: Path) -> None:
     with one field fewer; the parser has to attribute the missing field to the
     chain rather than shift every later column by one.
     """
+    from edstats_statistics import extract_metal_statistics
     from metal_elements import METAL_ELEMENTS
-    from metal_identification import extract_metal_statistics
     from structure_analysis import load_structure
 
     builder = StructureBuilder()
@@ -383,8 +383,8 @@ def test_cofactor_rows_repeat_once_per_metal_site(tmp_path: Path) -> None:
     so both rows share one density observation id and are marked shared, keeping
     the density from counting twice as independent evidence.
     """
+    from edstats_statistics import extract_metal_statistics
     from metal_elements import METAL_ELEMENTS
-    from metal_identification import extract_metal_statistics
     from structure_analysis import load_structure
 
     builder = StructureBuilder()

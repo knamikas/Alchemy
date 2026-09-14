@@ -78,7 +78,7 @@ tests passed, because the synthetic `stats.out` in `helpers.py` numbered `NR` th
 same incorrect way. Only a real `edstats` run distinguished them.
 
 So run the full lane locally before merging changes to CCP4 invocation, to the
-parsing of any CCP4 program's output (`metal_identification.py`,
+parsing of any CCP4 program's output (`edstats_statistics.py`,
 `density_analysis.py`), or to the worker's stage sequence:
 
 ```bash

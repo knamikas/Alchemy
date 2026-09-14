@@ -12,13 +12,13 @@ from typing import Protocol, cast
 
 import gemmi
 
-from structure_analysis import (
-    OCCUPANCY_DEFAULT_REMARK_PREFIX,
-    POLYMER_REMARK_PREFIX,
-    RESIDUE_REMARK_PREFIX,
-    RESNAME_REMARK_PREFIX,
-    blank_if_missing,
+from pdb_remarks import (
+    PolymerPositionRecord,
+    ResidueIdentityRecord,
+    ResnameRecord,
+    write_conversion_provenance,
 )
+from structure_analysis import blank_if_missing
 
 # The one-character chain ids accepted by both Gemmi and the CCP4 tools.
 LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -37,9 +37,6 @@ _ResidueAtoms = tuple[tuple[str, str], ...]
 # Residue name plus its atoms, keyed elsewhere by author identifiers.
 _ResidueEntry = tuple[str, _ResidueAtoms]
 _SourceRecord = tuple[int, str, int, str, str, _ResidueAtoms, int, int, str]
-_ResnameRecord = tuple[int, str, str, str, str]
-_IdentityRecord = tuple[int, str, str, str, str, int, str, str, int, int, str]
-_PolymerRecord = tuple[int, str, str, str, str]
 
 
 def _structure_atom_signatures(
@@ -180,14 +177,14 @@ def residue_index_by_author(
 
 def residue_conversion_records(
     structure: gemmi.Structure, converted_structure: gemmi.Structure
-) -> list[_ResnameRecord]:
+) -> list[ResnameRecord]:
     """Pair source mmCIF residue names with names written to legacy PDB."""
     source_by_author, source_order = residue_index_by_author(structure, "mmCIF")
     converted_by_author, converted_order = residue_index_by_author(
         converted_structure, "converted"
     )
 
-    records: list[_ResnameRecord] = []
+    records: list[ResnameRecord] = []
     if converted_order != source_order:
         raise ValueError("PDB conversion changed residue ordering")
     if set(converted_by_author) != set(source_by_author):
@@ -331,7 +328,7 @@ def _pack_legacy_pdb_residue_ids(structure: gemmi.Structure) -> None:
 
 def _residue_identity_records(
     source_records: Sequence[_SourceRecord], converted_structure: gemmi.Structure
-) -> list[_IdentityRecord]:
+) -> list[ResidueIdentityRecord]:
     """Map packed PDB residue identities back to source-mmCIF identities."""
     converted_records: list[tuple[int, str, str, str, _ResidueAtoms]] = []
     for model_index, model in enumerate(converted_structure, start=1):
@@ -356,7 +353,7 @@ def _residue_identity_records(
     if len(source_records) != len(converted_records):
         raise ValueError("PDB conversion changed residue count")
 
-    records: list[_IdentityRecord] = []
+    records: list[ResidueIdentityRecord] = []
     for source, converted in zip(source_records, converted_records, strict=False):
         (
             source_model,
@@ -407,7 +404,7 @@ def _residue_identity_records(
 
 def _polymer_position_records(
     source_records: Sequence[_SourceRecord], converted_structure: gemmi.Structure
-) -> list[_PolymerRecord]:
+) -> list[PolymerPositionRecord]:
     """Map every converted residue to its source polymer-boundary status."""
     converted_records: list[tuple[int, str, str, str]] = []
     for model_index, model in enumerate(converted_structure, start=1):
@@ -439,15 +436,12 @@ def _polymer_position_records(
     return [(*converted, position) for converted, position in positions.items()]
 
 
-def _write_cif_conversion_provenance(
-    dst: str,
-    missing_occupancies: list[bool],
-    residue_records: list[tuple[int, str, str, str, str]],
-    identity_records: Sequence[_IdentityRecord] | None = None,
-    polymer_records: Sequence[_PolymerRecord] | None = None,
-    defaulted_occupancy_counts: Sequence[int] = (),
-) -> None:
-    """Blank unknown occupancies and embed reversible residue mappings."""
+def _blank_missing_occupancies(dst: str, missing_occupancies: Sequence[bool]) -> None:
+    """Clear the occupancy columns of atoms whose mmCIF occupancy was null.
+
+    Gemmi writes such atoms with occupancy 1.00; blank columns let the analysis
+    report the value as unknown rather than as a full-occupancy site.
+    """
     with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
         lines = handle.readlines()
 
@@ -458,6 +452,8 @@ def _write_cif_conversion_provenance(
     ]
     if len(atom_line_indices) != len(missing_occupancies):
         raise ValueError("PDB conversion output atom count does not match mmCIF input")
+    if not any(missing_occupancies):
+        return
     for line_index, missing in zip(
         atom_line_indices, missing_occupancies, strict=False
     ):
@@ -468,58 +464,7 @@ def _write_cif_conversion_provenance(
         body = line[:-1] if newline else line
         body = body.ljust(60)
         lines[line_index] = body[:54] + "      " + body[60:] + newline
-
-    remarks = [
-        (
-            f"{RESNAME_REMARK_PREFIX} {model_index} "
-            f"{chain or '_'} {resnum} {converted_name} {source_name}\n"
-        )
-        for (model_index, chain, resnum, converted_name, source_name) in residue_records
-    ]
-    remarks.extend(
-        f"{OCCUPANCY_DEFAULT_REMARK_PREFIX} {model_index} {count}\n"
-        for model_index, count in enumerate(defaulted_occupancy_counts, start=1)
-        if count
-    )
-    remarks.extend(
-        (
-            f"{RESIDUE_REMARK_PREFIX} {model_index} "
-            f"{converted_chain or '_'} {converted_resnum} {converted_name} "
-            f"{source_chain or '_'} {source_number} "
-            f"{source_insertion or '_'} {source_name} "
-            f"{source_chain_index} {source_residue_index} "
-            f"{source_polymer_position}\n"
-        )
-        for (
-            model_index,
-            converted_chain,
-            converted_resnum,
-            converted_name,
-            source_chain,
-            source_number,
-            source_insertion,
-            source_name,
-            source_chain_index,
-            source_residue_index,
-            source_polymer_position,
-        ) in (identity_records or ())
-    )
-    remarks.extend(
-        (
-            f"{POLYMER_REMARK_PREFIX} {model_index} "
-            f"{converted_chain or '_'} {converted_resnum} {converted_name} "
-            f"{polymer_position}\n"
-        )
-        for (
-            model_index,
-            converted_chain,
-            converted_resnum,
-            converted_name,
-            polymer_position,
-        ) in (polymer_records or ())
-    )
     with open(dst, "w", encoding="utf-8", newline="") as handle:
-        handle.writelines(remarks)
         handle.writelines(lines)
 
 
@@ -569,9 +514,9 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
     )
     # Preserve polymer position for every residue, independently of identity packing.
     polymer_records = _polymer_position_records(source_residues, converted_structure)
-    _write_cif_conversion_provenance(
+    _blank_missing_occupancies(dst, missing_occupancies)
+    write_conversion_provenance(
         dst,
-        missing_occupancies,
         residue_records,
         identity_records,
         polymer_records,

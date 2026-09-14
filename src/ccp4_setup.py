@@ -3,6 +3,8 @@
 Raise Ccp4SetupError on setup failures so callers control how they are reported.
 """
 
+from __future__ import annotations
+
 import contextlib
 import json
 import os
@@ -103,10 +105,11 @@ def load_ccp4_setup_config(
     return config
 
 
-def save_ccp4_setup(
-    setup_path: str, config_files: Sequence[str] | None = None
-) -> list[str]:
-    """Save the CCP4 setup path to the highest-precedence config file."""
+def save_ccp4_setup(setup_path: str, config_files: Sequence[str] | None = None) -> str:
+    """Save the CCP4 setup path to the highest-precedence config file.
+
+    Returns the path of the file written.
+    """
     config_files = config_files or DEFAULT_CONFIG_FILES
     target = config_files[0]
     path = Path(target)
@@ -122,7 +125,7 @@ def save_ccp4_setup(
     with path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
         fh.write("\n")
-    return [str(path)]
+    return str(path)
 
 
 def find_ccp4_setup(
@@ -215,6 +218,21 @@ def _parse_windows_set_output(stdout: str) -> tuple[dict[str, str], bool]:
     return env, seen_sentinel
 
 
+def _timeout_error(ccp4_setup: str, runner: str) -> Ccp4SetupError:
+    """The error for a setup script that outlived SETUP_SHELL_TIMEOUT_S.
+
+    ``runner`` names what was executing the script when it was stopped: the
+    Windows batch "launcher" or the POSIX "shell".
+    """
+    return Ccp4SetupError(
+        f"CCP4 setup {ccp4_setup} did not finish within "
+        f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script that "
+        f"blocks usually waits on input the {runner} cannot provide. Alchemy "
+        "cannot run without CCP4, so this stops the run rather than "
+        "failing one entry."
+    )
+
+
 def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
     """Capture the environment a Windows CCP4 batch launcher establishes."""
     # Use a temporary script to preserve paths with spaces under cmd.exe quoting.
@@ -230,13 +248,7 @@ def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
                 timeout=SETUP_SHELL_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired:
-            raise Ccp4SetupError(
-                f"CCP4 setup {ccp4_setup} did not finish within "
-                f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script "
-                "that blocks usually waits on input the launcher cannot "
-                "provide. Alchemy cannot run without CCP4, so this stops the "
-                "run rather than failing one entry."
-            ) from None
+            raise _timeout_error(ccp4_setup, "launcher") from None
     finally:
         with contextlib.suppress(OSError):
             os.unlink(script_path)
@@ -275,13 +287,7 @@ def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
             timeout=SETUP_SHELL_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        raise Ccp4SetupError(
-            f"CCP4 setup {ccp4_setup} did not finish within "
-            f"{SETUP_SHELL_TIMEOUT_S}s and was stopped. A setup script that "
-            "blocks usually waits on input the shell cannot provide. Alchemy "
-            "cannot run without CCP4, so this stops the run rather than "
-            "failing one entry."
-        ) from None
+        raise _timeout_error(ccp4_setup, "shell") from None
     if out.returncode != 0:
         raise Ccp4SetupError(f"Failed to source CCP4 setup {ccp4_setup}:\n{out.stderr}")
     env: dict[str, str] = {}

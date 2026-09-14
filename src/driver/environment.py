@@ -66,7 +66,7 @@ def configure_ccp4(args: RunConfig) -> bool:
     logger.info(
         "verified %s are available; saved CCP4 setup path to %s",
         ", ".join(REQUIRED_CCP4_TOOLS),
-        ", ".join(saved),
+        saved,
     )
     return True
 

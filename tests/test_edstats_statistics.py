@@ -18,9 +18,9 @@ from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
 import confidence_score
 import worker
+from coordination.analysis import DensityZScoreIndex
 from driver.writers import STATS_COLUMNS
-from metal_elements import METAL_ELEMENTS
-from metal_identification import (
+from edstats_statistics import (
     DENSITY_CONTEXT_COLUMNS,
     EDSTATS_COLUMNS,
     EDSTATS_METRIC_COLUMNS,
@@ -30,12 +30,10 @@ from metal_identification import (
     extract_metal_statistics,
     is_edstats_separator,
     normalize_edstats_row,
-    sigma_for,
-    sigma_index,
     validate_edstats_row,
     validated_edstats_header,
-    zd_indices,
 )
+from metal_elements import METAL_ELEMENTS
 from output_rows import MetalStatsRow
 from structure_analysis import (
     AtomSite,
@@ -1064,17 +1062,9 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
     assert len({row.site_key for row in rows}) == 2
     assert [row.fields[header.index("ZDm")] for row in rows] == ["2.0", "8.0"]
 
-    indexed_sigma = sigma_index(rows)
-    zd_column_indices = zd_indices(header)
+    density_z_scores = DensityZScoreIndex.from_stats_rows(rows, header)
     assert [
-        sigma_for(
-            indexed_sigma,
-            row.resname,
-            row.chain,
-            row.resnum,
-            zd_column_indices,
-            site_key=row.site_key,
-        )[0]
+        density_z_scores.lookup(row.site_key, (row.resname, row.chain, row.resnum))[0]
         for row in rows
     ] == [2.0, 8.0]
 

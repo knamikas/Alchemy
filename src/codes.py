@@ -138,7 +138,6 @@ class ReasonCode(StrEnum):
     BOND_STAGE_FAILURE = "bond_stage_failure"
     #: An EDSTATS row for a catalog cofactor matched no coordinate residue.
     COFACTOR_COORDINATE_JOIN_FAILED = "cofactor_coordinate_join_failed"
-    AMBIGUOUS_COORDINATE_RESIDUE_JOIN = "ambiguous_coordinate_residue_join"
     COFACTOR_WITHOUT_SELECTED_METAL = "cofactor_without_selected_metal"
     #: A selected coordinate metal site has no corresponding statistics row.
     METAL_SITE_WITHOUT_DENSITY = "metal_site_without_density"
@@ -215,7 +214,6 @@ class CoordinateMappingStatus(StrEnum):
 
     MATCHED = "matched"
     RESIDUE_NOT_FOUND = "coordinate_residue_not_found"
-    MULTIPLE_RESIDUES = "multiple_coordinate_residues"
 
 
 class SelectedSiteStatus(StrEnum):

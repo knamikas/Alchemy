@@ -4,6 +4,8 @@ Parse and validate arguments, start the pipeline, write the run report,
 and handle termination signals.
 """
 
+from __future__ import annotations
+
 import argparse
 import contextlib
 import math
@@ -12,8 +14,8 @@ import re
 import shlex
 import signal
 import sys
-from collections.abc import Callable, Sequence
-from types import FrameType
+from collections.abc import Generator, Sequence
+from types import FrameType, TracebackType
 
 from ccp4_setup import REPO_DIR
 from density_analysis import (
@@ -342,12 +344,13 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
     return _run_config(args)
 
 
-def _install_termination_handler() -> (
-    Callable[[int, FrameType | None], object] | int | None
-):
+@contextlib.contextmanager
+def _sigterm_as_keyboard_interrupt() -> Generator[None]:
     """Handle SIGTERM like Ctrl-C so cleanup can stop workers and CCP4 processes.
 
-    Return the previous signal handler, or None if installation fails.
+    The previous handler is restored on exit. Where signal handling is
+    unavailable (off the main thread, or on a platform that rejects the call)
+    the body runs without a handler, exactly as before.
     """
 
     def _raise_interrupt(signum: int, frame: FrameType | None) -> None:
@@ -355,9 +358,60 @@ def _install_termination_handler() -> (
         raise KeyboardInterrupt
 
     try:
-        return signal.signal(signal.SIGTERM, _raise_interrupt)
+        previous = signal.signal(signal.SIGTERM, _raise_interrupt)
     except (AttributeError, OSError, ValueError):  # pragma: no cover
-        return None
+        previous = None
+    try:
+        yield
+    finally:
+        if previous is not None:
+            with contextlib.suppress(AttributeError, OSError, ValueError):
+                signal.signal(signal.SIGTERM, previous)
+
+
+class _Reporting:
+    """Write the run report when the run ends, however it ends.
+
+    ``exit_code`` starts at 1 so that a run which dies of an unexpected
+    exception is still reported as a failure; the body stores the run's own
+    code. An interruption is converted here: it is recorded in the report,
+    announced on stderr, swallowed, and reported as exit code 130.
+    """
+
+    def __init__(self, run_log: RunLog) -> None:
+        self.run_log = run_log
+        self.exit_code = 1
+
+    def __enter__(self) -> _Reporting:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        del exc_type, traceback
+        interrupted = isinstance(exc, KeyboardInterrupt)
+        if interrupted:
+            # run() has already stopped the workers; report the interruption.
+            self.run_log.driver_error = "interrupted before completion"
+            print(
+                "\nInterrupted: workers stopped; rows already flushed are kept "
+                "and --resume will continue.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.exit_code = 130
+        elif exc is not None:
+            self.run_log.driver_error = f"{type(exc).__name__}: {exc}"
+        try:
+            log_path = self.run_log.write(self.exit_code)
+        except OSError as write_error:
+            logger.error("could not write run report: %s", write_error)
+        else:
+            logger.info("run report -> %s", log_path)
+        return interrupted
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -375,32 +429,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     command_parts = list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args]
     run_log = RunLog(args, shlex.join(command_parts))
-    exit_code = 1
-    previous_term = _install_termination_handler()
-    try:
-        exit_code = run(args, run_log)
-        return exit_code
-    except KeyboardInterrupt:
-        # run() has already stopped the workers; report the interruption.
-        run_log.driver_error = "interrupted before completion"
-        print(
-            "\nInterrupted: workers stopped; rows already flushed are kept "
-            "and --resume will continue.",
-            file=sys.stderr,
-            flush=True,
-        )
-        exit_code = 130
-        return exit_code
-    except BaseException as exc:
-        run_log.driver_error = f"{type(exc).__name__}: {exc}"
-        raise
-    finally:
-        if previous_term is not None:
-            with contextlib.suppress(AttributeError, OSError, ValueError):
-                signal.signal(signal.SIGTERM, previous_term)
-        try:
-            log_path = run_log.write(exit_code)
-        except OSError as exc:
-            logger.error("could not write run report: %s", exc)
-        else:
-            logger.info("run report -> %s", log_path)
+    # The signal handler is the inner context so that it is restored before
+    # the report is written, as the original try/finally did.
+    with _Reporting(run_log) as report, _sigterm_as_keyboard_interrupt():
+        report.exit_code = run(args, run_log)
+    return report.exit_code

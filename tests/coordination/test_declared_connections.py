@@ -1696,7 +1696,7 @@ def test_the_name_fallback_refuses_ambiguous_component_ids(
 ) -> None:
     """With no atom to read an element from, only unambiguous names count.
 
-    ``metal_identification`` avoids this collision by matching on the element;
+    ``edstats_statistics`` avoids this collision by matching on the element;
     the declaration path once matched the bare CCD id instead, and so reported
     an unresolvable RNA ``U`` or nitric oxide ``NO`` as having named a metal.
     """

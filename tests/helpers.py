@@ -1284,8 +1284,8 @@ def stats_rows_for_structure(
     Returns ``(rows, header, stats_path)``, ready to hand to
     ``coordination.analysis.run_bond_analysis`` as its sigma join input.
     """
+    from edstats_statistics import extract_metal_statistics
     from metal_elements import METAL_ELEMENTS
-    from metal_identification import extract_metal_statistics
 
     stats_path = write_edstats_for_structure(path, context, **kwargs)
     extraction = extract_metal_statistics(

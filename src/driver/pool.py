@@ -14,12 +14,7 @@ from typing import NamedTuple
 
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
-from crystallization_conditions import (
-    CONDITION_COLUMNS,
-    SUMMARY_COLUMNS,
-    CrystallizationMetadataError,
-    prefetch_rcsb_crystallization_metadata,
-)
+from crystallization_conditions import CONDITION_COLUMNS, SUMMARY_COLUMNS
 from driver import confidence, dispatch, environment
 from driver.entries import schedule_entries
 from driver.errors import DriverError
@@ -46,7 +41,11 @@ from driver.resume import (
 )
 from driver.runlog import RunLog
 from driver.writers import OutputTargets, OutputWriters, manifest_row
-from metal_identification import DENSITY_CONTEXT_COLUMNS
+from edstats_statistics import DENSITY_CONTEXT_COLUMNS
+from rcsb_metadata_cache import (
+    CrystallizationMetadataError,
+    prefetch_rcsb_crystallization_metadata,
+)
 from reference_data import (
     cofactor_ids,
     reference_data_checksums,

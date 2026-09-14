@@ -23,9 +23,9 @@ def test_src_modules_import() -> None:
     import codes
     import confidence_score
     import density_analysis
+    import edstats_statistics
     import main
     import metal_elements
-    import metal_identification
     import structure_analysis
     import worker
     from coordination import (
@@ -58,7 +58,7 @@ def test_src_modules_import() -> None:
     assert callable(contact_record.Candidate)
     assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
     assert callable(density_analysis.run_density_analysis)
-    assert callable(metal_identification.extract_metal_statistics)
+    assert callable(edstats_statistics.extract_metal_statistics)
     assert callable(confidence_score.score_site)
     assert set(ccp4_setup.REQUIRED_CCP4_TOOLS) == {
         "mtzfix",

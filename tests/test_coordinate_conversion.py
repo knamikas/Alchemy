@@ -17,10 +17,10 @@ import pytest
 from helpers import approx
 
 import coordinate_conversion as conversion
-import metal_identification
+import edstats_statistics
 import structure_analysis
 from coordination import declared_connections
-from structure_analysis import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
+from pdb_remarks import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
 
 _CIF_HEADER = """data_TEST
 _cell.length_a 60.0
@@ -420,7 +420,7 @@ class TestCifToPdb:
         stats_path = helpers.write_edstats_for_structure(
             tmp_path / "stats.out", context, metrics={"ZDm": 2.0}
         )
-        rows = metal_identification.extract_metal_statistics(
+        rows = edstats_statistics.extract_metal_statistics(
             "test", stats_path, {"ZN"}, set(), structure=context
         ).rows
         assert len(rows) == 63

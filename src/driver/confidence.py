@@ -27,13 +27,11 @@ from confidence_score import (
 from confidence_score import (
     load_reference as load_confidence_reference,
 )
-from crystallization_conditions import (
-    write_review_queue,
-)
 from driver.errors import DriverError
 from driver.layout import (
     OutputLayout,
 )
+from driver.review_queue import write_review_queue
 from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS
 from run_config import RunConfig

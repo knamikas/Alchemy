@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -23,6 +24,7 @@ import main
 import scratch
 from driver import confidence as driver_confidence
 from driver import environment, errors
+from driver.runlog import RunLog
 from run_config import RunConfig
 
 
@@ -275,7 +277,7 @@ def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path: Path) -> No
 
     chosen = "/the/path/the/user/configured/ccp4.setup-sh"
     written = ccp4_setup.save_ccp4_setup(chosen, config_files=config_files)
-    assert written == [str(primary)]
+    assert written == str(primary)
 
     loaded = ccp4_setup.load_ccp4_setup_config(config_files=config_files)
     assert loaded.get("ccp4_setup") == chosen
@@ -707,3 +709,100 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
         name for name in os.listdir(output_dir) if name.startswith(".alchemy-")
     )
     assert leftovers == [], f"the run left scratch behind: {leftovers}"
+
+
+def _report_text(output_dir: Path) -> str:
+    """The single run report ``main`` wrote under ``output_dir``."""
+    reports = sorted((output_dir / "logs").glob("alchemy_run_*.log"))
+    assert len(reports) == 1, reports
+    return reports[0].read_text(encoding="utf-8")
+
+
+def _main_argv(tmp_path: Path) -> list[str]:
+    """Arguments for a ``main`` call whose run is stubbed out."""
+    return ["--id", "109m", "--output-dir", str(tmp_path / "out")]
+
+
+@pytest.mark.parametrize("delivery", ["ctrl-c", "sigterm"])
+def test_an_interrupted_run_exits_130_and_still_writes_its_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    delivery: str,
+) -> None:
+    """Ctrl-C and SIGTERM both end as exit 130 with the interruption on record.
+
+    The SIGTERM handler must also be gone again by the time ``main`` returns,
+    whichever way the run ended.
+    """
+    before = signal.getsignal(signal.SIGTERM)
+
+    def interrupted_run(*_args: object) -> NoReturn:
+        if delivery == "sigterm":
+            signal.raise_signal(signal.SIGTERM)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run", interrupted_run)
+
+    exit_code = cli.main(_main_argv(tmp_path))
+
+    assert exit_code == 130
+    assert signal.getsignal(signal.SIGTERM) is before
+    assert "Interrupted: workers stopped" in capsys.readouterr().err
+    report = _report_text(tmp_path / "out")
+    assert "Exit code: 130" in report
+    assert "Driver error: interrupted before completion" in report
+
+
+def test_an_unexpected_exception_is_on_record_before_it_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash still leaves a report, as a failure, naming the exception."""
+    before = signal.getsignal(signal.SIGTERM)
+
+    def crashing_run(*_args: object) -> NoReturn:
+        raise RuntimeError("the pool fell over")
+
+    monkeypatch.setattr(cli, "run", crashing_run)
+
+    with pytest.raises(RuntimeError, match="fell over"):
+        cli.main(_main_argv(tmp_path))
+
+    assert signal.getsignal(signal.SIGTERM) is before
+    report = _report_text(tmp_path / "out")
+    assert "Exit code: 1" in report
+    assert "Driver error: RuntimeError: the pool fell over" in report
+
+
+def _run_returning_zero(*_args: object) -> int:
+    """Stand in for ``cli.run`` with a successful, instant run."""
+    return 0
+
+
+def test_a_completed_run_reports_its_own_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The report carries the run's code and the report path is announced."""
+    monkeypatch.setattr(cli, "run", _run_returning_zero)
+
+    assert cli.main(_main_argv(tmp_path)) == 0
+
+    assert "Exit code: 0" in _report_text(tmp_path / "out")
+    assert "run report -> " in capsys.readouterr().err
+
+
+def test_a_report_that_cannot_be_written_is_logged_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Losing the report costs one error line, never the run's own exit code."""
+    monkeypatch.setattr(cli, "run", _run_returning_zero)
+
+    def unwritable(_self: RunLog, _exit_code: int) -> NoReturn:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(RunLog, "write", unwritable)
+
+    assert cli.main(_main_argv(tmp_path)) == 0
+
+    error = capsys.readouterr().err
+    assert "ERROR" in error and "could not write run report: disk full" in error

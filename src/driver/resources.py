@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from multiprocessing import cpu_count
 from typing import Any, TextIO, cast
 
-from inputs import entry_dir_for
+from inputs import entry_dir_for, final_file_candidates
 
 GIB = 1024**3
 
@@ -510,12 +510,7 @@ def estimate_entry_memory(
                 os.path.join(entry_dir, "data.json.gz"),
             )
         )
-        mtz_path = _first_existing(
-            (
-                os.path.join(entry_dir, f"{pdb_id}_final.mtz"),
-                os.path.join(entry_dir, f"{pdb_id}_final.mtz.gz"),
-            )
-        )
+        mtz_path = _first_existing(final_file_candidates(entry_dir, pdb_id, "mtz"))
 
     if data_path is not None:
         properties = _read_properties_prefix(data_path)

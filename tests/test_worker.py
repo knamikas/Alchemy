@@ -23,8 +23,8 @@ import worker_contracts
 from codes import DensityMapScope, EntryStatus
 from driver import confidence as driver_confidence
 from driver.writers import manifest_row
+from edstats_statistics import EdstatsExtraction
 from inputs import PdbRedoMetadata
-from metal_identification import EdstatsExtraction
 
 
 def _read_resolution_stub(
@@ -111,6 +111,9 @@ def _manual_entry(
             "deterministic_processing_error",
         ),
         (OSError("disk full"), "unexpected_processing_error"),
+        # Only the inputs module's MissingInputError is a skip; a stage that
+        # loses a file it already located is an error, like any other OSError.
+        (FileNotFoundError("stats.out vanished"), "unexpected_processing_error"),
         (MemoryError(), "unexpected_processing_error"),
         (RuntimeError("fft failed"), "unexpected_processing_error"),
     ],
@@ -135,6 +138,37 @@ def test_an_unanticipated_failure_reports_whether_it_will_recur(
     assert result.reason_codes == [expected_code]
     assert result.retryable is True
     assert type(exception).__name__ in result.status_detail
+
+
+def test_a_missing_manual_input_skips_the_entry_as_missing_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The inputs module's ``MissingInputError`` is the skip signal.
+
+    No stage is stubbed: ``resolve_manual_inputs`` itself reports the absent
+    MTZ, and the worker maps that to ``skip`` / ``missing_input`` with the
+    reader's message in ``status_detail``.
+    """
+    pdb_path = tmp_path / "entry.pdb"
+    helpers.StructureBuilder().write_pdb(str(pdb_path))
+    absent_mtz = tmp_path / "absent.mtz"
+    cfg = worker_config(
+        output_dir=str(tmp_path),
+        manual_inputs={
+            "pdb_file": str(pdb_path),
+            "mtz_file": str(absent_mtz),
+            "cif_file": None,
+            "data_json": None,
+        },
+    )
+    monkeypatch.setattr(worker, "worker_config", cfg)
+
+    result = worker.process("1abc")
+
+    assert result.status == "skip"
+    assert result.reason_codes == ["missing_input"]
+    assert result.status_detail == f"missing input: mtz file not found: {absent_mtz}"
+    assert result.retryable is True
 
 
 def _real_stats_density_stage(
@@ -448,7 +482,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
     monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
 
     outcome = worker.run_bond_stage(
-        "109m", worker_config(bonds=True), inputs, structure, [], []
+        "109m", worker_config(bonds=True), inputs, structure, [], [], []
     )
     analysis = outcome.analysis
 
@@ -458,7 +492,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
         {},
     )
     assert outcome.failed and outcome.status_detail.startswith("bond: RuntimeError")
-    worker._apply_bond_outcome(result, outcome)
+    worker._apply_bond_outcome(result, outcome)  # pyright: ignore[reportPrivateUsage]
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
     assert worker.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True

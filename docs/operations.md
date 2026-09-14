@@ -266,7 +266,6 @@ table, so a code cannot be added or renamed without updating this list.
 | `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analyzable. |
 | `bond_stage_failure` | The geometry stage raised, so its rows are not legitimate density-only evidence. |
 | `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |
-| `ambiguous_coordinate_residue_join` | An EDSTATS row matched more than one coordinate residue. |
 | `cofactor_without_selected_metal` | A matched cofactor contains no configured metal site to select. |
 | `metal_site_without_density` | A selected coordinate metal site is absent from the statistics table, so it has no density evidence; it remains included in the coordinate-site total `n_metals`. This is detected with or without bond analysis and can happen when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot. See [Rebuild the cofactor reference](maintenance.md#cofactor-reference-maintenance). |
 | `declared_connection_resolution_incomplete` | A source `_struct_conn` or `LINK` record named an atom that could not be resolved in the coordinate model. |

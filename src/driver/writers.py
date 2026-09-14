@@ -28,7 +28,7 @@ from crystallization_conditions import (
     unavailable_summary,
 )
 from driver.layout import OutputLayout
-from metal_identification import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
+from edstats_statistics import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
 from output_rows import MetalStatsRow, blank_if_unmeasured, scientific_csv_value
 from worker_contracts import EntryResult
 

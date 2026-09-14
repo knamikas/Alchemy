@@ -16,13 +16,14 @@ from typing import NamedTuple, Protocol, cast
 import gemmi
 
 from codes import ContactScope, ElementStatus, OccupancyStatus, WarningCode
+from pdb_remarks import (
+    SourceResidueIdentity,
+    read_defaulted_occupancy_counts,
+    read_residue_mapping,
+)
 
 NAN = float("nan")
 DUPLICATE_ATOM_POSITION_TOLERANCE = 0.001
-RESNAME_REMARK_PREFIX = "REMARK 950 ALCHEMY RESNAME"
-RESIDUE_REMARK_PREFIX = "REMARK 950 ALCHEMY RESIDUE"
-POLYMER_REMARK_PREFIX = "REMARK 950 ALCHEMY POLYMER"
-OCCUPANCY_DEFAULT_REMARK_PREFIX = "REMARK 950 ALCHEMY OCCUPANCY DEFAULTED"
 
 
 # Blank PDB columns, Gemmi's NUL altloc, and the two mmCIF null tokens all mean
@@ -867,184 +868,6 @@ def _raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
     return records, ""
 
 
-@dataclass(frozen=True)
-class SourceResidueIdentity:
-    """Source-mmCIF identity for one residue in an analysis PDB."""
-
-    residue_name: str
-    chain_id: str
-    residue_number: int | None = None
-    insertion_code: str = ""
-    polymer_position: str = ""
-    chain_index: int | None = None
-    residue_index: int | None = None
-
-
-def _raw_pdb_residue_mapping(
-    path: str,
-) -> dict[tuple[int, str, str, str], SourceResidueIdentity]:
-    """Read reversible mmCIF residue mappings embedded during conversion.
-
-    ``RESNAME`` records carry the source component name alone; ``RESIDUE``
-    records, written when residues had to be packed into a PDB-safe namespace,
-    also carry the source chain, sequence number and insertion code. ``POLYMER``
-    records independently preserve whether the deposited sequence identifies a
-    residue as terminal, internal, non-polymer, or indeterminate.
-    """
-    mapping: dict[tuple[int, str, str, str], SourceResidueIdentity] = {}
-    polymer_positions: dict[tuple[int, str, str, str], str] = {}
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            fields = line.split()
-            prefix = " ".join(fields[:4])
-            if prefix not in (
-                RESNAME_REMARK_PREFIX,
-                RESIDUE_REMARK_PREFIX,
-                POLYMER_REMARK_PREFIX,
-            ):
-                continue
-            expected_fields = {
-                RESNAME_REMARK_PREFIX: 9,
-                RESIDUE_REMARK_PREFIX: 15,
-                POLYMER_REMARK_PREFIX: 9,
-            }[prefix]
-            if len(fields) != expected_fields:
-                raise ValueError(f"malformed Alchemy residue mapping: {line.rstrip()}")
-            try:
-                model_index = int(fields[4]) - 1
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError(
-                    f"invalid model in residue mapping: {fields[4]!r}"
-                ) from exc
-            if model_index < 0:
-                raise ValueError("residue mapping model must be positive")
-            coordinate_chain = "" if fields[5] == "_" else fields[5]
-            coordinate_resnum, coordinate_name = fields[6:8]
-            key = (
-                model_index,
-                coordinate_name,
-                coordinate_chain,
-                coordinate_resnum,
-            )
-            if prefix == POLYMER_REMARK_PREFIX:
-                polymer_position = fields[8]
-                if polymer_position not in ("-", "?", "M", "N", "C", "NC"):
-                    raise ValueError(
-                        "invalid source polymer position in residue mapping: "
-                        f"{polymer_position!r}"
-                    )
-                previous_position = polymer_positions.get(key)
-                if (
-                    previous_position is not None
-                    and previous_position != polymer_position
-                ):
-                    raise ValueError(
-                        "conflicting Alchemy polymer mappings for "
-                        f"{coordinate_name}/{coordinate_chain}/"
-                        f"{coordinate_resnum}"
-                    )
-                polymer_positions[key] = polymer_position
-                continue
-            if prefix == RESNAME_REMARK_PREFIX:
-                source = SourceResidueIdentity(
-                    residue_name=fields[8],
-                    chain_id=coordinate_chain,
-                )
-            else:
-                source_chain = "" if fields[8] == "_" else fields[8]
-                try:
-                    source_number = int(fields[9])
-                    source_chain_index = int(fields[12])
-                    source_residue_index = int(fields[13])
-                except (TypeError, ValueError, OverflowError) as exc:
-                    raise ValueError(
-                        "invalid source numeric field in residue mapping: "
-                        f"{line.rstrip()}"
-                    ) from exc
-                polymer_position = fields[14]
-                if polymer_position not in ("-", "?", "M", "N", "C", "NC"):
-                    raise ValueError(
-                        "invalid source polymer position in residue mapping: "
-                        f"{polymer_position!r}"
-                    )
-                source = SourceResidueIdentity(
-                    residue_name=fields[11],
-                    chain_id=source_chain,
-                    residue_number=source_number,
-                    insertion_code=("" if fields[10] == "_" else fields[10]),
-                    chain_index=source_chain_index,
-                    residue_index=source_residue_index,
-                    polymer_position=polymer_position,
-                )
-            previous = mapping.get(key)
-            if previous is not None:
-                compatible_legacy_upgrade = (
-                    prefix == RESIDUE_REMARK_PREFIX
-                    and previous.residue_number is None
-                    and previous.residue_name == source.residue_name
-                )
-                if previous != source and not compatible_legacy_upgrade:
-                    raise ValueError(
-                        "conflicting Alchemy residue mappings for "
-                        f"{coordinate_name}/{coordinate_chain}/"
-                        f"{coordinate_resnum}"
-                    )
-            mapping[key] = source
-    for key, polymer_position in polymer_positions.items():
-        current = mapping.get(key)
-        if current is None:
-            _model_index, coordinate_name, coordinate_chain, _coordinate_resnum = key
-            mapping[key] = SourceResidueIdentity(
-                residue_name=coordinate_name,
-                chain_id=coordinate_chain,
-                polymer_position=polymer_position,
-            )
-        else:
-            mapping[key] = SourceResidueIdentity(
-                residue_name=current.residue_name,
-                chain_id=current.chain_id,
-                residue_number=current.residue_number,
-                insertion_code=current.insertion_code,
-                polymer_position=polymer_position,
-                chain_index=current.chain_index,
-                residue_index=current.residue_index,
-            )
-    return mapping
-
-
-def _raw_pdb_defaulted_occupancy_counts(path: str) -> dict[int, int]:
-    """Read per-model counts whose occupancies came from the mmCIF default."""
-    counts: dict[int, int] = {}
-    prefix_fields = OCCUPANCY_DEFAULT_REMARK_PREFIX.split()
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            fields = line.split()
-            if fields[: len(prefix_fields)] != prefix_fields:
-                continue
-            if len(fields) != len(prefix_fields) + 2:
-                raise ValueError(
-                    f"malformed Alchemy occupancy provenance: {line.rstrip()}"
-                )
-            try:
-                model_index = int(fields[-2]) - 1
-                count = int(fields[-1])
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError(
-                    f"invalid Alchemy occupancy provenance: {line.rstrip()}"
-                ) from exc
-            if model_index < 0 or count <= 0:
-                raise ValueError(
-                    "Alchemy occupancy provenance requires a positive model and count"
-                )
-            if model_index in counts:
-                raise ValueError(
-                    "duplicate Alchemy occupancy provenance for model "
-                    f"{model_index + 1}"
-                )
-            counts[model_index] = count
-    return counts
-
-
 def _gemmi_atom_identity(
     chain: gemmi.Chain, residue: gemmi.Residue, atom: gemmi.Atom
 ) -> tuple[str, str, str, str, str, str]:
@@ -1291,8 +1114,8 @@ def _source_model_data(path: str, model: gemmi.Model) -> _SourceModelData:
     defaulted_occupancy_counts: dict[int, int] = {}
     if analysis_format == "pdb":
         raw_models, raw_error = _raw_pdb_occupancies(path)
-        source_residue_identities = _raw_pdb_residue_mapping(path)
-        defaulted_occupancy_counts = _raw_pdb_defaulted_occupancy_counts(path)
+        source_residue_identities = read_residue_mapping(path)
+        defaulted_occupancy_counts = read_defaulted_occupancy_counts(path)
 
     legacy_identifiers_packed = any(
         identity.residue_number is not None

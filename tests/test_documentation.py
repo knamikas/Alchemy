@@ -453,11 +453,11 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
     from crystallization_conditions import (
         CONDITION_COLUMNS,
         CRYSTALLIZATION_DATA_STATUSES,
-        REVIEW_CONTEXT_COLUMNS,
         SUMMARY_COLUMNS,
     )
+    from driver.review_queue import REVIEW_CONTEXT_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
-    from metal_identification import (
+    from edstats_statistics import (
         DENSITY_CONTEXT_COLUMNS,
         DENSITY_CONTEXT_STATUSES,
     )

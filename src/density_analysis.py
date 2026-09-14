@@ -14,16 +14,26 @@ import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import IO, Any, Protocol, cast
+from typing import IO, Any, cast
 
 import gemmi
 import numpy as np
 import numpy.typing as npt
 
 from codes import DensityMapScope
+from gemmi_typing import mtz_column_data
 from run_logging import logger_for, truncate
 
 logger = logger_for(__name__)
+
+
+def elapsed_s(started: float) -> float:
+    """Return the seconds since a ``time.monotonic()`` reading, as a timing.
+
+    Every stage timing the pipeline records is rounded this way, so the
+    manifest's ``timings`` column is byte-stable across stages.
+    """
+    return round(time.monotonic() - started, 3)
 
 
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
@@ -45,20 +55,8 @@ REFMAC_TWIN_COLUMNS = {
 }
 
 
-class _MtzColumnData(Protocol):
-    """Gemmi MTZ column members whose stub currently lacks concrete types."""
-
-    dataset_id: int
-    array: npt.NDArray[np.float32]
-    idx: int
-
-
-def _mtz_column_data(column: object) -> _MtzColumnData:
-    """Apply Gemmi's runtime MTZ-column contract at one typed boundary."""
-    return cast(_MtzColumnData, column)
-
-
 REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
+
 
 # CCP4 map header layout: 256 four-byte words, of which the pipeline reads the
 # grid counts, the storage mode, the start indices, the unit-cell sampling, and
@@ -231,7 +229,7 @@ class _Ccp4Runner:
                 timings=self.timings,
             ) from exc
         finally:
-            self.timings.setdefault(timing_name, round(time.monotonic() - started, 3))
+            self.timings.setdefault(timing_name, elapsed_s(started))
             logger.debug(
                 "%s: %s ended after %.3fs",
                 self.pdb_id,
@@ -365,14 +363,14 @@ def normalize_refmac_twin_coefficients(
         columns[label] = column
 
     coefficient_dataset_ids = {
-        _mtz_column_data(columns[label]).dataset_id
+        mtz_column_data(columns[label]).dataset_id
         for label in ("FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
     }
     if len(coefficient_dataset_ids) != 1:
         raise ValueError("Refmac map coefficients belong to different datasets")
 
     source = {
-        label: np.asarray(_mtz_column_data(columns[label]).array, dtype=np.float64)
+        label: np.asarray(mtz_column_data(columns[label]).array, dtype=np.float64)
         for label in ("FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
     }
     map_finite = np.ones(mtz.nreflections, dtype=bool)
@@ -419,7 +417,7 @@ def normalize_refmac_twin_coefficients(
         ("DELFWT", delfwt),
         ("PHDELWT", phdelwt),
     ):
-        output_data[usable, _mtz_column_data(columns[label]).idx] = values
+        output_data[usable, mtz_column_data(columns[label]).idx] = values
     mtz.set_data(output_data)
     mtz.history = [
         *mtz.history,
@@ -432,7 +430,7 @@ def normalize_refmac_twin_coefficients(
     written = gemmi.read_mtz_file(output_path)
     written_values = {
         label: np.asarray(
-            _mtz_column_data(written.column_with_label(label)).array,
+            mtz_column_data(written.column_with_label(label)).array,
             dtype=np.float64,
         )[usable]
         for label in ("FC_ALL", "PHIC_ALL", "FWT", "PHWT", "DELFWT", "PHDELWT")
@@ -502,18 +500,14 @@ def _prepare_map_mtz(
                 mtz_path, paths.twin_normalized_mtz
             )
         except (OSError, RuntimeError, ValueError) as normalization_error:
-            runner.timings["twin_coefficient_normalization_s"] = round(
-                time.monotonic() - started, 3
-            )
+            runner.timings["twin_coefficient_normalization_s"] = elapsed_s(started)
             raise MtzfixValidationError(
                 f"{exc}; guarded twin coefficient normalization was refused: "
                 f"{normalization_error}",
                 timings=runner.timings,
             ) from normalization_error
         else:
-            runner.timings["twin_coefficient_normalization_s"] = round(
-                time.monotonic() - started, 3
-            )
+            runner.timings["twin_coefficient_normalization_s"] = elapsed_s(started)
 
     if twin_normalization is not None:
         return paths.twin_normalized_mtz, False, twin_normalization

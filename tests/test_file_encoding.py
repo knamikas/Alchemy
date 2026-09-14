@@ -80,7 +80,8 @@ if "utf" in locale.getencoding().lower().replace("-", ""):
     print("LOCALE_IS_UTF8")
     raise SystemExit(0)
 
-from crystallization_conditions import SUMMARY_COLUMNS, write_review_queue
+from crystallization_conditions import SUMMARY_COLUMNS
+from driver.review_queue import write_review_queue
 from driver import pool, resume
 from driver.confidence import ConfidencePlan
 from driver.layout import OutputLayout

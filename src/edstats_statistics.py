@@ -1,16 +1,26 @@
-"""Extract metal and cofactor statistics from EDSTATS residue tables."""
+"""Turn an EDSTATS residue table into per-site density rows and entry context.
+
+Validate the EDSTATS 1.0.9 residue-table schema, normalize each row (blank
+chains, USEALT conformers, fixed-width overflow), join rows to coordinate
+residues through the deposited chain and EDSTATS' chain-local ordinal, and
+aggregate the non-target residues into the density-context row. The only
+identification left here is :func:`classify_residue`, which decides whether a
+coordinate residue is a metal, a cofactor, or neither; per-site Z-score lookup
+lives beside its consumer in :mod:`coordination.analysis`.
+"""
+
+from __future__ import annotations
 
 import math
 import statistics
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 from codes import CoordinateMappingStatus, SelectedSiteStatus, WarningCode
-from output_rows import CsvValue, MetalStatsRow
+from output_rows import MetalStatsRow
 from structure_analysis import (
-    NAN,
     AtomSite,
     ResidueSelection,
     StructureContext,
@@ -99,13 +109,13 @@ class _DensityContextAccumulator:
     ordinary_residue_count: int = 0
     ordinary_nonwater_residue_count: int = 0
     water_residue_count: int = 0
-    ordinary_values: list[float] = field(default_factory=list)
-    ordinary_nonwater_values: list[float] = field(default_factory=list)
-    water_values: list[float] = field(default_factory=list)
+    ordinary_values: list[float] = field(default_factory=list[float])
+    ordinary_nonwater_values: list[float] = field(default_factory=list[float])
+    water_values: list[float] = field(default_factory=list[float])
 
     def observe(
         self,
-        resolved: "_ResolvedEdstatsRow",
+        resolved: _ResolvedEdstatsRow,
         metals_upper: set[str],
         cofactors: frozenset[str],
     ) -> None:
@@ -391,10 +401,10 @@ def expected_edstats_residues(
     )
 
 
-def _validated_edstats_row_number(
+def _validate_edstats_row_number(
     fields: Sequence[str], indices: Mapping[str, int], line_number: int
 ) -> int:
-    """Return EDSTATS' one-based residue ordinal within the row's chain part."""
+    """Validate NR and return EDSTATS' one-based ordinal within the chain part."""
     value = fields[indices["NR"]]
     try:
         row_number = int(value)
@@ -552,7 +562,7 @@ def _resolve_edstats_row(
                 normalized[index] = EDSTATS_NULL_VALUE
                 grid_point_overflow_columns.add(name)
     row_model = validate_edstats_row(normalized, header, indices, line_number)
-    row_number = _validated_edstats_row_number(normalized, indices, line_number)
+    row_number = _validate_edstats_row_number(normalized, indices, line_number)
     if row_model != structure.model_analyzed:
         raise ValueError(
             f"EDSTATS returned model {row_model}, but Alchemy's "
@@ -568,15 +578,15 @@ def _resolve_edstats_row(
         ) from exc
 
     coordinate_resname = normalized[indices["RT"]]
-    _group_chain, row_altloc = _edstats_chain_and_altloc(
+    _ci_chain, row_altloc = _edstats_chain_and_altloc(
         normalized[indices["CI"]], line_number
     )
-    # Join through CP, the deposited chain. EDSTATS sets CI=0 for ordered waters,
-    # which would merge equal-numbered waters from different chains.
-    chain = chain_part
-    normalized[indices["CI"]] = chain
+    # Join through CP, the deposited chain, and carry it in CI from here on.
+    # EDSTATS sets CI=0 for ordered waters, which would merge equal-numbered
+    # waters from different chains.
+    normalized[indices["CI"]] = chain_part
     resnum = normalized[indices["RN"]]
-    coordinate_key = (coordinate_resname, chain, resnum)
+    coordinate_key = (coordinate_resname, chain_part, resnum)
     matched_residues = structure.residues_for_coordinate_author(*coordinate_key)
     chain_residues = residues_by_chain_part.get(chain_part, ())
     matched_residues = _resolve_coordinate_residues(
@@ -807,68 +817,3 @@ def extract_metal_statistics(
     return EdstatsExtraction(
         rows, header, density_context.as_row(pdb_id), warning_codes
     )
-
-
-# Keep density-sigma joins beside the column schema they depend on.
-def sigma_index(
-    stats_rows: Iterable[MetalStatsRow],
-) -> dict[str, dict[tuple[Any, ...], Sequence[CsvValue]]]:
-    """Index EDSTATS fields by site, with an unambiguous author-key fallback."""
-    by_site: dict[tuple[Any, ...], Sequence[CsvValue]] = {}
-    by_author: dict[tuple[Any, ...], Sequence[CsvValue]] = {}
-    ambiguous_authors: set[tuple[Any, ...]] = set()
-    for row in stats_rows:
-        fields = row.fields
-        site_key = row.site_key
-        if site_key is not None:
-            by_site[tuple(site_key)] = fields
-        author_key = (row.resname, str(row.chain), str(row.resnum))
-        if author_key in by_author:
-            ambiguous_authors.add(author_key)
-        else:
-            by_author[author_key] = fields
-    for author_key in ambiguous_authors:
-        by_author.pop(author_key, None)
-    return {"by_site": by_site, "by_author": by_author}
-
-
-ZD_COLUMNS = ("ZDm", "ZD-m", "ZD+m")
-
-
-def zd_indices(header: Sequence[str] | None) -> tuple[int, ...] | None:
-    """Return column indices for ZDm/ZD-m/ZD+m, or ``None`` if any is absent."""
-    if not header:
-        return None
-    try:
-        return tuple(header.index(name) for name in ZD_COLUMNS)
-    except ValueError:
-        return None
-
-
-def sigma_for(
-    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[CsvValue]]],
-    resname: str,
-    chain: str,
-    resnum: str,
-    zd_idx: Sequence[int] | None,
-    site_key: Sequence[Any] | None = None,
-) -> tuple[float, float, float]:
-    """Return the three density Z scores for a site or author identity."""
-    indexed: Sequence[CsvValue] | None = None
-    if site_key is not None:
-        indexed = sig["by_site"].get(tuple(site_key))
-    if indexed is None:
-        indexed = sig["by_author"].get((resname, str(chain), str(resnum)))
-    if indexed is None or zd_idx is None:
-        return NAN, NAN, NAN
-    # ``zd_idx`` addresses EDSTATS header columns, which are parsed text; only
-    # the site fields appended after them can hold non-string values.
-    fields = cast(Sequence[str], indexed)
-    try:
-        return (
-            float(fields[zd_idx[0]]),
-            float(fields[zd_idx[1]]),
-            float(fields[zd_idx[2]]),
-        )
-    except (IndexError, ValueError):
-        return NAN, NAN, NAN
