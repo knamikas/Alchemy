@@ -18,7 +18,7 @@ from coordination import schema as coordination_schema
 from driver import confidence as driver_confidence
 from driver import dispatch, pool, resources, resume
 from driver import layout as driver_layout
-from driver.runlog import RunLog
+from driver.runlog import RunLog, RunSummary
 from driver.writers import (
     STATS_COLUMNS,
     OutputTargets,
@@ -693,7 +693,8 @@ class TestResumeStaging:
             )
 
         if fail_merge:
-            recovery = Path(run_log.summary["resume_staging_recovery_dir"])
+            assert run_log.summary.resume_staging_recovery_dir is not None
+            recovery = Path(run_log.summary.resume_staging_recovery_dir)
             assert recovery.is_dir()
             scratch.sweep_owned_scratch_directories(str(output_dir))
             assert recovery.is_dir()
@@ -708,7 +709,7 @@ class TestResumeStaging:
             "bbbb",
             "cccc",
         ]
-        assert run_log.summary["resume_entries_committed_after_interrupt"] == 2
+        assert run_log.summary.resume_entries_committed_after_interrupt == 2
 
     def _interrupt(
         self,
@@ -717,14 +718,19 @@ class TestResumeStaging:
         *,
         bonds: bool = True,
         confidence: bool = False,
-    ) -> dict[str, Any]:
+    ) -> RunSummary:
         """Run the halted-resume path and return the run-log summary."""
         args = run_config(bonds=bonds, output_dir=str(tmp_path))
-        plan = driver_confidence.ConfidencePlan()
-        # ``enabled`` is derived from the mode, which is what a scoring run sets.
-        plan.mode = "reference" if confidence else None
+        # Any enabled plan will do: the commit only asks whether one exists.
+        plan: driver_confidence.ConfidencePlan = (
+            driver_confidence.ClassificationPlan(
+                driver_layout.OutputLayout(str(tmp_path))
+            )
+            if confidence
+            else driver_confidence.ConfidencePlan()
+        )
         run_log = RunLog(args, "pytest")
-        pool.keep_completed_staging(staging, args, plan, run_log)
+        pool.commit_staged_entries(staging, args, plan, run_log, interrupted=True)
         return run_log.summary
 
     def test_an_interrupted_resume_keeps_the_entries_it_completed(
@@ -749,7 +755,7 @@ class TestResumeStaging:
         for name, path in targets.present().items():
             ids = [row[0] for row in read_csv(path)[1:]]
             assert ids == ["109m", "1cll", "8new"], name
-        assert summary["resume_entries_committed_after_interrupt"] == 1
+        assert summary.resume_entries_committed_after_interrupt == 1
         assert not os.path.isdir(staging.dir)
 
     def test_an_interrupted_resume_drops_an_entry_that_never_completed(
@@ -768,7 +774,7 @@ class TestResumeStaging:
         summary = self._interrupt(staging, tmp_path)
 
         assert self._bytes(targets) == before
-        assert "resume_entries_committed_after_interrupt" not in summary
+        assert summary.resume_entries_committed_after_interrupt is None
         assert not os.path.isdir(staging.dir)
 
     def test_a_failed_interrupt_merge_leaves_the_staged_rows_on_disk(
@@ -789,8 +795,9 @@ class TestResumeStaging:
             summary = self._interrupt(staging, tmp_path)
 
             assert os.path.isdir(staging.dir)
-            assert summary["resume_staging_recovery_dir"] == staging.dir
-            assert "staged CSV schema" in summary["resume_staging_commit_error"]
+            assert summary.resume_staging_recovery_dir == staging.dir
+            assert summary.resume_staging_commit_error is not None
+            assert "staged CSV schema" in summary.resume_staging_commit_error
             scratch.sweep_owned_scratch_directories(str(tmp_path))
             assert os.path.isdir(staging.dir)
         finally:

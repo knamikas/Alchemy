@@ -33,11 +33,6 @@ class OutputLayout:
             os.path.join(output_dir, "metal_candidates_all.csv"),
         )
 
-    @property
-    def core(self) -> tuple[str, str, str, str]:
-        """The four always-written outputs, in resume-validation order."""
-        return (self.manifest, self.stats, self.bonds, self.candidates)
-
 
 def prepare_output_directory(output_dir: str) -> None:
     """Create ``--output-dir`` before its stable lock file is opened."""

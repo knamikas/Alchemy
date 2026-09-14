@@ -29,7 +29,7 @@ def _empty_writer_counts() -> writers.OutputWriters:
     return cast(
         writers.OutputWriters,
         SimpleNamespace(
-            n_rows=0,
+            n_sites=0,
             n_bonds=0,
             n_candidates=0,
             n_crystallization_conditions=0,
@@ -46,8 +46,7 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
     """The finalization gate and process status must use the same policy."""
     args = cli.parse_args(["--output-dir", str(tmp_path)])
     layout = driver_layout.OutputLayout(str(tmp_path))
-    plan = driver_confidence.ConfidencePlan()
-    plan.mode = "database"
+    plan = driver_confidence.DatabasePlan(layout)
     tally = _tally_of(
         entry_result(
             status=EntryStatus.ERROR, reason_codes=["deterministic_processing_error"]
@@ -68,7 +67,9 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
 
     assert exit_code == 0
     assert finalized == [str(tmp_path)]
-    assert run_log.summary["confidence_status"] == "finalized"
+    assert run_log.summary.confidence_status == "finalized"
+    assert run_log.summary.confidence_scores_path == layout.confidence_scores
+    assert run_log.summary.confidence_reference_path == layout.reference_dir
 
 
 def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
@@ -77,8 +78,7 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
     """A retryable error must neither publish a reference nor report success."""
     args = cli.parse_args(["--output-dir", str(tmp_path)])
     layout = driver_layout.OutputLayout(str(tmp_path))
-    plan = driver_confidence.ConfidencePlan()
-    plan.mode = "database"
+    plan = driver_confidence.DatabasePlan(layout)
     tally = _tally_of(
         entry_result(
             status=EntryStatus.ERROR, reason_codes=["unexpected_processing_error"]
@@ -98,5 +98,5 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
     )
 
     assert exit_code == 1
-    assert run_log.summary["confidence_status"] == "not_finalized_incomplete_run"
-    assert run_log.summary["confidence_recoverable_entries"] == 1
+    assert run_log.summary.confidence_status == "not_finalized_incomplete_run"
+    assert run_log.summary.confidence_recoverable_entries == 1

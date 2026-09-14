@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, TextIO
 
 import pytest
 from helpers import entry_result, read_csv
@@ -22,16 +22,6 @@ from driver.writers import (
 from output_rows import MetalStatsRow
 
 
-class _Handles(NamedTuple):
-    """The open output files, in ``OutputWriters`` argument order."""
-
-    manifest: Any
-    stats: Any
-    bonds: Any
-    candidates: Any
-    confidence: Any
-
-
 class TestOutputWriters:
     """The streamed CSVs: headers on creation, running counts, schema guards."""
 
@@ -41,33 +31,30 @@ class TestOutputWriters:
         bonds: bool = True,
         candidates: bool = True,
         confidence: bool | None = None,
-    ) -> _Handles:
-        return _Handles(
-            manifest=open(tmp_path / "manifest.csv", "w", newline=""),
-            stats=open(tmp_path / "stats.csv", "w", newline=""),
-            bonds=open(tmp_path / "bonds.csv", "w", newline="") if bonds else None,
-            candidates=(
-                open(tmp_path / "candidates.csv", "w", newline="")
-                if candidates
-                else None
-            ),
-            confidence=(
-                open(tmp_path / "confidence.csv", "w", newline="")
-                if confidence
-                else None
-            ),
-        )
+    ) -> dict[str, TextIO]:
+        """Open output files keyed as ``OutputTargets`` names them."""
+        wanted = {
+            "manifest": True,
+            "stats": True,
+            "bonds": bonds,
+            "candidates": candidates,
+            "confidence": bool(confidence),
+        }
+        return {
+            name: open(tmp_path / f"{name}.csv", "w", newline="")
+            for name, present in wanted.items()
+            if present
+        }
 
     @staticmethod
-    def _close(handles: _Handles) -> None:
-        for handle in handles:
-            if handle is not None:
-                handle.close()
+    def _close(handles: dict[str, TextIO]) -> None:
+        for handle in handles.values():
+            handle.close()
 
     def test_headers_survive_a_run_that_produced_no_rows(self, tmp_path: Path) -> None:
         """README: the CSVs keep their headers when nothing was found."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         writers.write_stats_rows([])
         writers.write_bond_rows([])
         writers.write_candidate_rows([])
@@ -81,14 +68,14 @@ class TestOutputWriters:
         assert read_csv(tmp_path / "candidates.csv") == [
             list(coordination_schema.CANDIDATE_COLUMNS)
         ]
-        assert (writers.n_rows, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
+        assert (writers.n_sites, writers.n_bonds, writers.n_candidates) == (0, 0, 0)
 
     def test_running_counts_track_the_rows_actually_written(
         self, tmp_path: Path
     ) -> None:
         """The end-of-run totals come from these counters, not from re-reading."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         stats_rows = [
             MetalStatsRow.from_output_fields(
                 "109m", "metal", ["x"] * (len(STATS_COLUMNS) - 2)
@@ -113,7 +100,7 @@ class TestOutputWriters:
         writers.write_stats_rows(stats_rows)
         self._close(handles)
 
-        assert writers.n_rows == 6
+        assert writers.n_sites == 6
         assert writers.n_bonds == 4
         assert writers.n_candidates == 2
         assert len(read_csv(tmp_path / "stats.csv")) == 7
@@ -125,7 +112,7 @@ class TestOutputWriters:
     ) -> None:
         """Id and category lead each row; the EDSTATS block follows verbatim."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         fields = [str(i) for i in range(len(STATS_COLUMNS) - 2)]
         writers.write_stats_rows(
             [MetalStatsRow.from_output_fields("109m", "cofactor", fields)]
@@ -141,7 +128,7 @@ class TestOutputWriters:
         """Every entry gets one row, while unavailable values remain blank."""
         handles = self._handles(tmp_path)
         context_handle = open(tmp_path / "density-context.csv", "w", newline="")
-        writers = OutputWriters(*handles, density_context_fh=context_handle)
+        writers = OutputWriters({**handles, "density_context": context_handle})
         writers.write_density_context_row(entry_result("109m"))
         measured: dict[str, Any] = dict.fromkeys(
             metal_identification.DENSITY_CONTEXT_COLUMNS, ""
@@ -174,7 +161,7 @@ class TestOutputWriters:
         self, tmp_path: Path
     ) -> None:
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         fields = [""] * (len(STATS_COLUMNS) - 2)
         rows = [
             MetalStatsRow.from_output_fields("109m", "metal", fields),
@@ -185,13 +172,13 @@ class TestOutputWriters:
                 writers.write_stats_rows(rows)
         finally:
             self._close(handles)
-        assert writers.n_rows == 0
+        assert writers.n_sites == 0
         assert read_csv(tmp_path / "stats.csv") == [STATS_COLUMNS]
 
     def test_bond_rows_are_written_in_schema_order(self, tmp_path: Path) -> None:
         """Verify projected row values follow the CSV column order."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         row = {column: f"v-{column}" for column in coordination_schema.BOND_COLUMNS}
         shuffled = {key: row[key] for key in reversed(list(row))}
         writers.write_bond_rows([coordination_schema.BondRow(shuffled)])
@@ -203,7 +190,7 @@ class TestOutputWriters:
         self, tmp_path: Path
     ) -> None:
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         bond: dict[str, object] = dict.fromkeys(coordination_schema.BOND_COLUMNS, "")
         bond["declared_connection"] = True
         bond["geometry_outlier"] = False
@@ -227,7 +214,7 @@ class TestOutputWriters:
     ) -> None:
         """--no-bonds passes None handles; writes must be silently skipped."""
         handles = self._handles(tmp_path, bonds=False, candidates=False)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         writers.write_bond_rows(
             [
                 coordination_schema.BondRow(
@@ -260,7 +247,7 @@ class TestOutputWriters:
     ) -> None:
         """A silently dropped or ignored column would corrupt every later row."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         row = dict.fromkeys(getattr(coordination_schema, columns_name), "")
         if mutate == "drop":
             drifted = next(iter(row))
@@ -294,28 +281,14 @@ class TestOutputWriters:
         handles = self._handles(tmp_path, confidence=True)
         try:
             with pytest.raises(ValueError):
-                OutputWriters(
-                    handles.manifest,
-                    handles.stats,
-                    handles.bonds,
-                    handles.candidates,
-                    confidence_fh=handles.confidence,
-                    confidence_columns=None,
-                )
+                OutputWriters(handles, confidence_columns=None)
         finally:
             self._close(handles)
 
     def test_confidence_header_and_counts(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = OutputWriters(
-            handles.manifest,
-            handles.stats,
-            handles.bonds,
-            handles.candidates,
-            confidence_fh=handles.confidence,
-            confidence_columns=columns,
-        )
+        writers = OutputWriters(handles, confidence_columns=columns)
         writers.write_confidence_rows([])
         assert writers.n_confidence == 0
         first: dict[str, object] = dict.fromkeys(columns, "")
@@ -343,13 +316,8 @@ class TestOutputWriters:
         inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
         try:
             writers = OutputWriters(
-                handles.manifest,
-                handles.stats,
-                handles.bonds,
-                handles.candidates,
-                confidence_fh=handles.confidence,
+                {**handles, "confidence_inputs": inputs_handle},
                 confidence_columns=scored_columns,
-                confidence_inputs_fh=inputs_handle,
             )
             row = {column: f"value-{column}" for column in scored_columns}
             writers.write_confidence_rows([row])
@@ -368,14 +336,7 @@ class TestOutputWriters:
     def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)
-        writers = OutputWriters(
-            handles.manifest,
-            handles.stats,
-            handles.bonds,
-            handles.candidates,
-            confidence_fh=handles.confidence,
-            confidence_columns=columns,
-        )
+        writers = OutputWriters(handles, confidence_columns=columns)
         valid: dict[str, Any] = dict.fromkeys(columns, "")
         malformed = valid.copy()
         malformed.pop(columns[0])
@@ -392,7 +353,7 @@ class TestOutputWriters:
     ) -> None:
         """A written manifest is readable by load_done without reinterpretation."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         writers.write_manifest_row(
             manifest_row(
                 entry_result(
@@ -432,7 +393,7 @@ class TestOutputWriters:
     ) -> None:
         """An interrupted batch must retain the rows of completed entries."""
         handles = self._handles(tmp_path)
-        writers = OutputWriters(*handles)
+        writers = OutputWriters(handles)
         writers.write_stats_rows(
             [
                 MetalStatsRow.from_output_fields(

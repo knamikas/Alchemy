@@ -10,7 +10,7 @@ import weakref
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from helpers import entry_result
@@ -26,7 +26,23 @@ from driver.memory_admission import MemoryAdmission
 from driver.runlog import RunLog
 from worker_contracts import EntryResult, WorkerConfig
 
+if TYPE_CHECKING:
+    from multiprocessing.pool import AsyncResult
+
 GIB = 1024**3
+
+#: The ledger stores each entry's task but admission arithmetic never reads it.
+_NO_TASK = cast("AsyncResult[EntryResult]", None)
+
+
+def _ledger(
+    *active: resources.EntryMemoryEstimate, workers: int | None = None
+) -> dispatch._AdmissionLedger:
+    """A ledger running ``active``, sized so the candidate's slot is the only idle one."""
+    ledger = dispatch._AdmissionLedger(len(active) + 1 if workers is None else workers)
+    for estimate in active:
+        ledger.admit(_NO_TASK, estimate)
+    return ledger
 
 
 def controller() -> MemoryAdmission:
@@ -296,17 +312,17 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
         threads.close()
         threads.join()
     if entry_gib == 2:
-        assert log.summary["memory_scheduler_budget_backoffs"] == 1
-        assert log.summary["memory_scheduler_budget_recoveries"] >= 1
-        assert log.summary["memory_scheduler_max_active_entries"] == 4
+        assert log.summary.memory_scheduler_budget_backoffs == 1
+        assert (log.summary.memory_scheduler_budget_recoveries or 0) >= 1
+        assert log.summary.memory_scheduler_max_active_entries == 4
     else:
         # A 7 GiB entry plus three idle workers exceeds the 8 GiB budget.
         # Its pressure must not penalize the budget for ordinary entries.
-        assert log.summary["memory_scheduler_budget_backoffs"] == 0
-        assert log.summary["memory_scheduler_budget_recoveries"] == 0
-        assert log.summary["memory_scheduler_max_active_entries"] == 1
-        assert log.summary["memory_scheduler_oversized_entries"] == len(ids)
-    assert log.summary["memory_scheduler_final_budget_bytes"] == 8 * GIB
+        assert log.summary.memory_scheduler_budget_backoffs == 0
+        assert log.summary.memory_scheduler_budget_recoveries == 0
+        assert log.summary.memory_scheduler_max_active_entries == 1
+        assert log.summary.memory_scheduler_oversized_entries == len(ids)
+    assert log.summary.memory_scheduler_final_budget_bytes == 8 * GIB
     with (tmp_path / "manifest.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert len(rows) == len(ids)
@@ -316,13 +332,13 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
 
 def test_weighted_admission_skips_a_blocked_large_entry() -> None:
     gib = 1024**3
-    active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
+    active = resources.EntryMemoryEstimate("active-small", 2 * gib, "test")
     pending = [
         resources.EntryMemoryEstimate("large", 7 * gib, "test"),
         resources.EntryMemoryEstimate("small", gib, "test"),
     ]
 
-    admitted = dispatch.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active)
+    admitted = _ledger(active).pop_admissible(pending, 5 * gib)
 
     assert admitted is not None and admitted.pdb_id == "small"
     assert [estimate.pdb_id for estimate in pending] == ["large"]
@@ -330,11 +346,11 @@ def test_weighted_admission_skips_a_blocked_large_entry() -> None:
 
 def test_oversized_entry_is_admitted_only_after_active_work_drains() -> None:
     gib = 1024**3
-    active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
+    active = resources.EntryMemoryEstimate("active-small", 2 * gib, "test")
     pending = [resources.EntryMemoryEstimate("large", 7 * gib, "test")]
 
-    assert dispatch.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active) is None
-    admitted = dispatch.pop_admissible_estimate(pending, 0, 5 * gib, [])
+    assert _ledger(active).pop_admissible(pending, 5 * gib) is None
+    admitted = _ledger().pop_admissible(pending, 5 * gib)
     assert admitted is not None and admitted.pdb_id == "large"
 
 
@@ -345,12 +361,12 @@ def test_high_memory_entry_allows_two_ordinary_companions() -> None:
     second = resources.EntryMemoryEstimate("second", 2 * gib, "test")
     pending = [first, second]
 
-    admitted = dispatch.pop_admissible_estimate(pending, 3 * gib, 20 * gib, [large])
+    ledger = _ledger(large, workers=3)
+    admitted = ledger.pop_admissible(pending, 20 * gib)
     assert admitted == first
 
-    admitted = dispatch.pop_admissible_estimate(
-        pending, 5 * gib, 20 * gib, [large, first]
-    )
+    ledger.admit(_NO_TASK, first)
+    admitted = ledger.pop_admissible(pending, 20 * gib)
     assert admitted == second
 
 
@@ -362,41 +378,43 @@ def test_ordinary_companions_are_bounded_by_the_budget_not_a_count() -> None:
     full-database run.
     """
     gib = 1024**3
-    active = [
+    ledger = _ledger(
         resources.EntryMemoryEstimate("large", 3 * gib, "test"),
         resources.EntryMemoryEstimate("first", 2 * gib, "test"),
         resources.EntryMemoryEstimate("second", 2 * gib, "test"),
-    ]
+        workers=6,
+    )
     pending = [resources.EntryMemoryEstimate("third", 2 * gib, "test")]
 
-    admitted = dispatch.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active)
+    admitted = ledger.pop_admissible(pending, 20 * gib)
     assert admitted is not None and admitted.pdb_id == "third"
 
+    # With 19 of the 20 GiB reserved, a fourth companion no longer fits.
+    ledger.admit(_NO_TASK, admitted)
+    ledger.admit(_NO_TASK, resources.EntryMemoryEstimate("bulk", 10 * gib, "test"))
     exhausted = [resources.EntryMemoryEstimate("fourth", 2 * gib, "test")]
-    assert (
-        dispatch.pop_admissible_estimate(exhausted, 19 * gib, 20 * gib, active) is None
-    )
+    assert ledger.pop_admissible(exhausted, 20 * gib) is None
 
 
 def test_high_memory_entries_overlap_within_the_total_byte_budget() -> None:
     gib = 1024**3
-    active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
+    active = resources.EntryMemoryEstimate("large", 3 * gib, "test")
     pending = [resources.EntryMemoryEstimate("another-large", 4 * gib, "test")]
 
-    admitted = dispatch.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
+    admitted = _ledger(active).pop_admissible(pending, 20 * gib)
     assert admitted is not None and admitted.pdb_id == "another-large"
 
 
 def test_high_memory_admission_uses_the_total_budget_without_a_class_cap() -> None:
     """A capable node may overlap large entries whenever their estimates fit."""
     gib = 1024**3
-    active = [resources.EntryMemoryEstimate("large", 9 * gib, "test")]
+    active = resources.EntryMemoryEstimate("large", 9 * gib, "test")
     pending = [
         resources.EntryMemoryEstimate("another-large", 3 * gib, "test"),
         resources.EntryMemoryEstimate("ordinary", 2 * gib, "test"),
     ]
 
-    admitted = dispatch.pop_admissible_estimate(pending, 9 * gib, 20 * gib, active)
+    admitted = _ledger(active).pop_admissible(pending, 20 * gib)
     assert admitted is not None and admitted.pdb_id == "another-large"
     assert [estimate.pdb_id for estimate in pending] == ["ordinary"]
 

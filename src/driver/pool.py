@@ -10,14 +10,10 @@ from __future__ import annotations
 import contextlib
 import os
 from collections.abc import Collection, Sequence
-from typing import NamedTuple, TextIO
+from typing import NamedTuple
 
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
-from confidence_score import (
-    CONFIDENCE_INPUT_COLUMNS,
-    REFERENCE_METADATA_FILE,
-    validate_scored_reference,
-)
+from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from crystallization_conditions import (
     CONDITION_COLUMNS,
     SUMMARY_COLUMNS,
@@ -25,29 +21,15 @@ from crystallization_conditions import (
     prefetch_rcsb_crystallization_metadata,
 )
 from driver import confidence, dispatch, environment
-from driver.confidence import (
-    ConfidencePlan,
-    classify_run,
-    confidence_rows_for,
-    plan_confidence,
-)
-from driver.dispatch import BatchTally
-from driver.entries import (
-    schedule_entries,
-)
+from driver.entries import schedule_entries
 from driver.errors import DriverError
-from driver.layout import (
-    OutputLayout,
-    prepare_output_directory,
-)
+from driver.layout import OutputLayout, prepare_output_directory
 from driver.output_lock import (
     OutputDirectoryBusyError,
     OutputDirectoryLock,
     OutputDirectoryLockError,
 )
-from driver.report import (
-    report_batch,
-)
+from driver.report import report_batch
 from driver.resources import (
     MemoryPlan,
     available_memory_bytes,
@@ -76,23 +58,6 @@ from scratch import sweep_owned_scratch_directories
 from worker_contracts import EntryResult, WorkerConfig
 
 logger = logger_for(__name__)
-
-
-def output_targets_for_run(layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
-    """The files a run with this layout and confidence plan writes."""
-    return OutputTargets(
-        manifest=layout.manifest,
-        stats=layout.stats,
-        bonds=layout.bonds,
-        candidates=layout.candidates,
-        crystallization_conditions=layout.crystallization_conditions,
-        crystallization_summary=layout.crystallization_summary,
-        density_context=layout.density_context,
-        confidence=plan.output_path if plan.enabled else None,
-        confidence_inputs=(
-            layout.confidence_inputs if plan.synchronize_inputs else None
-        ),
-    )
 
 
 def plan_entry_memory(
@@ -176,7 +141,7 @@ def _load_cofactor_catalog() -> frozenset[str]:
 def _check_resume_is_compatible(
     args: RunConfig,
     layout: OutputLayout,
-    plan: ConfidencePlan,
+    plan: confidence.ConfidencePlan,
     current_analysis_config_id: str,
 ) -> None:
     """Refuse to resume onto output this run cannot safely extend."""
@@ -184,7 +149,7 @@ def _check_resume_is_compatible(
         return
     try:
         validate_resume_schemas(
-            *layout.core,
+            layout,
             bonds_enabled=args.bonds,
             confidence_path=plan.stream_path,
             confidence_columns=plan.columns,
@@ -196,7 +161,7 @@ def _check_resume_is_compatible(
         )
         if plan.synchronize_inputs:
             validate_resume_schemas(
-                *layout.core,
+                layout,
                 bonds_enabled=args.bonds,
                 confidence_path=layout.confidence_inputs,
                 confidence_columns=CONFIDENCE_INPUT_COLUMNS,
@@ -211,42 +176,36 @@ def _check_resume_is_compatible(
             "Cannot resume output produced with a different analysis "
             "configuration identity; use a fresh output directory."
         )
-    if plan.mode == "reference" and os.path.isfile(plan.output_path):
-        try:
-            validate_scored_reference(plan.output_path, plan.scored_reference)
-        except (OSError, ValueError) as exc:
-            raise DriverError(f"Cannot resume confidence output: {exc}") from None
+    plan.validate_resumed_output()
 
 
 def _finish_without_entries(
-    args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
+    args: RunConfig,
+    layout: OutputLayout,
+    plan: confidence.ConfidencePlan,
+    run_log: RunLog,
 ) -> int:
     """Exit code for a run whose work list came back empty."""
-    if (
-        args.resume
-        and plan.mode == "database"
-        and os.path.isfile(layout.confidence_inputs)
-    ):
-        total, scored, cohort = confidence.finalize_confidence_reference(layout)
+    finalized = plan.finalize_resumed_inputs(layout, run_log, resume=args.resume)
+    if finalized is not None:
         logger.info(
             "no entries required retry; finalized %d confidence rows "
             "(%d scored; database cohort %d) -> %s",
-            total,
-            scored,
-            cohort,
+            finalized.rows,
+            finalized.scored_rows,
+            finalized.cohort,
             layout.confidence_scores,
         )
         logger.info("confidence reference -> %s", layout.reference_dir)
-        confidence.finalize_review_queue(layout)
-        return 0
     if plan.enabled:
-        confidence.finalize_review_queue(layout)
-    logger.info("no entries to process")
+        confidence.finalize_review_queue(layout, run_log)
+    if finalized is None:
+        logger.info("no entries to process")
     return 0
 
 
 def _clear_stale_outputs(
-    args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
+    args: RunConfig, layout: OutputLayout, plan: confidence.ConfidencePlan
 ) -> None:
     """Remove stale outputs that conflict with the current run mode."""
     try:
@@ -266,17 +225,8 @@ def _clear_stale_outputs(
         raise DriverError(f"Could not clear stale review queue: {exc}") from None
     if args.resume:
         return
-    # The reference metadata file is the reference's completion marker.
-    reference_marker = os.path.join(layout.reference_dir, REFERENCE_METADATA_FILE)
-    stale: tuple[str, ...]
-    if plan.mode == "database":
-        stale = (layout.confidence_scores, reference_marker)
-    elif plan.mode == "reference":
-        stale = (layout.confidence_inputs,)
-    else:
-        stale = (layout.confidence_inputs, layout.confidence_scores, reference_marker)
     try:
-        for path in (*stale, *layout.legacy_scientific_outputs):
+        for path in (*plan.stale_outputs(layout), *layout.legacy_scientific_outputs):
             if os.path.isfile(path):
                 os.unlink(path)
     except OSError as exc:
@@ -355,13 +305,11 @@ def worker_config_from_args(
     pdb_redo_cache: str,
     cofactors: Collection[str],
     manual_inputs: dict[str, str | None] | None,
-    plan: ConfidencePlan,
-    run_log: RunLog,
     *,
     identity: AnalysisIdentity,
 ) -> WorkerConfig:
     """Build the config every worker is initialized with, once per run."""
-    cfg = WorkerConfig(
+    return WorkerConfig(
         input_root=input_root,
         pdb_redo_root=args.pdb_redo_root,
         pdb_redo_cache=pdb_redo_cache,
@@ -382,6 +330,12 @@ def worker_config_from_args(
         analysis_config_id=identity.analysis_config_id,
         pdb_metadata_cache=args.pdb_metadata_cache,
     )
+
+
+def record_run_provenance(
+    run_log: RunLog, cfg: WorkerConfig, plan: confidence.ConfidencePlan
+) -> None:
+    """Record the software, reference data, and confidence mode the run used."""
     run_log.details.update(
         alchemy_version=environment.ALCHEMY_VERSION,
         alchemy_commit=cfg.alchemy_commit,
@@ -396,7 +350,6 @@ def worker_config_from_args(
             for name, digest in reference_data_checksums().items()
         },
     )
-    return cfg
 
 
 def prepare_crystallization_metadata(
@@ -404,18 +357,12 @@ def prepare_crystallization_metadata(
     ids: Sequence[str],
     run_log: RunLog,
     *,
-    allow_download: bool | None = None,
+    allow_download: bool,
 ) -> None:
     """Warm the original-PDB metadata cache before costly worker execution."""
     try:
         stats = prefetch_rcsb_crystallization_metadata(
-            ids,
-            args.pdb_metadata_cache,
-            allow_download=(
-                args.crystallization_download
-                if allow_download is None
-                else allow_download
-            ),
+            ids, args.pdb_metadata_cache, allow_download=allow_download
         )
     except CrystallizationMetadataError as exc:
         raise DriverError(
@@ -451,24 +398,16 @@ def _open_writers(
     confidence_columns: Sequence[str] | None,
 ) -> OutputWriters:
     """Open every output stream this run writes and give them their headers."""
-
-    def opened(path: str) -> TextIO:
-        return handles.enter_context(open(path, "w", newline="", encoding="utf-8"))
-
-    def opened_if(path: str | None) -> TextIO | None:
-        return opened(path) if path is not None else None
-
+    paths = targets.present()
+    if not bonds:
+        for name in OutputTargets.BOND_STAGE_OUTPUTS:
+            del paths[name]
     return OutputWriters(
-        opened(targets.manifest),
-        opened(targets.stats),
-        opened(targets.bonds) if bonds else None,
-        opened(targets.candidates) if bonds else None,
-        opened_if(targets.confidence),
-        confidence_columns,
-        opened_if(targets.confidence_inputs),
-        opened(targets.crystallization_conditions),
-        opened(targets.crystallization_summary),
-        opened(targets.density_context),
+        {
+            name: handles.enter_context(open(path, "w", newline="", encoding="utf-8"))
+            for name, path in paths.items()
+        },
+        confidence_columns=confidence_columns,
     )
 
 
@@ -489,7 +428,7 @@ def should_write_entry(
 
 def write_entry(
     result: EntryResult,
-    plan: ConfidencePlan,
+    plan: confidence.ConfidencePlan,
     writers: OutputWriters,
     staging: ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
@@ -509,7 +448,7 @@ def write_entry(
     writers.write_crystallization_rows(result)
     writers.write_density_context_row(result)
     if plan.enabled:
-        writers.write_confidence_rows(confidence_rows_for(result, plan))
+        writers.write_confidence_rows(confidence.confidence_rows_for(result, plan))
     writers.write_manifest_row(
         manifest_row(result, resume, bonds, prior_bond_counts, prior_candidate_counts)
     )
@@ -517,27 +456,39 @@ def write_entry(
         staging.replacement_ids.add(result.pdb_id.lower())
 
 
-def keep_completed_staging(
+def commit_staged_entries(
     staging: ResumeStaging,
     args: RunConfig,
-    plan: ConfidencePlan,
+    plan: confidence.ConfidencePlan,
     run_log: RunLog,
+    *,
+    interrupted: bool,
 ) -> None:
-    """Commit entries completed before a resumed batch was interrupted.
+    """Merge the staged rows of a resumed batch into the outputs.
 
-    Only IDs with a written manifest row enter replacement_ids. Keep unfinished
-    rows in staging and preserve completed work if committing fails.
+    Only IDs with a written manifest row enter replacement_ids, so an entry
+    interrupted mid-write is left for the next resume. A failed merge keeps
+    the staging directory, which may hold the only copy of completed work,
+    and records where it is. After an interrupt the failure is logged and
+    swallowed so the interrupt stays the run's outcome; otherwise it is the
+    outcome, and propagates.
     """
     kept = len(staging.replacement_ids)
-    if not kept:
+    if interrupted and not kept:
         staging.discard()
         return
     try:
         staging.commit(args.bonds, confidence_enabled=plan.enabled)
-    except Exception as exc:
-        # Preserve staging for manual recovery if it is the only copy of completed work.
-        run_log.summary["resume_staging_recovery_dir"] = staging.dir
-        run_log.summary["resume_staging_commit_error"] = f"{type(exc).__name__}: {exc}"
+    except BaseException as exc:
+        if interrupted and not isinstance(exc, Exception):
+            raise  # a second interrupt, during the merge itself
+        run_log.summary.resume_staging_recovery_dir = staging.dir
+        run_log.summary.resume_staging_commit_error = f"{type(exc).__name__}: {exc}"
+        if not interrupted:
+            logger.error(
+                "resume merge failed; completed rows retained in %s", staging.dir
+            )
+            raise
         logger.error(
             "could not merge %d completed entries into the output after an "
             "interrupted resume; their rows are left in %s",
@@ -546,12 +497,13 @@ def keep_completed_staging(
         )
         return
     staging.discard()
-    run_log.summary["resume_entries_committed_after_interrupt"] = kept
-    logger.warning(
-        "interrupted after %d completed entries; their rows were merged and "
-        "--resume will skip them",
-        kept,
-    )
+    if interrupted:
+        run_log.summary.resume_entries_committed_after_interrupt = kept
+        logger.warning(
+            "interrupted after %d completed entries; their rows were merged and "
+            "--resume will skip them",
+            kept,
+        )
 
 
 def _prior_manifest_counts(
@@ -566,16 +518,39 @@ def _prior_manifest_counts(
     )
 
 
+def _record_written_outputs(
+    run_log: RunLog, layout: OutputLayout, writers: OutputWriters, *, bonds: bool
+) -> None:
+    """Record every closed output stream and its row count in the run report."""
+    summary = run_log.summary
+    summary.metal_rows_written = writers.n_sites
+    summary.bond_rows_written = writers.n_bonds
+    summary.candidate_rows_written = writers.n_candidates
+    summary.confidence_rows_written = writers.n_confidence
+    summary.crystallization_condition_rows_written = (
+        writers.n_crystallization_conditions
+    )
+    summary.crystallization_summary_rows_written = writers.n_crystallization_summaries
+    summary.density_context_rows_written = writers.n_density_contexts
+    summary.manifest_path = layout.manifest
+    summary.metal_sites_path = layout.stats
+    summary.metal_bonds_path = layout.bonds if bonds else "disabled"
+    summary.metal_contact_candidates_path = layout.candidates if bonds else "disabled"
+    summary.crystallization_conditions_path = layout.crystallization_conditions
+    summary.crystallization_summary_path = layout.crystallization_summary
+    summary.density_context_path = layout.density_context
+
+
 def process_entries(
     args: RunConfig,
     ids: Sequence[str],
     cfg: WorkerConfig,
     workers: int,
     layout: OutputLayout,
-    plan: ConfidencePlan,
+    plan: confidence.ConfidencePlan,
     run_log: RunLog,
-    memory_plan: MemoryPlan | None = None,
-) -> tuple[BatchTally, OutputWriters]:
+    memory_plan: MemoryPlan,
+) -> tuple[dispatch.BatchTally, OutputWriters]:
     """Open the outputs, run the batch, and commit any staged retry rows.
 
     An interrupted batch still commits the entries that completed, so the work
@@ -583,14 +558,12 @@ def process_entries(
     previous run's rows exactly as they were.
     """
     prior_counts = _prior_manifest_counts(args, layout)
-    if memory_plan is None:
-        memory_plan = plan_entry_memory(args, ids, cfg, run_log)
     # Which ids the manifest already describes; see ``should_write_entry``,
     # which uses it to decide whether a retry may overwrite an existing row.
     prior_ids: set[str] = (
         set(manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
-    targets = output_targets_for_run(layout, plan)
+    targets = OutputTargets.from_layout(layout, plan)
     staging = ResumeStaging(args.output_dir, targets) if args.resume else None
     write_targets = staging.staged if staging is not None else targets
 
@@ -622,37 +595,11 @@ def process_entries(
             processing_completed = True
     finally:
         if staging is not None and not processing_completed:
-            keep_completed_staging(staging, args, plan, run_log)
+            commit_staged_entries(staging, args, plan, run_log, interrupted=True)
 
-    run_log.summary.update(
-        metal_rows_written=writers.n_rows,
-        bond_rows_written=writers.n_bonds,
-        candidate_rows_written=writers.n_candidates,
-        confidence_rows_written=writers.n_confidence,
-        crystallization_condition_rows_written=writers.n_crystallization_conditions,
-        crystallization_summary_rows_written=writers.n_crystallization_summaries,
-        density_context_rows_written=writers.n_density_contexts,
-        manifest_path=layout.manifest,
-        metal_sites_path=layout.stats,
-        metal_bonds_path=layout.bonds if args.bonds else "disabled",
-        metal_contact_candidates_path=(layout.candidates if args.bonds else "disabled"),
-        crystallization_conditions_path=layout.crystallization_conditions,
-        crystallization_summary_path=layout.crystallization_summary,
-        density_context_path=layout.density_context,
-    )
+    _record_written_outputs(run_log, layout, writers, bonds=args.bonds)
     if staging is not None:
-        try:
-            staging.commit(args.bonds, confidence_enabled=plan.enabled)
-        except BaseException as exc:
-            run_log.summary["resume_staging_recovery_dir"] = staging.dir
-            run_log.summary["resume_staging_commit_error"] = (
-                f"{type(exc).__name__}: {exc}"
-            )
-            logger.error(
-                "resume merge failed; completed rows retained in %s", staging.dir
-            )
-            raise
-        staging.discard()
+        commit_staged_entries(staging, args, plan, run_log, interrupted=False)
     return tally, writers
 
 
@@ -675,10 +622,10 @@ def _execute_with_output_lock(
     """Run every output-reading and output-writing phase under one lease."""
     sweep_owned_scratch_directories(args.output_dir)
     layout = OutputLayout(args.output_dir)
-    run_mode, database_run = classify_run(args)
+    run_mode = confidence.classify_run(args)
     run_log.details["run_mode"] = run_mode
 
-    plan = plan_confidence(args, layout, database_run, run_log)
+    plan = confidence.plan_confidence(args, layout, run_mode, run_log)
     identity = AnalysisIdentity.current()
     run_log.details["analysis_config_id"] = identity.analysis_config_id
     _check_resume_is_compatible(args, layout, plan, identity.analysis_config_id)
@@ -687,12 +634,15 @@ def _execute_with_output_lock(
         args, layout, args.pdb_redo_cache, run_log
     )
     if not ids:
-        return _finish_without_entries(args, layout, plan)
+        return _finish_without_entries(args, layout, plan, run_log)
 
     # Manual labels may not be deposited PDB IDs; use cached metadata without
     # requiring a network lookup.
     prepare_crystallization_metadata(
-        args, ids, run_log, allow_download=False if manual_inputs else None
+        args,
+        ids,
+        run_log,
+        allow_download=args.crystallization_download and manual_inputs is None,
     )
     _clear_stale_outputs(args, layout, plan)
     cfg = worker_config_from_args(
@@ -702,10 +652,9 @@ def _execute_with_output_lock(
         args.pdb_redo_cache,
         cofactors,
         manual_inputs,
-        plan,
-        run_log,
         identity=identity,
     )
+    record_run_provenance(run_log, cfg, plan)
     memory_plan = plan_entry_memory(args, ids, cfg, run_log)
     workers = choose_worker_count(
         args, len(ids), run_log, memory_budget_bytes=memory_plan.budget_bytes
@@ -720,9 +669,9 @@ def _execute_with_output_lock(
 def _execute(args: RunConfig, run_log: RunLog) -> int:
     """Resolve prerequisites, then exclusively own the output for the run."""
     cofactors = _load_cofactor_catalog()
-    env, _ = environment.resolve_ccp4_environment(args)
-    if env is None:
-        return 0  # --configure-ccp4 saved a setup path and ran nothing else.
+    if environment.configure_ccp4(args):
+        return 0  # --configure-ccp4 saved a setup path and runs nothing else.
+    env = environment.resolve_ccp4_environment(args)
     prepare_output_directory(args.output_dir)
     try:
         with OutputDirectoryLock(args.output_dir, run_log.command):

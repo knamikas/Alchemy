@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import csv
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields, replace
 from operator import attrgetter
-from typing import Any, ClassVar, TextIO
+from typing import TYPE_CHECKING, Any, ClassVar, TextIO
 
 from analysis_config import ALTLOC_POLICY, MODEL_POLICY, SYMMETRY_POLICY
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
@@ -27,9 +27,14 @@ from crystallization_conditions import (
     SUMMARY_COLUMNS,
     unavailable_summary,
 )
+from driver.layout import OutputLayout
 from metal_identification import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
 from output_rows import MetalStatsRow, blank_if_unmeasured, scientific_csv_value
 from worker_contracts import EntryResult
+
+if TYPE_CHECKING:
+    # The plan module reads this module's schemas; only the annotation crosses back.
+    from driver.confidence import ConfidencePlan
 
 # Keep the published pdbID spelling for downstream readers and joins.
 MANIFEST_COLUMNS = [
@@ -171,6 +176,8 @@ class OutputTargets:
     confidence: str | None = None
     confidence_inputs: str | None = None
 
+    #: Written only when bond analysis runs; ``--no-bonds`` leaves them closed.
+    BOND_STAGE_OUTPUTS: ClassVar[tuple[str, ...]] = ("bonds", "candidates")
     #: Written whether or not bonds are enabled; every resume commit merges them.
     ALWAYS_WRITTEN_EXTRAS: ClassVar[tuple[str, ...]] = (
         "crystallization_conditions",
@@ -179,6 +186,23 @@ class OutputTargets:
     )
     #: Present only when confidence analysis is on; merged only when enabled.
     CONFIDENCE_OUTPUTS: ClassVar[tuple[str, ...]] = ("confidence", "confidence_inputs")
+
+    @classmethod
+    def from_layout(cls, layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
+        """The files a run with this layout and confidence plan writes."""
+        return cls(
+            manifest=layout.manifest,
+            stats=layout.stats,
+            bonds=layout.bonds,
+            candidates=layout.candidates,
+            crystallization_conditions=layout.crystallization_conditions,
+            crystallization_summary=layout.crystallization_summary,
+            density_context=layout.density_context,
+            confidence=plan.stream_path,
+            confidence_inputs=(
+                layout.confidence_inputs if plan.synchronize_inputs else None
+            ),
+        )
 
     def present(self) -> dict[str, str]:
         """Every path this run writes, keyed by field name."""
@@ -199,172 +223,165 @@ class OutputTargets:
         )
 
 
+class _CsvStream:
+    """One open CSV output: its handle, its schema, and a running row count.
+
+    The header is written on creation, so a run that finds nothing still
+    leaves a readable file behind. Every write flushes, so an interrupted
+    run retains the rows of the entries that completed.
+    """
+
+    def __init__(self, handle: TextIO, columns: Sequence[str]) -> None:
+        self.columns = list(columns)
+        self.n_rows = 0
+        self._handle = handle
+        self._writer = csv.DictWriter(handle, fieldnames=self.columns)
+        self._writer.writeheader()
+
+    def write_rows(self, rows: Iterable[Mapping[str, Any]]) -> None:
+        """Project rows onto the schema as scientific CSV text, then flush."""
+        for row in rows:
+            self._writer.writerow(
+                {column: scientific_csv_value(row[column]) for column in self.columns}
+            )
+            self.n_rows += 1
+        self._handle.flush()
+
+    def write_row(self, row: Mapping[str, Any]) -> None:
+        """Write one row whose values are already CSV text, then flush."""
+        self._writer.writerow(row)
+        self.n_rows += 1
+        self._handle.flush()
+
+
+def _stream_if_open(
+    handles: Mapping[str, TextIO], name: str, columns: Sequence[str]
+) -> _CsvStream | None:
+    handle = handles.get(name)
+    return _CsvStream(handle, columns) if handle is not None else None
+
+
+def _rows_written(stream: _CsvStream | None) -> int:
+    return stream.n_rows if stream is not None else 0
+
+
 class OutputWriters:
     """The streamed CSV outputs, with running row counts."""
 
     def __init__(
         self,
-        manifest_fh: TextIO,
-        stats_fh: TextIO,
-        bonds_fh: TextIO | None,
-        candidates_fh: TextIO | None,
-        confidence_fh: TextIO | None = None,
+        handles: Mapping[str, TextIO],
+        *,
         confidence_columns: Sequence[str] | None = None,
-        confidence_inputs_fh: TextIO | None = None,
-        crystallization_conditions_fh: TextIO | None = None,
-        crystallization_summary_fh: TextIO | None = None,
-        density_context_fh: TextIO | None = None,
     ) -> None:
-        """Initialize CSV writers and emit all enabled output headers."""
-        self._manifest_fh = manifest_fh
-        self._stats_fh = stats_fh
-        self._bonds_fh = bonds_fh
-        self._candidates_fh = candidates_fh
-        self._confidence_fh = confidence_fh
-        self._confidence_inputs_fh = confidence_inputs_fh
-        self._crystallization_conditions_fh = crystallization_conditions_fh
-        self._crystallization_summary_fh = crystallization_summary_fh
-        self._density_context_fh = density_context_fh
-        self._manifest = csv.DictWriter(manifest_fh, fieldnames=MANIFEST_COLUMNS)
-        self._stats = csv.writer(stats_fh)
-        self._bonds = csv.writer(bonds_fh) if bonds_fh is not None else None
-        self._candidates = (
-            csv.writer(candidates_fh) if candidates_fh is not None else None
-        )
-        if confidence_fh is not None and confidence_columns is None:
+        """Start one stream per open output and emit every header.
+
+        ``handles`` is keyed by ``OutputTargets`` field name; the manifest and
+        statistics outputs are always present, every other one is optional.
+        """
+        confidence_handle = handles.get("confidence")
+        if confidence_handle is not None and confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
-        self._confidence: csv.DictWriter[str] | None = None
-        self._confidence_inputs: csv.DictWriter[str] | None = None
-        self._crystallization_conditions = (
-            csv.DictWriter(crystallization_conditions_fh, fieldnames=CONDITION_COLUMNS)
-            if crystallization_conditions_fh is not None
+        if "confidence_inputs" in handles and confidence_handle is None:
+            raise ValueError("confidence inputs synchronization requires scored output")
+        self._manifest = _CsvStream(handles["manifest"], MANIFEST_COLUMNS)
+        self._stats = _CsvStream(handles["stats"], STATS_COLUMNS)
+        self._bonds = _stream_if_open(handles, "bonds", BOND_COLUMNS)
+        self._candidates = _stream_if_open(handles, "candidates", CANDIDATE_COLUMNS)
+        self._confidence = (
+            _CsvStream(confidence_handle, confidence_columns)
+            if confidence_handle is not None and confidence_columns is not None
             else None
         )
-        self._crystallization_summary = (
-            csv.DictWriter(crystallization_summary_fh, fieldnames=SUMMARY_COLUMNS)
-            if crystallization_summary_fh is not None
-            else None
+        self._confidence_inputs = _stream_if_open(
+            handles, "confidence_inputs", CONFIDENCE_INPUT_COLUMNS
         )
-        self._density_context = (
-            csv.DictWriter(density_context_fh, fieldnames=DENSITY_CONTEXT_COLUMNS)
-            if density_context_fh is not None
-            else None
+        self._crystallization_conditions = _stream_if_open(
+            handles, "crystallization_conditions", CONDITION_COLUMNS
         )
-        if confidence_fh is not None and confidence_columns is not None:
-            self._confidence = csv.DictWriter(
-                confidence_fh, fieldnames=confidence_columns
-            )
-        if confidence_inputs_fh is not None:
-            if confidence_fh is None:
-                raise ValueError(
-                    "confidence inputs synchronization requires scored output"
-                )
-            self._confidence_inputs = csv.DictWriter(
-                confidence_inputs_fh, fieldnames=CONFIDENCE_INPUT_COLUMNS
-            )
-        self._confidence_columns = confidence_columns
-        self.n_rows = 0
-        self.n_bonds = 0
-        self.n_candidates = 0
-        self.n_confidence = 0
-        self.n_crystallization_conditions = 0
-        self.n_crystallization_summaries = 0
-        self.n_density_contexts = 0
-        self._manifest.writeheader()
-        self._stats.writerow(STATS_COLUMNS)
-        if self._bonds is not None:
-            self._bonds.writerow(BOND_COLUMNS)
-        if self._candidates is not None:
-            self._candidates.writerow(CANDIDATE_COLUMNS)
-        if self._confidence is not None:
-            self._confidence.writeheader()
-        if self._confidence_inputs is not None:
-            self._confidence_inputs.writeheader()
-        if self._crystallization_conditions is not None:
-            self._crystallization_conditions.writeheader()
-        if self._crystallization_summary is not None:
-            self._crystallization_summary.writeheader()
-        if self._density_context is not None:
-            self._density_context.writeheader()
+        self._crystallization_summary = _stream_if_open(
+            handles, "crystallization_summary", SUMMARY_COLUMNS
+        )
+        self._density_context = _stream_if_open(
+            handles, "density_context", DENSITY_CONTEXT_COLUMNS
+        )
+
+    @property
+    def n_sites(self) -> int:
+        """Metal and cofactor site rows written to the statistics output."""
+        return self._stats.n_rows
+
+    @property
+    def n_bonds(self) -> int:
+        """Bond rows written; zero while that output is disabled."""
+        return _rows_written(self._bonds)
+
+    @property
+    def n_candidates(self) -> int:
+        """Contact-candidate rows written; zero while disabled."""
+        return _rows_written(self._candidates)
+
+    @property
+    def n_confidence(self) -> int:
+        """Scored confidence rows written; zero while disabled."""
+        return _rows_written(self._confidence)
+
+    @property
+    def n_crystallization_conditions(self) -> int:
+        """Crystallization condition rows written."""
+        return _rows_written(self._crystallization_conditions)
+
+    @property
+    def n_crystallization_summaries(self) -> int:
+        """Crystallization summary rows written."""
+        return _rows_written(self._crystallization_summary)
+
+    @property
+    def n_density_contexts(self) -> int:
+        """Density context rows written, one per entry."""
+        return _rows_written(self._density_context)
 
     def write_stats_rows(self, rows: Sequence[MetalStatsRow]) -> None:
         """Write and flush metal-site statistics rows."""
         if not rows:
             return
-        output_rows = [row.as_output_dict(STATS_COLUMNS) for row in rows]
-        for row in output_rows:
-            self._stats.writerow(
-                [scientific_csv_value(row[column]) for column in STATS_COLUMNS]
-            )
-            self.n_rows += 1
-        self._stats_fh.flush()
+        # Project every row before writing any, so a malformed batch writes nothing.
+        self._stats.write_rows([row.as_output_dict(STATS_COLUMNS) for row in rows])
 
     def write_bond_rows(self, bond_rows: Sequence[BondRow]) -> None:
         """Write and flush analyzed bond rows when that output is enabled."""
-        if self._bonds is None or self._bonds_fh is None or not bond_rows:
+        if self._bonds is None or not bond_rows:
             return
-        for bond in bond_rows:
-            values = bond.as_dict()
-            self._bonds.writerow(
-                [scientific_csv_value(values[column]) for column in BOND_COLUMNS]
-            )
-            self.n_bonds += 1
-        self._bonds_fh.flush()
+        self._bonds.write_rows(bond.as_dict() for bond in bond_rows)
 
     def write_candidate_rows(self, candidate_rows: Sequence[CandidateRow]) -> None:
         """Write and flush contact-candidate rows when enabled."""
-        if (
-            self._candidates is None
-            or self._candidates_fh is None
-            or not candidate_rows
-        ):
+        if self._candidates is None or not candidate_rows:
             return
-        for candidate in candidate_rows:
-            values = candidate.as_dict()
-            self._candidates.writerow(
-                [scientific_csv_value(values[column]) for column in CANDIDATE_COLUMNS]
-            )
-            self.n_candidates += 1
-        self._candidates_fh.flush()
+        self._candidates.write_rows(candidate.as_dict() for candidate in candidate_rows)
 
     def write_manifest_row(self, row: Mapping[str, Any]) -> None:
         """Write and flush one entry manifest row."""
-        self._manifest.writerow(row)
-        self._manifest_fh.flush()
+        self._manifest.write_row(row)
 
     def write_crystallization_rows(self, result: EntryResult) -> None:
         """Write condition and summary rows for one entry when enabled."""
         if (
             self._crystallization_conditions is None
             or self._crystallization_summary is None
-            or self._crystallization_conditions_fh is None
-            or self._crystallization_summary_fh is None
         ):
             return
-        for row in result.crystallization_condition_rows:
-            self._crystallization_conditions.writerow(
-                {
-                    column: scientific_csv_value(row[column])
-                    for column in CONDITION_COLUMNS
-                }
-            )
-            self.n_crystallization_conditions += 1
+        self._crystallization_conditions.write_rows(
+            result.crystallization_condition_rows
+        )
         summary = result.crystallization_summary_row or unavailable_summary(
             result.pdb_id
         )
-        self._crystallization_summary.writerow(
-            {
-                column: scientific_csv_value(summary[column])
-                for column in SUMMARY_COLUMNS
-            }
-        )
-        self.n_crystallization_summaries += 1
-        self._crystallization_conditions_fh.flush()
-        self._crystallization_summary_fh.flush()
+        self._crystallization_summary.write_rows([summary])
 
     def write_density_context_row(self, result: EntryResult) -> None:
         """Write exactly one available or explicitly uncomputed entry row."""
-        if self._density_context is None or self._density_context_fh is None:
+        if self._density_context is None:
             return
         row = dict.fromkeys(DENSITY_CONTEXT_COLUMNS, "")
         row.update(
@@ -379,49 +396,16 @@ class OutputWriters:
                     "density context row does not match its output schema"
                 )
             row.update(result.density_context_row)
-        self._density_context.writerow(
-            {
-                column: scientific_csv_value(row[column])
-                for column in DENSITY_CONTEXT_COLUMNS
-            }
-        )
-        self.n_density_contexts += 1
-        self._density_context_fh.flush()
+        self._density_context.write_rows([row])
 
     def write_confidence_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
         """Write scored confidence rows and synchronized inputs when enabled."""
         if self._confidence is None or not rows:
             return
-        if self._confidence_columns is None or self._confidence_fh is None:
-            raise RuntimeError("confidence output is not fully configured")
-        expected = set(self._confidence_columns)
+        expected = set(self._confidence.columns)
         for row in rows:
             if set(row) != expected:
                 raise RuntimeError("confidence row does not match its output schema")
-        input_rows = (
-            [
-                {column: row[column] for column in CONFIDENCE_INPUT_COLUMNS}
-                for row in rows
-            ]
-            if self._confidence_inputs is not None
-            else None
-        )
-        self._confidence.writerows(
-            {
-                column: scientific_csv_value(row[column])
-                for column in self._confidence_columns
-            }
-            for row in rows
-        )
-        if self._confidence_inputs is not None and input_rows is not None:
-            self._confidence_inputs.writerows(
-                {
-                    column: scientific_csv_value(row[column])
-                    for column in CONFIDENCE_INPUT_COLUMNS
-                }
-                for row in input_rows
-            )
-        self.n_confidence += len(rows)
-        self._confidence_fh.flush()
-        if self._confidence_inputs_fh is not None:
-            self._confidence_inputs_fh.flush()
+        self._confidence.write_rows(rows)
+        if self._confidence_inputs is not None:
+            self._confidence_inputs.write_rows(rows)

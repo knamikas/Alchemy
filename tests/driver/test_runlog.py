@@ -7,12 +7,14 @@ import os
 import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import fields
 from pathlib import Path
 
+import pytest
 from helpers import entry_result, run_config
 
 from driver import runlog
-from driver.runlog import RunLog
+from driver.runlog import RunLog, RunSummary
 
 
 class TestRunLog:
@@ -177,6 +179,57 @@ class TestRunLog:
             "Slowest entries"
         )[0]
         assert "routine | partial" not in exceptions
+
+    @pytest.mark.parametrize(
+        "written,finalized,expected",
+        [
+            # A run without confidence still accounts for its zero stream rows.
+            (0, None, ["Additional completion details:", "  confidence_rows: 0"]),
+            # A finalized database run reports the scores file total ...
+            (40, 40, ["Confidence scores: scores.csv (40 rows)"]),
+            # ... and, when resumed, how many of them this run streamed.
+            (
+                12,
+                40,
+                [
+                    "Confidence scores: scores.csv (40 rows)",
+                    "Additional completion details:",
+                    "  confidence_rows_written: 12",
+                ],
+            ),
+        ],
+    )
+    def test_confidence_counts_are_reported_beside_the_scores_file(
+        self,
+        tmp_path: Path,
+        written: int,
+        finalized: int | None,
+        expected: list[str],
+    ) -> None:
+        run_log = self._log(tmp_path, [])
+        run_log.summary.confidence_rows_written = written
+        if finalized is not None:
+            run_log.summary.confidence_rows = finalized
+            run_log.summary.confidence_scores_path = "scores.csv"
+
+        text = Path(run_log.write(0)).read_text(encoding="utf-8")
+
+        section = text.split("Output files")[1].split("Stage timing")[0]
+        assert [line for line in section.splitlines() if "confidence" in line] == (
+            [line for line in expected if "confidence" in line]
+        )
+        assert ("Additional completion details:" in section) == (
+            "Additional completion details:" in expected
+        )
+
+    def test_every_summary_field_is_rendered_or_listed_as_a_detail(self) -> None:
+        """A field the report neither labels nor lists would vanish silently."""
+        names = {field.name for field in fields(RunSummary)}
+        assert names >= RunSummary.RENDERED_BY_NAME
+        summary = RunSummary()
+        for name in names - RunSummary.RENDERED_BY_NAME:
+            setattr(summary, name, 1)
+        assert set(summary.completion_details()) == names - RunSummary.RENDERED_BY_NAME
 
     def test_an_existing_log_is_never_overwritten(self, tmp_path: Path) -> None:
         first = self._log(tmp_path, [1.0]).write(0)

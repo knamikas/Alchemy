@@ -324,8 +324,9 @@ def test_the_driver_reads_the_setup_path_configuration_writes(
     monkeypatch.setattr(environment, "verify_ccp4", verify_ccp4)
 
     configure = cli.parse_args(["--configure-ccp4", str(setup)])
-    assert environment.resolve_ccp4_environment(configure) == (None, None)
+    assert environment.configure_ccp4(configure) is True
     assert primary.exists(), "--configure-ccp4 wrote outside the configured list"
+    assert environment.configure_ccp4(cli.parse_args([])) is False
 
     def tools_unavailable(_env: Mapping[str, str] | None = None) -> bool:
         return False
@@ -335,9 +336,10 @@ def test_the_driver_reads_the_setup_path_configuration_writes(
     monkeypatch.delenv("CCP4_SETUP", raising=False)
 
     run = cli.parse_args([])
-    _, used = environment.resolve_ccp4_environment(run)
+    env = environment.resolve_ccp4_environment(run)
 
-    assert used == str(setup)
+    # The stubbed ``resolve_env`` records which setup script was sourced.
+    assert env == {"PATH": str(setup)}
 
 
 def _stub_ccp4_dir(root: Path, marker: str) -> Path:
@@ -389,10 +391,8 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
     setup.write_text(f'export PATH="{requested}:$PATH"\n', encoding="utf-8")
 
     args = cli.parse_args(["--ccp4-setup", str(setup)])
-    env, used = environment.resolve_ccp4_environment(args)
+    env = environment.resolve_ccp4_environment(args)
 
-    assert env is not None
-    assert used == str(setup)
     resolved = shutil.which("edstats", path=env.get("PATH"))
     assert resolved is not None
     assert str(requested) in resolved, (
@@ -508,10 +508,8 @@ def test_ccp4_timeout_help_states_its_default() -> None:
     assert f"default: {density.CCP4_TOOL_TIMEOUT_S}" in help_text
 
 
-def _resolved_ccp4_environment(
-    _args: RunConfig,
-) -> tuple[dict[str, str], None]:
-    return dict(os.environ), None
+def _resolved_ccp4_environment(_args: RunConfig) -> dict[str, str]:
+    return dict(os.environ)
 
 
 class TestPositiveInt:

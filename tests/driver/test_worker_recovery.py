@@ -21,7 +21,7 @@ import time
 import traceback
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 import helpers
 import pytest
@@ -38,6 +38,7 @@ from driver import confidence as driver_confidence
 from driver import dispatch, environment, runlog, writers
 from driver import pool as driver_pool
 from driver.writers import MANIFEST_COLUMNS
+from worker_contracts import InflightEvent
 
 if TYPE_CHECKING:
     # Annotations and casts only: the fakes below stand in for these nominal
@@ -116,21 +117,33 @@ def _reference_cfg(
 @pytest.mark.parametrize(
     "notifications, expected, label",
     [
-        ([("start", 11, "1abc")], {11: "1abc"}, "start records the holder"),
-        ([("start", 11, "1abc"), ("end", 11, "1abc")], {}, "end releases the holder"),
-        ([("end", 11, "1abc")], {}, "end for an unknown pid is ignored"),
         (
-            [("start", 11, "1abc"), ("end", 12, "2xyz")],
+            [InflightEvent("start", 11, "1abc")],
+            {11: "1abc"},
+            "start records the holder",
+        ),
+        (
+            [InflightEvent("start", 11, "1abc"), InflightEvent("end", 11, "1abc")],
+            {},
+            "end releases the holder",
+        ),
+        ([InflightEvent("end", 11, "1abc")], {}, "end for an unknown pid is ignored"),
+        (
+            [InflightEvent("start", 11, "1abc"), InflightEvent("end", 12, "2xyz")],
             {11: "1abc"},
             "end for another pid leaves the holder intact",
         ),
         (
-            [("start", 11, "1abc"), ("end", 11, "1abc"), ("start", 11, "2xyz")],
+            [
+                InflightEvent("start", 11, "1abc"),
+                InflightEvent("end", 11, "1abc"),
+                InflightEvent("start", 11, "2xyz"),
+            ],
             {11: "2xyz"},
             "a reused worker holds only its current entry",
         ),
         (
-            [("start", 11, "1abc"), ("start", 12, "2xyz")],
+            [InflightEvent("start", 11, "1abc"), InflightEvent("start", 12, "2xyz")],
             {11: "1abc", 12: "2xyz"},
             "each worker is tracked separately",
         ),
@@ -138,7 +151,7 @@ def _reference_cfg(
     ],
 )
 def test_drain_inflight_applies_notifications_in_order(
-    notifications: list[tuple[str, int, str]],
+    notifications: list[InflightEvent],
     expected: dict[int, str],
     label: str,
 ) -> None:
@@ -147,9 +160,7 @@ def test_drain_inflight_applies_notifications_in_order(
     The map is the only record of which entry a killed process held, so a stale
     or missing assignment either loses an entry or blames the wrong one.
     """
-    inflight: multiprocessing.SimpleQueue[tuple[str, int, str]] = (
-        multiprocessing.SimpleQueue()
-    )
+    inflight: multiprocessing.SimpleQueue[InflightEvent] = multiprocessing.SimpleQueue()
     try:
         for notification in notifications:
             inflight.put(notification)
@@ -162,11 +173,9 @@ def test_drain_inflight_applies_notifications_in_order(
 
 def test_drain_inflight_preserves_unrelated_existing_assignments() -> None:
     """Draining only touches the pids it has notifications for."""
-    inflight: multiprocessing.SimpleQueue[tuple[str, int, str]] = (
-        multiprocessing.SimpleQueue()
-    )
+    inflight: multiprocessing.SimpleQueue[InflightEvent] = multiprocessing.SimpleQueue()
     try:
-        inflight.put(("start", 22, "2xyz"))
+        inflight.put(InflightEvent("start", 22, "2xyz"))
         assignments = {11: "1abc"}
         dispatch.drain_inflight(inflight, assignments)
         assert assignments == {11: "1abc", 22: "2xyz"}
@@ -180,9 +189,7 @@ def test_drain_inflight_returns_promptly_on_an_empty_queue() -> None:
     ``SimpleQueue.get`` on an empty queue blocks forever, so the drain runs in a
     daemon thread: losing this property must be a red test, not a hung CI job.
     """
-    inflight: multiprocessing.SimpleQueue[tuple[str, int, str]] = (
-        multiprocessing.SimpleQueue()
-    )
+    inflight: multiprocessing.SimpleQueue[InflightEvent] = multiprocessing.SimpleQueue()
     returned = threading.Event()
     assignments: dict[int, str] = {}
 
@@ -215,7 +222,7 @@ def test_drain_inflight_survives_a_torn_down_queue(error: Exception) -> None:
     """
     assignments = {11: "1abc"}
     dispatch.drain_inflight(
-        cast("multiprocessing.SimpleQueue[tuple[str, int, str]]", _BrokenQueue(error)),
+        cast("multiprocessing.SimpleQueue[InflightEvent]", _BrokenQueue(error)),
         assignments,
     )
     assert assignments == {11: "1abc"}
@@ -418,7 +425,7 @@ _stub_marker_dir: str = ""
 _DRIVER_HARD_TIMEOUT_S: float = 60.0
 
 
-def _announce(state: str, pdb_id: str) -> None:
+def _announce(state: Literal["start", "end"], pdb_id: str) -> None:
     """Forward a scripted notification through the real worker mechanism."""
     worker.announce_inflight(state, pdb_id)
 
@@ -537,7 +544,7 @@ def _driver_child(
     _stub_script = script
     _stub_marker_dir = marker_dir
     try:
-        environment.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+        environment.resolve_ccp4_environment = lambda args: dict(os.environ)
         # These scenarios require the requested process topology; inheriting a
         # CI container's memory cap can serialize them and test a different case.
         driver_pool.worker_limits_for_budget = lambda _budget: (  # type: ignore[assignment, attr-defined]
@@ -1091,12 +1098,12 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         str(tmp_path / "cache"),
         frozenset({"HEM"}),
         None,
-        driver_confidence.ConfidencePlan(),
-        run_log,
         identity=driver_pool.AnalysisIdentity.current(),
     )
+    driver_pool.record_run_provenance(run_log, cfg, driver_confidence.ConfidencePlan())
 
     assert isinstance(cfg, worker_contracts.WorkerConfig)
+    assert run_log.details["confidence_mode"] == "disabled"
     # Keep both file hashes so changes in the combined ID can be traced.
     assert cfg.reference_data_id == reference_data.reference_data_id()
     assert run_log.details["reference_data_id"] == cfg.reference_data_id
@@ -1142,8 +1149,6 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         None,  # type: ignore[arg-type]
         frozenset(),
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
-        driver_confidence.ConfidencePlan(),
-        runlog.RunLog(manual, "pytest"),
         identity=driver_pool.AnalysisIdentity.current(),
     )
     assert manual_cfg.allow_download is False
@@ -1178,7 +1183,7 @@ def _sigterm_driver_child(
     if hasattr(os, "setsid"):
         os.setsid()
 
-    environment.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
+    environment.resolve_ccp4_environment = lambda args: dict(os.environ)
     # Replaced as driver.dispatch sees it; see _driver_child.
     dispatch.process = _never_finishing_process  # type: ignore[attr-defined]
     ready.set()

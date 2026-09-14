@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from _version import __version__
 from codes import EntryStatus
@@ -12,6 +12,18 @@ from codes import EntryStatus
 if TYPE_CHECKING:
     from coordination.schema import BondRow, CandidateRow
     from output_rows import MetalStatsRow
+
+
+class InflightEvent(NamedTuple):
+    """A worker's notice that it started or finished holding an entry.
+
+    Sent synchronously through the inflight queue, so the driver can name the
+    entry a worker held if that process dies without returning a result.
+    """
+
+    state: Literal["start", "end"]
+    pid: int
+    pdb_id: str
 
 
 @dataclass(frozen=True)

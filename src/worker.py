@@ -15,7 +15,7 @@ import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from multiprocessing.queues import Queue, SimpleQueue
-from typing import Any
+from typing import Any, Literal
 
 from analysis_config import MAX_ANALYZED_METAL_SITES
 from codes import (
@@ -65,6 +65,7 @@ from worker_contracts import (
     CoordinateProvenance,
     DensityProvenance,
     EntryResult,
+    InflightEvent,
     PdbRedoProvenance,
     SoftwareProvenance,
     WorkerConfig,
@@ -111,12 +112,12 @@ DETERMINISTIC_PROCESSING_ERRORS = (
 
 
 worker_config: WorkerConfig | None = None
-_inflight_queue: SimpleQueue[tuple[str, int, str]] | None = None
+_inflight_queue: SimpleQueue[InflightEvent] | None = None
 
 
 def initialize_worker(
     cfg: WorkerConfig,
-    inflight: SimpleQueue[tuple[str, int, str]] | None = None,
+    inflight: SimpleQueue[InflightEvent] | None = None,
     log_queue: Queue[logging.LogRecord] | None = None,
 ) -> None:
     """Initialize process-local configuration, logging, and signal state."""
@@ -134,7 +135,7 @@ def initialize_worker(
     configure_worker_logging(log_queue, level=cfg.log_level)
 
 
-def announce_inflight(state: str, pdb_id: str) -> None:
+def announce_inflight(state: Literal["start", "end"], pdb_id: str) -> None:
     """Notify the driver which entry this worker holds.
 
     Synchronous queue writes let the driver identify the entry if the worker dies
@@ -143,7 +144,7 @@ def announce_inflight(state: str, pdb_id: str) -> None:
     if _inflight_queue is None:
         return
     with contextlib.suppress(Exception):  # bookkeeping must never fail an entry
-        _inflight_queue.put((state, os.getpid(), pdb_id))
+        _inflight_queue.put(InflightEvent(state, os.getpid(), pdb_id))
 
 
 def _preserve_timeout_log(

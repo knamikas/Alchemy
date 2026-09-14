@@ -1,4 +1,4 @@
-"""Plan worker CPU and memory resources without importing Gemmi.
+"""Plan worker CPU and memory resources.
 
 Use conservative estimates when input metadata is incomplete.
 """
@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from multiprocessing import cpu_count
 from typing import Any, TextIO, cast
+
+from inputs import entry_dir_for
 
 GIB = 1024**3
 
@@ -54,6 +56,24 @@ _PROPERTY_PREFIX_LIMIT = 4 * 1024**2
 _PROPERTY_READ_CHUNK_BYTES = 64 * 1024
 #: Fixed size of the CCP4 map header that precedes the grid values.
 CCP4_MAP_HEADER_BYTES = 1024
+
+if os.name == "nt":  # pragma: no cover - Windows only
+    import ctypes
+
+    class _MemoryStatus(ctypes.Structure):
+        """``MEMORYSTATUSEX``, which ``GlobalMemoryStatusEx`` fills in."""
+
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
 
 
 @dataclass(frozen=True)
@@ -155,34 +175,50 @@ def available_physical_cpu_count() -> int | None:
     return len(cores) or None
 
 
+def _cgroup_memberships() -> list[tuple[str, str, str]]:
+    """This process's ``hierarchy:controllers:path`` cgroup memberships.
+
+    Empty when the membership file cannot be read.
+    """
+    try:
+        with open(PROC_SELF_CGROUP_PATH, encoding="ascii") as handle:
+            lines = [line.rstrip("\n").split(":", 2) for line in handle]
+    except OSError:
+        return []
+    return [(fields[0], fields[1], fields[2]) for fields in lines if len(fields) == 3]
+
+
+def _cgroup_v2_path(memberships: Sequence[tuple[str, str, str]]) -> str | None:
+    """The process's path in the unified (v2) hierarchy, or ``None`` without one."""
+    for hierarchy, controllers, path in memberships:
+        if hierarchy == "0" and controllers == "":
+            return path
+    return None
+
+
 def available_cpu_quota() -> int | None:
     """Bound workers by the tightest Linux cgroup-v2 CPU quota, if present."""
     if not sys.platform.startswith("linux"):
         return None
-    try:
-        with open(PROC_SELF_CGROUP_PATH, encoding="ascii") as handle:
-            paths = [line.strip().split(":", 2) for line in handle]
-    except OSError:
+    path = _cgroup_v2_path(_cgroup_memberships())
+    if path is None:
+        return None
+    current = _safe_cgroup_dir(path)
+    if current is None:
         return None
     quotas: list[int] = []
     root = os.path.abspath(CGROUP_ROOT)
-    for fields in paths:
-        if len(fields) != 3 or fields[:2] != ["0", ""]:
-            continue
-        current = _safe_cgroup_dir(fields[2])
-        if current is None:
-            continue
-        while True:
-            try:
-                with open(os.path.join(current, "cpu.max"), encoding="ascii") as handle:
-                    quota, period = handle.read().split()
-                if quota != "max" and int(quota) > 0 and int(period) > 0:
-                    quotas.append(max(1, int(quota) // int(period)))
-            except (OSError, ValueError):
-                pass
-            if current == root:
-                break
-            current = os.path.dirname(current)
+    while True:
+        try:
+            with open(os.path.join(current, "cpu.max"), encoding="ascii") as handle:
+                quota, period = handle.read().split()
+            if quota != "max" and int(quota) > 0 and int(period) > 0:
+                quotas.append(max(1, int(quota) // int(period)))
+        except (OSError, ValueError):
+            pass
+        if current == root:
+            break
+        current = os.path.dirname(current)
     return min(quotas) if quotas else None
 
 
@@ -263,28 +299,20 @@ def reclaimable_file_bytes(directory: str, usage: int) -> int:
 
 
 def _read_cgroup_available_memory() -> int | None:
-    try:
-        with open(PROC_SELF_CGROUP_PATH, encoding="ascii") as handle:
-            lines = tuple(handle)
-    except OSError:
-        return None
-
-    for line in lines:
-        fields = line.rstrip("\n").split(":", 2)
-        if len(fields) != 3 or fields[0] != "0" or fields[1] != "":
-            continue
-        directory = _safe_cgroup_dir(fields[2])
+    memberships = _cgroup_memberships()
+    v2_path = _cgroup_v2_path(memberships)
+    if v2_path is not None:
+        directory = _safe_cgroup_dir(v2_path)
         if directory is None:
             return None
         return _cgroup_tree_available(
             directory, CGROUP_ROOT, "memory.max", "memory.current"
         )
 
-    for line in lines:
-        fields = line.rstrip("\n").split(":", 2)
-        if len(fields) != 3 or "memory" not in fields[1].split(","):
+    for _hierarchy, controllers, path in memberships:
+        if "memory" not in controllers.split(","):
             continue
-        directory = _safe_cgroup_dir(os.path.join("memory", fields[2].lstrip("/")))
+        directory = _safe_cgroup_dir(os.path.join("memory", path.lstrip("/")))
         if directory is None:
             return None
         return _cgroup_tree_available(
@@ -313,22 +341,7 @@ def available_memory_bytes() -> int | None:
 
     elif os.name == "nt":
         try:
-            import ctypes
-
-            class MemoryStatus(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            status = MemoryStatus()
+            status = _MemoryStatus()
             status.dwLength = ctypes.sizeof(status)
             if ctypes.windll.kernel32.GlobalMemoryStatusEx(  # type: ignore[attr-defined]
                 ctypes.byref(status)
@@ -398,20 +411,6 @@ def worker_limits_for_budget(budget: int | None) -> tuple[int, int | None]:
         else 1
     )
     return cpu_limit, memory_limit
-
-
-def automatic_worker_limits(
-    *,
-    memory_limit_bytes: int | None = None,
-    utilization: float = DEFAULT_MEMORY_UTILIZATION,
-) -> tuple[int, int | None]:
-    """Measure memory, then size the pool as ``worker_limits_for_budget`` does."""
-    budget, _ = scheduling_memory_budget(
-        available_memory_bytes(),
-        memory_limit_bytes=memory_limit_bytes,
-        utilization=utilization,
-    )
-    return worker_limits_for_budget(budget)
 
 
 def _open_text(path: str) -> TextIO:
@@ -499,7 +498,7 @@ def estimate_entry_memory(
     manual_inputs: Mapping[str, str | None] | None = None,
 ) -> EntryMemoryEstimate:
     """Estimate one entry's peak memory from metadata or MTZ size."""
-    entry_dir = os.path.join(root, pdb_id[1:3], pdb_id)
+    entry_dir = entry_dir_for(root, pdb_id)
     if manual_inputs is not None:
         data_path = _first_existing((manual_inputs.get("data_json"),))
         mtz_path = _first_existing((manual_inputs.get("mtz_file"),))

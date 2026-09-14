@@ -12,6 +12,20 @@ class EntryStatus(StrEnum):
     ERROR = "error"
 
 
+class RunMode(StrEnum):
+    """How a run chose its entries, as recorded in the run report.
+
+    Only ``DATABASE`` -- an uncapped pass over a PDB-REDO mirror -- can build
+    a new confidence reference; every other mode scores against one.
+    """
+
+    MANUAL = "manual"
+    SINGLE = "single"
+    ID_FILE = "id_file"
+    DATABASE = "database"
+    CAPPED_DATABASE = "capped_database"
+
+
 class GeometryStatus(StrEnum):
     """Site-level verdict on the geometry of one metal's coordination.
 

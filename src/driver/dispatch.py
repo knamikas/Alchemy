@@ -40,7 +40,7 @@ from worker import (
     process,
     worker_death_result,
 )
-from worker_contracts import EntryResult, WorkerConfig
+from worker_contracts import EntryResult, InflightEvent, WorkerConfig
 
 if TYPE_CHECKING:
     # Import the actual Pool and Queue classes for type annotations.
@@ -65,20 +65,20 @@ logger = logger_for(__name__)
 
 
 def drain_inflight(
-    inflight: SimpleQueue[tuple[str, int, str]], assignments: dict[int, str]
+    inflight: SimpleQueue[InflightEvent], assignments: dict[int, str]
 ) -> None:
     """Apply pending worker notifications to the pid -> entry assignment map."""
     while True:
         try:
             if inflight.empty():
                 return
-            state, pid, pdb_id = inflight.get()
+            event = inflight.get()
         except (OSError, EOFError):  # pragma: no cover - pipe torn down
             return
-        if state == "start":
-            assignments[pid] = pdb_id
+        if event.state == "start":
+            assignments[event.pid] = event.pdb_id
         else:
-            assignments.pop(pid, None)
+            assignments.pop(event.pid, None)
 
 
 def _pool_children(pool: WorkerPool) -> list[Any]:
@@ -257,7 +257,7 @@ class _WorkerDeathWatch:
     def __init__(
         self,
         pool: WorkerPool,
-        inflight: SimpleQueue[tuple[str, int, str]],
+        inflight: SimpleQueue[InflightEvent],
         cfg: WorkerConfig,
     ) -> None:
         self._pool = pool
@@ -340,40 +340,6 @@ class _WorkerDeathWatch:
         return worker_death_result(pdb_id, self._cfg, pid)
 
 
-def pop_admissible_estimate(
-    pending: list[EntryMemoryEstimate],
-    reserved_bytes: int,
-    budget_bytes: int | None,
-    active_estimates: Collection[EntryMemoryEstimate],
-    *,
-    workers: int = 0,
-) -> EntryMemoryEstimate | None:
-    """Admit the first pending entry whose estimated memory fits the budget.
-
-    Scan past oversized entries to use available capacity. Live pressure checks
-    handle underestimated peaks.
-    """
-    if not pending:
-        return None
-    if not active_estimates:
-        # Nothing is running, so the head is admitted even when it is oversized:
-        # refusing an entry larger than the whole budget would deadlock the batch.
-        return pending.pop(0)
-    # The candidate occupies one idle worker; its estimate already includes
-    # that worker's overhead. Other idle processes remain resident as well.
-    idle_bytes = (
-        max(0, workers - len(active_estimates) - 1) * WORKER_FIXED_OVERHEAD_BYTES
-    )
-    for index, estimate in enumerate(pending):
-        if (
-            budget_bytes is not None
-            and reserved_bytes + estimate.bytes + idle_bytes > budget_bytes
-        ):
-            continue
-        return pending.pop(index)
-    return None
-
-
 def guarded_available_memory(
     memory_plan: MemoryPlan, current_available_bytes: int | None
 ) -> int | None:
@@ -420,7 +386,11 @@ class _AdmissionLedger:
         return self.reserved_bytes + idle_workers * WORKER_FIXED_OVERHEAD_BYTES
 
     def resident_bytes_with(self, estimate: EntryMemoryEstimate) -> int:
-        """Resident bytes once ``estimate`` occupies one of the idle workers."""
+        """Resident bytes once ``estimate`` occupies one of the idle workers.
+
+        The estimate already includes that worker's overhead; the other idle
+        processes remain resident as well.
+        """
         idle_workers = self.workers - len(self.active) - 1
         return (
             self.reserved_bytes
@@ -439,8 +409,28 @@ class _AdmissionLedger:
             and self.resident_bytes > budget_bytes
         )
 
-    def active_estimates(self) -> list[EntryMemoryEstimate]:
-        return [estimate for _task, estimate in self.active.values()]
+    def pop_admissible(
+        self, pending: list[EntryMemoryEstimate], budget_bytes: int | None
+    ) -> EntryMemoryEstimate | None:
+        """Take the first pending entry whose estimated memory fits the budget.
+
+        Scan past oversized entries to use available capacity. Live pressure
+        checks handle underestimated peaks.
+        """
+        if not pending:
+            return None
+        if not self.active:
+            # Nothing is running, so the head is admitted even when it is oversized:
+            # refusing an entry larger than the whole budget would deadlock the batch.
+            return pending.pop(0)
+        for index, estimate in enumerate(pending):
+            if (
+                budget_bytes is not None
+                and self.resident_bytes_with(estimate) > budget_bytes
+            ):
+                continue
+            return pending.pop(index)
+        return None
 
     def admit(
         self, task: AsyncResult[EntryResult], estimate: EntryMemoryEstimate
@@ -467,6 +457,31 @@ class _AdmissionLedger:
         return results
 
 
+def _warn_budget_change(
+    old_budget: int | None,
+    new_budget: int | None,
+    *,
+    after_worker_death: bool = False,
+) -> None:
+    """Warn when the admission budget moved; an unknown budget cannot move."""
+    if new_budget == old_budget or old_budget is None or new_budget is None:
+        return
+    if after_worker_death:
+        logger.warning(
+            "reducing future memory admission from %.2f GiB to "
+            "%.2f GiB after a worker process died",
+            old_budget / GIB,
+            new_budget / GIB,
+        )
+        return
+    logger.warning(
+        "%s memory admission from %.2f GiB to %.2f GiB",
+        "recovering" if new_budget > old_budget else "reducing",
+        old_budget / GIB,
+        new_budget / GIB,
+    )
+
+
 def _log_admission_changes(
     admission: MemoryAdmission,
     old_budget: int | None,
@@ -475,14 +490,7 @@ def _log_admission_changes(
     reserve_bytes: int | None,
 ) -> None:
     """Warn once per budget change or new pause; the controller is otherwise quiet."""
-    new_budget = admission.budget
-    if new_budget != old_budget and old_budget is not None and new_budget is not None:
-        logger.warning(
-            "%s memory admission from %.2f GiB to %.2f GiB",
-            "recovering" if new_budget > old_budget else "reducing",
-            old_budget / GIB,
-            new_budget / GIB,
-        )
+    _warn_budget_change(old_budget, admission.budget)
     if (
         admission.pauses != old_pauses
         and current_available is not None
@@ -493,54 +501,6 @@ def _log_admission_changes(
             "%.2f GiB protected reserve",
             current_available / GIB,
             reserve_bytes / GIB,
-        )
-
-
-def _admit_pending(
-    pending: list[EntryMemoryEstimate],
-    ledger: _AdmissionLedger,
-    admission: MemoryAdmission,
-    memory_plan: MemoryPlan,
-    deaths: _WorkerDeathWatch,
-    pool: WorkerPool,
-    current_available: int | None,
-) -> None:
-    """Start pending entries on idle workers until memory or the budget says stop.
-
-    ``current_available`` is the dispatcher's latest reading; memory is measured
-    again only after an admission, since only then has it changed.
-    """
-    while pending and ledger.has_idle_worker():
-        if (
-            ledger.active
-            and memory_plan.reserve_bytes is not None
-            and current_available is not None
-            and current_available <= memory_plan.reserve_bytes
-        ):
-            break
-        estimate = pop_admissible_estimate(
-            pending,
-            ledger.reserved_bytes,
-            admission.budget,
-            ledger.active_estimates(),
-            workers=ledger.workers,
-        )
-        if estimate is None:
-            break
-        required_bytes = ledger.resident_bytes_with(estimate)
-        if admission.budget is not None and required_bytes > admission.budget:
-            ledger.oversized_entries.add(estimate.pdb_id)
-            logger.warning(
-                "%s needs an estimated %.2f GiB including resident workers, "
-                "above the %.2f GiB worker budget; admitting it alone",
-                estimate.pdb_id,
-                required_bytes / GIB,
-                admission.budget / GIB,
-            )
-        deaths.track_submitted_entry(estimate.pdb_id)
-        ledger.admit(pool.apply_async(process, (estimate.pdb_id,)), estimate)
-        current_available = guarded_available_memory(
-            memory_plan, available_memory_bytes()
         )
 
 
@@ -561,18 +521,215 @@ def _release_workers(
             log_queue.close()
     # Keep forwarding logs until worker shutdown completes.
     elif stop_log_listener(log_listener, log_queue):
-        run_log.summary["worker_log_listener_abandoned"] = True
+        run_log.summary.worker_log_listener_abandoned = True
         logger.warning(
             "the worker log listener did not stop within %gs and was "
             "abandoned; some worker records may be missing from this log",
             WORKER_SHUTDOWN_GRACE_S,
         )
     if forced:
-        run_log.summary["worker_pool_forced_shutdown"] = True
+        run_log.summary.worker_pool_forced_shutdown = True
         logger.warning(
             "a worker pool shutdown had to be forced after a worker died "
             "holding the task-queue lock; results above are complete"
         )
+
+
+class _Dispatcher:
+    """One batch in flight: its pool, what is running, and what has landed.
+
+    ``dispatch_entries`` drives it one poll at a time: observe memory, admit
+    what fits, collect what finished, deliver it, until every entry is done.
+    """
+
+    def __init__(
+        self,
+        ids: Sequence[str],
+        cfg: WorkerConfig,
+        workers: int,
+        memory_plan: MemoryPlan,
+        run_log: RunLog,
+        sink: ResultSink,
+    ) -> None:
+        self.ids = ids
+        self.memory_plan = memory_plan
+        self.run_log = run_log
+        self.sink = sink
+        self.tally = BatchTally()
+        self.progress = ProgressReporter(len(ids))
+        self.inflight: SimpleQueue[InflightEvent] = SimpleQueue()
+        self.completed_ids: set[str] = set()
+        self.completed = 0
+        self.last_progress = time.monotonic()
+        self.pending = list(memory_plan.estimates)
+        self.estimates_by_id = {
+            estimate.pdb_id: estimate for estimate in memory_plan.estimates
+        }
+        self.ledger = _AdmissionLedger(workers)
+        self.admission = MemoryAdmission(
+            memory_plan.budget_bytes,
+            WORKER_FIXED_OVERHEAD_BYTES,
+            memory_plan.reserve_bytes,
+        )
+        # Use Python's default start method for platform compatibility.
+        # Avoid Pool's context manager: its unbounded terminate can hang after a
+        # worker dies with a queue lock held. ``release`` bounds shutdown.
+        # Start the log listener after the pool to avoid forking with active threads.
+        self.log_queue = create_worker_log_queue()
+        self.pool = Pool(
+            workers,
+            initializer=initialize_worker,
+            initargs=(cfg, self.inflight, self.log_queue),
+        )
+        self.log_listener: QueueListener | None = None
+        self.deaths = _WorkerDeathWatch(self.pool, self.inflight, cfg)
+
+    def start(self) -> None:
+        """Begin forwarding worker logs and show the heartbeat before any result."""
+        self.log_listener = start_worker_log_listener(self.log_queue)
+        self.progress.render(self.completed, self.tally, force=True)
+
+    def observe_memory(self) -> tuple[bool, int | None]:
+        """Measure headroom and let the admission controller react to it.
+
+        Returns whether new admission must pause, and the measured headroom
+        for ``admit_pending`` to reuse.
+        """
+        current_available = guarded_available_memory(
+            self.memory_plan, available_memory_bytes()
+        )
+        old_budget = self.admission.budget
+        old_pauses = self.admission.pauses
+        pause = self.admission.observe(
+            current_available,
+            self.ledger.resident_bytes,
+            time.monotonic(),
+            active=bool(self.ledger.active),
+            oversized=self.ledger.runs_oversized_alone(self.memory_plan.budget_bytes),
+        )
+        _log_admission_changes(
+            self.admission,
+            old_budget,
+            old_pauses,
+            current_available,
+            self.memory_plan.reserve_bytes,
+        )
+        return pause, current_available
+
+    def admit_pending(self, current_available: int | None) -> None:
+        """Start pending entries on idle workers until memory or the budget says stop.
+
+        ``current_available`` is the dispatcher's latest reading; memory is
+        measured again only after an admission, since only then has it changed.
+        """
+        while self.pending and self.ledger.has_idle_worker():
+            if (
+                self.ledger.active
+                and self.memory_plan.reserve_bytes is not None
+                and current_available is not None
+                and current_available <= self.memory_plan.reserve_bytes
+            ):
+                break
+            estimate = self.ledger.pop_admissible(self.pending, self.admission.budget)
+            if estimate is None:
+                break
+            required_bytes = self.ledger.resident_bytes_with(estimate)
+            if (
+                self.admission.budget is not None
+                and required_bytes > self.admission.budget
+            ):
+                self.ledger.oversized_entries.add(estimate.pdb_id)
+                logger.warning(
+                    "%s needs an estimated %.2f GiB including resident workers, "
+                    "above the %.2f GiB worker budget; admitting it alone",
+                    estimate.pdb_id,
+                    required_bytes / GIB,
+                    self.admission.budget / GIB,
+                )
+            self.deaths.track_submitted_entry(estimate.pdb_id)
+            self.ledger.admit(
+                self.pool.apply_async(process, (estimate.pdb_id,)), estimate
+            )
+            current_available = guarded_available_memory(
+                self.memory_plan, available_memory_bytes()
+            )
+
+    def collect_batch(self) -> list[EntryResult]:
+        """Results that landed since the last call, or the losses a stall proves.
+
+        Empty when nothing has landed and the run may still be making progress.
+        """
+        batch = self.ledger.collect_ready()
+        batch.extend(self.deaths.poll())
+        if batch:
+            return batch
+        stalled = self.deaths.stalled_losses(
+            self.completed_ids,
+            time.monotonic() - self.last_progress,
+            len(self.ledger.active),
+        )
+        return stalled or []
+
+    def deliver(self, batch: list[EntryResult]) -> None:
+        """Account for lost workers, then hand each new result on in order."""
+        lost = [result for result in batch if is_worker_death_result(result)]
+        for result in lost:
+            self.ledger.release(result.pdb_id)
+        if lost:
+            old_budget = self.admission.budget
+            self.admission.back_off(time.monotonic())
+            _warn_budget_change(
+                old_budget, self.admission.budget, after_worker_death=True
+            )
+        self.last_progress = time.monotonic()
+        for result in batch:
+            if self.deaths.superseded(result, self.completed_ids):
+                continue
+            self.completed += 1
+            self.completed_ids.add(result.pdb_id)
+            # Write the rows before the run log records the entry, so a
+            # failed write cannot leave diagnostics claiming it completed.
+            self.sink(result)
+            self.run_log.record_entry(
+                result,
+                memory_estimate_bytes=self.estimates_by_id[result.pdb_id].bytes,
+            )
+            self.tally.record(result)
+            finished = self.completed == len(self.ids)
+            self.progress.render(
+                self.completed,
+                self.tally,
+                force=self.progress.terminal or finished,
+                final=finished,
+            )
+
+    def idle(self) -> None:
+        """Refresh the heartbeat, then wait before polling the pool again."""
+        self.progress.render(self.completed, self.tally)
+        time.sleep(DISPATCH_POLL_INTERVAL_S)
+
+    def record_scheduler_summary(self) -> None:
+        """Record the run's admission peaks and budget history in the run report."""
+        summary = self.run_log.summary
+        summary.memory_scheduler_worker_overhead_bytes = (
+            self.ledger.workers * WORKER_FIXED_OVERHEAD_BYTES
+        )
+        summary.memory_scheduler_peak_reserved_bytes = self.ledger.peak_resident_bytes
+        summary.memory_scheduler_max_active_entries = self.ledger.max_active
+        summary.memory_scheduler_oversized_entries = len(self.ledger.oversized_entries)
+        summary.memory_scheduler_pressure_pauses = self.admission.pauses
+        summary.memory_scheduler_budget_backoffs = self.admission.backoffs
+        summary.memory_scheduler_budget_recoveries = self.admission.recoveries
+        summary.memory_scheduler_final_budget_bytes = (
+            self.admission.budget
+            if self.admission.budget is not None
+            else "unavailable"
+        )
+
+    def release(self) -> None:
+        """Stop the pool and log listener, then finish the progress line."""
+        _release_workers(self.pool, self.log_listener, self.log_queue, self.run_log)
+        self.progress.close()
 
 
 def dispatch_entries(
@@ -588,138 +745,19 @@ def dispatch_entries(
     The loop polls rather than iterating the pool's results, because waiting on
     the pool alone would hang forever on an entry a killed worker was holding.
     """
-    tally = BatchTally()
-    progress = ProgressReporter(len(ids))
-    inflight: SimpleQueue[tuple[str, int, str]] = SimpleQueue()
-    completed_ids: set[str] = set()
-    completed = 0
-    last_progress = time.monotonic()
-    # Use Python's default start method for platform compatibility.
-    # Avoid Pool's context manager: its unbounded terminate can hang after a
-    # worker dies with a queue lock held. The finally block bounds shutdown.
-    # Start the log listener after the pool to avoid forking with active threads.
-    log_queue = create_worker_log_queue()
-    pool = Pool(
-        workers, initializer=initialize_worker, initargs=(cfg, inflight, log_queue)
-    )
-    log_listener: QueueListener | None = None
-
-    def render(*, force: bool = False, final: bool = False) -> None:
-        progress.render(
-            completed,
-            tally.counts,
-            tally.no_metals,
-            tally.metal_site_limit_exceeded,
-            force=force,
-            final=final,
-        )
-
+    dispatcher = _Dispatcher(ids, cfg, workers, memory_plan, run_log, sink)
     try:
-        log_listener = start_worker_log_listener(log_queue)
-        deaths = _WorkerDeathWatch(pool, inflight, cfg)
-        pending = list(memory_plan.estimates)
-        estimates_by_id = {
-            estimate.pdb_id: estimate for estimate in memory_plan.estimates
-        }
-        ledger = _AdmissionLedger(workers)
-        admission = MemoryAdmission(
-            memory_plan.budget_bytes,
-            WORKER_FIXED_OVERHEAD_BYTES,
-            memory_plan.reserve_bytes,
-        )
-        render(force=True)
-        while completed < len(ids):
-            current_available = guarded_available_memory(
-                memory_plan, available_memory_bytes()
-            )
-            old_budget = admission.budget
-            old_pauses = admission.pauses
-            pause = admission.observe(
-                current_available,
-                ledger.resident_bytes,
-                time.monotonic(),
-                active=bool(ledger.active),
-                oversized=ledger.runs_oversized_alone(memory_plan.budget_bytes),
-            )
-            _log_admission_changes(
-                admission,
-                old_budget,
-                old_pauses,
-                current_available,
-                memory_plan.reserve_bytes,
-            )
+        dispatcher.start()
+        while dispatcher.completed < len(ids):
+            pause, current_available = dispatcher.observe_memory()
             if not pause:
-                _admit_pending(
-                    pending,
-                    ledger,
-                    admission,
-                    memory_plan,
-                    deaths,
-                    pool,
-                    current_available,
-                )
-
-            batch = ledger.collect_ready()
-            batch.extend(deaths.poll())
-            if not batch:
-                stalled = deaths.stalled_losses(
-                    completed_ids,
-                    time.monotonic() - last_progress,
-                    len(ledger.active),
-                )
-                if stalled is None:
-                    render()
-                    time.sleep(DISPATCH_POLL_INTERVAL_S)
-                    continue
-                batch = stalled
-            for result in batch:
-                if is_worker_death_result(result):
-                    ledger.release(result.pdb_id)
-            if any(is_worker_death_result(result) for result in batch):
-                old_budget = admission.budget
-                admission.back_off(time.monotonic())
-                new_budget = admission.budget
-                if (
-                    new_budget != old_budget
-                    and old_budget is not None
-                    and new_budget is not None
-                ):
-                    logger.warning(
-                        "reducing future memory admission from %.2f GiB to "
-                        "%.2f GiB after a worker process died",
-                        old_budget / GIB,
-                        new_budget / GIB,
-                    )
-            last_progress = time.monotonic()
-            for result in batch:
-                if deaths.superseded(result, completed_ids):
-                    continue
-                completed += 1
-                completed_ids.add(result.pdb_id)
-                # Write the rows before the run log records the entry, so a
-                # failed write cannot leave diagnostics claiming it completed.
-                sink(result)
-                run_log.record_entry(
-                    result,
-                    memory_estimate_bytes=estimates_by_id[result.pdb_id].bytes,
-                )
-                tally.record(result)
-                finished = completed == len(ids)
-                render(force=progress.terminal or finished, final=finished)
-        run_log.summary.update(
-            memory_scheduler_worker_overhead_bytes=workers
-            * WORKER_FIXED_OVERHEAD_BYTES,
-            memory_scheduler_peak_reserved_bytes=ledger.peak_resident_bytes,
-            memory_scheduler_max_active_entries=ledger.max_active,
-            memory_scheduler_oversized_entries=len(ledger.oversized_entries),
-            memory_scheduler_pressure_pauses=admission.pauses,
-            memory_scheduler_budget_backoffs=admission.backoffs,
-            memory_scheduler_budget_recoveries=admission.recoveries,
-            memory_scheduler_final_budget_bytes=(
-                admission.budget if admission.budget is not None else "unavailable"
-            ),
-        )
+                dispatcher.admit_pending(current_available)
+            batch = dispatcher.collect_batch()
+            if batch:
+                dispatcher.deliver(batch)
+            else:
+                dispatcher.idle()
+        dispatcher.record_scheduler_summary()
     finally:
-        _release_workers(pool, log_listener, log_queue, run_log)
-        progress.close()
-    return tally
+        dispatcher.release()
+    return dispatcher.tally

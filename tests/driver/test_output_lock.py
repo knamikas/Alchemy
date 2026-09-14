@@ -13,10 +13,8 @@ from driver import environment, output_lock
 from run_config import RunConfig
 
 
-def _resolved_ccp4_environment(
-    _args: RunConfig,
-) -> tuple[dict[str, str], None]:
-    return dict(os.environ), None
+def _resolved_ccp4_environment(_args: RunConfig) -> dict[str, str]:
+    return dict(os.environ)
 
 
 class TestOutputDirectoryLock:

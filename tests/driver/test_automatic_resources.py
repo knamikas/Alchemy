@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from driver import dispatch, resources
 
+if TYPE_CHECKING:
+    from multiprocessing.pool import AsyncResult
+
+    from worker_contracts import EntryResult
+
 GIB = 1024**3
+
+
+def _automatic_limits(
+    available: int | None, *, memory_limit_bytes: int | None = None
+) -> tuple[int, int | None]:
+    """Size the pool from one memory reading, as the driver's two steps do."""
+    budget, _ = resources.scheduling_memory_budget(
+        available, memory_limit_bytes=memory_limit_bytes
+    )
+    return resources.worker_limits_for_budget(budget)
 
 
 @pytest.mark.parametrize(
@@ -34,22 +50,15 @@ def test_cpu_and_memory_profiles(
     monkeypatch.setattr(resources, "available_cpu_count", lambda: logical)
     monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: physical)
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
-    monkeypatch.setattr(
-        resources, "available_memory_bytes", lambda: available_gib * GIB
-    )
-    cpu, memory = resources.automatic_worker_limits()
+    cpu, memory = _automatic_limits(available_gib * GIB)
     assert memory is not None
     assert min(cpu, memory) == expected
 
 
-def test_explicit_limit_cannot_override_less_available_memory(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(resources, "available_memory_bytes", lambda: 8 * GIB)
-    assert resources.automatic_worker_limits(memory_limit_bytes=100 * GIB)[1] == 4
-    monkeypatch.setattr(resources, "available_memory_bytes", lambda: None)
-    assert resources.automatic_worker_limits()[1] == 1
-    assert resources.automatic_worker_limits(memory_limit_bytes=12 * GIB)[1] == 8
+def test_explicit_limit_cannot_override_less_available_memory() -> None:
+    assert _automatic_limits(8 * GIB, memory_limit_bytes=100 * GIB)[1] == 4
+    assert _automatic_limits(None)[1] == 1
+    assert _automatic_limits(None, memory_limit_bytes=12 * GIB)[1] == 8
 
 
 def test_topology_counts_sockets_and_partial_affinity(
@@ -83,9 +92,9 @@ def test_unknown_topology_does_not_assume_smt(
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 12)
     monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
-    assert resources.automatic_worker_limits()[0] == 10
+    assert resources.worker_limits_for_budget(None)[0] == 10
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: 3)
-    assert resources.automatic_worker_limits()[0] == 3
+    assert resources.worker_limits_for_budget(None)[0] == 3
 
 
 def test_cpu_quota_respects_ancestors_and_fractional_allowances(
@@ -113,20 +122,23 @@ def test_cpu_quota_respects_ancestors_and_fractional_allowances(
 
 
 def test_idle_workers_prevent_over_admission_but_allow_small_entries() -> None:
-    active = [resources.EntryMemoryEstimate("active", 2 * GIB, "test")]
+    ledger = dispatch._AdmissionLedger(workers=8)
+    ledger.admit(
+        cast("AsyncResult[EntryResult]", None),
+        resources.EntryMemoryEstimate("active", 2 * GIB, "test"),
+    )
     pending = [
         resources.EntryMemoryEstimate("large", 3 * GIB, "test"),
         resources.EntryMemoryEstimate("small", GIB, "test"),
     ]
     # Six other idle workers consume 3 GiB after the candidate starts. Only
     # the small candidate fits, although both fit if idle overhead is ignored.
-    admitted = dispatch.pop_admissible_estimate(
-        pending, 2 * GIB, 6 * GIB, active, workers=8
-    )
+    admitted = ledger.pop_admissible(pending, 6 * GIB)
     assert admitted is not None and admitted.pdb_id == "small"
     assert [entry.pdb_id for entry in pending] == ["large"]
     # An oversized singleton must still make progress after the pool drains.
-    assert dispatch.pop_admissible_estimate(pending, 0, GIB, [], workers=8) is not None
+    ledger.release("active")
+    assert ledger.pop_admissible(pending, GIB) is not None
 
 
 def test_missing_inputs_keep_conservative_fallback(tmp_path: Path) -> None:

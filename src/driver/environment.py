@@ -48,23 +48,31 @@ def _existing_setup_path(configured: str) -> str:
     return setup_path
 
 
-def _resolve_ccp4_environment(
-    args: RunConfig,
-) -> tuple[dict[str, str] | None, str | None]:
-    """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
-    if args.configure_ccp4:
+def configure_ccp4(args: RunConfig) -> bool:
+    """Save the ``--configure-ccp4`` setup path, or return False when not asked to.
+
+    The path is verified before it is saved, so a later run never reads a
+    setup file this one could not use. Raise ``DriverError`` on any failure.
+    """
+    if not args.configure_ccp4:
+        return False
+    try:
         setup_path = _existing_setup_path(args.configure_ccp4)
         env = resolve_env(setup_path)
         _verify_resolved_ccp4(env, setup_path)
-
         saved = save_ccp4_setup(setup_path)
-        logger.info(
-            "verified %s are available; saved CCP4 setup path to %s",
-            ", ".join(REQUIRED_CCP4_TOOLS),
-            ", ".join(saved),
-        )
-        return None, None
+    except Ccp4SetupError as exc:
+        raise DriverError(str(exc)) from None
+    logger.info(
+        "verified %s are available; saved CCP4 setup path to %s",
+        ", ".join(REQUIRED_CCP4_TOOLS),
+        ", ".join(saved),
+    )
+    return True
 
+
+def _resolve_ccp4_environment(args: RunConfig) -> dict[str, str]:
+    """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
     environment = os.environ.copy()
 
     # Validate explicit setup before PATH so a bad override cannot select another install.
@@ -72,10 +80,10 @@ def _resolve_ccp4_environment(
         setup_path = _existing_setup_path(args.ccp4_setup)
         env = resolve_env(setup_path)
         _verify_resolved_ccp4(env, setup_path)
-        return env, setup_path
+        return env
 
     if ccp4_tools_available(environment):
-        return environment, None
+        return environment
 
     ccp4_setup = find_ccp4_setup(env=environment, config=load_ccp4_setup_config())
     if ccp4_setup is None:
@@ -88,13 +96,11 @@ def _resolve_ccp4_environment(
         )
     env = resolve_env(ccp4_setup)
     verify_ccp4(env)
-    return env, ccp4_setup
+    return env
 
 
-def resolve_ccp4_environment(
-    args: RunConfig,
-) -> tuple[dict[str, str] | None, str | None]:
-    """Return ``(env, setup_path)`` for this run, or raise ``DriverError``."""
+def resolve_ccp4_environment(args: RunConfig) -> dict[str, str]:
+    """Return the environment the CCP4 tools run in, or raise ``DriverError``."""
     try:
         return _resolve_ccp4_environment(args)
     except Ccp4SetupError as exc:

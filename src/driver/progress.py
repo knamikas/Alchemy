@@ -6,7 +6,23 @@ Throttle terminal updates and redirected output separately.
 import sys
 import time
 from collections.abc import Callable, Mapping
-from typing import TextIO
+from typing import Protocol, TextIO
+
+
+class BatchCounts(Protocol):
+    """The running totals the heartbeat line shows; ``BatchTally`` provides them."""
+
+    @property
+    def counts(self) -> Mapping[str, int]:
+        """Entries finished so far, keyed by status."""
+
+    @property
+    def no_metals(self) -> int:
+        """Entries that held no analyzable metal."""
+
+    @property
+    def metal_site_limit_exceeded(self) -> int:
+        """Entries excluded for holding more metal sites than the policy allows."""
 
 
 class ProgressReporter:
@@ -43,9 +59,7 @@ class ProgressReporter:
     def render(
         self,
         completed: int,
-        counts: Mapping[str, int],
-        no_metal_count: int,
-        metal_site_limit_exceeded_count: int,
+        tally: BatchCounts,
         force: bool = False,
         final: bool = False,
     ) -> None:
@@ -57,13 +71,14 @@ class ProgressReporter:
         if not force and now - self.last_rendered < interval:
             return
         percent = 100.0 * completed / self.total if self.total else 100.0
+        counts = tally.counts
         line = (
             f"[{completed}/{self.total} {percent:5.1f}%] "
             f"elapsed={self._elapsed_text(now - self.started)} | "
             f"ok={counts['ok']} partial={counts['partial']} "
             f"skip={counts['skip']} error={counts['error']} | "
-            f"no_metals={no_metal_count} "
-            f"metal_site_limit_exceeded={metal_site_limit_exceeded_count}"
+            f"no_metals={tally.no_metals} "
+            f"metal_site_limit_exceeded={tally.metal_site_limit_exceeded}"
         )
         if self.terminal:
             padded = line.ljust(self.last_width)

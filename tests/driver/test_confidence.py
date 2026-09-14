@@ -6,8 +6,11 @@ import logging
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 import cli
 import confidence_score
+from codes import RunMode
 from driver import confidence as driver_confidence
 from driver import layout as driver_layout
 from driver import runlog
@@ -37,15 +40,16 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
         plan = driver_confidence.plan_confidence(
             args,
             driver_layout.OutputLayout("/tmp/out"),
-            True,
+            RunMode.DATABASE,
             cast("runlog.RunLog", None),
         )
     finally:
         alchemy_logger.removeHandler(handler)
         alchemy_logger.setLevel(previous_level)
 
+    assert isinstance(plan, driver_confidence.DatabasePlan)
     assert plan.mode == "database"
-    assert plan.reference is None
+    assert plan.builds_reference
     assert any("is ignored on an uncapped" in message for message in messages)
     assert any("/tmp/reference" in message for message in messages)
 
@@ -66,11 +70,12 @@ def test_targeted_run_without_reference_still_plans_classifications(
     plan = driver_confidence.plan_confidence(
         args,
         driver_layout.OutputLayout(str(tmp_path)),
-        False,
+        RunMode.SINGLE,
         cast("runlog.RunLog", None),
     )
+    assert isinstance(plan, driver_confidence.ClassificationPlan)
     assert plan.mode == "classification"
-    assert plan.reference is None
+    assert not plan.builds_reference
     assert plan.stream_path == str(tmp_path / "confidence_scores_all.csv")
     assert plan.columns == (
         *confidence_score.CONFIDENCE_INPUT_COLUMNS,
@@ -84,14 +89,55 @@ def test_fresh_targeted_run_automatically_uses_the_manuscript_reference(
     args = cli.parse_args(["--id", "9myr", "--output-dir", str(tmp_path)])
     run_log = runlog.RunLog(args, "pytest")
     plan = driver_confidence.plan_confidence(
-        args, driver_layout.OutputLayout(str(tmp_path)), False, run_log
+        args, driver_layout.OutputLayout(str(tmp_path)), RunMode.SINGLE, run_log
     )
 
+    assert isinstance(plan, driver_confidence.ReferencePlan)
     assert plan.mode == "reference"
-    assert plan.reference is not None
     assert plan.reference.reference_id == "alchemy-confidence-8ba6808c816791ffbb87"
     assert plan.reference.cohort_size == 330978
     assert (
         run_log.details["confidence_reference_dir"]
         == driver_confidence.DEFAULT_CONFIDENCE_REFERENCE_DIR
     )
+
+
+@pytest.mark.parametrize(
+    "arguments,run_mode",
+    [
+        (["--pdb-file", "a.pdb", "--mtz-file", "a.mtz"], RunMode.MANUAL),
+        (["--id", "1abc"], RunMode.SINGLE),
+        (["--id-file", "ids.txt"], RunMode.ID_FILE),
+        ([], RunMode.DATABASE),
+        (["--max-pdbs", "5"], RunMode.CAPPED_DATABASE),
+    ],
+)
+def test_classify_run_names_how_the_entries_were_chosen(
+    arguments: list[str], run_mode: RunMode
+) -> None:
+    """Only the uncapped database mode may build a reference."""
+    assert driver_confidence.classify_run(cli.parse_args(arguments)) is run_mode
+
+
+def test_a_disabled_plan_scores_nothing_and_clears_every_confidence_output(
+    tmp_path: Path,
+) -> None:
+    layout = driver_layout.OutputLayout(str(tmp_path))
+    plan = driver_confidence.plan_confidence(
+        cli.parse_args(["--no-bonds"]),
+        layout,
+        RunMode.DATABASE,
+        cast("runlog.RunLog", None),
+    )
+
+    assert type(plan) is driver_confidence.ConfidencePlan
+    assert not plan.enabled
+    assert plan.stream_path is None
+    assert plan.columns is None
+    assert plan.stale_outputs(layout) == (
+        layout.confidence_inputs,
+        layout.confidence_scores,
+        driver_confidence.reference_marker(layout),
+    )
+    rows = [{"pdbID": "1abc"}]
+    assert plan.score_rows(rows) is rows
