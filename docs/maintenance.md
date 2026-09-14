@@ -43,8 +43,10 @@ list or classification rules change.
 
 ## Reference data
 
-- `src/data/metallocofactors_id.txt` — fixed bundled list of metal-containing
-  Chemical Component Dictionary IDs used by every analysis run.
+- `src/data/metallocofactors_id.txt` — fixed bundled catalog of metal-containing
+  Chemical Component Dictionary components used by every analysis run. Each
+  tab-separated row carries the component ID, its formula, and the structural
+  class (cluster, heme, or other) that the analysis reports for it.
 - `src/data/metallocofactors_id.meta.json` — generation metadata for the
   committed cofactor list.
 - `src/data/metal_distances_info.txt` — reference metal-ligand distances and

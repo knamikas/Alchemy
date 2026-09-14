@@ -22,10 +22,10 @@ For example, run a capped batch from a local mirror with:
 ./alchemy \
     --pdb-redo-root /path/to/pdb-redo \
     --max-pdbs 20 \
-    --ccp4-setup CCP4_SETUP
+    --ccp4-setup SETUP_SCRIPT
 ```
 
-Replace `/path/to/pdb-redo` with your mirror directory and `CCP4_SETUP` with
+Replace `/path/to/pdb-redo` with your mirror directory and `SETUP_SCRIPT` with
 the absolute path to the CCP4 setup script.
 
 ### Process requested PDB IDs
@@ -36,17 +36,17 @@ Alchemy checks the mirror if `--pdb-redo-root` is supplied, then checks
 The cache defaults to `pdb-redo-cache/` in the checkout.
 
 ```bash
-./alchemy --id 9myr --ccp4-setup CCP4_SETUP
-./alchemy --id-file PDB_ID_FILE --ccp4-setup CCP4_SETUP
+./alchemy --id 9myr --ccp4-setup SETUP_SCRIPT
+./alchemy --id-file PDB_ID_FILE --ccp4-setup SETUP_SCRIPT
 ```
 
 The ID file can contain comma-, whitespace-, or newline-separated PDB IDs.
 
 ### Process manual files
 
-Use `--mtz-file` with either `--pdb-file` or `--cif-file`. If you provide both
-coordinate formats, Alchemy uses the mmCIF file. Manual mode processes one
-structure, so don't combine it with `--id-file`.
+Use `--mtz-file` with either `--pdb-file` or `--cif-file`, never both; the
+command rejects the pair. Manual mode processes one structure, so don't
+combine it with `--id-file`.
 
 For an mmCIF input, replace `PDB_ID` with the four-character entry ID and run:
 
@@ -56,7 +56,7 @@ For an mmCIF input, replace `PDB_ID` with the four-character entry ID and run:
     --cif-file /data/PDB_ID.cif \
     --mtz-file /data/PDB_ID.mtz \
     --data-json /data/PDB_ID_data.json \
-    --ccp4-setup CCP4_SETUP
+    --ccp4-setup SETUP_SCRIPT
 ```
 
 Omit `--id` if Alchemy can infer a four-character PDB ID from the filenames.
@@ -85,7 +85,7 @@ reports an input error. It doesn't fall back to the no-metadata behavior.
 | `--pdb-metadata-cache CACHE_DIR` | Set the persistent cache for original-PDB crystallization records retrieved from the RCSB Data API. |
 | `--no-crystallization-download` | Don't fetch missing original-PDB metadata. Alchemy still uses valid cache entries and coordinate-file fallbacks. |
 | `--output-dir OUTPUT_DIR` | Set the result directory. |
-| `--density-map-scope {model-envelope,full}` | Set the map extent passed to EDSTATS. The default model envelope retains every coordinate plus a 10 ångström border; `full` selects the complete-map path. |
+| `--density-map-scope {model-envelope,full}` | Set the map extent passed to EDSTATS. The default model envelope retains every coordinate plus a 10 ångström border, and falls back to the full map when the crop would not be smaller or safe; `full` selects the complete-map path directly. |
 | `--ccp4-timeout SECONDS` | Set the wall-clock limit for each CCP4 program; the default is 900 seconds per program. A timeout produces a retryable `partial` result and a log under `OUTPUT_DIR/ccp4_timeout_logs/`. |
 | `--workers COUNT` | Set the worker-process ceiling; the value must be at least 1. Memory-aware admission can lower the active count. |
 | `--memory-limit SIZE` | Override the memory capacity used for scheduling, such as `8G` or `16GiB`. A tighter host, cgroup, container, or scheduler limit still takes precedence. |
@@ -100,8 +100,12 @@ reports an input error. It doesn't fall back to the no-metadata behavior.
 | `--quiet` | Report only warnings and errors. |
 | `--log-file LOG_FILE` | Also write full debug diagnostics to a file. This file is separate from the per-run report. |
 | `--keep-intermediates` | Retain per-entry maps and logs. |
-| `--ccp4-setup CCP4_SETUP` | Source and verify a CCP4 setup script for this run. |
-| `--configure-ccp4 CCP4_SETUP` | Save a CCP4 setup-script path for later runs. |
+| `--ccp4-setup SETUP_SCRIPT` | Source and verify a CCP4 setup script for this run. |
+| `--configure-ccp4 SETUP_SCRIPT` | Save a CCP4 setup-script path for later runs. |
+
+When the CCP4 programs are not already on `PATH` and neither option names a
+script, Alchemy looks for one in the `CCP4_SETUP` environment variable, then in
+the path saved by `--configure-ccp4`, then in common CCP4 install locations.
 
 Run `./alchemy --help` for the authoritative command-line defaults. See the
 [confidence-scoring method](method.md#database-referenced-confidence-scoring)

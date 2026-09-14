@@ -75,7 +75,7 @@ whether the output is complete enough for your analysis.
 | `pdbID` | Normalized entry identifier and entry-level join key. |
 | `status`, `retryable` | Entry outcome and whether an ordinary resume should retry it. |
 | `no_metals`, `metal_site_limit_exceeded` | Successful metal-free result and standard-cohort exclusion flag. |
-| `n_metals`, `n_bonds`, `n_candidates` | Selected coordinate sites, assigned contacts, and candidate rows. Blank bond or candidate counts mean that stage didn't run; `0` means it ran and found no rows. |
+| `n_metals`, `n_bonds`, `n_candidates` | Selected coordinate sites, assigned contacts, and candidate rows. Blank bond or candidate counts mean bond analysis was disabled or the entry failed before it could run; `0` means it ran and found no rows, or that the entry ended early with nothing to analyze (`no_metals=true` or `metal_site_limit_exceeded=true`). |
 | `runtime_s` | Total entry runtime in seconds. |
 | `reason_codes`, `warning_codes`, `status_detail` | Pipe-separated outcome reasons, non-status warnings, and a bounded human-readable explanation. |
 | `alchemy_version`, `alchemy_commit`, `gemmi_version`, `ccp4_version` | Software provenance. |
@@ -119,7 +119,12 @@ examples; modeled-water selection and chemistry differ from metal sites.
 
 ## `metal_sites_all.csv`
 
-Grain: one row per selected metal site with an EDSTATS density observation.
+Grain: one row per selected metal site with an EDSTATS density observation,
+plus diagnostic rows for catalog cofactor residues that matched no coordinate
+residue or hold no selected metal. Those rows carry
+`selected_metal_site_status=no_selected_metal`, a blank `metal_site_id`, and
+`coordinate_mapping_status=coordinate_residue_not_found` where the join
+failed; filter on `selected_metal_site_status=selected` for site analyses.
 A multi-metal cofactor can repeat the same residue-level observation once for
 each site. Density analyses must deduplicate `density_observation_id`; site
 analyses must use `metal_site_id`.
@@ -309,7 +314,10 @@ entry-level experimental context and join to site, bond, and confidence rows by
 Grain: exactly one contextual row per processed manifest entry. A status of
 `available` means a condition record was found, `not_reported` means the source
 contained no condition record, `unparseable` means extraction failed, and
-`input_unavailable` means entry preparation supplied no source file.
+`input_unavailable` means no source could be consulted: entry preparation
+supplied no coordinate file, the cached RCSB record reports that the entry does
+not exist, or the entry failed before extraction ran, in which case this
+default row keeps the file at one row per manifest entry.
 
 | Columns | Meaning |
 | --- | --- |
@@ -341,7 +349,7 @@ are embedded directly in `confidence_scores_all.csv`.
 | `coordinate_mapping_status`, `selected_metal_site_status` | Whether density and coordinate evidence were resolved for the selected site. |
 | `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited metal-site identity. |
-| `rszd`, `rszd_abs`, `rszd_negative`, `rszd_positive`, `density_saturated` | Raw metal-site RSZD, its absolute magnitude, signed negative/positive difference-density statistics, and the EDSTATS saturation flag. |
+| `rszd`, `rszd_abs`, `rszd_negative`, `rszd_positive`, `density_saturated` | Raw metal-site RSZD (`ZDm`; the all-atom `ZDa` feeds only `density_context_all.csv`), its absolute magnitude, signed negative/positive difference-density statistics, and the EDSTATS saturation flag. |
 | `assigned_contact_count`, `reference_covered_contact_count`, `geometry_bond_count` | Assigned contacts, contacts covered by the literature reference, and finite score-eligible contacts used for RMS geometry. |
 | `geometry_coverage` | Literature-reference-covered contacts divided by all assigned contacts. This is a coverage annotation and does not modify the score or level. |
 | `geometry_rms_zbond`, `geometry_max_abs_zbond`, `geometry_mean_abs_zbond`, `geometry_mean_signed_zbond` | Primary RMS geometry statistic and supporting Zbond diagnostics. |
@@ -377,7 +385,8 @@ preserved as the leading block, followed by these analysis columns:
 | `confidence_cohort_size` | Number of site rows in the frozen input cohort. |
 | `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution. |
 
-Support scores are published to six decimal places. Raw component values define
+Support scores are published with up to six decimal places; trailing zeros are
+dropped. Raw component values define
 the levels; neither a score nor a population percentile can move a site across
 a PASS/REVIEW/SUSPECT boundary.
 
@@ -445,3 +454,18 @@ bundled-reference policies. Execution-only choices such as paths, worker count,
 optional stage selection, map-cropping scope, logging, caching, and timeouts are
 excluded from that identity. Hashes identify exact artifacts; the reference ID
 and cohort ID deliberately answer different questions.
+
+## `logs/alchemy_run_*_entries.csv`
+
+Grain: one row per entry the run completed, sorted by `pdbID`. This is the run
+report's per-entry diagnostics table, written beside `alchemy_run_*.log` under
+`--log-dir`; it repeats the manifest outcome for convenience and adds timing
+and resource measurements that the manifest does not carry.
+
+| Columns | Meaning |
+| --- | --- |
+| `pdbID`, `status`, `retryable`, `no_metals`, `metal_site_limit_exceeded`, `runtime_s`, `n_metals`, `n_bonds`, `n_candidates` | The entry outcome as recorded in the manifest. |
+| `input_structure_s`, `mtzfix_s`, `twin_coefficient_normalization_s`, `fft_2fofc_s`, `mapmask_2fofc_s`, `fft_fofc_s`, `mapmask_fofc_s`, `edstats_s`, `density_total_s`, `statistics_extraction_s`, `bond_analysis_s`, `cleanup_s` | Wall-clock seconds per stage, to three decimals. Only stages that ran in at least one entry get a column, in this order; any other timing the worker recorded follows alphabetically. Blank means the stage did not run for that entry. |
+| `density_map_scope`, `full_map_bytes`, `edstats_map_bytes` | The map scope EDSTATS received and the sizes of the full and cropped maps. |
+| `memory_estimate_bytes` | The per-entry memory estimate the scheduler admitted the entry under; blank when no estimate was made. |
+| `reason_codes`, `warning_codes`, `status_detail` | The manifest's outcome vocabulary, repeated. |

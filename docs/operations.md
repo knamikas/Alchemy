@@ -52,7 +52,8 @@ reference data, see [Reference-data maintenance](maintenance.md).
   missing inputs receive a 2 GiB estimate. Valid map estimates can be smaller
   than 2 GiB, but still include 512 MiB overhead plus the safety margin.
   By default, Alchemy uses up to 80% of currently available memory while
-  protecting at least 4 GiB for the OS and driver. All
+  protecting at least 4 GiB for the OS and driver; on a host with less than
+  6 GiB the reserve shrinks so that one 2 GiB worker can still run. All
   detected host and cgroup limits remain in force. On cgroup v2, clean inactive
   file cache is treated as reclaimable; anonymous, dirty, mapped and shared
   memory remains charged. All entries and idle workers share one estimated-byte
@@ -86,7 +87,9 @@ reference data, see [Reference-data maintenance](maintenance.md).
   a later startup preserves that directory. Merges replace individual files
   atomically, but a failed multi-file merge may require recovery from staging.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis
-  was not run; `0` means it ran successfully but found no rows of that type.
+  was disabled or the entry failed before reaching it; `0` means it ran and
+  found no rows of that type, or that the entry ended early with nothing to
+  analyze (`no_metals` or `metal_site_limit_exceeded`).
   Resume uses this distinction to add bond-stage results after an earlier
   `--no-bonds` run. Missing bond or candidate CSVs make bond-enabled results
   incomplete.
@@ -110,11 +113,11 @@ reference data, see [Reference-data maintenance](maintenance.md).
   preserves existing bond and candidate rows and their manifest counts. Entries
   originating from a bond-disabled run retain blank `n_bonds` and
   `n_candidates`, so a later bond-enabled resume will process them.
-- `--resume --retry-partials` reprocesses non-retryable `partial` and `error`
+- `--resume --retry-partials` also reprocesses non-retryable `partial`
   entries from the manifest after a processing improvement while continuing to
   protect `ok` entries. Optional `--id` or `--id-file` selectors restrict that
-  set. Skips, retryable errors, and retryable partials already follow ordinary
-  resume behavior. The same staged replacement rules apply, so an interrupted
+  set. Skips, errors, and retryable partials already follow ordinary resume
+  behavior. The same staged replacement rules apply, so an interrupted
   or retryably failed attempt does not discard the previous terminal result.
   When a frozen reference scores a targeted resume inside an existing database
   output, `confidence_scores_all.csv` and `confidence_inputs_all.csv` are
@@ -146,8 +149,10 @@ reference data, see [Reference-data maintenance](maintenance.md).
   cannot produce metal-site output for such entries. Progress and completion
   summaries report these successful negative results as `no_metals`; the
   manifest records them explicitly as `no_metals=true`. Valid zero-occupancy
-  metal records remain visible through the `zero_occupancy_atoms` warning but
-  are not counted as sites. `no_metals` is an informational subset of `ok`,
+  metal records are not counted as sites; they remain visible through the
+  `zero_occupancy_atoms` warning, and the entry adds
+  `zero_occupancy_metal_excluded` so that a metal modeled as absent is not
+  mistaken for an entry containing no metal record at all. `no_metals` is an informational subset of `ok`,
   whereas `skip` remains reserved for entries that could not be processed
   operationally. If any atom has a missing or invalid deposited element, metal
   absence cannot be established under the no-inference policy; the entry
@@ -161,12 +166,19 @@ reference data, see [Reference-data maintenance](maintenance.md).
   policy exclusion: metal-dense assemblies contain highly correlated sites that
   would otherwise dominate the standard database cohort and its runtime.
   Progress and completion summaries report the excluded-entry count separately.
-- Targeted and capped runs exit nonzero when any entry ends as `error`, `skip`,
-  or a retryable `partial`. An uncapped database run treats explicitly
+- Targeted and capped runs, and any run with `--no-bonds`, exit nonzero when
+  any entry ends as `error`, `skip`, or a retryable `partial`. An uncapped
+  database run that builds a confidence reference treats explicitly
   deterministic processing errors as documented terminal exclusions: when no
   missing, interrupted, or otherwise retryable work remains, it finalizes the
   confidence reference and exits successfully. Unknown and unexpected errors,
   worker deaths, skips, and retryable partials remain nonzero.
+- The exit code is `0` for a complete batch, `1` when entries remain
+  incomplete under the rule above or when the driver stops on a fatal error
+  before or during the batch (a busy output lock, a CCP4 setup that cannot be
+  resolved, incompatible existing outputs under `--resume`, a crystallization
+  metadata fetch failure, or an unwritable `--log-file`), and `130` after an
+  interrupt. The run report records the driver error in every case.
 
 ## Protect the output directory and scratch data
 
@@ -260,11 +272,11 @@ table, so a code cannot be added or renamed without updating this list.
 | `worker_process_died` | The worker holding the entry died before returning a result; the driver recorded the loss on its behalf. |
 | `missing_input` | A coordinate or reflection file named on the command line, or expected in the mirror, was absent. |
 | `ccp4_tool_timeout` | A CCP4 program was killed at `--ccp4-timeout`. It reported nothing about the entry, so this is retryable. |
-| `mtzfix_validation_failure` | `mtzfix` failed its consistency re-test, and the entry is not a PDB-REDO-declared twin. |
+| `mtzfix_validation_failure` | `mtzfix` failed its consistency re-test and no guarded twin normalization replaced the coefficients: the entry is not a PDB-REDO-declared twin, or it is one whose normalization was refused. |
 | `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError` or an unrecognized CCP4 failure. |
 | `deterministic_processing_error` | An exception that will recur identically on the same inputs and tool build, such as a parse or lookup error, MAPMASK's compiled `maxsec` limit, or FFT finding no acceptable reflections. Terminal for the current database snapshot, but still retried by `--resume` in case inputs or tools changed. |
 | `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analyzable. |
-| `bond_stage_failure` | The geometry stage raised, so its rows are not legitimate density-only evidence. |
+| `bond_stage_failure` | The geometry stage raised after density analysis. The density rows are kept and the entry is `partial` with no assigned contacts, so its sites are density-only evidence. |
 | `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |
 | `cofactor_without_selected_metal` | A matched cofactor contains no configured metal site to select. |
 | `metal_site_without_density` | A selected coordinate metal site is absent from the statistics table, so it has no density evidence; it remains included in the coordinate-site total `n_metals`. This is detected with or without bond analysis and can happen when a metal sits inside a multi-atom residue absent from the bundled cofactor catalog, which is a fixed snapshot. See [Rebuild the cofactor reference](maintenance.md#cofactor-reference-maintenance). |
@@ -274,10 +286,39 @@ table, so a code cannot be added or renamed without updating this list.
 | `metal_site_limit_exceeded` | More than 100 selected canonical metal sites were detected, so the entry was intentionally excluded before CCP4 processing. `n_metals` retains the detected count for audit. |
 | `non_finite_metal_coordinates` | A selected metal has a NaN or infinite Cartesian coordinate, so its geometry and confidence are unscorable. Other valid sites in the entry are still analyzed. |
 | `missing_dpi_metadata_source` | Manual input without `--data-json`: the reflection count has no source, which differs from a calculation that ran and failed. |
-| `invalid_dpi_metadata` | The reflection count, R-free, or asymmetric-unit volume was present but not numeric. |
+| `invalid_dpi_metadata` | The reflection count or R-free in `--data-json` or PDB-REDO metadata was present but not numeric. |
 | `invalid_occupancy` | Deposited occupancies could not be read, or overfull alternates exceeded the tolerance, leaving `Ni` unusable. |
 | `missing_or_invalid_reflection_count` | `NREFCNT` was absent or non-positive. |
-| `missing_or_invalid_rfree` | `RFFIN` was absent or non-positive, and no R-free could be read from the coordinate file. |
+| `missing_or_invalid_rfree` | `RFFIN` was non-positive, or it was absent and no R-free could be read from the coordinate file either. |
 | `missing_or_invalid_asu_volume` | The asymmetric-unit volume could not be derived from the cell and space group. |
 | `invalid_dpi_atom_count` | `Ni` came out non-positive with every other DPI input valid. |
 | `dpi_calculation_failed` | The DPI calculation raised; the entry keeps its contact distances, which do not require a DPI. |
+
+## Manifest warning codes
+
+`warning_codes` is a `|`-separated list of observations that did not determine
+the entry's status. The vocabulary is `WarningCode` in `src/codes.py`, and
+`tests/test_documentation.py` fails if a member is missing from this table.
+
+| Code | Meaning |
+| --- | --- |
+| `cofactor_catalog_fallback` | Density was retained for a selected metal inside a multi-atom component absent from the bundled cofactor catalog; no structural class is inferred for it. |
+| `multi_model_structure` | The input holds more than one model. Only the first model was analyzed. |
+| `duplicate_atom_records` | Two or more records shared one exact atom identity; the better-occupied record was kept. |
+| `duplicate_atom_coordinate_conflict` | Duplicate records of one atom disagreed in position by more than the duplicate tolerance. |
+| `malformed_duplicate_atom_names` | A residue holds several atoms of one name within the chosen conformer, or a named conformer beside a blank-altloc copy; one atom was chosen per name. |
+| `altloc_selection_fallback` | No alternate conformer of some residue had a valid occupancy to rank by, so the alphabetically first altloc was chosen. |
+| `unknown_elements` | One or more atoms have a missing or invalid element symbol. If no metal was selected, the entry ends as `metal_presence_indeterminate`. |
+| `non_finite_coordinates` | One or more atoms have NaN or infinite coordinates. They stay in the deposited inventory for provenance but are excluded from every spatial search. |
+| `zero_occupancy_atoms` | Valid zero-occupancy atoms are present. They count toward `Ni` but are never site or contact evidence. |
+| `zero_occupancy_metal_excluded` | A metal record was excluded for valid zero occupancy, so an entry reporting `no_metals` still contains a metal record. |
+| `overfull_alternate_occupancy` | Alternate conformers of at least one atom site sum to more than one; see `overfull_occupancy_excess` for whether the DPI was affected. |
+| `occupancy_dictionary_default_applied` | The mmCIF source carried no occupancy column, so every atom was given the dictionary default of 1.0 during conversion. |
+| `raw_occupancy_mapping_failed` | Raw PDB occupancy records could not be matched one-to-one to the parsed atoms; `raw_occupancy_mapping_failure_reason` explains why, and occupancy validation fails. |
+| `legacy_pdb_identifiers_packed` | Converting mmCIF to PDB had to repack chain or residue identifiers into the fixed-width PDB namespace. The source identifiers are restored from `REMARK 950` records and reported in the outputs. |
+| `edstats_grid_point_count_overflow` | EDSTATS printed `****` because an `NPm`, `NPs`, or `NPa` grid-point count exceeded its fixed-width field. That count is recorded as unavailable; every other density metric remains usable. |
+| `twin_refmac_coefficients_normalized` | The guarded twin path rewrote Refmac's twinned map coefficients for EDSTATS after `mtzfix` validation failed. |
+| `declared_connection_conformer_substituted` | A `_struct_conn` or `LINK` record named an alternate conformer that per-residue selection did not choose, so it was re-pointed onto the chosen one. |
+| `declared_connection_zero_occupancy_partner` | A declared connection resolves to an atom with valid zero occupancy. It remains candidate evidence but cannot become a bond. |
+| `declared_donor_element_unsupported` | A declared partner atom is not nitrogen, oxygen, or sulfur, so the declaration was not turned into a contact candidate. |
+| `declared_donor_outside_supported_classes` | A declared donor belongs to a residue class with no bundled reference, so it stays a candidate and is never z-scored or promoted to a bond. |

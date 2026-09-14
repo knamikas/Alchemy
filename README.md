@@ -18,9 +18,9 @@ cache, or process coordinate and MTZ files that you provide.
 ## Requirements
 
 - CCP4 with `mtzfix`, `fft`, `mapmask`, and `edstats`. If these programs aren't
-  already on `PATH`, pass a setup script with `--ccp4-setup` or save its path
-  with `--configure-ccp4`. On Windows, use the CCP4 `ccp4.setup.bat` or
-  `ccp4.setup.cmd` launcher.
+  already on `PATH`, pass a setup script with `--ccp4-setup`, save its path
+  with `--configure-ccp4`, or export it as `CCP4_SETUP`. On Windows, use the
+  CCP4 `ccp4.setup.bat` or `ccp4.setup.cmd` launcher.
 - Python 3.11 or later.
 - The Python dependencies declared in `pyproject.toml`, including
   `gemmi>=0.7.0`, `numpy>=1.17`, and `typing_extensions>=4.6`.
@@ -48,11 +48,11 @@ sites.
    ./alchemy --help
    ```
 
-2. Run the entry. Replace `CCP4_SETUP` with the absolute path to your CCP4
+2. Run the entry. Replace `SETUP_SCRIPT` with the absolute path to your CCP4
    setup script:
 
    ```bash
-   ./alchemy --id 9myr --ccp4-setup CCP4_SETUP
+   ./alchemy --id 9myr --ccp4-setup SETUP_SCRIPT
    ```
 
 3. Check the run outcome in `output/manifest.csv`. A completed analysis has
@@ -83,14 +83,14 @@ the manifest, then see the
 Process a multi-element example or a metal-free control:
 
 ```bash
-./alchemy --id 6nlr --ccp4-setup CCP4_SETUP
-./alchemy --id 9nxl --ccp4-setup CCP4_SETUP
+./alchemy --id 6nlr --ccp4-setup SETUP_SCRIPT
+./alchemy --id 9nxl --ccp4-setup SETUP_SCRIPT
 ```
 
 Process IDs from a comma-, whitespace-, or newline-separated file:
 
 ```bash
-./alchemy --id-file PDB_ID_FILE --ccp4-setup CCP4_SETUP
+./alchemy --id-file PDB_ID_FILE --ccp4-setup SETUP_SCRIPT
 ```
 
 For local mirrors and manual coordinate and MTZ inputs, see
@@ -129,7 +129,8 @@ failure handling, see the [operations guide](docs/operations.md).
 - [Release notes](CHANGELOG.md): Features, tested software, and known limitations.
 - [Usage guide](docs/usage.md): Choose an input mode and configure the command.
 - [Architecture](docs/architecture.md): Follow execution, process boundaries,
-  and module relationships with detailed pipeline diagrams.
+  and module relationships. A rendered overview of the same lanes is in
+  [docs/architecture.png](docs/architecture.png).
 - [Method reference](docs/method.md): Understand each analysis stage, contact
   assignment, reference coverage, and confidence classification.
 - [Output schema](docs/output-schema.md): Interpret results and find the data

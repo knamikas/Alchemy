@@ -6,7 +6,8 @@ sequence of standalone commands. The driver coordinates the batch, worker
 processes analyze individual entries, and the driver writes the combined
 outputs.
 
-This page maps execution and ownership. For scientific rules, see the
+This page maps execution and ownership; [architecture.png](architecture.png)
+renders the same lanes as one picture. For scientific rules, see the
 [method reference](method.md); for CSV fields, see the
 [output schema](output-schema.md); for retries and resource controls, see
 the [operations guide](operations.md).
@@ -42,22 +43,30 @@ frozen reference when applicable.
    collaborators are [driver/layout.py](../src/driver/layout.py) for output
    paths, [driver/entries.py](../src/driver/entries.py) for entry selection,
    [driver/confidence.py](../src/driver/confidence.py) for the confidence
-   plan, and [driver/report.py](../src/driver/report.py) for the final
-   report. The pool loads the bundled cofactor catalog
-   and resolves the CCP4 environment through
+   plan, and [driver/report.py](../src/driver/report.py) for the batch
+   summary and confidence finalization. The pool loads the bundled cofactor
+   catalog and resolves the CCP4 environment through
    [driver/environment.py](../src/driver/environment.py), which also records
    the Alchemy, Gemmi, and CCP4 versions for provenance.
-   `--configure-ccp4` saves the setup path and exits before analysis.
-3. The driver acquires the output-directory lock before reading or changing
-   run outputs. It determines the confidence mode, checks resume compatibility,
+   [ccp4_setup.py](../src/ccp4_setup.py) locates the setup script for it:
+   the `--ccp4-setup` option, the `CCP4_SETUP` environment variable, the path
+   saved by `--configure-ccp4`, then common install locations.
+   `--configure-ccp4` saves the setup path and exits before analysis. A
+   `DriverError` from [driver/errors.py](../src/driver/errors.py) at any
+   startup step ends the run with exit code 1.
+3. The driver creates the output directory if needed, then acquires the
+   output-directory lock before reading or writing any run output. It determines the confidence mode, checks resume compatibility,
    and selects entries from the requested input mode. Completed entries may
    be excluded by resume policy.
 4. Crystallization metadata is prefetched before expensive analysis. Manual
    input mode uses coordinate records and existing cache entries without
    downloading original-PDB metadata.
-5. The driver estimates entry memory and chooses a worker-process ceiling.
-   Memory admission controls how many entries are active at once; the worker
-   count alone does not determine concurrency.
+5. [driver/resources.py](../src/driver/resources.py) estimates entry memory
+   from each entry's metadata and chooses a worker-process ceiling within the
+   memory budget. [driver/memory_admission.py](../src/driver/memory_admission.py)
+   then controls how many entries are active at once, backing off under memory
+   pressure and recovering afterwards; the worker count alone does not
+   determine concurrency.
 
 ### One entry
 
@@ -129,7 +138,7 @@ metadata. Its collaborators have distinct responsibilities:
 | Module | Responsibility |
 | --- | --- |
 | [structure_analysis.py](../src/structure_analysis.py) | Load the analyzed model; its types (`AtomSite`, `StructureContext`, `ContactImage`) and neighbor searches including symmetry images live in [structure_model.py](../src/structure_model.py). |
-| [policy.py](../src/coordination/policy.py) | Search radii and scoring thresholds shared by every coordination stage: the 4 Å search, the 0.75 Å first-sphere tolerance, the 0.8 Å special-position cutoff, and the |z| >= 6 outlier cutoff. |
+| [policy.py](../src/coordination/policy.py) | Search radii and scoring thresholds shared by every coordination stage: the 4 Å search, the 0.75 Å first-sphere tolerance, the 0.8 Å special-position cutoff, the 6 Å nearby-metal radius, and the |z| >= 6 outlier cutoff. |
 | [candidates.py](../src/coordination/candidates.py) | Discover donor-like atom images around a metal, collapse near-coincident special-position images, and merge proximity with declaration provenance. |
 | [eligibility.py](../src/coordination/eligibility.py) | Apply the donor rule and the literature-distance rule to decide which candidates are first-sphere contacts. |
 | [geometry.py](../src/coordination/geometry.py) | Score assigned contacts with the DPI-aware z-score and group contacts that share one donor-residue image. |
@@ -189,18 +198,23 @@ Recovery spans several layers:
   run left behind; it lives outside the driver so the worker does not import
   driver code.
 - [run_logging.py](../src/run_logging.py) carries worker diagnostics to driver
-  logging. [driver/runlog.py](../src/driver/runlog.py) writes the final report
-  through the CLI's cleanup path, including interrupted or failed runs.
+  logging. [driver/runlog.py](../src/driver/runlog.py) writes the run report
+  file and its per-entry diagnostics CSV through the CLI's cleanup path,
+  including interrupted or failed runs.
 
 ## Shared contracts and separate commands
 
 | Module | Shared role |
 | --- | --- |
 | [run_config.py](../src/run_config.py) | Validated command-line configuration. |
-| [worker_contracts.py](../src/worker_contracts.py) | Worker configuration, entry results, and shared entry limits. |
+| [worker_contracts.py](../src/worker_contracts.py) | Worker configuration, entry results, and input provenance records. |
 | [output_rows.py](../src/output_rows.py) | Typed site rows and CSV value formatting. |
 | [codes.py](../src/codes.py) | Status, reason, warning, and contact vocabulary. |
-| [analysis_config.py](../src/analysis_config.py) | Analysis-policy identity and compatibility. |
+| [analysis_config.py](../src/analysis_config.py) | Analysis-policy identity and compatibility, including the 100-site entry limit. |
+| [ccp4_setup.py](../src/ccp4_setup.py) | Locate the CCP4 setup script and prepare the process environment. |
+| [driver/errors.py](../src/driver/errors.py) | The driver's fatal-error type; raising it ends the run with exit code 1. |
+| [driver/resources.py](../src/driver/resources.py) | Per-entry memory estimates and the worker ceiling for a memory budget. |
+| [driver/memory_admission.py](../src/driver/memory_admission.py) | Admission of entries under memory pressure, with backoff and delayed recovery. |
 | [metal_elements.py](../src/metal_elements.py) | Recognized metal elements. |
 | [pdb_remarks.py](../src/pdb_remarks.py) | The `REMARK 950 ALCHEMY` provenance records of converted PDB files: record layouts, writer, and parser. |
 | [gemmi_typing.py](../src/gemmi_typing.py) | Typed views of Gemmi members its stub leaves untyped. |

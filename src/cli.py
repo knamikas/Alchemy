@@ -102,7 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--id", type=parse_pdb_id, help="process a single PDB id (else batch the root)"
     )
     ap.add_argument(
-        "--id-file", help="path to a file of PDB ids (comma- and/or newline-separated)"
+        "--id-file",
+        help="path to a file of PDB ids (comma-, whitespace-, or newline-separated)",
     )
     ap.add_argument("--pdb-file", help="path to a local PDB file for manual input mode")
     ap.add_argument("--mtz-file", help="path to a local MTZ file for manual input mode")

@@ -15,9 +15,14 @@ from pathlib import Path
 import pytest
 from helpers import REPO_ROOT, SRC_DIR
 
-from codes import ReasonCode
+from codes import ReasonCode, WarningCode
 from driver import confidence as driver_confidence
 from driver import environment
+from driver.runlog import (
+    ENTRY_DIAGNOSTIC_BASE_COLUMNS,
+    ENTRY_DIAGNOSTIC_TRAILING_COLUMNS,
+    PREFERRED_TIMING_COLUMNS,
+)
 from driver.writers import STATS_COLUMNS
 
 README_PATH = os.path.join(REPO_ROOT, "README.md")
@@ -56,6 +61,15 @@ def test_every_reason_code_is_documented() -> None:
         code.value for code in ReasonCode if f"`{code.value}`" not in documented
     )
     assert not missing, f"reason codes absent from docs/operations.md: {missing}"
+
+
+def test_every_warning_code_is_documented() -> None:
+    """Verify every manifest warning code is documented in docs/operations.md."""
+    documented = _read(os.path.join(DOCS_DIR, "operations.md"))
+    missing = sorted(
+        code.value for code in WarningCode if f"`{code.value}`" not in documented
+    )
+    assert not missing, f"warning codes absent from docs/operations.md: {missing}"
 
 
 def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
@@ -479,6 +493,9 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         SUMMARY_COLUMNS,
         REVIEW_CONTEXT_COLUMNS,
         DENSITY_CONTEXT_COLUMNS,
+        ENTRY_DIAGNOSTIC_BASE_COLUMNS,
+        PREFERRED_TIMING_COLUMNS,
+        ENTRY_DIAGNOSTIC_TRAILING_COLUMNS,
     ):
         known |= set(columns)
     known |= CONFIDENCE_INPUT_STATUSES | REFERENCE_METADATA_FIELDS
