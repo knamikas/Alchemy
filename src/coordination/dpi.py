@@ -136,33 +136,29 @@ def calculate_dpi_components(
 
         nobs = props.get("NREFCNT")
         rfree = props.get("RFFIN")
-        rfree = (
-            float(rfree)
-            if rfree is not None and rfree != ""
-            else rfree_from_pdb(dpi_inputs["pdb_path"])
-        )
-        rfree_value = rfree
-        nobs = float(nobs) if nobs is not None and nobs != "" else NAN
-        nobs_value = nobs
-        # Keep the extension boundary widened to ``object`` so a malformed
-        # runtime value is reported explicitly rather than reaching
-        # ``math.isfinite`` and being folded into the catch-all reason.
-        va = cast(
-            object,
-            asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"]),
-        )
-        ni = count_ni(structure)
-
-        if not isinstance(va, (float, int)):
+        try:
+            rfree = (
+                float(rfree)
+                if rfree is not None and rfree != ""
+                else rfree_from_pdb(dpi_inputs["pdb_path"])
+            )
+            nobs = float(nobs) if nobs is not None and nobs != "" else NAN
+        except (TypeError, ValueError):
+            # Present but not numeric: a metadata defect, not a failed calculation.
             return DpiComponents(
                 NAN,
                 resolution,
                 ReasonCode.INVALID_DPI_METADATA,
-                rfree_value,
-                nobs_value,
+                NAN,
+                NAN,
                 NAN,
             )
-        va_value = float(va)
+        rfree_value = rfree
+        nobs_value = nobs
+        va = asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
+        va_value = va
+        ni = count_ni(structure)
+
         if not (
             math.isfinite(nobs)
             and math.isfinite(rfree)
@@ -208,11 +204,3 @@ def calculate_dpi_components(
             nobs_value,
             va_value,
         )
-
-
-def calculate_dpi_details(
-    structure: StructureContext, dpi_inputs: Mapping[str, Any]
-) -> tuple[float, float, str]:
-    """Return the historical ``(dpi, resolution, reason_code)`` interface."""
-    result = calculate_dpi_components(structure, dpi_inputs)
-    return result.dpi, result.resolution, result.reason_code

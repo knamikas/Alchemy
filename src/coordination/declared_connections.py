@@ -122,12 +122,9 @@ def analysis_atom_for_partner(
 
     source_chain_id = str(chain.name)
     resnum = f"{residue.seqid.num}{blank_if_missing(residue.seqid.icode)}"
-    source_lookup = (
-        structure.residues_for_source_author
-        if hasattr(type(structure), "residues_for_source_author")
-        else structure.residues_for_author
+    matches = structure.residues_for_source_author(
+        str(residue.name), source_chain_id, resnum
     )
-    matches = source_lookup(str(residue.name), source_chain_id, resnum)
     if len(matches) != 1:
         # Fallback for an analysis PDB carrying no residue provenance: retry
         # under Gemmi's shortened chain name.

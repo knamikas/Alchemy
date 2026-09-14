@@ -56,7 +56,7 @@ def test_src_modules_import() -> None:
     assert callable(progress.ProgressReporter)
     assert callable(runlog.RunLog)
     assert resources.available_cpu_count() >= 1
-    assert callable(dpi.calculate_dpi_details)
+    assert callable(dpi.calculate_dpi_components)
     assert callable(declared_connections.collect_declared_candidates)
     assert schema.BOND_COLUMNS[0] == "pdbID"
     # Compare enum members directly with strings to verify serialized compatibility.

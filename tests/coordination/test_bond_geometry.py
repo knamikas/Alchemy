@@ -1319,7 +1319,7 @@ DPI_BASE: dict[str, float] = {
 }
 DPI_BASE_VALUE = 0.25
 
-# ``calculate_dpi_details`` rounds to four decimals.
+# ``calculate_dpi_components`` rounds to four decimals.
 DPI_ROUNDING = 5e-5
 
 
@@ -1361,14 +1361,16 @@ def _atom_count_structure(
 
 
 class _DpiRun:
-    """What one ``calculate_dpi_details`` call needed and produced."""
+    """What one ``calculate_dpi_components`` call needed and produced."""
 
     def __init__(
-        self, path: str, context: StructureContext, result: tuple[float, float, str]
+        self, path: str, context: StructureContext, result: dpi_module.DpiComponents
     ) -> None:
         self.path = path
         self.context = context
-        self.dpi, self.resolution, self.reason = result
+        self.dpi = result.dpi
+        self.resolution = result.resolution
+        self.reason = result.reason_code
 
 
 def _dpi_details(
@@ -1385,7 +1387,7 @@ def _dpi_details(
     mtz_path: str | None = None,
     name: str = "dpi",
 ) -> _DpiRun:
-    """``calculate_dpi_details`` over a structure with known ni and va.
+    """``calculate_dpi_components`` over a structure with known ni and va.
 
     ``mtz_path`` defaults to a path that does not exist, which makes
     ``asu_volume`` fall back to the coordinate file's CRYST1 record.
@@ -1409,7 +1411,7 @@ def _dpi_details(
         ),
         resolution=resolution,
     )
-    return _DpiRun(path, context, dpi_module.calculate_dpi_details(context, inputs))
+    return _DpiRun(path, context, dpi_module.calculate_dpi_components(context, inputs))
 
 
 def _dpi_value(tmp_path: Path, **kwargs: Any) -> float:
@@ -1592,7 +1594,6 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path: Path) -> None:
     summary = next(iter(summaries.values()))
     assert summary["dpi"] == approx(0.048, abs=DPI_ROUNDING)
     assert summary["occupancy_weighted_atom_count"] == approx(400.0)
-    assert summary["dpi_atom_count_multiplier"] == 1
     assert summary["dpi_unavailable_reason"] == ""
 
 
@@ -1664,12 +1665,12 @@ def test_placeholder_one_angstrom_cell_is_rejected_for_dpi(tmp_path: Path) -> No
 
     data_json = helpers.write_data_json(tmp_path / "data.json")
     context = load_structure("test", path)
-    dpi, _, reason = dpi_module.calculate_dpi_details(
+    components = dpi_module.calculate_dpi_components(
         context, helpers.dpi_inputs(pdb_path=path, data_json=data_json)
     )
 
-    assert math.isnan(dpi)
-    assert reason == "missing_or_invalid_asu_volume"
+    assert math.isnan(components.dpi)
+    assert components.reason_code == "missing_or_invalid_asu_volume"
 
 
 def test_a_real_cell_of_ordinary_size_is_still_accepted(tmp_path: Path) -> None:
@@ -1862,10 +1863,10 @@ def test_rfree_from_the_header_is_used_when_data_json_omits_it(tmp_path: Path) -
         ),
     )
 
-    dpi, _resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
+    components = dpi_module.calculate_dpi_components(context, inputs)
 
-    assert reason == ""
-    assert dpi == approx(0.125, abs=DPI_ROUNDING)
+    assert components.reason_code == ""
+    assert components.dpi == approx(0.125, abs=DPI_ROUNDING)
 
 
 @pytest.mark.parametrize(
@@ -1902,9 +1903,9 @@ def test_an_unreadable_data_json_reports_the_reflection_count(tmp_path: Path) ->
             mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
             data_json=data_json,
         )
-        dpi, _resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
-        assert math.isnan(dpi)
-        assert reason == "missing_or_invalid_reflection_count"
+        components = dpi_module.calculate_dpi_components(context, inputs)
+        assert math.isnan(components.dpi)
+        assert components.reason_code == "missing_or_invalid_reflection_count"
 
 
 @pytest.mark.parametrize(
@@ -1994,61 +1995,27 @@ def test_the_missing_terms_are_reported_in_a_fixed_order(tmp_path: Path) -> None
     assert no_rfree.reason == "missing_or_invalid_rfree"
 
 
-def test_a_non_numeric_reflection_count_is_a_calculation_failure(
-    tmp_path: Path,
+@pytest.mark.parametrize("field", ["nrefcnt", "rffin"])
+def test_non_numeric_metadata_keeps_its_own_reason_code(
+    tmp_path: Path, field: str
 ) -> None:
-    """Garbage in ``data.json`` is caught and labelled, never raised.
+    """A present but non-numeric reflection count or R-free is a metadata defect.
 
-    ``float("many")`` raises inside the calculation, and the caller must still
-    get a row.
+    The documented ``invalid_dpi_metadata`` code separates it from the
+    catch-all ``dpi_calculation_failed`` and from a missing value.
     """
-    path = _atom_count_structure(tmp_path, "site.pdb", 16, cell_edge=100.0)
-    context = load_structure("test", path)
-    data_json = helpers.write_data_json(
-        tmp_path / "bad.json", nrefcnt="many", rffin=0.20
-    )
-    inputs = helpers.dpi_inputs(
-        pdb_path=path,
-        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=data_json,
+    values: dict[str, object] = {"nrefcnt": 4096, "rffin": 0.25, field: "n/a"}
+    run = _dpi_details(
+        tmp_path,
+        atom_count=16,
+        cell_edge=100.0,
+        nrefcnt=values["nrefcnt"],
+        rffin=values["rffin"],
     )
 
-    dpi, resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
-
-    assert math.isnan(dpi)
-    assert reason == "dpi_calculation_failed"
-    assert resolution == approx(1.50)  # metadata survives the failure
-
-
-def test_a_non_numeric_asu_volume_is_reported_as_invalid_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The ``invalid_dpi_metadata`` guard keeps its own reason code.
-
-    No real input reaches the branch, since ``nobs`` and ``rfree`` have been
-    through ``float()`` and ``asu_volume`` returns a float or NaN, so the stub
-    is the only way to separate it from the catch-all
-    ``dpi_calculation_failed``.
-    """
-    path = _atom_count_structure(tmp_path, "site.pdb", 16, cell_edge=100.0)
-    context = load_structure("test", path)
-
-    def non_numeric_asu_volume(_mtz_path: str, _pdb_path: str) -> str:
-        return "1000000"
-
-    monkeypatch.setattr(dpi_module, "asu_volume", non_numeric_asu_volume)
-    inputs = helpers.dpi_inputs(
-        pdb_path=path,
-        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
-        data_json=helpers.write_data_json(
-            tmp_path / "meta.json", nrefcnt=4096, rffin=0.25
-        ),
-    )
-
-    dpi, _resolution, reason = dpi_module.calculate_dpi_details(context, inputs)
-
-    assert math.isnan(dpi)
-    assert reason == "invalid_dpi_metadata"
+    assert math.isnan(run.dpi)
+    assert run.reason == "invalid_dpi_metadata"
+    assert run.resolution == approx(1.50)  # metadata survives the defect
 
 
 def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path: Path) -> None:

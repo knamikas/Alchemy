@@ -1082,11 +1082,6 @@ def _site_summary(
         "deposited_occupancy_weighted_atom_count": (
             round(deposited_ni, 6) if math.isfinite(deposited_ni) else NAN
         ),
-        "dpi_atom_count_multiplier": structure.dpi_atom_count_multiplier,
-        "strict_ncs_operation_count": structure.strict_ncs_operation_count,
-        "crystallographic_operation_count": (
-            structure.crystallographic_operation_count
-        ),
         "dpi_unavailable_reason": dpi_components.reason_code,
         "candidate_contact_count": primary["candidate"],
         "reference_covered_contact_count": primary["covered"],

@@ -46,6 +46,9 @@ confidence scores.
 - Legacy PDB remark temperatures stated in Celsius are converted to kelvin,
   and ambiguous unitless values are left blank instead of being recorded as
   kelvin.
+- A present but non-numeric reflection count or R-free in PDB-REDO metadata
+  now reports `invalid_dpi_metadata`, as documented, instead of the catch-all
+  `dpi_calculation_failed`. The DPI is unavailable either way.
 - The manifest `retryable` field is derived once from the entry status and
   reason codes instead of being set by each stage in turn.
 - A bond-enabled resume can complete entries previously run with `--no-bonds`

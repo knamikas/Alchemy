@@ -203,6 +203,11 @@ class AmbiguousStructure:
         self._context = context
         self._matches = tuple(matches)
 
+    def residues_for_source_author(
+        self, residue_name: str, chain_id: str, resnum: str
+    ) -> tuple[ResidueSelection, ...]:
+        return self._matches
+
     def residues_for_author(
         self, residue_name: str, chain_id: str, resnum: str
     ) -> tuple[ResidueSelection, ...]:
