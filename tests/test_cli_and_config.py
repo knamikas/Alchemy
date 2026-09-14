@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
+from helpers import resolved_ccp4_environment
 
 import ccp4_setup
 import cli
@@ -25,7 +26,6 @@ import scratch
 from driver import confidence as driver_confidence
 from driver import environment, errors
 from driver.runlog import RunLog
-from run_config import RunConfig
 
 
 def _option_help(option: str) -> str:
@@ -510,10 +510,6 @@ def test_ccp4_timeout_help_states_its_default() -> None:
     assert f"default: {density.CCP4_TOOL_TIMEOUT_S}" in help_text
 
 
-def _resolved_ccp4_environment(_args: RunConfig) -> dict[str, str]:
-    return dict(os.environ)
-
-
 class TestPositiveInt:
     """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
 
@@ -637,7 +633,7 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
         pytest.skip("root ignores directory permissions")
 
     monkeypatch.setattr(
-        environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+        environment, "resolve_ccp4_environment", resolved_ccp4_environment
     )
     parent = tmp_path / "readonly"
     parent.mkdir()
@@ -680,7 +676,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
     even a failing run must leave the directory clean.
     """
     monkeypatch.setattr(
-        environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+        environment, "resolve_ccp4_environment", resolved_ccp4_environment
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir()

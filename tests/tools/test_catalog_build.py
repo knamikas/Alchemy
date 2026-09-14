@@ -324,7 +324,7 @@ def test_a_component_with_two_irons_is_not_a_heme() -> None:
 def test_cluster_wins_when_a_component_could_be_read_as_both() -> None:
     """Verify cluster classification wins an ambiguous component.
 
-    ``_parent_type`` resolves the same collision during analysis, so both paths
+    ``parent_type`` resolves the same collision during analysis, so both paths
     must agree.
     """
     atoms, bonds = porphyrin()

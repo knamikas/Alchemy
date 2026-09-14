@@ -271,8 +271,8 @@ class TestCifToPdb:
             assert _occupancy_field(line).strip() == "1.00"
 
         context = structure_analysis.load_structure("test", out)
-        assert context.occupancy_validation_failed is False
-        assert context.defaulted_occupancy_atom_count == 2
+        assert context.occupancy.validation_failed is False
+        assert context.occupancy.defaulted_atom_count == 2
         assert "occupancy_dictionary_default_applied" in context.warning_codes
         assert structure_analysis.count_deposited_ni(context) == approx(2.0)
 
@@ -354,7 +354,7 @@ class TestCifToPdb:
         assert by_atom["C"].occupancy_valid is False
         assert by_atom["N"].occupancy == approx(1.0)
         assert by_atom["ZN"].occupancy == approx(0.75)
-        assert context.defaulted_occupancy_atom_count == 0
+        assert context.occupancy.defaulted_atom_count == 0
         assert "occupancy_dictionary_default_applied" not in context.warning_codes
 
     def test_more_than_62_chains_use_reversible_pdb_safe_residue_ids(
@@ -405,7 +405,7 @@ class TestCifToPdb:
         assert {metal.chain_index for metal in metals} == {0}
         assert [metal.output_chain_index for metal in metals] == list(range(63))
         assert {metal.output_residue_index for metal in metals} == {0}
-        assert context.raw_occupancy_mapping_failed is False
+        assert context.occupancy.raw_mapping_failed is False
         assert "legacy_pdb_identifiers_packed" in context.warning_codes
         # A source key can coincide with a different residue's packed key, so
         # the two namespaces are indexed separately.

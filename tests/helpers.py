@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from coordination.analysis import AtomKey, BondAnalysisMetadata
     from coordination.dpi import DpiInputs
     from coordination.schema import BondRow, CandidateRow
+    from coordination.site_summary import SiteSummary
+    from driver.dispatch import BatchTally
     from output_rows import MetalStatsRow
     from run_config import RunConfig
     from structure_analysis import AtomSite, StructureContext
@@ -163,6 +165,36 @@ def worker_config(**overrides: Any) -> WorkerConfig:
     }
     fields.update(overrides)
     return WorkerConfig(**fields)
+
+
+def resolved_ccp4_environment(_args: RunConfig) -> dict[str, str]:
+    """Stand in for ``environment.resolve_ccp4_environment`` with the live environment.
+
+    Lets a driver start-up test run without a CCP4 installation.
+    """
+    return dict(os.environ)
+
+
+def tally_of(*results: EntryResult) -> BatchTally:
+    """A ``BatchTally`` that has recorded ``results`` in order."""
+    from driver.dispatch import BatchTally
+
+    tally = BatchTally()
+    for result in results:
+        tally.record(result)
+    return tally
+
+
+def automatic_limits(
+    available: int | None, *, memory_limit_bytes: int | None = None
+) -> tuple[int, int | None]:
+    """Size the pool from one memory reading, as the driver's two steps do."""
+    from driver import resources
+
+    budget, _ = resources.scheduling_memory_budget(
+        available, memory_limit_bytes=memory_limit_bytes
+    )
+    return resources.worker_limits_for_budget(budget)
 
 
 def write_manifest(
@@ -301,11 +333,11 @@ class BondAnalysis(NamedTuple):
     context: StructureContext
     bond_rows: list[BondRow]
     candidate_rows: list[CandidateRow]
-    site_summaries: dict[AtomKey, dict[str, Any]]
+    site_summaries: dict[AtomKey, SiteSummary]
     metadata: BondAnalysisMetadata
 
     @property
-    def summary(self) -> dict[str, Any]:
+    def summary(self) -> SiteSummary:
         """The one site summary of a one-metal structure."""
         assert len(self.site_summaries) == 1, "expected a one-metal structure"
         return next(iter(self.site_summaries.values()))
@@ -1393,6 +1425,7 @@ __all__ = [
     "STANDARD_AMINO_ACIDS",
     "TESTS_DIR",
     "WATER_NAMES",
+    "automatic_limits",
     "ccp4_available",
     "ccp4_env",
     "dpi_inputs",
@@ -1402,8 +1435,10 @@ __all__ = [
     "edstats_text",
     "element_for_atom_name",
     "network_available",
+    "resolved_ccp4_environment",
     "simple_metal_site",
     "stats_rows_for_structure",
+    "tally_of",
     "which",
     "write_data_json",
     "write_edstats",

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from helpers import automatic_limits
 
 from driver import dispatch, resources
 
@@ -15,16 +16,6 @@ if TYPE_CHECKING:
     from worker_contracts import EntryResult
 
 GIB = 1024**3
-
-
-def _automatic_limits(
-    available: int | None, *, memory_limit_bytes: int | None = None
-) -> tuple[int, int | None]:
-    """Size the pool from one memory reading, as the driver's two steps do."""
-    budget, _ = resources.scheduling_memory_budget(
-        available, memory_limit_bytes=memory_limit_bytes
-    )
-    return resources.worker_limits_for_budget(budget)
 
 
 @pytest.mark.parametrize(
@@ -50,15 +41,15 @@ def test_cpu_and_memory_profiles(
     monkeypatch.setattr(resources, "available_cpu_count", lambda: logical)
     monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: physical)
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
-    cpu, memory = _automatic_limits(available_gib * GIB)
+    cpu, memory = automatic_limits(available_gib * GIB)
     assert memory is not None
     assert min(cpu, memory) == expected
 
 
 def test_explicit_limit_cannot_override_less_available_memory() -> None:
-    assert _automatic_limits(8 * GIB, memory_limit_bytes=100 * GIB)[1] == 4
-    assert _automatic_limits(None)[1] == 1
-    assert _automatic_limits(None, memory_limit_bytes=12 * GIB)[1] == 8
+    assert automatic_limits(8 * GIB, memory_limit_bytes=100 * GIB)[1] == 4
+    assert automatic_limits(None)[1] == 1
+    assert automatic_limits(None, memory_limit_bytes=12 * GIB)[1] == 8
 
 
 def test_topology_counts_sockets_and_partial_affinity(
@@ -122,7 +113,7 @@ def test_cpu_quota_respects_ancestors_and_fractional_allowances(
 
 
 def test_idle_workers_prevent_over_admission_but_allow_small_entries() -> None:
-    ledger = dispatch._AdmissionLedger(workers=8)
+    ledger = dispatch._AdmissionLedger(workers=8)  # pyright: ignore[reportPrivateUsage]
     ledger.admit(
         cast("AsyncResult[EntryResult]", None),
         resources.EntryMemoryEstimate("active", 2 * GIB, "test"),

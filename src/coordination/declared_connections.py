@@ -174,13 +174,13 @@ def declared_candidate_geometry(
     """Return the contact image for a resolved declared connection."""
     asu = connection.asu
     if asu == gemmi.Asu.Same or (
-        asu == gemmi.Asu.Any and not structure.symmetry_search_available
+        asu == gemmi.Asu.Any and not structure.symmetry.search_available
     ):
         return ContactImage.explicit(metal, neighbor)
 
-    if not structure.symmetry_search_available:
+    if not structure.symmetry.search_available:
         raise ValueError(
-            structure.symmetry_search_failure_reason or "symmetry metadata unavailable"
+            structure.symmetry.search_failure_reason or "symmetry metadata unavailable"
         )
     cell = structure.structure.cell
     nearest = cell.find_nearest_image(metal.pos, neighbor.pos, asu)

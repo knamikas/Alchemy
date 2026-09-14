@@ -6,19 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from helpers import automatic_limits
 
 import cli
 from driver import pool, resources, runlog
-
-
-def _automatic_limits(
-    available: int | None, *, memory_limit_bytes: int | None = None
-) -> tuple[int, int | None]:
-    """Size the pool from one memory reading, as the driver's two steps do."""
-    budget, _ = resources.scheduling_memory_budget(
-        available, memory_limit_bytes=memory_limit_bytes
-    )
-    return resources.worker_limits_for_budget(budget)
 
 
 def test_worker_limits_leave_headroom_and_respect_memory(
@@ -32,12 +23,12 @@ def test_worker_limits_leave_headroom_and_respect_memory(
     monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 16)
-    assert _automatic_limits(8 * resources.AUTO_WORKER_MEMORY_BYTES) == (14, 12)
+    assert automatic_limits(8 * resources.AUTO_WORKER_MEMORY_BYTES) == (14, 12)
 
     monkeypatch.setattr(resources, "available_physical_cpu_count", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 1)
-    assert _automatic_limits(0) == (1, 1)
+    assert automatic_limits(0) == (1, 1)
 
 
 def test_unknown_memory_limits_concurrency_to_one(
@@ -48,7 +39,7 @@ def test_unknown_memory_limits_concurrency_to_one(
     monkeypatch.setattr(resources, "available_cpu_quota", lambda: None)
     monkeypatch.setattr(resources, "available_cpu_count", lambda: 8)
 
-    cpu_limit, memory_limit = _automatic_limits(None)
+    cpu_limit, memory_limit = automatic_limits(None)
     assert cpu_limit == 6
     assert memory_limit == 1
 
@@ -63,7 +54,7 @@ def test_explicit_memory_controls_bound_automatic_worker_selection(
 
     # The explicit 20 GiB capacity is tighter than detection. At 80%, with the
     # 4 GiB minimum reserve, it supplies a 16 GiB budget: 16 resident workers.
-    assert _automatic_limits(100 * gib, memory_limit_bytes=20 * gib) == (62, 16)
+    assert automatic_limits(100 * gib, memory_limit_bytes=20 * gib) == (62, 16)
 
     # On a large allocation the requested utilization controls the reserve.
     assert resources.scheduling_memory_budget(100 * gib, utilization=0.9) == (
@@ -112,7 +103,7 @@ def test_available_memory_is_read_from_meminfo(
     _host_meminfo(tmp_path, monkeypatch, host_bytes=7 * budget)
 
     assert resources.available_memory_bytes() == 7 * budget
-    assert _automatic_limits(resources.available_memory_bytes())[1] == 10
+    assert automatic_limits(resources.available_memory_bytes())[1] == 10
 
 
 def test_an_unreadable_meminfo_uses_one_worker(
@@ -132,7 +123,7 @@ def test_an_unreadable_meminfo_uses_one_worker(
     )
 
     assert resources.available_memory_bytes() is None
-    assert _automatic_limits(resources.available_memory_bytes())[1] == 1
+    assert automatic_limits(resources.available_memory_bytes())[1] == 1
 
 
 def _cgroup_tree(

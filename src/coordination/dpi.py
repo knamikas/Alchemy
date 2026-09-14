@@ -158,7 +158,7 @@ def _invalid_term_reason(
     structure: StructureContext, nobs: float, rfree: float, va: float
 ) -> str:
     """Name the first formula term that rules out the DPI, in reporting order."""
-    if structure.occupancy_validation_failed:
+    if structure.occupancy.validation_failed:
         return ReasonCode.INVALID_OCCUPANCY
     if not math.isfinite(nobs) or nobs <= 0:
         return ReasonCode.MISSING_OR_INVALID_REFLECTION_COUNT

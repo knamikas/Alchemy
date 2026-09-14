@@ -63,20 +63,29 @@ frozen reference when applicable.
 
 [worker.py](../src/worker.py) owns the entry lifecycle and its temporary
 directory. The pool initializer installs `WorkerConfig` and logging once in
-each process; subsequent tasks call `process()` with a PDB ID.
+each process; subsequent tasks call `process()` with a PDB ID. Input
+resolution lives in [worker_inputs.py](../src/worker_inputs.py) and the
+analysis stages in [worker_stages.py](../src/worker_stages.py); `worker.py`
+folds their outcomes into the `EntryResult`.
 
-Input preparation uses [inputs.py](../src/inputs.py) to locate or retrieve
-files and read reflection limits and PDB-REDO metadata.
+[worker_inputs.py](../src/worker_inputs.py) uses [inputs.py](../src/inputs.py)
+to locate or retrieve files and read reflection limits and PDB-REDO metadata.
 [coordinate_conversion.py](../src/coordinate_conversion.py) handles coordinate
 conversion and first-model extraction, recording source-residue provenance in
 `REMARK 950` records whose format [pdb_remarks.py](../src/pdb_remarks.py) owns,
 writer and parser alike. Both EDSTATS and
 [structure_analysis.py](../src/structure_analysis.py) use that prepared model.
+`structure_analysis.py` is the facade for structure loading: the analyzed-model
+types live in [structure_model.py](../src/structure_model.py), the loading
+steps in [structure_loading.py](../src/structure_loading.py), raw PDB record
+fields in [pdb_records.py](../src/pdb_records.py), and conformer choice in
+[conformer_selection.py](../src/conformer_selection.py).
 The original coordinate path is retained for deposited connection records,
 crystallization context, and provenance.
 
 After loading the structure and extracting crystallization context, the worker
-checks whether analysis can proceed. Entries without selected metals return
+checks whether analysis can proceed (the early-exit, density, and bond stages
+are the functions of `worker_stages.py`). Entries without selected metals return
 early; unknown element symbols can make metal absence indeterminate. Entries
 above `MAX_ANALYZED_METAL_SITES` also return early with an explicit reason.
 These paths avoid map generation and contact analysis.
@@ -119,7 +128,14 @@ metadata. Its collaborators have distinct responsibilities:
 
 | Module | Responsibility |
 | --- | --- |
-| [structure_analysis.py](../src/structure_analysis.py) | Atom selection, model context, and neighbor searches including symmetry images. |
+| [structure_analysis.py](../src/structure_analysis.py) | Load the analyzed model; its types (`AtomSite`, `StructureContext`, `ContactImage`) and neighbor searches including symmetry images live in [structure_model.py](../src/structure_model.py). |
+| [policy.py](../src/coordination/policy.py) | Search radii and scoring thresholds shared by every coordination stage: the 4 Å search, the 0.75 Å first-sphere tolerance, the 0.8 Å special-position cutoff, and the |z| >= 6 outlier cutoff. |
+| [candidates.py](../src/coordination/candidates.py) | Discover donor-like atom images around a metal, collapse near-coincident special-position images, and merge proximity with declaration provenance. |
+| [eligibility.py](../src/coordination/eligibility.py) | Apply the donor rule and the literature-distance rule to decide which candidates are first-sphere contacts. |
+| [geometry.py](../src/coordination/geometry.py) | Score assigned contacts with the DPI-aware z-score and group contacts that share one donor-residue image. |
+| [site_environment.py](../src/coordination/site_environment.py) | Contact-independent per-metal context: entry model statistics, neighbouring metals, crystallographic site symmetry, and the metal's parent component type. |
+| [site_summary.py](../src/coordination/site_summary.py) | Define the typed `SiteSummary`, the analysis's share of the site columns, and assemble it from the assessed contacts of both search scopes. |
+| [density_zscores.py](../src/coordination/density_zscores.py) | Index one entry's EDSTATS rows by metal site or author identity to attach the RSZD triple to bond rows. |
 | [declared_connections.py](../src/coordination/declared_connections.py) | Resolve deposited `LINK` and mmCIF connection records into contact candidates. |
 | [donor_chemistry.py](../src/coordination/donor_chemistry.py) | Determine which donor chemistries permit inferred contacts. |
 | [dpi.py](../src/coordination/dpi.py) | Calculate coordinate-precision components used in geometry assessment. |
@@ -190,6 +206,8 @@ Recovery spans several layers:
 | [gemmi_typing.py](../src/gemmi_typing.py) | Typed views of Gemmi members its stub leaves untyped. |
 | [driver/progress.py](../src/driver/progress.py) | Batch progress reporting. |
 | [worker_memory.py](../src/worker_memory.py) | Release idle memory after an entry's analysis frame is gone. |
+| [worker_inputs.py](../src/worker_inputs.py) | Resolve one entry's inputs into the first-model PDB, structure, and provenance. |
+| [worker_stages.py](../src/worker_stages.py) | The per-entry early-exit, density, and bond stages and the outcomes they return. |
 | [_version.py](../src/_version.py) | Software version used in provenance. |
 
 The maintenance tools are separate entry points, never automatic pipeline

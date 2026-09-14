@@ -1579,7 +1579,7 @@ def test_declared_contact_through_an_ncs_image_is_labelled_strict_ncs(
     """
     path, _, _ = _structure_with_one_ncs_operation(tmp_path)
     context = load_structure("test", path)
-    assert context.strict_ncs_operation_ids == ("1",)
+    assert context.symmetry.strict_ncs_operation_ids == ("1",)
 
     metal = context.metal_atoms(["ZN"])[0]
     neighbor = next(atom for atom in context.contact_atoms if atom.atom_name == "O")

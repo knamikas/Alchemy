@@ -11,8 +11,9 @@ from typing import Any, ClassVar
 from typing_extensions import override
 
 from codes import CoordinationStatus
-from coordination.contact_record import ZSCORE_OUTLIER_CUTOFF, Candidate
+from coordination.contact_record import Candidate
 from coordination.donor_chemistry import neighbor_class
+from coordination.policy import ZSCORE_OUTLIER_CUTOFF
 from output_rows import CsvValue
 from structure_analysis import (
     NAN,
@@ -589,42 +590,42 @@ def stats_extra_values(
         "altloc_selection_fallback": (
             residue.altloc_selection_fallback if residue else ""
         ),
-        "symmetry_search_available": structure.symmetry_search_available,
-        "symmetry_search_failure_reason": structure.symmetry_search_failure_reason,
-        "strict_ncs_operation_count": structure.strict_ncs_operation_count,
+        "symmetry_search_available": structure.symmetry.search_available,
+        "symmetry_search_failure_reason": structure.symmetry.search_failure_reason,
+        "strict_ncs_operation_count": structure.symmetry.strict_ncs_operation_count,
         "crystallographic_operation_count": (
-            structure.crystallographic_operation_count
+            structure.symmetry.crystallographic_operation_count
         ),
-        "dpi_atom_count_multiplier": structure.dpi_atom_count_multiplier,
-        "occupancy_validation_failed": structure.occupancy_validation_failed,
-        "missing_occupancy_count": structure.missing_occupancy_count,
-        "invalid_occupancy_count": structure.invalid_occupancy_count,
-        "overfull_occupancy_site_count": structure.overfull_occupancy_site_count,
-        "overfull_occupancy_excess": structure.overfull_occupancy_excess,
-        "defaulted_occupancy_atom_count": structure.defaulted_occupancy_atom_count,
-        "zero_occupancy_atom_count": structure.zero_occupancy_atom_count,
-        "duplicate_atom_records_present": structure.duplicate_atom_records_present,
-        "duplicate_atom_record_count": structure.duplicate_atom_record_count,
+        "dpi_atom_count_multiplier": structure.symmetry.dpi_atom_count_multiplier,
+        "occupancy_validation_failed": structure.occupancy.validation_failed,
+        "missing_occupancy_count": structure.occupancy.missing_count,
+        "invalid_occupancy_count": structure.occupancy.invalid_count,
+        "overfull_occupancy_site_count": structure.occupancy.overfull_site_count,
+        "overfull_occupancy_excess": structure.occupancy.overfull_excess,
+        "defaulted_occupancy_atom_count": structure.occupancy.defaulted_atom_count,
+        "zero_occupancy_atom_count": structure.occupancy.zero_atom_count,
+        "duplicate_atom_records_present": structure.records.duplicate_records_present,
+        "duplicate_atom_record_count": structure.records.duplicate_record_count,
         "duplicate_atom_coordinate_conflict_count": (
-            structure.duplicate_coordinate_conflict_count
+            structure.records.coordinate_conflict_count
         ),
         "malformed_duplicate_atom_name_count": (
-            structure.malformed_duplicate_atom_name_count
+            structure.records.malformed_duplicate_atom_name_count
         ),
-        "raw_occupancy_mapping_failed": structure.raw_occupancy_mapping_failed,
+        "raw_occupancy_mapping_failed": structure.occupancy.raw_mapping_failed,
         "raw_occupancy_mapping_failure_reason": (
-            structure.raw_occupancy_mapping_failure_reason
+            structure.occupancy.raw_mapping_failure_reason
         ),
-        "unknown_element_atom_count": structure.unknown_element_atom_count,
-        "element_validation_warning": structure.element_validation_warning,
+        "unknown_element_atom_count": structure.records.unknown_element_atom_count,
+        "element_validation_warning": structure.records.element_validation_warning,
         "non_finite_coordinate_atom_count": (
-            structure.non_finite_coordinate_atom_count
+            structure.records.non_finite_coordinate_atom_count
         ),
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
     }
-    # Summary values win over anything computed above. The site summary holds
-    # ``coordination.analysis.SUMMARY_OWNED_STATS_EXTRA_COLUMNS`` (analysis.py
-    # raises if it drifts) plus the density-context columns the worker adds;
+    # Summary values win over anything computed above. The site summary is a
+    # ``coordination.site_summary.SiteSummary`` (its key set is checked against
+    # these columns at import) plus the density-context columns the worker adds;
     # neither overlaps the structure-level fields computed here, so the
     # ``update`` never replaces one of them. The ``setdefault`` blanks the
     # summary columns only for a density row that joined no metal site.

@@ -19,8 +19,8 @@ import pytest
 from helpers import StructureBuilder, approx, simple_metal_site
 
 import codes
-import coordination.analysis as ba
 import structure_analysis as sa
+from coordination import candidates, policy
 from coordination.contact_record import Candidate
 from metal_elements import METAL_ELEMENTS
 
@@ -327,7 +327,7 @@ def test_transformed_neighbor_is_the_image_not_the_deposited_atom(
         return
 
     assert sa.position_distance(transformed, deposited) > 1.0
-    assert deposited_distance > ba.CANDIDATE_SEARCH_RADIUS
+    assert deposited_distance > policy.CANDIDATE_SEARCH_RADIUS
     assert row["distance"] < deposited_distance
     assert row["symmetry_contact"] is True
 
@@ -451,12 +451,12 @@ def _raw_and_deduplicated(
     metals = context.metal_atoms(METAL_ELEMENTS, canonical=True)
     assert len(metals) == 1
     search = context.make_neighbor_search(
-        ba.CANDIDATE_SEARCH_RADIUS + ba.SEARCH_EPSILON,
+        policy.CANDIDATE_SEARCH_RADIUS + policy.SEARCH_EPSILON,
         include_symmetry=True,
         positive_occupancy_only=True,
     )
-    raw = ba.collect_proximal_candidates(context, search, metals[0], True)
-    return raw, ba.deduplicate_special_position_contacts(raw)
+    raw = candidates.collect_proximal_candidates(context, search, metals[0], True)
+    return raw, candidates.deduplicate_special_position_contacts(raw)
 
 
 def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(
@@ -470,7 +470,7 @@ def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(
     """
     path = _write_structure(_axis_site(0.0), tmp_path / "axis.pdb")
     context = sa.load_structure("test", path)
-    assert context.crystallographic_operation_count == 2
+    assert context.symmetry.crystallographic_operation_count == 2
 
     raw, collapsed = _raw_and_deduplicated(context)
 
@@ -539,7 +539,9 @@ def test_images_collapse_only_within_the_special_position_cutoff(
     assert len(raw) == 2
     measured = sa.position_distance(raw[0].image.position, raw[1].image.position)
     assert measured == approx(separation, abs=1e-6)
-    assert (measured <= ba.SPECIAL_POSITION_DEDUP_CUTOFF) is (expected_contacts == 1)
+    assert (measured <= policy.SPECIAL_POSITION_DEDUP_CUTOFF) is (
+        expected_contacts == 1
+    )
 
     assert len(collapsed) == expected_contacts
     analysis = _analyze(builder, tmp_path, f"sep_full_{offset}")
@@ -582,14 +584,14 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse() -> None:
     boundary = candidate(0.8, symmetry=True)
     assert sa.position_distance(origin.image.position, boundary.image.position) == 0.8
 
-    collapsed = ba.deduplicate_special_position_contacts([origin, boundary])
+    collapsed = candidates.deduplicate_special_position_contacts([origin, boundary])
     assert len(collapsed) == 1
     assert collapsed[0].candidate_sources == {
         codes.CandidateSource.PROXIMITY_4A,
         codes.CandidateSource.STRUCT_CONN,
     }
 
-    outside = ba.deduplicate_special_position_contacts(
+    outside = candidates.deduplicate_special_position_contacts(
         [candidate(0.0, symmetry=False), candidate(0.800001, symmetry=True)]
     )
     assert len(outside) == 2
@@ -602,9 +604,12 @@ def test_special_position_cutoff_is_not_the_duplicate_record_tolerance() -> None
     while 0.001 A decides that two deposited records with the same identity
     disagree about where the atom is.
     """
-    assert ba.SPECIAL_POSITION_DEDUP_CUTOFF == 0.8
+    assert policy.SPECIAL_POSITION_DEDUP_CUTOFF == 0.8
     assert sa.DUPLICATE_ATOM_POSITION_TOLERANCE == 0.001
-    assert ba.SPECIAL_POSITION_DEDUP_CUTOFF > sa.DUPLICATE_ATOM_POSITION_TOLERANCE * 100
+    assert (
+        policy.SPECIAL_POSITION_DEDUP_CUTOFF
+        > sa.DUPLICATE_ATOM_POSITION_TOLERANCE * 100
+    )
 
 
 def test_collapsed_images_are_not_reported_as_duplicate_records(
@@ -619,9 +624,9 @@ def test_collapsed_images_are_not_reported_as_duplicate_records(
     """
     axis_path = _write_structure(_axis_site(0.025), tmp_path / "axis_dup.pdb")
     axis = sa.load_structure("test", axis_path)
-    assert axis.duplicate_atom_records_present is False
-    assert axis.duplicate_atom_record_count == 0
-    assert axis.duplicate_coordinate_conflict_count == 0
+    assert axis.records.duplicate_records_present is False
+    assert axis.records.duplicate_record_count == 0
+    assert axis.records.coordinate_conflict_count == 0
 
     builder = StructureBuilder(cell=SMALL_CELL, spacegroup="P 1 2 1")
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 10.0, 0.0))
@@ -638,8 +643,8 @@ def test_collapsed_images_are_not_reported_as_duplicate_records(
         "test", _write_structure(builder, tmp_path / "conflict.pdb")
     )
 
-    assert conflict.duplicate_atom_record_count == 1
-    assert conflict.duplicate_coordinate_conflict_count == 1
+    assert conflict.records.duplicate_record_count == 1
+    assert conflict.records.coordinate_conflict_count == 1
     assert "duplicate_atom_coordinate_conflict" in conflict.warning_codes
 
 
@@ -666,7 +671,7 @@ def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
 
     # A zero cutoff still merges exactly coincident images, isolating the
     # near-coincident case the 0.8 A value exists for.
-    monkeypatch.setattr(ba, "SPECIAL_POSITION_DEDUP_CUTOFF", 0.0)
+    monkeypatch.setattr(candidates, "SPECIAL_POSITION_DEDUP_CUTOFF", 0.0)
     uncollapsed = _analyze(builder, tmp_path, "chelate_raw")
 
     assert len(uncollapsed.bond_rows) == 4
@@ -690,7 +695,9 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path: Path) ->
     context = sa.load_structure("test", path)
     raw, collapsed = _raw_and_deduplicated(context)
 
-    reversed_result = ba.deduplicate_special_position_contacts(list(reversed(raw)))
+    reversed_result = candidates.deduplicate_special_position_contacts(
+        list(reversed(raw))
+    )
 
     assert len(collapsed) == len(reversed_result) == 1
     assert (
@@ -797,7 +804,7 @@ def test_strict_ncs_site_does_not_claim_a_crystallographic_dependence(
     analysis = _analyze(builder, tmp_path, "ncs_only", ncs=[("1", NCS_SHIFT)])
     summary = analysis.summary
 
-    assert analysis.context.strict_ncs_operation_count == 1
+    assert analysis.context.symmetry.strict_ncs_operation_count == 1
     assert summary["explicit_contact_count"] == 0
     assert summary["image_inclusive_contact_count"] == 1
     assert summary["strict_ncs_contact_count"] == 1
@@ -860,7 +867,7 @@ def test_generated_columns_are_blank_without_symmetry_metadata(
     analysis = _analyze(builder, tmp_path, "nocell")
     summary = analysis.summary
 
-    assert analysis.context.symmetry_search_available is False
+    assert analysis.context.symmetry.search_available is False
     assert summary["explicit_contact_count"] == 2
     assert math.isnan(summary["image_inclusive_contact_count"])
     assert math.isnan(summary["symmetry_contact_count"])

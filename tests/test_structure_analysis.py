@@ -1,8 +1,7 @@
 """Behavioural tests for ``src/structure_analysis.py``.
 
-Everything is built in memory with the shared helpers or from explicitly
-constructed :class:`structure_analysis.AtomSite` records; nothing touches the
-network, CCP4 or the PDB-REDO mirror.
+Every structure is built in memory with the shared helpers and loaded through
+``load_structure``; nothing touches the network, CCP4 or the PDB-REDO mirror.
 """
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ import math
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import gemmi
 import helpers
@@ -51,42 +49,6 @@ def _rewrite_atom_field(
     return destination
 
 
-def _site(
-    atom_name: str,
-    *,
-    altloc: str = "",
-    occupancy: float = 1.0,
-    source_order: int = 0,
-    element: str = "C",
-    pos: Sequence[float] = (0.0, 0.0, 0.0),
-    **overrides: Any,
-) -> sa.AtomSite:
-    """One atom of ``HIS A 10`` built directly; the builder cannot express bad occupancy.
-
-    ``residue_index``, ``occupancy_valid`` and ``occupancy_status`` pass through
-    as overrides.
-    """
-    return helpers.atom_site(
-        element,
-        atom_name=atom_name,
-        residue_name="HIS",
-        occupancy=occupancy,
-        altloc=altloc,
-        pos=pos,
-        source_order=source_order,
-        residue_number=10,
-        resnum="10",
-        **overrides,
-    )
-
-
-def _altloc_option_map(selection: sa.ResidueSelection) -> dict[str, str]:
-    """Parse ``ResidueSelection.altloc_options`` into ``{label: text}``."""
-    if not selection.altloc_options:
-        return {}
-    return dict(part.split(":", 1) for part in selection.altloc_options.split("|"))
-
-
 def _contact(selection: sa.ResidueSelection, atom_name: str) -> sa.AtomSite:
     matches = [atom for atom in selection.contact_atoms if atom.atom_name == atom_name]
     assert len(matches) == 1, (
@@ -115,420 +77,6 @@ def _write_pdb_with_ncs(
     path = str(path)
     helpers.write_pdb(structure, path)
     return path
-
-
-@pytest.mark.parametrize(
-    "field, expected",
-    [
-        ("   1", 1),
-        ("  10", 10),
-        ("9999", 9999),  # last decimal value representable in four columns
-        ("A000", 10000),  # first hybrid-36 value: 9999 + 1
-        ("A001", 10001),
-        ("A00A", 10010),
-        ("ZZZZ", 1223055),  # 36**4 - 1 - 10*36**3 + 10**4
-        ("abcd", 24701),
-    ],
-)
-def test_decode_pdb_resseq_matches_gemmi(
-    field: str, expected: int, tmp_path: Path
-) -> None:
-    """Verify decoded residue numbers agree with Gemmi.
-
-    EDSTATS rows and raw PDB atoms join on this number, so any divergence from
-    Gemmi's ``Residue.seqid.num`` mismatches residues.
-    """
-    assert sa.decode_pdb_resseq(field) == expected
-
-    line = (
-        f"HETATM    1 ZN    ZN B{field}       1.000   2.000   3.000"
-        "  1.00 20.00          ZN  \n"
-    )
-    path = tmp_path / "resseq.pdb"
-    path.write_text(line + "END\n", encoding="utf-8")
-    structure = gemmi.read_structure(str(path))
-    numbers = [residue.seqid.num for chain in structure[0] for residue in chain]
-    assert numbers == [expected]
-
-
-def test_decode_pdb_resseq_hybrid36_starts_immediately_after_9999() -> None:
-    assert sa.decode_pdb_resseq("9999") == 9999
-    assert sa.decode_pdb_resseq("A000") == sa.decode_pdb_resseq("9999") + 1
-
-
-def test_decode_pdb_resseq_is_case_insensitive() -> None:
-    """Gemmi treats resSeq letter case equivalently, so Alchemy must too."""
-    for upper, lower in (("A000", "a000"), ("ABCD", "abcd"), ("ZZZZ", "zzzz")):
-        assert sa.decode_pdb_resseq(upper) == sa.decode_pdb_resseq(lower)
-
-
-@pytest.mark.parametrize("field", ["  -1", "-999", " -12"])
-def test_decode_pdb_resseq_accepts_negative_decimal(field: str) -> None:
-    """Negative author numbering (expression tags) stays decimal, not base-36."""
-    assert sa.decode_pdb_resseq(field) == int(field.strip())
-
-
-@pytest.mark.parametrize(
-    "field",
-    [
-        "12345",  # wider than the four-column PDB field
-        "",  # nothing to decode
-        "   ",
-        "A00-",  # not a base-36 digit
-        "1 2",  # embedded space
-        "1.5",
-        "$$$$",
-    ],
-)
-def test_decode_pdb_resseq_rejects_undecodable_fields(field: str) -> None:
-    with pytest.raises(ValueError):
-        sa.decode_pdb_resseq(field)
-
-
-@pytest.mark.parametrize(
-    "value, expected",
-    [
-        ("10", "10"),
-        (" 10 ", "10"),  # surrounding whitespace is not significant
-        ("10A", "10A"),  # compact insertion-code form
-        ("10:A", "10A"),  # EDSTATS colon-separated form
-        ("9999A", "9999A"),
-        ("-5", "-5"),
-        ("A000", "10000"),  # hybrid-36 number, no insertion code
-        ("A00A", "10010"),  # trailing letter of a hybrid-36 number is a digit
-        ("0", "0"),
-    ],
-)
-def test_canonical_pdb_residue_id_normalizes_every_input_form(
-    value: str, expected: str
-) -> None:
-    """All accepted spellings must collapse to ``<decimal><icode>``."""
-    assert sa.canonical_pdb_residue_id(value) == expected
-
-
-@pytest.mark.parametrize("value", ["10:AB", "9999AB", "10:  A"])
-def test_canonical_pdb_residue_id_rejects_multi_character_insertion(
-    value: str,
-) -> None:
-    """A PDB insertion code is a single column; anything wider is malformed."""
-    with pytest.raises(ValueError):
-        sa.canonical_pdb_residue_id(value)
-
-
-def test_canonical_pdb_residue_id_equals_loaded_residue_resnum(
-    tmp_path: Path,
-) -> None:
-    """Verify insertion-code identities agree across statistics and coordinates.
-
-    The statistics table carries ``canonical_pdb_residue_id("10:A")`` and the
-    coordinate side carries ``ResidueSelection.resnum``; a mismatch loses the
-    residue during the sigma join.
-    """
-    builder = StructureBuilder()
-    builder.add_metal("ZN", 1, chain="B")
-    builder.add_amino_acid("HIS", 10, chain="A", icode="A")
-    context = sa.load_structure("test", builder.write_pdb(tmp_path / "ic.pdb"))
-
-    his = _residue(context, "HIS")
-    assert his.resnum == "10A"
-    assert sa.canonical_pdb_residue_id("10:A") == his.resnum
-    assert sa.canonical_pdb_residue_id("10A") == his.resnum
-
-
-@pytest.mark.parametrize("token", list(sa.MISSING_VALUE_TOKENS))
-def test_blank_if_missing_blanks_every_missing_token(token: str) -> None:
-    """Blank PDB columns, Gemmi's NUL altloc and mmCIF ``.``/``?`` all mean none."""
-    assert sa.blank_if_missing(token) == ""
-
-
-def test_blank_if_missing_covers_the_documented_token_set() -> None:
-    """The missing-value vocabulary is shared with main.py's mmCIF conversion."""
-    assert set(sa.MISSING_VALUE_TOKENS) == {"", " ", "\x00", ".", "?"}
-
-
-@pytest.mark.parametrize("value", ["A", "B", "0", "1", "-", "..", "  ", "?!"])
-def test_blank_if_missing_preserves_real_values(value: str) -> None:
-    """EDSTATS uses ``"0"`` as an ordered-water chain group, so it is a value."""
-    assert sa.blank_if_missing(value) == value
-
-
-@pytest.mark.parametrize(
-    "value, expected",
-    [
-        (1.0, True),
-        (0.0, True),  # zero occupancy is a valid deposited value
-        (-0.0, True),
-        (0.5, True),
-        ("0.5", True),  # deposited fields arrive as text
-        ("1", True),
-        (1.0000001, False),  # just above the physical maximum
-        (-1e-9, False),  # just below the physical minimum
-        (-0.5, False),
-        (2.0, False),
-        (float("nan"), False),
-        (float("inf"), False),
-        (float("-inf"), False),
-        (None, False),
-        (b"0.5", False),
-        ("", False),
-        ("abc", False),
-        ([0.5], False),
-    ],
-)
-def test_valid_occupancy_accepts_only_finite_values_in_unit_range(
-    value: object, expected: bool
-) -> None:
-    assert sa.valid_occupancy(value) is expected
-
-
-@pytest.mark.parametrize(
-    "field, element, status",
-    [
-        ("ZN", "ZN", "valid"),
-        (" ZN ", "ZN", "valid"),
-        ("zn", "ZN", "valid"),  # deposited case is normalized
-        ("C", "C", "valid"),
-        ("D", "D", "valid"),  # deuterium is a real element for Ni purposes
-        ("", "", "missing"),
-        ("  ", "", "missing"),
-        ("X", "", "invalid"),  # Gemmi's unknown-element placeholder
-        ("XX", "", "invalid"),
-        ("Q", "", "invalid"),
-    ],
-)
-def test_parse_pdb_element_reports_deposited_provenance(
-    field: str, element: str, status: str
-) -> None:
-    """Blank and unrecognized element fields are flagged, never guessed."""
-    assert sa.parse_pdb_element(field) == (element, status)
-
-
-@pytest.mark.parametrize(
-    "candidate, current, expected, why",
-    [
-        (
-            _site("O", occupancy=0.1, source_order=5),
-            _site("O", occupancy=float("nan"), source_order=0),
-            True,
-            "a valid occupancy always beats an invalid one",
-        ),
-        (
-            _site("O", occupancy=float("nan"), source_order=0),
-            _site("O", occupancy=0.1, source_order=5),
-            False,
-            "an invalid occupancy never beats a valid one",
-        ),
-        (
-            _site("O", occupancy=0.9, source_order=5),
-            _site("O", occupancy=0.4, source_order=0),
-            True,
-            "higher valid occupancy wins regardless of file order",
-        ),
-        (
-            _site("O", occupancy=0.4, source_order=0),
-            _site("O", occupancy=0.9, source_order=5),
-            False,
-            "lower valid occupancy loses regardless of file order",
-        ),
-        (
-            _site("O", occupancy=0.5, source_order=1),
-            _site("O", occupancy=0.5, source_order=3),
-            True,
-            "an exact tie keeps the earlier source record",
-        ),
-        (
-            _site("O", occupancy=0.5, source_order=3),
-            _site("O", occupancy=0.5, source_order=1),
-            False,
-            "an exact tie does not displace the earlier source record",
-        ),
-        (
-            _site("O", occupancy=2.0, source_order=1),
-            _site("O", occupancy=5.0, source_order=3),
-            True,
-            "two invalid records fall back to source order, not magnitude",
-        ),
-    ],
-)
-def test_site_is_better_ranks_validity_then_occupancy_then_order(
-    candidate: sa.AtomSite, current: sa.AtomSite, expected: bool, why: str
-) -> None:
-    assert sa.site_is_better(candidate, current) is expected, why
-
-
-def test_select_residue_without_alternates_shares_every_blank_atom() -> None:
-    atoms = [
-        _site("N", occupancy=1.0, source_order=0),
-        _site("CA", occupancy=0.8, source_order=1),
-        _site("C", occupancy=0.6, source_order=2),
-    ]
-    selection = sa.select_residue(atoms)
-
-    assert selection.selected_altloc == ""
-    assert selection.alternative_conformers_present is False
-    assert selection.altloc_selection_fallback is False
-    assert [atom.atom_name for atom in selection.contact_atoms] == ["N", "CA", "C"]
-    assert selection.selected_conformer_mean_occupancy == approx((1.0 + 0.8 + 0.6) / 3)
-
-
-def test_select_residue_shares_blank_atoms_with_the_selected_conformer() -> None:
-    atoms = [
-        _site("N", occupancy=1.0, source_order=0),
-        _site("CA", occupancy=1.0, source_order=1),
-        _site("NE2", altloc="A", occupancy=0.3, source_order=2),
-        _site("NE2", altloc="B", occupancy=0.7, source_order=3),
-    ]
-    selection = sa.select_residue(atoms)
-
-    assert selection.selected_altloc == "B"
-    assert [(atom.atom_name, atom.altloc) for atom in selection.contact_atoms] == [
-        ("N", ""),
-        ("CA", ""),
-        ("NE2", "B"),
-    ]
-
-
-def test_select_residue_uses_the_conformer_mean_not_the_single_best_atom() -> None:
-    """Selection compares mean occupancy per conformer, per the README.
-
-    Conformer A holds the highest single atom (0.9) but the lower mean (0.5);
-    per-atom maxima would build a chimeric residue.
-    """
-    atoms = [
-        _site("CB", altloc="A", occupancy=0.9, source_order=0),
-        _site("CG", altloc="A", occupancy=0.1, source_order=1),
-        _site("CB", altloc="B", occupancy=0.6, source_order=2),
-        _site("CG", altloc="B", occupancy=0.6, source_order=3),
-    ]
-    selection = sa.select_residue(atoms)
-
-    assert selection.selected_altloc == "B"
-    assert selection.selected_conformer_mean_occupancy == approx(0.6)
-    assert {atom.altloc for atom in selection.contact_atoms} == {"B"}
-
-
-@pytest.mark.parametrize("order", ["ab", "ba"])
-def test_select_residue_breaks_occupancy_ties_by_altloc_label(order: str) -> None:
-    a_atoms = [
-        _site("CB", altloc="A", occupancy=0.5, source_order=0),
-        _site("CG", altloc="A", occupancy=0.5, source_order=1),
-    ]
-    b_atoms = [
-        _site("CB", altloc="B", occupancy=0.5, source_order=2),
-        _site("CG", altloc="B", occupancy=0.5, source_order=3),
-    ]
-    atoms = a_atoms + b_atoms if order == "ab" else b_atoms + a_atoms
-
-    selection = sa.select_residue(atoms)
-
-    assert selection.selected_altloc == "A"
-    assert {atom.altloc for atom in selection.contact_atoms} == {"A"}
-
-
-def test_select_residue_averages_only_valid_occupancies() -> None:
-    """Verify conformer selection averages only valid occupancies.
-
-    Conformer A is 0.4 plus an out-of-range 5.0: averaging raw values gives 2.7
-    and selects A, while the valid subset gives 0.4 and selects B.
-    """
-    atoms = [
-        _site("CB", altloc="A", occupancy=0.4, source_order=0),
-        _site("CG", altloc="A", occupancy=5.0, source_order=1),
-        _site("CB", altloc="B", occupancy=0.6, source_order=2),
-        _site("CG", altloc="B", occupancy=0.6, source_order=3),
-    ]
-    selection = sa.select_residue(atoms)
-
-    assert selection.selected_altloc == "B"
-    assert selection.selected_conformer_mean_occupancy == approx(0.6)
-    assert float(_altloc_option_map(selection)["A"]) == approx(0.4)
-
-
-def test_select_residue_records_every_available_alternative() -> None:
-    atoms = [
-        _site("CB", altloc="A", occupancy=0.25, source_order=0),
-        _site("CB", altloc="B", occupancy=0.35, source_order=1),
-        _site("CB", altloc="C", occupancy=0.40, source_order=2),
-    ]
-    selection = sa.select_residue(atoms)
-
-    options = _altloc_option_map(selection)
-    assert set(options) == {"A", "B", "C"}
-    assert [float(options[label]) for label in ("A", "B", "C")] == approx(
-        [0.25, 0.35, 0.40]
-    )
-    assert selection.selected_altloc == "C"
-
-
-def test_select_residue_keeps_one_coherent_conformer_across_all_atoms() -> None:
-    """Mixing conformers would hand the contact search an invented residue."""
-    names = ("CB", "CG", "ND1", "CD2", "CE1", "NE2")
-    atoms: list[sa.AtomSite] = []
-    for index, name in enumerate(names):
-        atoms.append(_site(name, altloc="A", occupancy=0.45, source_order=2 * index))
-        atoms.append(
-            _site(name, altloc="B", occupancy=0.55, source_order=2 * index + 1)
-        )
-    selection = sa.select_residue(atoms)
-
-    assert selection.selected_altloc == "B"
-    assert {atom.altloc for atom in selection.contact_atoms} == {"B"}
-    assert [atom.atom_name for atom in selection.contact_atoms] == list(names)
-    assert selection.chemical_atom_site_count == len(names)
-    assert len(selection.source_atoms) == 2 * len(names)
-
-
-def test_select_residue_falls_back_when_no_conformer_has_valid_occupancy() -> None:
-    atoms = [
-        _site("CB", altloc="B", occupancy=2.5, source_order=0),
-        _site("CB", altloc="A", occupancy=float("nan"), source_order=1),
-    ]
-    selection = sa.select_residue(atoms)
-
-    assert selection.altloc_selection_fallback is True
-    assert selection.selected_altloc == "A"  # lowest label, not file order
-    assert selection.selected_conformer_mean_occupancy is None
-    assert _altloc_option_map(selection) == {"A": "NA", "B": "NA"}
-    assert {atom.altloc for atom in selection.contact_atoms} == {"A"}
-
-
-def test_select_residue_prefers_a_selected_conformer_over_a_blank_duplicate() -> None:
-    atoms = [
-        _site("NE2", altloc="", occupancy=1.0, source_order=0),
-        _site("NE2", altloc="A", occupancy=0.4, source_order=1),
-        _site("NE2", altloc="B", occupancy=0.6, source_order=2),
-    ]
-    selection = sa.select_residue(atoms)
-
-    contact = _contact(selection, "NE2")
-    assert contact.altloc == "B"
-    assert selection.selected_over_blank_duplicate_count == 1
-
-
-def test_select_residue_resolves_repeated_atom_names_by_occupancy() -> None:
-    atoms = [
-        _site("NE2", altloc="A", occupancy=0.4, source_order=0, pos=(1.0, 0.0, 0.0)),
-        _site("NE2", altloc="A", occupancy=0.9, source_order=1, pos=(2.0, 0.0, 0.0)),
-    ]
-    selection = sa.select_residue(atoms)
-
-    contact = _contact(selection, "NE2")
-    assert contact.occupancy == approx(0.9)
-    assert contact.x == approx(2.0)
-    assert selection.malformed_duplicate_atom_name_count == 1
-
-
-def test_select_residue_orders_contact_atoms_by_source_order() -> None:
-    """Deposited order keeps the downstream atom indices stable."""
-    atoms = [
-        _site("C", occupancy=1.0, source_order=7),
-        _site("N", occupancy=1.0, source_order=2),
-        _site("CA", occupancy=1.0, source_order=5),
-    ]
-    selection = sa.select_residue(atoms)
-
-    assert [atom.atom_name for atom in selection.contact_atoms] == ["N", "CA", "C"]
-    assert [atom.source_order for atom in selection.source_atoms] == [2, 5, 7]
 
 
 def test_load_structure_selects_conformer_and_keeps_both_for_counting(
@@ -586,11 +134,11 @@ def test_rounded_alternate_occupancy_is_reported_but_keeps_the_dpi(
         "test", builder.write_pdb(tmp_path / "rounded_conformers.pdb")
     )
 
-    assert context.overfull_occupancy_site_count == 1
-    assert context.overfull_occupancy_excess == approx(0.01)
+    assert context.occupancy.overfull_site_count == 1
+    assert context.occupancy.overfull_excess == approx(0.01)
     # The measurement is still reported, so the deposition oddity stays visible.
     assert "overfull_alternate_occupancy" in context.warning_codes
-    assert context.occupancy_validation_failed is False
+    assert context.occupancy.validation_failed is False
     assert math.isfinite(sa.count_deposited_ni(context))
     assert math.isfinite(sa.count_ni(context))
 
@@ -612,9 +160,9 @@ def test_overfull_excess_accumulated_across_sites_still_voids_the_dpi(
         "test", builder.write_pdb(tmp_path / "many_overfull.pdb")
     )
 
-    assert context.overfull_occupancy_site_count == len(names)
-    assert context.overfull_occupancy_excess == approx(0.01 * len(names))
-    assert context.occupancy_validation_failed is True
+    assert context.occupancy.overfull_site_count == len(names)
+    assert context.occupancy.overfull_excess == approx(0.01 * len(names))
+    assert context.occupancy.validation_failed is True
     assert math.isnan(sa.count_ni(context))
 
 
@@ -642,9 +190,9 @@ def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path: Path) -> N
 
     assert [atom.occupancy for atom in alternates] == approx([0.8, 0.8])
     assert all(atom.occupancy_valid for atom in alternates)
-    assert context.invalid_occupancy_count == 0
-    assert context.overfull_occupancy_site_count == 1
-    assert context.occupancy_validation_failed is True
+    assert context.occupancy.invalid_count == 0
+    assert context.occupancy.overfull_site_count == 1
+    assert context.occupancy.validation_failed is True
     assert "overfull_alternate_occupancy" in context.warning_codes
     assert math.isnan(sa.count_deposited_ni(context))
     assert math.isnan(sa.count_ni(context))
@@ -662,7 +210,7 @@ def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path: Path) -> N
     assert selection.altloc_selection_fallback is True
     assert selection.selected_altloc == "A"
     assert "altloc_selection_fallback" in context.warning_codes
-    assert context.occupancy_validation_failed is True
+    assert context.occupancy.validation_failed is True
     assert math.isnan(sa.count_deposited_ni(context))
 
 
@@ -773,9 +321,9 @@ def test_invalid_occupancy_makes_dpi_unavailable_without_repair(
 
     assert metal.occupancy_status == status
     assert metal.occupancy_valid is False
-    assert context.occupancy_validation_failed is True
-    assert context.missing_occupancy_count == missing
-    assert context.invalid_occupancy_count == invalid
+    assert context.occupancy.validation_failed is True
+    assert context.occupancy.missing_count == missing
+    assert context.occupancy.invalid_count == invalid
     assert math.isnan(sa.count_deposited_ni(context))
     assert math.isnan(sa.count_ni(context))
 
@@ -798,8 +346,8 @@ def test_zero_occupancy_is_valid_for_ni(tmp_path: Path) -> None:
     assert metal.occupancy == approx(0.0)
     assert metal.occupancy_valid is True
     assert metal.occupancy_status == "valid"
-    assert context.occupancy_validation_failed is False
-    assert context.zero_occupancy_atom_count == 1
+    assert context.occupancy.validation_failed is False
+    assert context.occupancy.zero_atom_count == 1
     assert "zero_occupancy_atoms" in context.warning_codes
     assert context.metal_atoms(["ZN"]) == []
     assert context.metal_atoms(["ZN"], include_zero_occupancy=True) == [metal]
@@ -821,8 +369,8 @@ def test_missing_occupancy_is_not_counted_as_a_measured_zero(tmp_path: Path) -> 
 
     context = sa.load_structure("test", path)
 
-    assert context.missing_occupancy_count == 1
-    assert context.zero_occupancy_atom_count == 0
+    assert context.occupancy.missing_count == 1
+    assert context.occupancy.zero_atom_count == 0
     assert "zero_occupancy_atoms" not in context.warning_codes
     assert math.isnan(sa.count_deposited_ni(context))
 
@@ -844,10 +392,10 @@ def test_unknown_element_makes_the_atom_count_indeterminate(tmp_path: Path) -> N
 
     assert metal.element == ""
     assert metal.element_known is False
-    assert context.unknown_element_atom_count == 1
-    assert context.element_validation_warning == "unknown_element_atoms"
+    assert context.records.unknown_element_atom_count == 1
+    assert context.records.element_validation_warning == "unknown_element_atoms"
     assert "unknown_elements" in context.warning_codes
-    assert context.occupancy_validation_failed is False
+    assert context.occupancy.validation_failed is False
     assert math.isnan(sa.count_deposited_ni(context))
     assert math.isnan(sa.count_ni(context))
 
@@ -912,21 +460,23 @@ def test_count_ni_multiplies_by_non_given_strict_ncs_copies(tmp_path: Path) -> N
 
     context = sa.load_structure("test", path)
 
-    assert context.strict_ncs_operation_ids == ("1", "3")
-    assert context.strict_ncs_operation_count == 2
-    assert context.dpi_atom_count_multiplier == 3
+    assert context.symmetry.strict_ncs_operation_ids == ("1", "3")
+    assert context.symmetry.strict_ncs_operation_count == 2
+    assert context.symmetry.dpi_atom_count_multiplier == 3
     deposited = sa.count_deposited_ni(context)
     assert deposited == approx(2.0)
     assert sa.count_ni(context) == approx(6.0)
-    assert sa.count_ni(context) == approx(deposited * context.dpi_atom_count_multiplier)
+    assert sa.count_ni(context) == approx(
+        deposited * context.symmetry.dpi_atom_count_multiplier
+    )
 
 
 def test_count_ni_equals_deposited_without_strict_ncs(tmp_path: Path) -> None:
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
     context = sa.load_structure("test", builder.write_pdb(tmp_path / "plain.pdb"))
 
-    assert context.strict_ncs_operation_ids == ()
-    assert context.dpi_atom_count_multiplier == 1
+    assert context.symmetry.strict_ncs_operation_ids == ()
+    assert context.symmetry.dpi_atom_count_multiplier == 1
     assert sa.count_ni(context) == approx(sa.count_deposited_ni(context))
 
 
@@ -945,7 +495,7 @@ def test_count_ni_stays_unavailable_when_the_deposited_count_is(
 
     context = sa.load_structure("test", path)
 
-    assert context.dpi_atom_count_multiplier == 2
+    assert context.symmetry.dpi_atom_count_multiplier == 2
     assert math.isnan(sa.count_deposited_ni(context))
     assert math.isnan(sa.count_ni(context))
 
@@ -969,9 +519,9 @@ def test_duplicate_atom_records_collapse_to_the_higher_occupancy(
     metals = [atom for atom in context.source_atoms if atom.element == "ZN"]
     assert len(metals) == 1
     assert metals[0].occupancy == approx(0.9)
-    assert context.duplicate_atom_records_present is True
-    assert context.duplicate_atom_record_count == 1
-    assert context.duplicate_coordinate_conflict_count == 0
+    assert context.records.duplicate_records_present is True
+    assert context.records.duplicate_record_count == 1
+    assert context.records.coordinate_conflict_count == 0
     assert "duplicate_atom_records" in context.warning_codes
     assert "duplicate_atom_coordinate_conflict" not in context.warning_codes
     assert sa.count_deposited_ni(context) == approx(0.9 + 1.0)
@@ -993,146 +543,9 @@ def test_duplicate_atom_records_at_different_positions_are_flagged(
     )
     context = sa.load_structure("test", builder.write_pdb(tmp_path / "conflict.pdb"))
 
-    assert context.duplicate_atom_record_count == 1
-    assert context.duplicate_coordinate_conflict_count == 1
+    assert context.records.duplicate_record_count == 1
+    assert context.records.coordinate_conflict_count == 1
     assert "duplicate_atom_coordinate_conflict" in context.warning_codes
-
-
-@pytest.mark.parametrize(
-    "a, b, expected",
-    [
-        ((0.0, 0.0, 0.0), (3.0, 4.0, 12.0), 13.0),
-        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 0.0),
-        ((1.0, 2.0, 3.0), (1.0, 2.0, 3.0), 0.0),
-        ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0), math.sqrt(12.0)),
-        ((0.0, 0.0, 0.0), (2.03, 0.0, 0.0), 2.03),
-        ((5.0, 0.0, 0.0), (0.0, 0.0, 0.0), 5.0),
-    ],
-)
-def test_position_distance_is_euclidean(
-    a: tuple[float, float, float],
-    b: tuple[float, float, float],
-    expected: float,
-) -> None:
-    assert sa.position_distance(a, b) == approx(expected, abs=1e-12)
-    assert sa.position_distance(b, a) == approx(expected, abs=1e-12)
-
-
-def test_position_distance_matches_gemmi_position_distance() -> None:
-    first = (1.5, -2.25, 7.75)
-    second = (-3.0, 4.5, 0.25)
-    expected = gemmi.Position(*first).dist(gemmi.Position(*second))
-    assert sa.position_distance(first, second) == approx(expected, abs=1e-12)
-
-
-@pytest.fixture
-def ncs_context(tmp_path: Path) -> sa.StructureContext:
-    """A loaded context with four symmetry operations and two strict-NCS ops."""
-    builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
-    path = _write_pdb_with_ncs(
-        builder, tmp_path / "prov.pdb", [("1", False), ("2", False)]
-    )
-    context = sa.load_structure("test", path)
-    assert context.crystallographic_operation_count == 4
-    assert context.strict_ncs_operation_ids == ("1", "2")
-    return context
-
-
-@pytest.mark.parametrize(
-    "image_index, translation, expected",
-    [
-        (0, (0, 0, 0), (False, False, "", "explicit")),
-        (1, (0, 0, 0), (True, False, "", "crystallographic")),
-        (3, (0, 0, 0), (True, False, "", "crystallographic")),
-        (0, (1, 0, 0), (True, False, "", "crystallographic")),
-        (0, (0, 0, -1), (True, False, "", "crystallographic")),
-        (4, (0, 0, 0), (False, True, "1", "strict_ncs")),
-        (5, (0, 0, 0), (True, True, "1", "strict_ncs_and_crystallographic")),
-        (4, (1, 0, 0), (True, True, "1", "strict_ncs_and_crystallographic")),
-        (8, (0, 0, 0), (False, True, "2", "strict_ncs")),
-        (11, (0, 0, 0), (True, True, "2", "strict_ncs_and_crystallographic")),
-    ],
-)
-def test_image_provenance_classifies_symmetry_and_ncs(
-    ncs_context: sa.StructureContext,
-    image_index: int,
-    translation: tuple[int, int, int],
-    expected: tuple[bool, bool, str, str],
-) -> None:
-    """Verify Gemmi image indices preserve symmetry provenance.
-
-    ``setup_cell_images()`` lists the identity, remaining space-group
-    operations, and then one full block per strict-NCS transform. A nonzero
-    cell translation is crystallographic even at the identity.
-    """
-    assert ncs_context.image_provenance(image_index, translation) == expected
-
-
-def test_image_provenance_explicit_only_for_the_identity_image(
-    ncs_context: sa.StructureContext,
-) -> None:
-    crystallographic, strict_ncs, ncs_id, scope = ncs_context.image_provenance(
-        0, (0, 0, 0)
-    )
-    assert (crystallographic, strict_ncs, ncs_id, scope) == (
-        False,
-        False,
-        "",
-        "explicit",
-    )
-
-
-def test_image_provenance_rejects_a_negative_image_index(
-    ncs_context: sa.StructureContext,
-) -> None:
-    with pytest.raises(ValueError, match="negative"):
-        ncs_context.image_provenance(-1, (0, 0, 0))
-
-
-def test_image_provenance_rejects_an_image_beyond_the_ncs_blocks(
-    ncs_context: sa.StructureContext,
-) -> None:
-    with pytest.raises(ValueError, match="strict-NCS"):
-        ncs_context.image_provenance(12, (0, 0, 0))
-
-
-def test_image_provenance_requires_symmetry_metadata(tmp_path: Path) -> None:
-    builder = simple_metal_site("ZN", [("HOH", "O", 2.09)], cell=None)
-    context = sa.load_structure("test", builder.write_pdb(tmp_path / "nocell.pdb"))
-
-    assert context.symmetry_search_available is False
-    assert context.symmetry_search_failure_reason == "missing_or_invalid_unit_cell"
-    assert context.crystallographic_operation_count == 0
-    with pytest.raises(ValueError, match="operation count"):
-        context.image_provenance(0, (0, 0, 0))
-
-
-def test_image_provenance_without_ncs_never_reports_a_strict_ncs_scope(
-    tmp_path: Path,
-) -> None:
-    builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
-    context = sa.load_structure("test", builder.write_pdb(tmp_path / "noncs.pdb"))
-
-    scopes = {
-        context.image_provenance(index, (0, 0, 0))[3]
-        for index in range(context.crystallographic_operation_count)
-    }
-    assert scopes == {"explicit", "crystallographic"}
-    with pytest.raises(ValueError, match="strict-NCS"):
-        context.image_provenance(context.crystallographic_operation_count, (0, 0, 0))
-
-
-def test_image_provenance_ncs_id_tracks_the_operation_block(tmp_path: Path) -> None:
-    """The reported NCS identifier is the deposited MTRIX id, not an index."""
-    builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
-    path = _write_pdb_with_ncs(
-        builder, tmp_path / "ids.pdb", [("7", False), ("9", False)]
-    )
-    context = sa.load_structure("test", path)
-
-    operations = context.crystallographic_operation_count
-    assert context.image_provenance(operations, (0, 0, 0))[2] == "7"
-    assert context.image_provenance(2 * operations, (0, 0, 0))[2] == "9"
 
 
 def test_load_structure_reads_mmcif_without_raw_pdb_matching(tmp_path: Path) -> None:
@@ -1141,9 +554,9 @@ def test_load_structure_reads_mmcif_without_raw_pdb_matching(tmp_path: Path) -> 
     context = sa.load_structure("test", builder.write_cif(tmp_path / "site.cif"))
 
     assert context.analysis_coordinate_format == "mmcif"
-    assert context.raw_occupancy_mapping_failed is False
-    assert context.raw_occupancy_mapping_failure_reason == ""
-    assert context.occupancy_validation_failed is False
+    assert context.occupancy.raw_mapping_failed is False
+    assert context.occupancy.raw_mapping_failure_reason == ""
+    assert context.occupancy.validation_failed is False
     assert all(atom.occupancy_status == "valid" for atom in context.source_atoms)
     assert sa.count_deposited_ni(context) == approx(float(len(context.source_atoms)))
 
@@ -1157,7 +570,7 @@ def test_mmcif_occupancy_out_of_range_still_disables_dpi(tmp_path: Path) -> None
     metal = [atom for atom in context.source_atoms if atom.element == "ZN"][0]
     assert metal.occupancy == approx(1.5)
     assert metal.occupancy_valid is False
-    assert context.occupancy_validation_failed is True
+    assert context.occupancy.validation_failed is True
     assert math.isnan(sa.count_deposited_ni(context))
 
 
@@ -1258,7 +671,7 @@ def test_neighbor_search_skips_zero_occupancy_atoms(tmp_path: Path) -> None:
     context = sa.load_structure("test", path)
 
     assert _oxygen_neighbors_of_the_metal(context) == []
-    assert context.zero_occupancy_atom_count == 1
+    assert context.occupancy.zero_atom_count == 1
     assert sa.count_deposited_ni(context) == approx(1.0)
 
 
@@ -1291,7 +704,7 @@ def test_neighbor_search_excludes_non_finite_coordinates(
     metal = context.metal_atoms(["ZN"])[0]
 
     assert invalid.coordinates_valid is False
-    assert context.non_finite_coordinate_atom_count == 1
+    assert context.records.non_finite_coordinate_atom_count == 1
     assert "non_finite_coordinates" in context.warning_codes
 
     search = context.make_neighbor_search(5.0, include_symmetry=False)
@@ -1309,8 +722,8 @@ def test_neighbor_search_requires_symmetry_metadata_when_asked(tmp_path: Path) -
     builder = simple_metal_site("ZN", [("HOH", "O", 2.09)], spacegroup=None)
     context = sa.load_structure("test", builder.write_cif(tmp_path / "nosg.cif"))
 
-    assert context.symmetry_search_available is False
-    assert context.symmetry_search_failure_reason == ("missing_or_invalid_space_group")
+    assert context.symmetry.search_available is False
+    assert context.symmetry.search_failure_reason == ("missing_or_invalid_space_group")
     with pytest.raises(ValueError, match="space_group"):
         context.make_neighbor_search(4.0, include_symmetry=True)
     assert context.make_neighbor_search(4.0, include_symmetry=False) is not None

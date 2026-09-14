@@ -7,22 +7,14 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from helpers import entry_result
+from helpers import entry_result, tally_of
 
 import cli
-import worker_contracts
 from codes import EntryStatus
 from driver import confidence as driver_confidence
-from driver import dispatch, runlog, writers
 from driver import layout as driver_layout
 from driver import report as driver_report
-
-
-def _tally_of(*results: worker_contracts.EntryResult) -> dispatch.BatchTally:
-    tally = dispatch.BatchTally()
-    for result in results:
-        tally.record(result)
-    return tally
+from driver import runlog, writers
 
 
 def _empty_writer_counts() -> writers.OutputWriters:
@@ -47,7 +39,7 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
     args = cli.parse_args(["--output-dir", str(tmp_path)])
     layout = driver_layout.OutputLayout(str(tmp_path))
     plan = driver_confidence.DatabasePlan(layout)
-    tally = _tally_of(
+    tally = tally_of(
         entry_result(
             status=EntryStatus.ERROR, reason_codes=["deterministic_processing_error"]
         )
@@ -79,7 +71,7 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
     args = cli.parse_args(["--output-dir", str(tmp_path)])
     layout = driver_layout.OutputLayout(str(tmp_path))
     plan = driver_confidence.DatabasePlan(layout)
-    tally = _tally_of(
+    tally = tally_of(
         entry_result(
             status=EntryStatus.ERROR, reason_codes=["unexpected_processing_error"]
         )

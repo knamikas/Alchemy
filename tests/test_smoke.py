@@ -29,17 +29,17 @@ def test_src_modules_import() -> None:
     import structure_analysis
     import worker
     from coordination import (
-        analysis,
         contact_record,
         declared_connections,
         donor_chemistry,
         dpi,
+        policy,
         schema,
     )
     from driver import pool, progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
-    assert analysis.CANDIDATE_SEARCH_RADIUS == 4.0
+    assert policy.CANDIDATE_SEARCH_RADIUS == 4.0
     assert callable(structure_analysis.load_structure)
     assert callable(main.main), "src/main.py must keep delegating to the CLI"
     assert main.main is cli.main, "the entry point must delegate, not reimplement"

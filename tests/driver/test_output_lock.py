@@ -6,15 +6,11 @@ import os
 from pathlib import Path
 
 import pytest
+from helpers import resolved_ccp4_environment
 
 import main
 import scratch
 from driver import environment, output_lock
-from run_config import RunConfig
-
-
-def _resolved_ccp4_environment(_args: RunConfig) -> dict[str, str]:
-    return dict(os.environ)
 
 
 class TestOutputDirectoryLock:
@@ -144,7 +140,7 @@ class TestOutputDirectoryLock:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         monkeypatch.setattr(
-            environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+            environment, "resolve_ccp4_environment", resolved_ccp4_environment
         )
         output_dir = tmp_path / "output"
         output_dir.mkdir()

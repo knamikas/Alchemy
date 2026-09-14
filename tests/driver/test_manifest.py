@@ -13,6 +13,7 @@ from helpers import entry_result, run_config, worker_config
 
 import analysis_config
 import worker
+import worker_inputs
 from driver import confidence as driver_confidence
 from driver import environment, pool, resume
 from driver.writers import (
@@ -131,11 +132,11 @@ class TestInitialResult:
         manual_path = "/research/inputs/custom.cif"
 
         assert (
-            worker.source_coordinate_provenance_path(CFG, "109m", mirror_path)
+            worker_inputs.source_coordinate_provenance_path(CFG, "109m", mirror_path)
             == "09/109m/109m_final.cif"
         )
         assert (
-            worker.source_coordinate_provenance_path(
+            worker_inputs.source_coordinate_provenance_path(
                 worker_config(manual_inputs={"cif_file": manual_path}),
                 "109m",
                 manual_path,

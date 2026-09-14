@@ -66,7 +66,12 @@ def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
     also_column_names = {code.value for code in ReasonCode} & set(STATS_COLUMNS)
     known = {code.value for code in ReasonCode} - also_column_names
     offenders: list[str] = []
-    for module in ("worker.py", "coordination/analysis.py", "coordination/dpi.py"):
+    for module in (
+        "worker.py",
+        "coordination/analysis.py",
+        "coordination/site_summary.py",
+        "coordination/dpi.py",
+    ):
         source = _read(os.path.join(SRC_DIR, module))
         for literal in re.findall(r'"([a-z][a-z0-9_]{6,})"', source):
             if literal in known:
@@ -504,11 +509,11 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
 
 def test_documented_thresholds_match_the_constants() -> None:
     """Verify documented thresholds match the constants used by the code."""
-    from coordination.analysis import (
+    from coordination.policy import (
         CANDIDATE_SEARCH_RADIUS,
         FIRST_SPHERE_TOLERANCE,
+        ZSCORE_OUTLIER_CUTOFF,
     )
-    from coordination.contact_record import ZSCORE_OUTLIER_CUTOFF
     from density_analysis import (
         CCP4_TOOL_TIMEOUT_S,
         MODEL_ENVELOPE_BORDER_ANGSTROM,

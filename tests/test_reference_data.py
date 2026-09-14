@@ -15,12 +15,15 @@ from typing import IO, Any, Protocol, cast
 import pytest
 from helpers import SRC_DIR, STANDARD_AMINO_ACIDS, approx
 
-import coordination.analysis as ba
 import reference_data
+from coordination import policy
 from metal_elements import METAL_ELEMENTS
 
 _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
     "coordination.analysis",
+    "coordination.eligibility",
+    "coordination.geometry",
+    "coordination.site_environment",
     "edstats_statistics",
     "reference_data",
 )
@@ -209,12 +212,12 @@ def test_first_sphere_targets_is_the_longest_distance_per_metal_and_donor() -> N
 
 def test_building_the_targets_leaves_nothing_in_the_module_namespace() -> None:
     """A loop variable left bound at module scope reads as a module constant."""
-    from coordination import analysis as coordination_analysis
+    from coordination import eligibility as coordination_eligibility
 
     leaked = [
         name
         for name in ("donor", "metal_element", "target", "key")
-        if hasattr(reference_data, name) or hasattr(coordination_analysis, name)
+        if hasattr(reference_data, name) or hasattr(coordination_eligibility, name)
     ]
     assert not leaked, f"loop variables left in a module namespace: {leaked}"
 
@@ -499,7 +502,7 @@ def test_the_unambiguous_ids_still_cover_the_metals_that_matter() -> None:
 # ``load_literature`` so the comparison against it is not a tautology.
 _REFERENCE_TABLE = os.path.join(SRC_DIR, "data", "metal_distances_info.txt")
 
-# ``CA`` here is the backbone-carbonyl pseudo residue ``_bonding_key`` maps
+# ``CA`` here is the backbone-carbonyl pseudo residue ``bonding_key`` maps
 # every main-chain ``O`` onto, not calcium.
 _REFERENCE_RESIDUE_TOKENS = STANDARD_AMINO_ACIDS | {"HOH", "CA"}
 
@@ -664,7 +667,9 @@ def test_reference_table_values_are_physically_plausible() -> None:
         # A spread that large relative to the mean would make |Z| meaningless.
         assert stdev < mu / 4.0, where
         # The 4 A discovery radius must never clip a first sphere.
-        assert mu + ba.FIRST_SPHERE_TOLERANCE <= ba.CANDIDATE_SEARCH_RADIUS, where
+        assert mu + policy.FIRST_SPHERE_TOLERANCE <= policy.CANDIDATE_SEARCH_RADIUS, (
+            where
+        )
 
     parsed = {
         (residue, atom, metal): (mu, stdev)

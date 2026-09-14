@@ -20,6 +20,8 @@ import scratch
 import structure_analysis
 import worker
 import worker_contracts
+import worker_inputs
+import worker_stages
 from codes import DensityMapScope, EntryStatus
 from driver import confidence as driver_confidence
 from driver.writers import manifest_row
@@ -69,11 +71,11 @@ def _manual_entry(
     mtz_path = tmp_path / "entry.mtz"
     mtz_path.write_bytes(b"unused: the readers below are stubbed")
 
-    monkeypatch.setattr(worker, "read_resolution", _read_resolution_stub)
+    monkeypatch.setattr(worker_inputs, "read_resolution", _read_resolution_stub)
     monkeypatch.setattr(
-        worker, "read_map_column_resolution", _read_map_column_resolution_stub
+        worker_inputs, "read_map_column_resolution", _read_map_column_resolution_stub
     )
-    monkeypatch.setattr(worker, "run_density_analysis", density_stage)
+    monkeypatch.setattr(worker_stages, "run_density_analysis", density_stage)
 
     cfg = worker_config(
         input_root=str(tmp_path),
@@ -209,7 +211,7 @@ def test_manifest_twin_flag_uses_the_density_routing_metadata(
         return PdbRedoMetadata(is_twin=True, version="8.04", date="2024-02-08")
 
     monkeypatch.setattr(
-        worker,
+        worker_inputs,
         "read_pdb_redo_metadata",
         twin_metadata,
     )
@@ -460,7 +462,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 ) -> None:
     """A crashed geometry stage is not legitimate density-only evidence."""
     result = entry_result()
-    inputs = worker.EntryInputs(
+    inputs = worker_inputs.EntryInputs(
         work_dir="/nonexistent",
         mtz="/nonexistent/entry.mtz",
         pdb="/nonexistent/entry.pdb",
@@ -479,9 +481,9 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
     def fail_bond_analysis(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("geometry unavailable")
 
-    monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
+    monkeypatch.setattr(worker_stages, "run_bond_analysis", fail_bond_analysis)
 
-    outcome = worker.run_bond_stage(
+    outcome = worker_stages.run_bond_stage(
         "109m", worker_config(bonds=True), inputs, structure, [], [], []
     )
     analysis = outcome.analysis
@@ -658,7 +660,9 @@ class TestDensityResultReachesTheResult:
         result: density.DensityResult,
         **cfg_overrides: Any,
     ) -> worker_contracts.EntryResult:
-        monkeypatch.setattr(worker, "extract_metal_statistics", _empty_metal_statistics)
+        monkeypatch.setattr(
+            worker_stages, "extract_metal_statistics", _empty_metal_statistics
+        )
 
         def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
             return result
@@ -742,7 +746,9 @@ def test_a_loaded_structure_fills_in_the_model_provenance(
     failed before ``load_structure`` cannot claim a model count; a successful
     load must fill them in.
     """
-    monkeypatch.setattr(worker, "extract_metal_statistics", _empty_metal_statistics)
+    monkeypatch.setattr(
+        worker_stages, "extract_metal_statistics", _empty_metal_statistics
+    )
 
     def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
         return TestDensityResultReachesTheResult.density_result()
@@ -837,7 +843,7 @@ class TestCcp4TimeoutOutcome:
             f"the retained log is missing at {kept}; the path named in the "
             "timeout message must outlive the scratch directory"
         )
-        assert worker.TIMEOUT_LOG_DIRNAME in kept
+        assert worker_stages.TIMEOUT_LOG_DIRNAME in kept
         with open(kept, encoding="utf-8") as handle:
             assert "before the stall" in handle.read()
 

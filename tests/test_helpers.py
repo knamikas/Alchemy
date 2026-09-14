@@ -44,10 +44,10 @@ def test_builder_output_loads_cleanly(tmp_path: Path, suffix: str) -> None:
         "mmcif" if suffix == ".cif" else "pdb"
     )
     assert context.warning_codes == ()
-    assert not context.occupancy_validation_failed
-    assert context.unknown_element_atom_count == 0
-    assert context.symmetry_search_available
-    assert context.crystallographic_operation_count == 4
+    assert not context.occupancy.validation_failed
+    assert context.records.unknown_element_atom_count == 0
+    assert context.symmetry.search_available
+    assert context.symmetry.crystallographic_operation_count == 4
 
     metals = context.metal_atoms(["ZN"])
     assert [atom.element for atom in metals] == ["ZN"]
@@ -266,8 +266,8 @@ def test_builder_can_omit_symmetry_metadata(tmp_path: Path) -> None:
     path = builder.write_pdb(tmp_path / "nocell.pdb")
 
     context = load_structure("test", path)
-    assert not context.symmetry_search_available
-    assert context.symmetry_search_failure_reason == "missing_or_invalid_unit_cell"
+    assert not context.symmetry.search_available
+    assert context.symmetry.search_failure_reason == "missing_or_invalid_unit_cell"
 
 
 def test_edstats_row_matches_the_documented_schema() -> None:

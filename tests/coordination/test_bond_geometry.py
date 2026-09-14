@@ -1,4 +1,4 @@
-"""Coordination chemistry and geometry in ``src/coordination/analysis.py``."""
+"""Coordination chemistry and geometry in ``src/coordination/``."""
 
 from __future__ import annotations
 
@@ -15,14 +15,16 @@ from helpers import AtomSpec, StructureBuilder, approx
 
 import codes
 import coordinate_conversion
-import coordination.analysis as ba
 import coordination.dpi as dpi_module
 import coordination.schema as coordination_schema
 import reference_data
 import worker
 from codes import EligibilityReason, EligibilityStatus, EntryStatus, ReferenceKind
-from coordination import contact_record, donor_chemistry
+from coordination import donor_chemistry, policy
 from coordination.contact_record import Candidate
+from coordination.eligibility import first_sphere_rule
+from coordination.geometry import annotate_contacts, zscore
+from coordination.policy import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import (
     AtomSite,
@@ -212,7 +214,7 @@ def test_special_position_detection_excludes_strict_ncs(tmp_path: Path) -> None:
     analysis = helpers.analyze_bonds(path)
     context = analysis.context
     metal = context.metal_atoms(METAL_ELEMENTS)[0]
-    assert context.strict_ncs_operation_count == 1
+    assert context.symmetry.strict_ncs_operation_count == 1
 
     summary = analysis.site_summaries[metal.source_key]
     assert summary["metal_special_position"] is False
@@ -425,7 +427,7 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(
 ) -> None:
     """Main-chain ``O`` donates for all 20 residues and uses the generic reference.
 
-    ``_bonding_key`` maps every backbone carbonyl onto the table's ``CA`` rows,
+    ``bonding_key`` maps every backbone carbonyl onto the table's ``CA`` rows,
     not onto the residue's own side-chain row.
     """
     path = _probe_structure(
@@ -782,13 +784,13 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     )
     mu = reference_data.literature_distances()[expected_key][0]
 
-    target, cutoff, kind, key = ba.first_sphere_rule(metal_site, neighbor)
+    target, cutoff, kind, key = first_sphere_rule(metal_site, neighbor)
 
     assert kind is ReferenceKind.EXACT
     assert key == ":".join(expected_key)
     assert target == approx(mu)
     assert cutoff == approx(mu + 0.75)
-    assert ba.FIRST_SPHERE_TOLERANCE == 0.75
+    assert FIRST_SPHERE_TOLERANCE == 0.75
 
 
 def test_missing_exact_reference_falls_back_to_the_largest_same_element_target() -> (
@@ -808,7 +810,7 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
         if metal == "ZN" and atom == "O"
     )
 
-    target, cutoff, kind, key = ba.first_sphere_rule(metal_site, neighbor)
+    target, cutoff, kind, key = first_sphere_rule(metal_site, neighbor)
 
     assert kind is ReferenceKind.ELEMENT_FALLBACK
     assert key == "*:O:ZN"
@@ -929,7 +931,7 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path: Path) -> None:
     path = builder.write_pdb(tmp_path / "second_shell.pdb")
     _, rows, candidates, summaries, _ = _analyze(path)
 
-    assert ba.CANDIDATE_SEARCH_RADIUS == 4.0
+    assert CANDIDATE_SEARCH_RADIUS == 4.0
     distances = sorted(round(c["candidate_distance"], 3) for c in candidates)
     assert distances == [2.09, 3.5]
     assert [round(row["distance"], 3) for row in rows] == [2.09]
@@ -956,7 +958,7 @@ def test_overfull_occupancy_far_from_the_metal_is_not_charged_to_the_site(
     context, _rows, _candidates, summaries, _meta = _analyze(path)
     summary = next(iter(summaries.values()))
 
-    assert context.overfull_occupancy_site_count > 0
+    assert context.occupancy.overfull_site_count > 0
     assert "overfull_alternate_occupancy" in context.warning_codes
     assert summary["metal_overfull_occupancy"] is False
 
@@ -984,13 +986,13 @@ def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path: Path) 
 
 def test_zscore_matches_the_documented_formula() -> None:
     """Z = (d - mu) / sqrt(DPI^2 + sigma^2), without decision-time rounding."""
-    assert ba.zscore(2.30, 2.09, 0.05, 0.12) == approx(
+    assert zscore(2.30, 2.09, 0.05, 0.12) == approx(
         (2.30 - 2.09) / math.sqrt(0.12**2 + 0.05**2)
     )
     # 0.12 / 0.05 / 0.13 is a right triangle, so this one is exact by hand.
-    assert ba.zscore(2.87, 2.09, 0.05, 0.12) == approx(6.0)
-    assert ba.zscore(1.31, 2.09, 0.05, 0.12) == approx(-6.0)
-    assert ba.zscore(2.09, 2.09, 0.05, 0.12) == approx(0.0)
+    assert zscore(2.87, 2.09, 0.05, 0.12) == approx(6.0)
+    assert zscore(1.31, 2.09, 0.05, 0.12) == approx(-6.0)
+    assert zscore(2.09, 2.09, 0.05, 0.12) == approx(0.0)
 
 
 def test_zscore_denominator_carries_exactly_one_dpi() -> None:
@@ -1004,10 +1006,10 @@ def test_zscore_denominator_carries_exactly_one_dpi() -> None:
     single = (dist - mu) / math.sqrt(dpi**2 + sigma**2)
     two_atom = (dist - mu) / math.sqrt(2 * dpi**2 + sigma**2)
 
-    assert ba.zscore(dist, mu, sigma, dpi) == approx(single)
+    assert zscore(dist, mu, sigma, dpi) == approx(single)
     assert single == approx(6.0)
-    assert two_atom < contact_record.ZSCORE_OUTLIER_CUTOFF < single
-    assert ba.zscore(dist, mu, sigma, dpi) != approx(two_atom)
+    assert two_atom < policy.ZSCORE_OUTLIER_CUTOFF < single
+    assert zscore(dist, mu, sigma, dpi) != approx(two_atom)
 
 
 @pytest.mark.parametrize(
@@ -1022,14 +1024,14 @@ def test_zscore_propagates_missing_inputs_as_nan(
     mu: float, stdev: float, dpi: float
 ) -> None:
     """Any missing input yields NaN rather than a fabricated number."""
-    assert math.isnan(ba.zscore(2.30, mu, stdev, dpi))
+    assert math.isnan(zscore(2.30, mu, stdev, dpi))
 
 
 def test_zscore_is_nan_when_the_denominator_vanishes() -> None:
     """A zero spread and a zero DPI give no scale, so no z-score."""
-    assert math.isnan(ba.zscore(2.30, 2.09, 0.0, 0.0))
+    assert math.isnan(zscore(2.30, 2.09, 0.0, 0.0))
     # A non-zero spread alone is still a usable scale.
-    assert ba.zscore(2.14, 2.09, 0.05, 0.0) == approx(1.0)
+    assert zscore(2.14, 2.09, 0.05, 0.0) == approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -1056,9 +1058,9 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     water = next(residue for residue in context.residues if residue.is_water)
     contact = _contact(water.contact_atoms[0], distance=distance)
 
-    ba.annotate_contacts([contact], "ZN", 0.12)
+    annotate_contacts([contact], "ZN", 0.12)
 
-    assert contact_record.ZSCORE_OUTLIER_CUTOFF == 6.0
+    assert policy.ZSCORE_OUTLIER_CUTOFF == 6.0
     geometry = contact.geometry()
     assert geometry.literature_distance == approx(2.09)
     assert geometry.literature_stdev == approx(0.05)
@@ -1090,7 +1092,7 @@ def test_outlier_verdict_uses_unrounded_distance_and_zscore(
     distance = 2.09 + raw_zscore * denominator
     contact = _contact(water.contact_atoms[0], distance=distance)
 
-    ba.annotate_contacts([contact], "ZN", 0.12)
+    annotate_contacts([contact], "ZN", 0.12)
 
     geometry = contact.geometry()
     assert geometry.distance == approx(round(distance, 3))
@@ -1119,7 +1121,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
 
     expected = round((row["distance"] - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2), 4)
     assert row["zscore"] == approx(expected)
-    assert expected > contact_record.ZSCORE_OUTLIER_CUTOFF
+    assert expected > policy.ZSCORE_OUTLIER_CUTOFF
     assert row["geometry_outlier"] is True
     assert row["geometry_consistent"] is False
     assert row["zscore_outlier_cutoff"] == approx(6.0)
@@ -1699,7 +1701,7 @@ def test_missing_reflection_count_is_named(tmp_path: Path, nrefcnt: object) -> N
 
     assert math.isnan(run.dpi)
     assert run.reason == "missing_or_invalid_reflection_count"
-    assert run.context.occupancy_validation_failed is False
+    assert run.context.occupancy.validation_failed is False
     assert count_ni(run.context) == approx(16.0)
 
 
@@ -1773,7 +1775,7 @@ def test_invalid_atom_count_is_named(tmp_path: Path) -> None:
 
     assert math.isnan(run.dpi)
     assert run.reason == "invalid_dpi_atom_count"
-    assert run.context.occupancy_validation_failed is False
+    assert run.context.occupancy.validation_failed is False
     assert count_ni(run.context) == approx(0.0)
 
 

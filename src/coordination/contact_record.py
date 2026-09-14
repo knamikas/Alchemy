@@ -48,16 +48,12 @@ class EligibilityResult:
     assignment_reference: str
 
 
-# |z| at or above this is a geometry outlier. It is published with every bond
-# and site row so older result files retain the threshold they were scored with.
-ZSCORE_OUTLIER_CUTOFF = 6.0
-
-
 @dataclass(frozen=True, slots=True)
 class GeometryResult:
     """Record a candidate contact's reference-based geometry assessment.
 
-    ``outlier`` compares ``zscore`` against ``ZSCORE_OUTLIER_CUTOFF``.
+    ``outlier`` compares ``zscore`` against
+    ``coordination.policy.ZSCORE_OUTLIER_CUTOFF``.
     """
 
     distance: float
