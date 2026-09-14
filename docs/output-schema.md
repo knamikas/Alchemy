@@ -3,7 +3,7 @@
 This document defines the row grain, identifiers, serialization, and columns
 of Alchemy's CSV outputs. The ordered machine-enforced schemas live in
 `src/driver/writers.py`, `src/coordination/schema.py`,
-`src/metal_identification.py`, `src/confidence_score.py`, and
+`src/metal_identification.py`, `src/confidence_score/`, and
 `src/crystallization_conditions.py`.
 
 ## Shared conventions

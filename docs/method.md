@@ -377,8 +377,9 @@ own small cohort. If no reference is found, classifications are still produced
 from the raw thresholds and numerical rankings remain blank. An incompatible
 reference is rejected rather than silently substituted.
 
-`src/confidence_score.py` retains `finalize` and `score` subcommands for recovery
-and reproducibility using already compact confidence-input CSVs; neither command
+The `confidence_score` package retains `finalize` and `score` subcommands,
+run as `PYTHONPATH=src python3 -m confidence_score`, for recovery and
+reproducibility using already compact confidence-input CSVs; neither command
 reconstructs inputs by rescanning `metal_sites_all.csv` or
 `metal_bonds_all.csv`. Recovery finalization should pass `--manifest` when the
 completed manifest is available so the rebuilt reference retains entry counts,

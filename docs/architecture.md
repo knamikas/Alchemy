@@ -130,7 +130,7 @@ crystallization, density-context, and optional confidence rows. The manifest row
 is written last as the entry's completion marker. Entries are collected as they
 finish, so output order is not guaranteed to match input order.
 
-[confidence_score.py](../src/confidence_score.py) runs in the driver and uses
+[confidence_score/](../src/confidence_score/) runs in the driver and uses
 the returned site and bond evidence:
 
 | Run mode | Confidence behavior |
@@ -184,6 +184,9 @@ updates or checks distance-table metadata. Normal runs verify and read their
 committed artifacts through `reference_data.py`. See
 [reference-data maintenance](maintenance.md) before changing those artifacts.
 
-`src/confidence_score.py` also exposes standalone `finalize` and `score`
-subcommands for prepared confidence-input files. Normal analysis calls its
-functions directly from the driver.
+The `confidence_score` package also exposes standalone `finalize` and `score`
+subcommands for prepared confidence-input files, run as
+`PYTHONPATH=src python3 -m confidence_score`. Its modules separate the column
+vocabulary, input preparation, classification and ranking, reference
+persistence, and the command line. Normal analysis calls its functions directly
+from the driver.

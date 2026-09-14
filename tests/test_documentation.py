@@ -456,6 +456,7 @@ def test_every_cli_flag_appears_in_the_prose() -> None:
 # strict about everything else.
 _NON_FIELD_TERMS = frozenset(
     (
+        "confidence_score",
         "sigma_lit",
         "label_seq_id",
         "extract_metal_statistics",

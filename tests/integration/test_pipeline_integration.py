@@ -1433,7 +1433,7 @@ def frozen_reference(
     """Publish a frozen confidence reference and return its directory.
 
     Built the way a real one is, through the documented
-    ``src/confidence_score.py finalize`` entry point. Two rows carry no
+    ``python -m confidence_score finalize`` entry point. Two rows carry no
     assessable component, so component sizes and total input size cannot be
     confused.
     """
