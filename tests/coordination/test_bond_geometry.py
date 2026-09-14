@@ -19,6 +19,8 @@ import coordinate_conversion
 import coordination.analysis as ba
 import coordination.dpi as dpi_module
 import reference_data
+import worker
+from codes import EntryStatus
 from coordination import donor_chemistry
 from coordination import schema as coordination_schema
 from coordination.contact_record import Candidate
@@ -433,7 +435,11 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
         "non_finite_metal_coordinates"
     )
     assert "non_finite_metal_coordinates" in metadata.partial_reason_codes
-    assert metadata.retryable is False
+    # The entry itself is unscorable, so an ordinary resume does not retry it.
+    assert (
+        worker.retryable_for(EntryStatus.PARTIAL, metadata.partial_reason_codes)
+        is False
+    )
 
 
 def _dpi_metadata(
@@ -2213,6 +2219,8 @@ def test_two_donors_of_one_residue_form_a_consistent_group(tmp_path: Path) -> No
     assert summary["multi_donor_contact_count"] == 2
     assert summary["suspect_multi_donor_residue_group_count"] == 0
     assert summary["indeterminate_multi_donor_residue_group_count"] == 0
+    assert summary["context_warning"] is False
+    assert summary["context_warning_reasons"] == ""
 
 
 def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(
@@ -2250,6 +2258,9 @@ def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(
     assert summary["scored_geometry_outlier_contact_count"] == 1
     assert summary["scored_geometry_consistent_contact_count"] == 1
     assert summary["image_inclusive_geometry_status"] == "suspect"
+    # The site-level flag covers a suspect group, as the method reference states.
+    assert summary["context_warning"] is True
+    assert summary["context_warning_reasons"] == "suspect_multi_donor_group"
 
 
 def test_a_group_with_no_assessable_member_is_indeterminate(tmp_path: Path) -> None:

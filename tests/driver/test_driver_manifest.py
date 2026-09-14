@@ -592,7 +592,40 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
     )
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
-    assert result.retryable is True
+    assert worker.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True
+
+
+@pytest.mark.parametrize(
+    "status, reason_codes, expected",
+    [
+        (EntryStatus.OK, [], False),
+        (EntryStatus.OK, ["metal_site_limit_exceeded"], False),
+        (EntryStatus.SKIP, ["missing_input"], True),
+        (EntryStatus.ERROR, ["unexpected_processing_error"], True),
+        (EntryStatus.ERROR, ["deterministic_processing_error"], True),
+        (EntryStatus.ERROR, ["worker_process_died"], True),
+        (EntryStatus.PARTIAL, ["ccp4_tool_timeout"], True),
+        (EntryStatus.PARTIAL, ["bond_stage_failure"], True),
+        (EntryStatus.PARTIAL, ["mtzfix_validation_failure"], False),
+        (
+            EntryStatus.PARTIAL,
+            ["mtzfix_validation_failure", "bond_stage_failure"],
+            True,
+        ),
+        (EntryStatus.PARTIAL, ["metal_presence_indeterminate"], False),
+        (EntryStatus.PARTIAL, ["metal_site_without_density"], False),
+    ],
+)
+def test_retry_policy_follows_from_status_and_reason_codes(
+    status: EntryStatus, reason_codes: list[str], expected: bool
+) -> None:
+    """``retryable`` is derived once, so no stage can overwrite another's verdict.
+
+    Deterministic errors stay retryable because a resume may read repaired
+    inputs; a partial entry is retried only when the failed stage reported
+    nothing about the entry itself.
+    """
+    assert worker.retryable_for(status, reason_codes) is expected
 
 
 class TestNoRecognizedMetalOutcome:

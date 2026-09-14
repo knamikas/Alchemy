@@ -301,7 +301,7 @@ entry-level experimental context and join to site, bond, and confidence rows by
 | `crystal_id` | Deposited crystal identifier when reported. |
 | `method` | Reported method; for legacy PDB it is conservatively recognized from the remark text. |
 | `pH`, `pH_range` | Deposited pH value or range, preserved separately. |
-| `temperature_K`, `temperature_details` | Deposited temperature and its free-text qualification. mmCIF temperatures are in kelvin. |
+| `temperature_K`, `temperature_details` | Deposited temperature in kelvin and its free-text qualification. mmCIF temperatures are in kelvin. A legacy PDB remark is recorded when it states kelvin or a plausible unitless kelvin value; a stated Celsius value is converted, and an ambiguous one is left blank. |
 | `raw_details` | Original deposited condition details: the auditable source for normalized summary flags. |
 
 ## `crystallization_summary_all.csv`

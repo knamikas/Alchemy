@@ -38,6 +38,16 @@ confidence scores.
 
 ### Fixes included
 
+- Site rows now carry the `suspect_multi_donor_group` context warning that
+  the method reference documents; previously only bond rows recorded it.
+- Crystallization metal detection no longer reads mass units such as
+  `PROTEIN 5 MG/ML` as magnesium, which affected the detected-metal columns
+  and review-queue context flags.
+- Legacy PDB remark temperatures stated in Celsius are converted to kelvin,
+  and ambiguous unitless values are left blank instead of being recorded as
+  kelvin.
+- The manifest `retryable` field is derived once from the entry status and
+  reason codes instead of being set by each stage in turn.
 - A bond-enabled resume can complete entries previously run with `--no-bonds`
   without requiring confidence rows from the unfinished stage. Integrity
   checks remain in place for completed results.

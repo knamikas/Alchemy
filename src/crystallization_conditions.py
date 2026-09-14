@@ -170,6 +170,11 @@ _METAL_ALIASES: Mapping[str, tuple[str, ...]] = {
 }
 
 _FORMULA_SUFFIX = r"(?=[A-Z0-9(])[A-Za-z0-9()]*\d[A-Za-z0-9()]*"
+# Mass units in deposited condition text, such as ``PROTEIN 5 MG/ML``, spell
+# the magnesium symbol. They are blanked before symbol detection.
+_MASS_UNIT_RE = re.compile(
+    r"(?<![A-Za-z])(?:MG|Mg)\s*/\s*(?:[MDUmdu]|\u00b5)?L\b|\d[\d.]*\s*MG\b"
+)
 _SIMPLE_FORMULAS: Mapping[str, tuple[str, ...]] = {
     "LI": ("LiCl", "LICL"),
     "NA": ("NaCl", "NACL"),
@@ -181,8 +186,12 @@ _PH_RANGE_RE = re.compile(
     r"(?i)\bp\s*h\s*(?:range)?\s*(?:=|:)?\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)"
 )
 _TEMP_RE = re.compile(
-    r"(?i)\b(?:temperature|temp\.?)\s*(?:=|:)?\s*(\d+(?:\.\d+)?)\s*(?:k|kelvin)?"
+    r"(?i)\b(?:temperature|temp\.?)\s*(?:=|:)?\s*(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?:(?P<kelvin>k\b|kelvin\b)|(?P<celsius>(?:deg(?:rees?)?\.?\s*|\u00b0\s*)?c\b))?"
 )
+# A unitless temperature is taken as kelvin only inside this window; a value
+# such as ``TEMPERATURE 20`` is ambiguous and is not recorded.
+_UNITLESS_KELVIN_RANGE = (150.0, 400.0)
 
 RCSB_GRAPHQL_URL = "https://data.rcsb.org/graphql"
 RCSB_CACHE_SCHEMA_VERSION = 1
@@ -305,9 +314,21 @@ def _parse_text_measurements(text: str) -> tuple[str, str, str]:
         match = _PH_RE.search(text)
         if match:
             ph = match.group(1)
-    temp_match = _TEMP_RE.search(text)
-    temperature = temp_match.group(1) if temp_match else ""
-    return ph, ph_range, temperature
+    return ph, ph_range, _temperature_kelvin(text)
+
+
+def _temperature_kelvin(text: str) -> str:
+    """Read a stated temperature in kelvin, converting an explicit Celsius value."""
+    match = _TEMP_RE.search(text)
+    if match is None:
+        return ""
+    value = match.group("value")
+    if match.group("celsius"):
+        return f"{float(value) + 273.15:.2f}"
+    low, high = _UNITLESS_KELVIN_RANGE
+    if match.group("kelvin") or low <= float(value) <= high:
+        return value
+    return ""
 
 
 def _provenance(
@@ -387,6 +408,7 @@ def _pdb_conditions(
 
 def detected_metals(text: str) -> frozenset[str]:
     """Return explicitly named or formula-like metals in condition text."""
+    text = _MASS_UNIT_RE.sub(" ", text)
     lowered = text.lower()
     detected = {
         symbol

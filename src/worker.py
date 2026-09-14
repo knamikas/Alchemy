@@ -12,7 +12,7 @@ import os
 import shutil
 import signal
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from multiprocessing.queues import Queue, SimpleQueue
 from typing import Any
@@ -170,12 +170,35 @@ def initial_result(
     )
 
 
+# Partial outcomes worth retrying: the stage that failed reported nothing about
+# the entry itself, so a rerun may still complete it.
+RETRYABLE_PARTIAL_REASON_CODES: frozenset[str] = frozenset(
+    {ReasonCode.CCP4_TOOL_TIMEOUT, ReasonCode.BOND_STAGE_FAILURE}
+)
+
+
+def retryable_for(status: EntryStatus, reason_codes: Iterable[str]) -> bool:
+    """Whether an ordinary resume should retry an entry with this outcome.
+
+    A completed entry is terminal. Skips and errors are always retried, since a
+    resume may read repaired inputs or tools. A partial entry is retried only
+    when the failed stage said nothing about the entry: a CCP4 timeout or a
+    bond-stage exception. Every other partial reason describes the entry itself
+    and would recur on the same inputs.
+    """
+    if status == EntryStatus.OK:
+        return False
+    if status in (EntryStatus.SKIP, EntryStatus.ERROR):
+        return True
+    return not RETRYABLE_PARTIAL_REASON_CODES.isdisjoint(reason_codes)
+
+
 def worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult:
     """Synthesize the retryable result a killed worker could not return."""
     result = initial_result(pdb_id, cfg, cfg.manual_inputs)
     result.status = EntryStatus.ERROR
-    result.retryable = True
     result.reason_codes = [ReasonCode.WORKER_PROCESS_DIED]
+    result.retryable = retryable_for(result.status, result.reason_codes)
     result.error = (
         f"worker process {pid} terminated without returning a result "
         f"(out-of-memory kill or crash); {pdb_id} was not analyzed"
@@ -262,8 +285,7 @@ def _run_density_stage(
     """Calculate the maps, run EDSTATS, and extract this entry's statistics.
 
     Returns ``(rows, header)``, both empty when density could not be produced;
-    the reason is recorded on ``result`` in that case, along with whether it is
-    worth retrying.
+    the reason is recorded on ``result`` in that case.
     """
     rows: list[MetalStatsRow] = []
     header: list[str] = []
@@ -283,10 +305,9 @@ def _run_density_stage(
             tool_timeout_s=cfg.ccp4_timeout_s,
         )
     except Ccp4ToolTimeoutError as exc:
-        # A timeout does not establish an input defect, so allow a retry.
+        # A timeout does not establish an input defect; see ``retryable_for``.
         rows, header = [], []
         kept_log = _preserve_timeout_log(exc, result.pdb_id, cfg.output_dir)
-        result.retryable = True
         result.reason_codes = [ReasonCode.CCP4_TOOL_TIMEOUT]
         result.error = truncate(
             f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
@@ -297,7 +318,6 @@ def _run_density_stage(
     except MtzfixValidationError as exc:
         # Coefficient validation failed; geometry can still be assessed.
         rows, header = [], []
-        result.retryable = False
         result.reason_codes = [ReasonCode.MTZFIX_VALIDATION_FAILURE]
         result.error = truncate(
             f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
@@ -329,8 +349,6 @@ def _run_density_stage(
         result.timings["statistics_extraction_s"] = round(
             time.monotonic() - statistics_started, 3
         )
-        # Inputs and density succeeded; later limitations are terminal.
-        result.retryable = False
     finally:
         result.timings["density_total_s"] = round(time.monotonic() - density_started, 3)
     return rows, header
@@ -472,7 +490,6 @@ def run_bond_stage(
             dict.fromkeys(result.reason_codes + [ReasonCode.BOND_STAGE_FAILURE])
         )
         result.confidence_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
-        result.retryable = True
     finally:
         result.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)
     return analysis
@@ -498,15 +515,10 @@ def _finalize_result(
             ([existing_error] if existing_error else []) + messages
         )
         result.error = truncate(result.error, MAX_MANIFEST_STATUS_DETAIL_CHARS)
-    if bond_meta.retryable:
-        result.retryable = True
     result.warning_codes = list(
         dict.fromkeys(result.warning_codes + bond_meta.warning_codes)
     )
-    status = EntryStatus.PARTIAL if result.reason_codes else EntryStatus.OK
-    if status == EntryStatus.OK:
-        result.retryable = False
-    result.status = status
+    result.status = EntryStatus.PARTIAL if result.reason_codes else EntryStatus.OK
     # Count coordinate sites even when their EDSTATS joins failed.
     result.n_metals = len(structure.metal_atoms(METALS_SET, canonical=True))
     result.n_bonds = len(result.bond_rows)
@@ -587,7 +599,6 @@ def _finish_if_no_analyzable_metals(
         # Unknown elements prevent a reliable no-metals result.
         unknown_count = structure.unknown_element_atom_count
         result.status = EntryStatus.PARTIAL
-        result.retryable = False
         result.reason_codes = [ReasonCode.METAL_PRESENCE_INDETERMINATE]
         result.error = truncate(
             "cannot establish metal absence: "
@@ -602,7 +613,6 @@ def _finish_if_no_analyzable_metals(
 
     # Skip map and contact calculations when no canonical metal site exists.
     result.status = EntryStatus.OK
-    result.retryable = False
     result.n_metals = 0
     result.rows = []
     result.bond_rows = []
@@ -621,7 +631,6 @@ def _finish_if_metal_site_limit_exceeded(
         return False
 
     result.status = EntryStatus.OK
-    result.retryable = False
     result.n_metals = selected_count
     result.rows = []
     result.bond_rows = []
@@ -733,14 +742,11 @@ def _process_entry(pdb_id: str) -> EntryResult:
         )
     except FileNotFoundError as e:
         result.status = EntryStatus.SKIP
-        result.retryable = True
         result.reason_codes = [ReasonCode.MISSING_INPUT]
         result.error = truncate(f"missing input: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS)
     except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = EntryStatus.ERROR
-        # Resume may read repaired inputs, so even deterministic errors remain retryable.
-        result.retryable = True
         result.reason_codes = [
             ReasonCode.DETERMINISTIC_PROCESSING_ERROR
             if deterministic
@@ -762,6 +768,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
             cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
             result.timings["cleanup_s"] = round(time.monotonic() - cleanup_started, 3)
+        result.retryable = retryable_for(result.status, result.reason_codes)
         result.runtime_s = round(time.monotonic() - t0, 3)
         announce_inflight("end", pdb_id)
     return result

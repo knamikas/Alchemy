@@ -966,7 +966,7 @@ def _site_context_values(
     """Aggregate coordination-relevant context without changing confidence."""
     reasons: list[str] = []
     for contact in contacts:
-        values = context_warning_values(contact)
+        values = context_warning_values(contact, multi_donor=contact.multi_donor())
         if values["context_warning_reasons"]:
             reasons.extend(values["context_warning_reasons"].split("|"))
     non_typical_first_sphere = [
@@ -1243,7 +1243,6 @@ class BondAnalysisMetadata:
     partial_reason_codes: list[str]
     warning_codes: list[str]
     messages: list[str]
-    retryable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
