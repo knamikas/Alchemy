@@ -258,6 +258,35 @@ def test_dead_worker_pids_reports_several_simultaneous_deaths() -> None:
     assert known == {1, 4, 5}
 
 
+def test_dead_worker_pids_reads_a_snapshot_of_a_roster_reaped_mid_read() -> None:
+    """A worker reaped while the roster is read must not hide its neighbour.
+
+    ``Pool._handle_workers`` deletes exited workers from ``_pool`` on its own
+    thread. Reading the live list lets a deletion beneath the cursor skip the
+    next worker, which the driver would then report dead, SIGKILL, and whose
+    real result it would later discard as superseded. This roster reaps its
+    first worker the moment the read touches it.
+    """
+    roster: list[object] = []
+
+    class _ReapedWhileRead:
+        def __init__(self, pid: int) -> None:
+            self._pid = pid
+
+        @property
+        def pid(self) -> int:
+            if roster and roster[0] is self:
+                del roster[0]  # the handler thread joining this worker
+            return self._pid
+
+    roster.extend(_ReapedWhileRead(pid) for pid in (1, 2, 3))
+    pool = type("_ReapingPool", (), {"_pool": roster})()
+    known = {1, 2, 3}
+
+    assert dispatch.dead_worker_pids(cast("Pool", pool), known) == set()
+    assert known == {1, 2, 3}
+
+
 @pytest.mark.parametrize(
     "pool, label",
     [

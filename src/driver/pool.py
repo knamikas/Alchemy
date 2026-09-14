@@ -12,8 +12,7 @@ import json
 import os
 import re
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, fields, replace
-from typing import Any, ClassVar, Literal, NamedTuple, TextIO
+from typing import Any, Literal, NamedTuple, TextIO
 
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
 from ccp4_setup import REPO_DIR
@@ -66,7 +65,7 @@ from driver.resume import (
     validate_resume_schemas,
 )
 from driver.runlog import RunLog
-from driver.writers import STATS_COLUMNS, OutputWriters, manifest_row
+from driver.writers import STATS_COLUMNS, OutputTargets, OutputWriters, manifest_row
 from inputs import (
     ensure_entry_available,
     enumerate_entries,
@@ -275,63 +274,21 @@ class ConfidencePlan:
         return self.reference
 
 
-@dataclass(frozen=True)
-class OutputTargets:
-    """The files one run writes, each by name.
-
-    Resume staging sees the same files as one flat sequence: the four core
-    outputs, the always-written extras, then whichever confidence streams
-    this run keeps. Field order here is that sequence, so ``ordered`` and
-    ``rebound`` are the only places it is spelled out.
-    """
-
-    manifest: str
-    stats: str
-    bonds: str
-    candidates: str
-    crystallization_conditions: str
-    crystallization_summary: str
-    density_context: str
-    confidence: str | None = None
-    confidence_inputs: str | None = None
-
-    ALWAYS_WRITTEN_EXTRAS: ClassVar[tuple[str, ...]] = (
-        "crystallization_conditions",
-        "crystallization_summary",
-        "density_context",
+def output_targets_for_run(layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
+    """The files a run with this layout and confidence plan writes."""
+    return OutputTargets(
+        manifest=layout.manifest,
+        stats=layout.stats,
+        bonds=layout.bonds,
+        candidates=layout.candidates,
+        crystallization_conditions=layout.crystallization_conditions,
+        crystallization_summary=layout.crystallization_summary,
+        density_context=layout.density_context,
+        confidence=plan.output_path if plan.enabled else None,
+        confidence_inputs=(
+            layout.confidence_inputs if plan.synchronize_inputs else None
+        ),
     )
-
-    @classmethod
-    def for_run(cls, layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
-        """The targets a run with this layout and confidence plan writes."""
-        return cls(
-            manifest=layout.manifest,
-            stats=layout.stats,
-            bonds=layout.bonds,
-            candidates=layout.candidates,
-            crystallization_conditions=layout.crystallization_conditions,
-            crystallization_summary=layout.crystallization_summary,
-            density_context=layout.density_context,
-            confidence=plan.output_path if plan.enabled else None,
-            confidence_inputs=(
-                layout.confidence_inputs if plan.synchronize_inputs else None
-            ),
-        )
-
-    def _present(self) -> list[str]:
-        return [
-            field.name
-            for field in fields(self)
-            if getattr(self, field.name) is not None
-        ]
-
-    def ordered(self) -> tuple[str, ...]:
-        """Every path this run writes, in the order resume staging expects."""
-        return tuple(getattr(self, name) for name in self._present())
-
-    def rebound(self, paths: Sequence[str]) -> OutputTargets:
-        """The same targets pointed at a parallel sequence of paths."""
-        return replace(self, **dict(zip(self._present(), paths, strict=True)))
 
 
 def plan_entry_memory(
@@ -844,7 +801,7 @@ def _open_writers(
     """Open every output stream this run writes and give them their headers."""
 
     def opened(path: str) -> TextIO:
-        return handles.enter_context(open(path, "w", newline=""))
+        return handles.enter_context(open(path, "w", newline="", encoding="utf-8"))
 
     def opened_if(path: str | None) -> TextIO | None:
         return opened(path) if path is not None else None
@@ -1003,17 +960,9 @@ def process_entries(
     prior_ids: set[str] = (
         set(manifest_values_by_id(layout.manifest, "status")) if args.resume else set()
     )
-    targets = OutputTargets.for_run(layout, plan)
-    staging = (
-        ResumeStaging(
-            args.output_dir,
-            targets.ordered(),
-            always_extra_count=len(OutputTargets.ALWAYS_WRITTEN_EXTRAS),
-        )
-        if args.resume
-        else None
-    )
-    write_targets = targets.rebound(staging.staged) if staging is not None else targets
+    targets = output_targets_for_run(layout, plan)
+    staging = ResumeStaging(args.output_dir, targets) if args.resume else None
+    write_targets = staging.staged if staging is not None else targets
 
     processing_completed = False
     try:

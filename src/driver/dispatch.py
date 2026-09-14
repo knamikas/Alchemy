@@ -86,11 +86,11 @@ def _pool_children(pool: WorkerPool) -> list[Any]:
     Python 2 and is read defensively so a change disables death detection
     rather than crashing the batch.
     """
-    return [
-        child
-        for child in getattr(pool, "_pool", ()) or ()
-        if getattr(child, "pid", None)
-    ]
+    # Copy the roster before reading it: the pool's handler thread deletes
+    # reaped workers from the live list, and a deletion beneath an in-progress
+    # iteration skips the next worker, which would then be reported dead.
+    roster = list(getattr(pool, "_pool", ()) or ())
+    return [child for child in roster if getattr(child, "pid", None)]
 
 
 def dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:

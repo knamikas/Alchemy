@@ -4,9 +4,13 @@ Flush each result so interrupted runs retain completed work. Resume reads
 these same schemas to determine what remains.
 """
 
+from __future__ import annotations
+
 import csv
+import os
 from collections.abc import Mapping, Sequence
-from typing import Any, TextIO
+from dataclasses import dataclass, fields, replace
+from typing import Any, ClassVar, TextIO
 
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from coordination.schema import (
@@ -111,6 +115,52 @@ def manifest_row(
         warning_codes="|".join(result.warning_codes),
     )
     return row
+
+
+@dataclass(frozen=True)
+class OutputTargets:
+    """The files one run writes, each by name.
+
+    Resume staging mirrors these under its scratch directory and merges each
+    one back by name, so nothing depends on the field order.
+    """
+
+    manifest: str
+    stats: str
+    bonds: str
+    candidates: str
+    crystallization_conditions: str
+    crystallization_summary: str
+    density_context: str
+    confidence: str | None = None
+    confidence_inputs: str | None = None
+
+    #: Written whether or not bonds are enabled; every resume commit merges them.
+    ALWAYS_WRITTEN_EXTRAS: ClassVar[tuple[str, ...]] = (
+        "crystallization_conditions",
+        "crystallization_summary",
+        "density_context",
+    )
+    #: Present only when confidence analysis is on; merged only when enabled.
+    CONFIDENCE_OUTPUTS: ClassVar[tuple[str, ...]] = ("confidence", "confidence_inputs")
+
+    def present(self) -> dict[str, str]:
+        """Every path this run writes, keyed by field name."""
+        return {
+            field.name: path
+            for field in fields(self)
+            if (path := getattr(self, field.name)) is not None
+        }
+
+    def staged_in(self, directory: str) -> OutputTargets:
+        """The same targets relocated by basename under ``directory``."""
+        return replace(
+            self,
+            **{
+                name: os.path.join(directory, os.path.basename(path))
+                for name, path in self.present().items()
+            },
+        )
 
 
 class OutputWriters:

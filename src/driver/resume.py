@@ -16,7 +16,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.output_lock import create_owned_scratch_directory
-from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
+from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS, OutputTargets
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult
 
 # DictReader uses None for missing cells and stores surplus cells under a None key.
@@ -56,7 +56,7 @@ def load_done(
     }
     done: set[str] = set()
     if os.path.exists(manifest_path):
-        with open(manifest_path, newline="") as f:
+        with open(manifest_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             if reader.fieldnames and {"pdbID", "status"}.issubset(reader.fieldnames):
                 for row in reader:
@@ -112,7 +112,7 @@ def manifest_values_by_id(path: str, column: str) -> dict[str, str]:
     values: dict[str, str] = {}
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return values
-    with open(path, newline="") as handle:
+    with open(path, newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             if not _complete_csv_row(row):
                 continue
@@ -125,7 +125,7 @@ def manifest_values_by_id(path: str, column: str) -> dict[str, str]:
 def _csv_header(path: str) -> list[str] | None:
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
-    with open(path, newline="") as handle:
+    with open(path, newline="", encoding="utf-8") as handle:
         return next(csv.reader(handle), None)
 
 
@@ -150,7 +150,7 @@ def _terminal_manifest_rows(path: str) -> dict[str, _CsvRow]:
     complete_ids: set[str] = set()
     if _csv_header(path) is None:
         return terminal_rows
-    with open(path, newline="") as handle:
+    with open(path, newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             # A crash may leave the last manifest row incomplete. It was never
             # committed and remains eligible for replacement on resume.
@@ -211,7 +211,7 @@ def _rows_for_ids(path: str, terminal_ids: Set[str]) -> Iterator[tuple[str, _Csv
     manifest row. The replacement merge intentionally removes them if that ID
     is retried, so they must not make an otherwise safe resume fail.
     """
-    with open(path, newline="") as handle:
+    with open(path, newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
             pdb_id = _csv_text(row, "pdbID").strip().lower()
             if pdb_id not in terminal_ids:
@@ -461,7 +461,7 @@ def _merge_csv_replacements(
         # only if the wrapping itself failed: a second close could land on a
         # descriptor the runtime has since reused.
         try:
-            replacement = os.fdopen(fd, "w", newline="")
+            replacement = os.fdopen(fd, "w", newline="", encoding="utf-8")
         except BaseException:
             os.close(fd)
             raise
@@ -469,7 +469,7 @@ def _merge_csv_replacements(
         with replacement as dst:
             writer = csv.writer(dst)
             if os.path.exists(path) and os.path.getsize(path) > 0:
-                with open(path, newline="") as src:
+                with open(path, newline="", encoding="utf-8") as src:
                     reader = csv.reader(src)
                     destination_header = next(reader, None)
                     if destination_header is not None:
@@ -480,7 +480,7 @@ def _merge_csv_replacements(
                         writer.writerow(row)
 
             if os.path.exists(staged_path) and os.path.getsize(staged_path) > 0:
-                with open(staged_path, newline="") as staged:
+                with open(staged_path, newline="", encoding="utf-8") as staged:
                     reader = csv.reader(staged)
                     staged_header = next(reader, None)
                     if destination_header is None and staged_header is not None:
@@ -509,16 +509,9 @@ def _merge_csv_replacements(
 class ResumeStaging:
     """Stage retry outputs and merge entries with completed manifest rows."""
 
-    def __init__(
-        self,
-        output_dir: str,
-        targets: Sequence[str],
-        *,
-        always_extra_count: int = 0,
-    ) -> None:
+    def __init__(self, output_dir: str, targets: OutputTargets) -> None:
         """Create staging paths for all outputs participating in resume."""
         self.targets = targets
-        self.always_extra_count = always_extra_count
         self.dir = create_owned_scratch_directory(
             output_dir,
             prefix=".alchemy-resume-",
@@ -527,38 +520,32 @@ class ResumeStaging:
             # only after success.
             preserve=True,
         )
-        self.staged = tuple(
-            os.path.join(self.dir, os.path.basename(path)) for path in targets
-        )
+        self.staged = targets.staged_in(self.dir)
         self.replacement_ids: set[str] = set()
 
     def commit(self, bonds_enabled: bool, confidence_enabled: bool = False) -> None:
         """Replace the retried entries' rows in the real output files."""
         if not self.replacement_ids:
             return
-        manifest_path, stats_path, bonds_path, candidates_path = self.targets[:4]
-        (staged_manifest, staged_stats, staged_bonds, staged_candidates) = self.staged[
-            :4
-        ]
+        names = ["stats"]
+        if bonds_enabled:
+            names += ["bonds", "candidates"]
+        names += OutputTargets.ALWAYS_WRITTEN_EXTRAS
+        if confidence_enabled:
+            names += [
+                name
+                for name in OutputTargets.CONFIDENCE_OUTPUTS
+                if getattr(self.targets, name) is not None
+            ]
         # Data files are committed before the manifest completion marker, so an
         # interruption between replacements leaves the entry safely retryable.
-        _merge_csv_replacements(stats_path, staged_stats, self.replacement_ids)
-        if bonds_enabled:
-            _merge_csv_replacements(bonds_path, staged_bonds, self.replacement_ids)
+        names.append("manifest")
+        for name in names:
             _merge_csv_replacements(
-                candidates_path, staged_candidates, self.replacement_ids
+                getattr(self.targets, name),
+                getattr(self.staged, name),
+                self.replacement_ids,
             )
-        extra_end = 4 + self.always_extra_count
-        for target, staged in zip(
-            self.targets[4:extra_end], self.staged[4:extra_end], strict=False
-        ):
-            _merge_csv_replacements(target, staged, self.replacement_ids)
-        if confidence_enabled:
-            for target, staged in zip(
-                self.targets[extra_end:], self.staged[extra_end:], strict=False
-            ):
-                _merge_csv_replacements(target, staged, self.replacement_ids)
-        _merge_csv_replacements(manifest_path, staged_manifest, self.replacement_ids)
 
     def discard(self) -> None:
         """Discard every staged output without changing published files."""

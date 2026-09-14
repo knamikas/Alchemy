@@ -81,7 +81,7 @@ def asu_volume(mtz_path: str, pdb_path: str) -> float:
 def rfree_from_pdb(pdb_path: str) -> float:
     """Fallback R-free scrape from a PDB REMARK 3 header (final R-free only)."""
     try:
-        with open(pdb_path) as f:
+        with open(pdb_path, encoding="utf-8") as f:
             for line in f:
                 if (
                     "FREE R VALUE" in line
@@ -129,7 +129,7 @@ def calculate_dpi_components(
     try:
         props: dict[str, Any] = {}
         try:
-            with open(data_json) as f:
+            with open(data_json, encoding="utf-8") as f:
                 props = json.load(f).get("properties", {})
         except (OSError, ValueError):
             props = {}

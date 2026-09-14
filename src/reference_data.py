@@ -179,7 +179,7 @@ def load_literature(
     """
     lit: dict[tuple[str, str, str], tuple[float, float]] = {}
     first_line_by_key: dict[tuple[str, str, str], int] = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for number, line in enumerate(f, start=1):
             parts = line.split()
             if not parts or parts[0].startswith("#"):

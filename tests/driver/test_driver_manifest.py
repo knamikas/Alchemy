@@ -44,6 +44,7 @@ from driver.writers import (
     MANIFEST_COLUMNS,
     MANIFEST_FIELDS,
     STATS_COLUMNS,
+    OutputTargets,
     OutputWriters,
     manifest_row,
 )
@@ -1598,41 +1599,61 @@ class TestResumeReplacementSucceeded:
 class TestResumeStaging:
     """Staged retries replace rows only on a completed, terminal batch."""
 
-    TARGET_NAMES = (
-        "manifest.csv",
-        "metal_sites_all.csv",
-        "metal_bonds_all.csv",
-        "metal_contact_candidates_all.csv",
-    )
+    CORE_NAMES = ("manifest", "stats", "bonds", "candidates")
+    ALWAYS_NAMES = (*CORE_NAMES, *OutputTargets.ALWAYS_WRITTEN_EXTRAS)
 
-    def _outputs(self, output_dir: Path, confidence: bool = False) -> tuple[str, ...]:
-        """Create the four (or five) output CSVs with two entries' rows."""
-        names: list[str] = list(self.TARGET_NAMES)
-        if confidence:
-            names.append("confidence_inputs_all.csv")
-        paths: list[str] = []
-        for name in names:
-            path = output_dir / name
+    def _outputs(
+        self,
+        output_dir: Path,
+        *,
+        confidence_inputs: bool = False,
+        scores: bool = False,
+    ) -> OutputTargets:
+        """Create the always-written CSVs, plus any confidence ones, by name."""
+        layout = driver_pool.OutputLayout(str(output_dir))
+        targets = OutputTargets(
+            manifest=layout.manifest,
+            stats=layout.stats,
+            bonds=layout.bonds,
+            candidates=layout.candidates,
+            crystallization_conditions=layout.crystallization_conditions,
+            crystallization_summary=layout.crystallization_summary,
+            density_context=layout.density_context,
+            confidence=layout.confidence_scores if scores else None,
+            confidence_inputs=layout.confidence_inputs if confidence_inputs else None,
+        )
+        for name, path in targets.present().items():
             with open(path, "w", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(["pdbID", "value"])
                 writer.writerow(["109m", f"old-109m-{name}"])
                 writer.writerow(["1cll", f"old-1cll-{name}"])
-            paths.append(str(path))
-        return tuple(paths)
+        return targets
+
+    @staticmethod
+    def _bytes(
+        targets: OutputTargets, names: Sequence[str] | None = None
+    ) -> dict[str, bytes]:
+        """The current content of the named outputs, or of every present one."""
+        present = targets.present()
+        chosen = present if names is None else {name: present[name] for name in names}
+        return {name: Path(path).read_bytes() for name, path in chosen.items()}
+
+    @staticmethod
+    def _values(targets: OutputTargets, name: str) -> dict[str, str]:
+        return {row[0]: row[1] for row in _read_csv(targets.present()[name])[1:]}
 
     def _stage(
         self,
         staging: resume.ResumeStaging,
-        names_and_rows: Mapping[int, Sequence[Sequence[str]]],
+        names_and_rows: Mapping[str, Sequence[Sequence[str]]],
     ) -> None:
-        """Write staged rows for the given staged-file indices."""
-        for index, rows in names_and_rows.items():
-            with open(staging.staged[index], "w", newline="") as handle:
+        """Write staged rows for the named outputs."""
+        for name, rows in names_and_rows.items():
+            with open(staging.staged.present()[name], "w", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(["pdbID", "value"])
-                for row in rows:
-                    writer.writerow(row)
+                writer.writerows(rows)
 
     def test_staged_paths_mirror_the_targets_inside_the_output_dir(
         self, tmp_path: Path
@@ -1643,13 +1664,13 @@ class TestResumeStaging:
         try:
             assert os.path.isdir(staging.dir)
             assert os.path.dirname(staging.dir) == str(tmp_path)
-            assert [os.path.basename(p) for p in staging.staged] == [
-                os.path.basename(p) for p in targets
-            ]
-            assert all(os.path.dirname(p) == staging.dir for p in staging.staged)
+            staged = staging.staged.present()
+            assert set(staged) == set(targets.present())
+            for name, path in targets.present().items():
+                assert os.path.basename(staged[name]) == os.path.basename(path)
+                assert os.path.dirname(staged[name]) == staging.dir
+                assert _read_csv(path)[1][1].startswith("old-109m")
             assert staging.replacement_ids == set()
-            for target in targets:
-                assert _read_csv(target)[1][1].startswith("old-109m")
         finally:
             staging.discard()
 
@@ -1657,14 +1678,14 @@ class TestResumeStaging:
         self, tmp_path: Path
     ) -> None:
         targets = self._outputs(tmp_path)
-        before = {p: open(p, "rb").read() for p in targets}
+        before = self._bytes(targets)
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {0: [["109m", "new"]]})
+            self._stage(staging, {"manifest": [["109m", "new"]]})
             staging.commit(bonds_enabled=True)
         finally:
             staging.discard()
-        assert {p: open(p, "rb").read() for p in targets} == before
+        assert self._bytes(targets) == before
 
     @pytest.mark.parametrize("fail_merge", [False, True])
     def test_an_interrupted_batch_commits_the_entries_it_finished(
@@ -1789,18 +1810,15 @@ class TestResumeStaging:
         staging = resume.ResumeStaging(str(tmp_path), targets)
         self._stage(
             staging,
-            {
-                index: [["8new", f"new-8new-{name}"]]
-                for index, name in enumerate(self.TARGET_NAMES)
-            },
+            {name: [["8new", f"new-8new-{name}"]] for name in self.ALWAYS_NAMES},
         )
         staging.replacement_ids.add("8new")
 
         summary = self._interrupt(staging, tmp_path)
 
-        for target in targets:
-            ids = [row[0] for row in _read_csv(target)[1:]]
-            assert ids == ["109m", "1cll", "8new"], target
+        for name, path in targets.present().items():
+            ids = [row[0] for row in _read_csv(path)[1:]]
+            assert ids == ["109m", "1cll", "8new"], name
         assert summary["resume_entries_committed_after_interrupt"] == 1
         assert not os.path.isdir(staging.dir)
 
@@ -1813,13 +1831,13 @@ class TestResumeStaging:
         interrupted mid-write is absent from ``replacement_ids``.
         """
         targets = self._outputs(tmp_path)
-        before = {path: open(path, "rb").read() for path in targets}
+        before = self._bytes(targets)
         staging = resume.ResumeStaging(str(tmp_path), targets)
-        self._stage(staging, {1: [["8new", "half-written"]]})
+        self._stage(staging, {"stats": [["8new", "half-written"]]})
 
         summary = self._interrupt(staging, tmp_path)
 
-        assert {path: open(path, "rb").read() for path in targets} == before
+        assert self._bytes(targets) == before
         assert "resume_entries_committed_after_interrupt" not in summary
         assert not os.path.isdir(staging.dir)
 
@@ -1829,10 +1847,10 @@ class TestResumeStaging:
         """A merge failure must not delete the only copy of the work."""
         targets = self._outputs(tmp_path)
         staging = resume.ResumeStaging(str(tmp_path), targets)
-        self._stage(staging, {0: [["8new", "new"]]})
+        self._stage(staging, {"manifest": [["8new", "new"]]})
         staging.replacement_ids.add("8new")
         # A staged file whose header disagrees makes ``commit`` raise.
-        with open(staging.staged[1], "w", newline="") as handle:
+        with open(staging.staged.stats, "w", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(["different", "header"])
             writer.writerow(["8new", "new"])
@@ -1854,21 +1872,19 @@ class TestResumeStaging:
         try:
             self._stage(
                 staging,
-                {
-                    index: [["109m", f"new-109m-{name}"]]
-                    for index, name in enumerate(self.TARGET_NAMES)
-                },
+                {name: [["109m", f"new-109m-{name}"]] for name in self.ALWAYS_NAMES},
             )
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True)
         finally:
             staging.discard()
-        for target, name in zip(targets, self.TARGET_NAMES, strict=False):
-            rows = _read_csv(target)
+        for name, path in targets.present().items():
+            rows = _read_csv(path)
             assert rows[0] == ["pdbID", "value"]
-            values = {row[0]: row[1] for row in rows[1:]}
-            assert values["109m"] == f"new-109m-{name}"
-            assert values["1cll"] == f"old-1cll-{name}"
+            assert self._values(targets, name) == {
+                "109m": f"new-109m-{name}",
+                "1cll": f"old-1cll-{name}",
+            }
             assert len(rows) == 3
 
     def test_commit_drops_stale_rows_when_the_retry_produced_none(
@@ -1877,114 +1893,104 @@ class TestResumeStaging:
         targets = self._outputs(tmp_path)
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {index: [] for index in range(4)})
+            self._stage(staging, {name: [] for name in self.ALWAYS_NAMES})
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True)
         finally:
             staging.discard()
-        for target in targets:
-            values = {row[0] for row in _read_csv(target)[1:]}
-            assert values == {"1cll"}
+        for name in targets.present():
+            assert set(self._values(targets, name)) == {"1cll"}, name
 
     def test_commit_with_bonds_disabled_leaves_bond_outputs_untouched(
         self, tmp_path: Path
     ) -> None:
         targets = self._outputs(tmp_path)
-        bond_paths = targets[2:4]
-        before = {p: open(p, "rb").read() for p in bond_paths}
+        bond_names = ("bonds", "candidates")
+        before = self._bytes(targets, bond_names)
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(
                 staging,
                 {
-                    0: [["109m", "new-manifest"]],
-                    1: [["109m", "new-stats"]],
-                    2: [["109m", "SHOULD-NOT-APPEAR"]],
-                    3: [["109m", "SHOULD-NOT-APPEAR"]],
+                    "manifest": [["109m", "new-manifest"]],
+                    "stats": [["109m", "new-stats"]],
+                    "bonds": [["109m", "SHOULD-NOT-APPEAR"]],
+                    "candidates": [["109m", "SHOULD-NOT-APPEAR"]],
+                    **{
+                        name: [["109m", f"new-{name}"]]
+                        for name in OutputTargets.ALWAYS_WRITTEN_EXTRAS
+                    },
                 },
             )
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=False)
         finally:
             staging.discard()
-        assert {p: open(p, "rb").read() for p in bond_paths} == before
-        manifest_values = {row[0]: row[1] for row in _read_csv(targets[0])[1:]}
-        assert manifest_values == {
+        assert self._bytes(targets, bond_names) == before
+        assert self._values(targets, "manifest") == {
             "109m": "new-manifest",
-            "1cll": "old-1cll-manifest.csv",
+            "1cll": "old-1cll-manifest",
         }
 
     def test_commit_replaces_confidence_rows_only_when_enabled(
         self, tmp_path: Path
     ) -> None:
-        targets = self._outputs(tmp_path, confidence=True)
-        confidence_path = targets[4]
-        before = open(confidence_path, "rb").read()
+        targets = self._outputs(tmp_path, confidence_inputs=True)
+        before = self._bytes(targets, ("confidence_inputs",))
+        staged_rows = {name: [["109m", "new"]] for name in targets.present()}
 
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {index: [["109m", "new"]] for index in range(5)})
+            self._stage(staging, staged_rows)
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True, confidence_enabled=False)
         finally:
             staging.discard()
-        assert open(confidence_path, "rb").read() == before
+        assert self._bytes(targets, ("confidence_inputs",)) == before
 
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {index: [["109m", "new"]] for index in range(5)})
+            self._stage(staging, staged_rows)
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True, confidence_enabled=True)
         finally:
             staging.discard()
-        values = {row[0]: row[1] for row in _read_csv(confidence_path)[1:]}
-        assert values == {"109m": "new", "1cll": ("old-1cll-confidence_inputs_all.csv")}
+        assert self._values(targets, "confidence_inputs") == {
+            "109m": "new",
+            "1cll": "old-1cll-confidence_inputs",
+        }
 
     def test_commit_replaces_every_enabled_confidence_output(
         self, tmp_path: Path
     ) -> None:
         """Scored and input confidence rows participate in one staged commit."""
-        targets = list(self._outputs(tmp_path, confidence=True))
-        scores = tmp_path / "confidence_scores_all.csv"
-        with open(scores, "w", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerows(
-                [
-                    ["pdbID", "value"],
-                    ["109m", "old-109m-scores"],
-                    ["1cll", "old-1cll-scores"],
-                ]
-            )
-        targets.append(str(scores))
-        staging = resume.ResumeStaging(str(tmp_path), tuple(targets))
+        targets = self._outputs(tmp_path, confidence_inputs=True, scores=True)
+        staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(
                 staging,
-                {index: [["109m", f"new-{index}"]] for index in range(len(targets))},
+                {name: [["109m", f"new-{name}"]] for name in targets.present()},
             )
             staging.replacement_ids.add("109m")
             staging.commit(bonds_enabled=True, confidence_enabled=True)
         finally:
             staging.discard()
 
-        for index in (4, 5):
-            values = {row[0]: row[1] for row in _read_csv(targets[index])[1:]}
-            expected_old = (
-                "old-1cll-confidence_inputs_all.csv"
-                if index == 4
-                else "old-1cll-scores"
-            )
-            assert values == {"109m": f"new-{index}", "1cll": expected_old}
+        for name in OutputTargets.CONFIDENCE_OUTPUTS:
+            assert self._values(targets, name) == {
+                "109m": f"new-{name}",
+                "1cll": f"old-1cll-{name}",
+            }
 
     def test_discard_leaves_previous_rows_intact(self, tmp_path: Path) -> None:
         targets = self._outputs(tmp_path)
-        before = {p: open(p, "rb").read() for p in targets}
+        before = self._bytes(targets)
         staging = resume.ResumeStaging(str(tmp_path), targets)
-        self._stage(staging, {index: [["109m", "new"]] for index in range(4)})
+        self._stage(staging, {name: [["109m", "new"]] for name in self.CORE_NAMES})
         staging.replacement_ids.add("109m")
         staging.discard()
         assert not os.path.exists(staging.dir)
-        assert {p: open(p, "rb").read() for p in targets} == before
+        assert self._bytes(targets) == before
 
     def test_discard_is_idempotent(self, tmp_path: Path) -> None:
         """Cleanup runs in a finally block and may be reached twice."""
@@ -2000,12 +2006,17 @@ class TestResumeStaging:
         targets = self._outputs(tmp_path)
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
-            self._stage(staging, {index: [["109M", "new"]] for index in range(4)})
+            self._stage(
+                staging, {name: [["109M", "new"]] for name in self.ALWAYS_NAMES}
+            )
             staging.replacement_ids.add("109M")
             staging.commit(bonds_enabled=True)
         finally:
             staging.discard()
-        values = {row[0].lower(): row[1] for row in _read_csv(targets[0])[1:]}
+        values = {
+            key.lower(): value
+            for key, value in self._values(targets, "manifest").items()
+        }
         assert values["109m"] == "new"
         assert len(values) == 2
 
@@ -2014,20 +2025,27 @@ class TestResumeStaging:
     ) -> None:
         """A header disagreement must fail loudly, not silently misalign rows."""
         targets = self._outputs(tmp_path)
-        before = open(targets[0], "rb").read()
+        before = self._bytes(targets, ("manifest",))
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
-            with open(staging.staged[0], "w", newline="") as handle:
+            with open(staging.staged.manifest, "w", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(["pdbID", "value", "extra"])
                 writer.writerow(["109m", "new", "x"])
-            self._stage(staging, {1: [["109m", "new"]], 2: [], 3: []})
+            self._stage(
+                staging,
+                {
+                    name: [["109m", "new"]]
+                    for name in self.ALWAYS_NAMES
+                    if name != "manifest"
+                },
+            )
             staging.replacement_ids.add("109m")
             with pytest.raises(ValueError):
                 staging.commit(bonds_enabled=True)
         finally:
             staging.discard()
-        assert open(targets[0], "rb").read() == before
+        assert self._bytes(targets, ("manifest",)) == before
         leftovers = [
             name for name in os.listdir(tmp_path) if name.startswith(".manifest.csv.")
         ]

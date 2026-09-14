@@ -843,17 +843,17 @@ def write_review_queue(
     output_columns = (*confidence_columns, *REVIEW_CONTEXT_COLUMNS)
     summaries: dict[str, dict[str, str]] = {}
     if os.path.isfile(crystallization_summary_path):
-        with open(crystallization_summary_path, newline="") as handle:
+        with open(crystallization_summary_path, newline="", encoding="utf-8") as handle:
             summaries = {
                 row["pdbID"].strip().lower(): row for row in csv.DictReader(handle)
             }
     count = 0
-    with open(output_path, "w", newline="") as output:
+    with open(output_path, "w", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=output_columns)
         writer.writeheader()
         if not os.path.isfile(confidence_scores_path):
             return 0
-        with open(confidence_scores_path, newline="") as scores:
+        with open(confidence_scores_path, newline="", encoding="utf-8") as scores:
             reader = csv.DictReader(scores)
             if reader.fieldnames != list(confidence_columns):
                 raise ValueError(
