@@ -1056,12 +1056,14 @@ def test_explicit_workers_are_still_capped_for_process_overhead(
     args = cli.parse_args(["--workers", "50", "--output-dir", str(tmp_path)])
     run_log = runlog.RunLog(args, "pytest")
 
-    def automatic_worker_limits(**_kwargs: object) -> tuple[int, int]:
+    def worker_limits_for_budget(_budget: object) -> tuple[int, int]:
         return 8, 3
 
-    monkeypatch.setattr(pool, "automatic_worker_limits", automatic_worker_limits)
+    monkeypatch.setattr(pool, "worker_limits_for_budget", worker_limits_for_budget)
 
-    workers = pool.choose_worker_count(args, entry_count=20, run_log=run_log)
+    workers = pool.choose_worker_count(
+        args, entry_count=20, run_log=run_log, memory_budget_bytes=None
+    )
 
     assert workers == 3
     assert run_log.details["requested_workers"] == 50

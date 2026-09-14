@@ -180,8 +180,10 @@ class _Ccp4Runner:
         logger.debug("%s: running %s (budget %gs)", self.pdb_id, program, budget)
         started = time.monotonic()
         try:
-            # Capture stderr in a file to tolerate non-UTF-8 output and avoid waiting
-            # for EOF from helpers that inherit a pipe.
+            # Both outputs are files the child writes to directly, so the text
+            # encoding here never touches CCP4 output; the log is decoded
+            # leniently when read back. Files also avoid waiting for EOF from
+            # helpers that inherit a pipe.
             # Keep CCP4 in the worker's process group so driver cleanup reaches it.
             with (
                 open(log_path, "w", encoding="utf-8", errors="replace") as log,

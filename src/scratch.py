@@ -74,7 +74,7 @@ def sweep_owned_scratch_directories(output_dir: str) -> int:
         return 0
     root = os.path.realpath(output_dir)
     for name in names:
-        if not name.startswith((".alchemy-", ".alchemy-resume-")):
+        if not name.startswith(".alchemy-"):
             continue
         path = os.path.join(output_dir, name)
         if os.path.islink(path) or not os.path.isdir(path):

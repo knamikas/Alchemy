@@ -142,7 +142,8 @@ atom-level chemical rule determines which candidates Alchemy may infer as
 bonds. Following [Harding's
 coordination-group
 definition](https://doi.org/10.1107/S0907444904004081), the upper limit is the
-target metal-donor distance plus 0.75 Å. If the exact residue-specific reference
+target metal-donor distance plus 0.75 Å, never more than the 4.0 Å candidate
+search radius. If the exact residue-specific reference
 is absent, the largest target for the same metal and donor element is used only
 for sphere membership. A pair with no such target is retained as candidate
 evidence but is not inferred as a contact; the entry reports

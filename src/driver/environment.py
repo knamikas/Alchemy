@@ -132,7 +132,7 @@ def gemmi_version() -> str:
         import gemmi
 
         return str(getattr(gemmi, "__version__", "unknown"))
-    except Exception:
+    except ImportError:
         return "unknown"
 
 

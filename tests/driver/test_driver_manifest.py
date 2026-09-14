@@ -560,15 +560,16 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 
     monkeypatch.setattr(worker, "run_bond_analysis", fail_bond_analysis)
 
-    analysis = worker.run_bond_stage(
-        result, _cfg(bonds=True), inputs, structure, [], []
-    )
+    outcome = worker.run_bond_stage("109m", _cfg(bonds=True), inputs, structure, [], [])
+    analysis = outcome.analysis
 
     assert (analysis.bond_rows, analysis.candidate_rows, analysis.site_summaries) == (
         [],
         [],
         {},
     )
+    assert outcome.failed and outcome.error.startswith("bond: RuntimeError")
+    worker._apply_bond_outcome(result, outcome)
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
     assert worker.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True

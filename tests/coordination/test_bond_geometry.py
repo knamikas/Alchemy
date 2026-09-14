@@ -18,15 +18,20 @@ import codes
 import coordinate_conversion
 import coordination.analysis as ba
 import coordination.dpi as dpi_module
+import coordination.schema as coordination_schema
 import reference_data
 import worker
 from codes import EntryStatus
 from coordination import donor_chemistry
-from coordination import schema as coordination_schema
 from coordination.contact_record import Candidate
 from coordination.schema import BondRow, CandidateRow
 from metal_elements import METAL_ELEMENTS
-from structure_analysis import AtomSite, StructureContext, count_ni, load_structure
+from structure_analysis import (
+    AtomSite,
+    StructureContext,
+    count_ni,
+    load_structure,
+)
 
 _AnalysisResult = tuple[
     list[BondRow],

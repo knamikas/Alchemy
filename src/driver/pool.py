@@ -50,10 +50,10 @@ from driver.report import (
 )
 from driver.resources import (
     MemoryPlan,
-    automatic_worker_limits,
     available_memory_bytes,
     estimate_entry_memory,
     scheduling_memory_budget,
+    worker_limits_for_budget,
 )
 from driver.resume import (
     ResumeStaging,
@@ -282,16 +282,20 @@ def _clear_stale_outputs(
         raise DriverError(f"Could not clear stale confidence output: {exc}") from None
 
 
-def choose_worker_count(args: RunConfig, entry_count: int, run_log: RunLog) -> int:
+def choose_worker_count(
+    args: RunConfig,
+    entry_count: int,
+    run_log: RunLog,
+    *,
+    memory_budget_bytes: int | None,
+) -> int:
     """Size the pool, never above the number of entries there are to run.
 
     A Pool creates every worker up front, and under the spawn start method each
-    one re-imports gemmi into its own interpreter.
+    one re-imports gemmi into its own interpreter. The memory budget is the one
+    the entry plan measured, so the run sizes itself from a single reading.
     """
-    cpu_limit, memory_limit = automatic_worker_limits(
-        memory_limit_bytes=args.memory_limit,
-        utilization=args.memory_utilization,
-    )
+    cpu_limit, memory_limit = worker_limits_for_budget(memory_budget_bytes)
     requested = cpu_limit if args.workers is None else args.workers
     workers = min(requested, entry_count)
     if memory_limit is not None:
@@ -704,7 +708,9 @@ def _execute_with_output_lock(
         identity=identity,
     )
     memory_plan = plan_entry_memory(args, ids, cfg, run_log)
-    workers = choose_worker_count(args, len(ids), run_log)
+    workers = choose_worker_count(
+        args, len(ids), run_log, memory_budget_bytes=memory_plan.budget_bytes
+    )
 
     tally, writers = process_entries(
         args, ids, cfg, workers, layout, plan, run_log, memory_plan

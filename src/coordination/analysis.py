@@ -993,7 +993,9 @@ def _site_context_values(
 
 # Generated-contact scope and its two dependency flags, keyed by whether the
 # site has any crystallographic and any strict-NCS contact. Read only once a
-# site has generated contacts, so a contact that is neither counts as NCS.
+# site has generated contacts, and every generated contact is one or the other,
+# so the (False, False) row is unreachable; it is kept so an inconsistent count
+# degrades to the NCS scope instead of raising.
 _GENERATED_SCOPES = {
     (True, True): ("strict_ncs_and_crystallographic", True, True),
     (True, False): ("crystallographic", True, False),
@@ -1128,24 +1130,35 @@ class _MetalAnalysisResult:
     unsupported_pairs: set[tuple[str, str]]
 
 
+@dataclass(frozen=True, slots=True)
+class _EntryContext:
+    """Entry-level inputs that every metal site of one entry shares."""
+
+    pdb_id: str
+    structure: StructureContext
+    explicit_search: gemmi.NeighborSearch
+    image_search: gemmi.NeighborSearch | None
+    dpi_components: DpiComponents
+    ni: float
+    deposited_ni: float
+    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]]
+    zd_idx: Sequence[int] | None
+    entry_nonwater_median_b_iso: float
+
+
 def _analyze_metal_site(
-    pdb_id: str,
-    structure: StructureContext,
+    entry: _EntryContext,
     metal: AtomSite,
     metal_declarations: Sequence[Candidate],
-    explicit_search: gemmi.NeighborSearch,
-    image_search: gemmi.NeighborSearch | None,
-    dpi_components: DpiComponents,
-    ni: float,
-    deposited_ni: float,
-    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]],
-    zd_idx: Sequence[int] | None,
 ) -> _MetalAnalysisResult:
+    pdb_id = entry.pdb_id
+    structure = entry.structure
+    dpi_components = entry.dpi_components
     explicit_declarations = [
         candidate for candidate in metal_declarations if not candidate.symmetry_contact
     ]
     explicit_candidates = _merge_candidates(
-        collect_proximal_candidates(structure, explicit_search, metal, False),
+        collect_proximal_candidates(structure, entry.explicit_search, metal, False),
         explicit_declarations,
     )
     _annotate_donor_policy(structure, explicit_candidates)
@@ -1157,9 +1170,9 @@ def _analyze_metal_site(
 
     image_candidates: list[Candidate] | None = None
     image_contacts: list[Candidate] | None = None
-    if image_search is not None:
+    if entry.image_search is not None:
         image_candidates = _merge_candidates(
-            collect_proximal_candidates(structure, image_search, metal, True),
+            collect_proximal_candidates(structure, entry.image_search, metal, True),
             metal_declarations,
         )
         _annotate_donor_policy(structure, image_candidates)
@@ -1181,19 +1194,19 @@ def _analyze_metal_site(
         explicit_contacts,
         image_contacts,
         dpi_components,
-        ni,
-        deposited_ni,
+        entry.ni,
+        entry.deposited_ni,
         structure,
     )
     summary.update(_site_context_values(primary_contacts, primary_candidates))
     summary.update(_donor_b_factor_summary(metal, primary_contacts))
 
     sigma = sigma_for(
-        sig,
+        entry.sig,
         metal.residue_name,
         metal.chain_id,
         metal.resnum,
-        zd_idx,
+        entry.zd_idx,
         site_key=metal.source_key,
     )
     parent_type = _parent_type(structure, metal, metal.residue_name, metal.element)
@@ -1250,6 +1263,107 @@ class BondAnalysisResult:
     metadata: BondAnalysisMetadata
 
 
+def _declared_candidates_by_metal(
+    structure: StructureContext,
+    connection_path: str,
+    spatial_metals: Sequence[AtomSite],
+    metadata: BondAnalysisMetadata,
+) -> dict[AtomKey, list[Candidate]]:
+    """Resolve deposited connections, recording unresolved ones on ``metadata``."""
+    declared_candidates, declared_issues, declared_warnings = (
+        collect_declared_candidates(structure, connection_path, spatial_metals)
+    )
+    if declared_issues:
+        metadata.partial_reason_codes.append(
+            ReasonCode.DECLARED_CONNECTION_RESOLUTION_INCOMPLETE
+        )
+        metadata.messages.extend(declared_issues)
+    metadata.warning_codes.extend(declared_warnings)
+    declared_by_metal: dict[AtomKey, list[Candidate]] = {}
+    for candidate in declared_candidates:
+        # Every declaration-derived candidate carries the metal it was resolved
+        # against; only proximity discovery leaves the field unset.
+        declared_by_metal.setdefault(
+            cast(AtomSite, candidate.metal).source_key, []
+        ).append(candidate)
+    return declared_by_metal
+
+
+def _entry_context(
+    pdb_id: str,
+    structure: StructureContext,
+    stats_rows: Sequence[Mapping[str, Any]],
+    header: Sequence[str] | None,
+    dpi_inputs: Mapping[str, Any],
+    metadata: BondAnalysisMetadata,
+) -> _EntryContext:
+    """Compute what every site shares, recording entry-level limitations."""
+    dpi_components = calculate_dpi_components(structure, dpi_inputs)
+    if dpi_components.reason_code:
+        metadata.partial_reason_codes.append(dpi_components.reason_code)
+        metadata.messages.append(f"DPI unavailable: {dpi_components.reason_code}")
+    if not structure.symmetry_search_available:
+        metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
+        metadata.messages.append(
+            "symmetry search unavailable: "
+            + (structure.symmetry_search_failure_reason or "unknown reason")
+        )
+    image_search = None
+    if structure.symmetry_search_available:
+        image_search = structure.make_neighbor_search(
+            CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
+            include_symmetry=True,
+            positive_occupancy_only=True,
+        )
+    return _EntryContext(
+        pdb_id=pdb_id,
+        structure=structure,
+        explicit_search=structure.make_neighbor_search(
+            CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
+            include_symmetry=False,
+            positive_occupancy_only=True,
+        ),
+        image_search=image_search,
+        dpi_components=dpi_components,
+        ni=count_ni(structure),
+        deposited_ni=count_deposited_ni(structure),
+        sig=sigma_index(stats_rows),
+        zd_idx=zd_indices(header),
+        entry_nonwater_median_b_iso=_entry_nonwater_median_b_iso(structure),
+    )
+
+
+def _unassessable_site_summary(entry: _EntryContext, metal: AtomSite) -> dict[str, Any]:
+    """The site summary for a metal whose coordinates rule out any geometry."""
+    summary = _site_summary(
+        metal,
+        [],
+        [] if entry.structure.symmetry_search_available else None,
+        entry.dpi_components,
+        entry.ni,
+        entry.deposited_ni,
+        entry.structure,
+    )
+    summary["geometry_not_assessed_reason"] = ReasonCode.NON_FINITE_METAL_COORDINATES
+    summary.update(_site_context_values([], []))
+    summary.update(_donor_b_factor_summary(metal, []))
+    return summary
+
+
+def _note_unsupported_pairs(
+    metadata: BondAnalysisMetadata, unsupported_pairs: set[tuple[str, str]]
+) -> None:
+    """Record metal-donor element pairs the reference table cannot score."""
+    if not unsupported_pairs:
+        return
+    metadata.partial_reason_codes.append(ReasonCode.MISSING_FIRST_SPHERE_REFERENCE)
+    pairs = ", ".join(
+        f"{metal_element}-{donor_element}"
+        for metal_element, donor_element in sorted(unsupported_pairs)
+    )
+    metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
+
+
 def run_bond_analysis(
     pdb_id: str,
     pdb_path: str,
@@ -1286,17 +1400,9 @@ def run_bond_analysis(
     if not metals_in_model:
         return BondAnalysisResult([], [], {}, metadata)
 
-    (declared_candidates, declared_issues, declared_warnings) = (
-        collect_declared_candidates(
-            structure, connection_path or pdb_path, spatial_metals
-        )
+    declared_by_metal = _declared_candidates_by_metal(
+        structure, connection_path or pdb_path, spatial_metals, metadata
     )
-    if declared_issues:
-        metadata.partial_reason_codes.append(
-            ReasonCode.DECLARED_CONNECTION_RESOLUTION_INCOMPLETE
-        )
-        metadata.messages.extend(declared_issues)
-    metadata.warning_codes.extend(declared_warnings)
     if non_finite_metals:
         metadata.partial_reason_codes.append(ReasonCode.NON_FINITE_METAL_COORDINATES)
         metadata.messages.append(
@@ -1308,97 +1414,26 @@ def run_bond_analysis(
                 for metal in non_finite_metals
             )
         )
-    declared_by_metal: dict[AtomKey, list[Candidate]] = {}
-    for candidate in declared_candidates:
-        # Every declaration-derived candidate carries the metal it was resolved
-        # against; only proximity discovery leaves the field unset.
-        declared_by_metal.setdefault(
-            cast(AtomSite, candidate.metal).source_key, []
-        ).append(candidate)
-
-    dpi_components = calculate_dpi_components(structure, dpi_inputs)
-    entry_nonwater_median_b_iso = _entry_nonwater_median_b_iso(structure)
-    ni = count_ni(structure)
-    deposited_ni = count_deposited_ni(structure)
-    if dpi_components.reason_code:
-        metadata.partial_reason_codes.append(dpi_components.reason_code)
-        metadata.messages.append(f"DPI unavailable: {dpi_components.reason_code}")
-    if not structure.symmetry_search_available:
-        metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
-        metadata.messages.append(
-            "symmetry search unavailable: "
-            + (structure.symmetry_search_failure_reason or "unknown reason")
-        )
-
-    explicit_search = structure.make_neighbor_search(
-        CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
-        include_symmetry=False,
-        positive_occupancy_only=True,
-    )
-    image_search = None
-    if structure.symmetry_search_available:
-        image_search = structure.make_neighbor_search(
-            CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
-            include_symmetry=True,
-            positive_occupancy_only=True,
-        )
-    sig = sigma_index(stats_rows)
-    zd_idx = zd_indices(header)
+    entry = _entry_context(pdb_id, structure, stats_rows, header, dpi_inputs, metadata)
 
     rows: list[BondRow] = []
     candidate_rows: list[CandidateRow] = []
     summaries: dict[AtomKey, dict[str, Any]] = {}
     for metal in metals_in_model:
         if not metal.coordinates_valid:
-            summary = _site_summary(
-                metal,
-                [],
-                [] if structure.symmetry_search_available else None,
-                dpi_components,
-                ni,
-                deposited_ni,
-                structure,
+            summary = _unassessable_site_summary(entry, metal)
+        else:
+            site_result = _analyze_metal_site(
+                entry, metal, declared_by_metal.get(metal.source_key, ())
             )
-            summary["geometry_not_assessed_reason"] = (
-                ReasonCode.NON_FINITE_METAL_COORDINATES
-            )
-            summary.update(_site_context_values([], []))
-            summary.update(_donor_b_factor_summary(metal, []))
-            summary["entry_nonwater_median_b_iso"] = entry_nonwater_median_b_iso
-            summary.update(metal_proximity[metal.source_key])
-            summary.update(metal_special_positions[metal.source_key])
-            summaries[metal.source_key] = summary
-            continue
-        site_result = _analyze_metal_site(
-            pdb_id,
-            structure,
-            metal,
-            declared_by_metal.get(metal.source_key, ()),
-            explicit_search,
-            image_search,
-            dpi_components,
-            ni,
-            deposited_ni,
-            sig,
-            zd_idx,
-        )
-        if site_result.unsupported_pairs:
-            metadata.partial_reason_codes.append(
-                ReasonCode.MISSING_FIRST_SPHERE_REFERENCE
-            )
-            pairs = ", ".join(
-                f"{metal_element}-{donor_element}"
-                for metal_element, donor_element in sorted(
-                    site_result.unsupported_pairs
-                )
-            )
-            metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
-        site_result.summary.update(metal_proximity[metal.source_key])
-        site_result.summary.update(metal_special_positions[metal.source_key])
-        site_result.summary["entry_nonwater_median_b_iso"] = entry_nonwater_median_b_iso
-        summaries[metal.source_key] = site_result.summary
-        rows.extend(site_result.bond_rows)
-        candidate_rows.extend(site_result.candidate_rows)
+            _note_unsupported_pairs(metadata, site_result.unsupported_pairs)
+            summary = site_result.summary
+            rows.extend(site_result.bond_rows)
+            candidate_rows.extend(site_result.candidate_rows)
+        summary.update(metal_proximity[metal.source_key])
+        summary.update(metal_special_positions[metal.source_key])
+        summary["entry_nonwater_median_b_iso"] = entry.entry_nonwater_median_b_iso
+        summaries[metal.source_key] = summary
 
     metadata.partial_reason_codes = list(dict.fromkeys(metadata.partial_reason_codes))
     metadata.warning_codes = list(dict.fromkeys(metadata.warning_codes))

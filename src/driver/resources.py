@@ -38,6 +38,11 @@ MTZ_GZIP_SIZE_FALLBACK_MULTIPLIER = 128
 # driver, desktop, filesystem cache and short-lived program overlap need room.
 MEMORY_RESERVE_MIN_BYTES = 4 * GIB
 DEFAULT_MEMORY_UTILIZATION = 0.80
+#: Logical CPUs left idle when the physical count is unknown, so hyperthread
+#: siblings are not all treated as independent workers.
+LOGICAL_CPU_HEADROOM = 2
+#: Resident worker overhead may claim at most 1/N of the memory budget.
+RESIDENT_WORKER_BUDGET_DIVISOR = 2
 
 PROC_MEMINFO_PATH = "/proc/meminfo"
 PROC_SELF_CGROUP_PATH = "/proc/self/cgroup"
@@ -367,12 +372,8 @@ def scheduling_memory_budget(
     return max(1, capacity - reserve), reserve
 
 
-def automatic_worker_limits(
-    *,
-    memory_limit_bytes: int | None = None,
-    utilization: float = DEFAULT_MEMORY_UTILIZATION,
-) -> tuple[int, int | None]:
-    """Size the pool separately from the memory cost of active analyses.
+def worker_limits_for_budget(budget: int | None) -> tuple[int, int | None]:
+    """Size the pool from the CPU limits and an already measured memory budget.
 
     Reserve at most half the entry budget for resident worker overhead, so
     starting a pool leaves space for calculations. Weighted admission charges
@@ -380,21 +381,34 @@ def automatic_worker_limits(
     """
     logical = available_cpu_count()
     physical = available_physical_cpu_count()
-    cpu_limit = min(logical, physical) if physical else max(1, logical - 2)
+    cpu_limit = (
+        min(logical, physical) if physical else max(1, logical - LOGICAL_CPU_HEADROOM)
+    )
     quota = available_cpu_quota()
     if quota is not None:
         cpu_limit = min(cpu_limit, quota)
+    # With no measurable or explicit allowance, concurrency cannot be safely
+    # calibrated. A user-supplied --memory-limit enables sizing in that case.
+    memory_limit = (
+        max(1, budget // (RESIDENT_WORKER_BUDGET_DIVISOR * WORKER_FIXED_OVERHEAD_BYTES))
+        if budget is not None
+        else 1
+    )
+    return cpu_limit, memory_limit
+
+
+def automatic_worker_limits(
+    *,
+    memory_limit_bytes: int | None = None,
+    utilization: float = DEFAULT_MEMORY_UTILIZATION,
+) -> tuple[int, int | None]:
+    """Measure memory, then size the pool as ``worker_limits_for_budget`` does."""
     budget, _ = scheduling_memory_budget(
         available_memory_bytes(),
         memory_limit_bytes=memory_limit_bytes,
         utilization=utilization,
     )
-    # With no measurable or explicit allowance, concurrency cannot be safely
-    # calibrated. A user-supplied --memory-limit enables sizing in that case.
-    memory_limit = (
-        max(1, budget // (2 * WORKER_FIXED_OVERHEAD_BYTES)) if budget is not None else 1
-    )
-    return cpu_limit, memory_limit
+    return worker_limits_for_budget(budget)
 
 
 def _open_text(path: str) -> TextIO:

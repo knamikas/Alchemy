@@ -94,8 +94,8 @@ def utilization_fraction(value: str) -> float:
     return parsed
 
 
-def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
-    """Parse command-line arguments into an immutable run configuration."""
+def build_parser() -> argparse.ArgumentParser:
+    """Declare every command-line option; validation lives in ``parse_args``."""
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -274,8 +274,11 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         "(bonds=%(default)s)",
     )
     ap.set_defaults(bonds=True)
+    return ap
 
-    args = ap.parse_args(argv)
+
+def _validate_arguments(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Reject option combinations that argparse alone cannot express."""
     if args.id and args.id_file:
         ap.error("use either --id or --id-file, not both")
     if args.retry_partials and not args.resume:
@@ -299,6 +302,10 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
             "--data-json requires manual structure inputs: --mtz-file with "
             "either --pdb-file or --cif-file"
         )
+
+
+def _run_config(args: argparse.Namespace) -> RunConfig:
+    """Freeze the parsed namespace into the immutable run configuration."""
     return RunConfig(
         id=args.id,
         id_file=args.id_file,
@@ -329,6 +336,14 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         retry_partials=args.retry_partials,
         bonds=args.bonds,
     )
+
+
+def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
+    """Parse command-line arguments into an immutable run configuration."""
+    ap = build_parser()
+    args = ap.parse_args(argv)
+    _validate_arguments(ap, args)
+    return _run_config(args)
 
 
 def _install_termination_handler() -> (

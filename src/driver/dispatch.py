@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 # without any new results before marking all unfinished entries as failed.
 # Those entries can be retried on a later run.
 WORKER_STALL_GRACE_S = 600.0
+# How long the dispatcher sleeps when no result, death, or stall is pending.
+DISPATCH_POLL_INTERVAL_S = 0.05
 # Bound clean shutdown before forcefully stopping remaining workers.
 WORKER_SHUTDOWN_GRACE_S = 5.0
 
@@ -501,12 +503,14 @@ def _admit_pending(
     memory_plan: MemoryPlan,
     deaths: _WorkerDeathWatch,
     pool: WorkerPool,
+    current_available: int | None,
 ) -> None:
-    """Start pending entries on idle workers until memory or the budget says stop."""
+    """Start pending entries on idle workers until memory or the budget says stop.
+
+    ``current_available`` is the dispatcher's latest reading; memory is measured
+    again only after an admission, since only then has it changed.
+    """
     while pending and ledger.has_idle_worker():
-        current_available = guarded_available_memory(
-            memory_plan, available_memory_bytes()
-        )
         if (
             ledger.active
             and memory_plan.reserve_bytes is not None
@@ -535,18 +539,28 @@ def _admit_pending(
             )
         deaths.track_submitted_entry(estimate.pdb_id)
         ledger.admit(pool.apply_async(process, (estimate.pdb_id,)), estimate)
+        current_available = guarded_available_memory(
+            memory_plan, available_memory_bytes()
+        )
 
 
 def _release_workers(
     pool: WorkerPool,
-    log_listener: QueueListener,
+    log_listener: QueueListener | None,
     log_queue: WorkerLogQueue[Any],
     run_log: RunLog,
 ) -> None:
-    """Stop the pool and its log listener, recording any forced shutdown."""
+    """Stop the pool and its log listener, recording any forced shutdown.
+
+    ``log_listener`` is ``None`` when the listener never started; the pool is
+    still shut down so its workers do not outlive the failed batch.
+    """
     forced = _shutdown_pool(pool)
+    if log_listener is None:
+        with contextlib.suppress(Exception):
+            log_queue.close()
     # Keep forwarding logs until worker shutdown completes.
-    if stop_log_listener(log_listener, log_queue):
+    elif stop_log_listener(log_listener, log_queue):
         run_log.summary["worker_log_listener_abandoned"] = True
         logger.warning(
             "the worker log listener did not stop within %gs and was "
@@ -588,8 +602,7 @@ def dispatch_entries(
     pool = Pool(
         workers, initializer=initialize_worker, initargs=(cfg, inflight, log_queue)
     )
-    log_listener = start_worker_log_listener(log_queue)
-    deaths = _WorkerDeathWatch(pool, inflight, cfg)
+    log_listener: QueueListener | None = None
 
     def render(*, force: bool = False, final: bool = False) -> None:
         progress.render(
@@ -602,6 +615,8 @@ def dispatch_entries(
         )
 
     try:
+        log_listener = start_worker_log_listener(log_queue)
+        deaths = _WorkerDeathWatch(pool, inflight, cfg)
         pending = list(memory_plan.estimates)
         estimates_by_id = {
             estimate.pdb_id: estimate for estimate in memory_plan.estimates
@@ -634,7 +649,15 @@ def dispatch_entries(
                 memory_plan.reserve_bytes,
             )
             if not pause:
-                _admit_pending(pending, ledger, admission, memory_plan, deaths, pool)
+                _admit_pending(
+                    pending,
+                    ledger,
+                    admission,
+                    memory_plan,
+                    deaths,
+                    pool,
+                    current_available,
+                )
 
             batch = ledger.collect_ready()
             batch.extend(deaths.poll())
@@ -646,7 +669,7 @@ def dispatch_entries(
                 )
                 if stalled is None:
                     render()
-                    time.sleep(0.05)
+                    time.sleep(DISPATCH_POLL_INTERVAL_S)
                     continue
                 batch = stalled
             for result in batch:
@@ -673,11 +696,13 @@ def dispatch_entries(
                     continue
                 completed += 1
                 completed_ids.add(result.pdb_id)
+                # Write the rows before the run log records the entry, so a
+                # failed write cannot leave diagnostics claiming it completed.
+                sink(result)
                 run_log.record_entry(
                     result,
                     memory_estimate_bytes=estimates_by_id[result.pdb_id].bytes,
                 )
-                sink(result)
                 tally.record(result)
                 finished = completed == len(ids)
                 render(force=progress.terminal or finished, final=finished)

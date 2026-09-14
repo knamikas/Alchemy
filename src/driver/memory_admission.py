@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+#: Headroom above the reserve that must hold before admission recovers.
+PRESSURE_MARGIN_FLOOR_BYTES = 512 * 1024**2
+#: Share of the budget kept after each pressure episode.
+BACKOFF_FACTOR = 0.80
+#: Each recovery step raises the budget by this fraction of its original maximum.
+RECOVERY_STEP_DIVISOR = 20
+
 
 class MemoryAdmission:
     """Reduce admission during memory pressure and recover after sustained headroom.
@@ -19,7 +26,7 @@ class MemoryAdmission:
         self.budget = maximum
         self.floor = floor
         self.reserve = reserve
-        self.margin = max(512 * 1024**2, (reserve or 0) // 4)
+        self.margin = max(PRESSURE_MARGIN_FLOOR_BYTES, (reserve or 0) // 4)
         self.pressure_active = False
         self.healthy_since: float | None = None
         self.last_change = float("-inf")
@@ -30,7 +37,7 @@ class MemoryAdmission:
     def back_off(self, now: float) -> None:
         """Reduce future admission and restart the healthy observation window."""
         if self.budget is not None and self.budget > self.floor:
-            self.budget = max(self.floor, int(self.budget * 0.80))
+            self.budget = max(self.floor, int(self.budget * BACKOFF_FACTOR))
             self.backoffs += 1
         self.last_change = now
         self.healthy_since = None
@@ -65,7 +72,7 @@ class MemoryAdmission:
             return False
         self.pressure_active = False
         if self.budget is not None and self.maximum is not None:
-            step = max(self.floor, self.maximum // 20)
+            step = max(self.floor, self.maximum // RECOVERY_STEP_DIVISOR)
             safe_budget = reserved + available - self.reserve - self.margin
             recovered = min(self.maximum, self.budget + step, safe_budget)
             if recovered > self.budget:

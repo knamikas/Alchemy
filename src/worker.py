@@ -13,7 +13,7 @@ import shutil
 import signal
 import time
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing.queues import Queue, SimpleQueue
 from typing import Any
 
@@ -276,23 +276,92 @@ class EntryInputs:
     source_coordinate_path: str
 
 
+@dataclass(frozen=True, slots=True)
+class InputProvenance:
+    """Coordinate and PDB-REDO provenance the input stage establishes."""
+
+    source_coordinate_format: str
+    analysis_coordinate_format: str
+    coordinate_conversion_performed: bool
+    pdb_redo_is_twin: bool | None
+    pdb_redo_version: str
+    pdb_redo_date: str
+    source_coordinate_path: str
+
+
+@dataclass(slots=True)
+class DensityOutcome:
+    """What the density stage produced, or why it could not.
+
+    Stages return an outcome instead of editing the entry result themselves;
+    ``_process_entry`` folds each one in, in stage order.
+    """
+
+    rows: list[MetalStatsRow] = field(default_factory=list)
+    header: list[str] = field(default_factory=list)
+    #: Set only when density could not be produced.
+    reason_code: str = ""
+    error: str = ""
+    timings: dict[str, float] = field(default_factory=dict)
+    warning_codes: list[str] = field(default_factory=list)
+    density_context_row: dict[str, Any] = field(default_factory=dict)
+    ccp4_timeout_log_path: str = ""
+    density_map_scope_used: str = ""
+    density_full_map_bytes: int = 0
+    density_edstats_map_bytes: int = 0
+
+    @property
+    def failed(self) -> bool:
+        """Whether density is unavailable for this entry."""
+        return bool(self.reason_code)
+
+
+@dataclass(slots=True)
+class BondOutcome:
+    """The bond-stage analysis, or the failure that stood in for it."""
+
+    analysis: BondAnalysisResult
+    #: Set only when the geometry stage raised; the analysis is then empty.
+    error: str = ""
+    timings: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def failed(self) -> bool:
+        """Whether the geometry stage raised."""
+        return bool(self.error)
+
+
+@dataclass(frozen=True, slots=True)
+class EarlyOutcome:
+    """An entry that finishes before any map is calculated."""
+
+    status: EntryStatus
+    n_metals: int
+    n_bonds: int | None
+    n_candidates: int | None
+    reason_codes: tuple[str, ...] = ()
+    error: str = ""
+    no_metals: bool = False
+    metal_site_limit_exceeded: bool = False
+    confidence_inputs_missing_reason: str = ""
+
+
 def _run_density_stage(
-    result: EntryResult,
+    pdb_id: str,
     cfg: WorkerConfig,
     inputs: EntryInputs,
     structure: StructureContext,
-) -> tuple[list[MetalStatsRow], list[str]]:
+) -> DensityOutcome:
     """Calculate the maps, run EDSTATS, and extract this entry's statistics.
 
-    Returns ``(rows, header)``, both empty when density could not be produced;
-    the reason is recorded on ``result`` in that case.
+    A handled failure leaves ``rows`` and ``header`` empty and records the
+    reason on the outcome.
     """
-    rows: list[MetalStatsRow] = []
-    header: list[str] = []
+    outcome = DensityOutcome()
     density_started = time.monotonic()
     try:
         res = run_density_analysis(
-            result.pdb_id,
+            pdb_id,
             inputs.mtz,
             inputs.pdb,
             inputs.work_dir,
@@ -306,52 +375,67 @@ def _run_density_stage(
         )
     except Ccp4ToolTimeoutError as exc:
         # A timeout does not establish an input defect; see ``retryable_for``.
-        rows, header = [], []
-        kept_log = _preserve_timeout_log(exc, result.pdb_id, cfg.output_dir)
-        result.reason_codes = [ReasonCode.CCP4_TOOL_TIMEOUT]
-        result.error = truncate(
+        outcome.ccp4_timeout_log_path = _preserve_timeout_log(
+            exc, pdb_id, cfg.output_dir
+        )
+        outcome.reason_code = ReasonCode.CCP4_TOOL_TIMEOUT
+        outcome.error = truncate(
             f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
-        result.confidence_inputs_missing_reason = ReasonCode.CCP4_TOOL_TIMEOUT
-        result.ccp4_timeout_log_path = kept_log
-        result.timings.update(exc.timings)
+        outcome.timings.update(exc.timings)
     except MtzfixValidationError as exc:
         # Coefficient validation failed; geometry can still be assessed.
-        rows, header = [], []
-        result.reason_codes = [ReasonCode.MTZFIX_VALIDATION_FAILURE]
-        result.error = truncate(
+        outcome.reason_code = ReasonCode.MTZFIX_VALIDATION_FAILURE
+        outcome.error = truncate(
             f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
-        result.confidence_inputs_missing_reason = ReasonCode.MTZFIX_VALIDATION_FAILURE
-        result.timings.update(exc.timings)
+        outcome.timings.update(exc.timings)
     else:
-        result.timings.update(res.timings)
-        result.density_map_scope_used = res.density_map_scope_used
-        result.density_full_map_bytes = res.full_map_bytes
-        result.density_edstats_map_bytes = res.edstats_map_bytes
+        outcome.timings.update(res.timings)
+        outcome.density_map_scope_used = res.density_map_scope_used
+        outcome.density_full_map_bytes = res.full_map_bytes
+        outcome.density_edstats_map_bytes = res.edstats_map_bytes
         if res.twin_coefficient_normalization_applied:
-            result.warning_codes = list(
-                dict.fromkeys(
-                    result.warning_codes
-                    + [WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED]
-                )
+            outcome.warning_codes.append(
+                WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED
             )
         statistics_started = time.monotonic()
-        rows, header = extract_metal_statistics(
-            result.pdb_id,
+        outcome.rows, outcome.header = extract_metal_statistics(
+            pdb_id,
             res.stats_out,
             METALS_SET,
             cfg.cofactors,
             structure=structure,
-            density_context_out=result.density_context_row,
-            warning_codes_out=result.warning_codes,
+            density_context_out=outcome.density_context_row,
+            warning_codes_out=outcome.warning_codes,
         )
-        result.timings["statistics_extraction_s"] = round(
+        outcome.timings["statistics_extraction_s"] = round(
             time.monotonic() - statistics_started, 3
         )
     finally:
-        result.timings["density_total_s"] = round(time.monotonic() - density_started, 3)
-    return rows, header
+        outcome.timings["density_total_s"] = round(
+            time.monotonic() - density_started, 3
+        )
+    return outcome
+
+
+def _apply_density_outcome(result: EntryResult, outcome: DensityOutcome) -> None:
+    """Fold the density stage into the entry result."""
+    result.timings.update(outcome.timings)
+    result.warning_codes = list(
+        dict.fromkeys(result.warning_codes + outcome.warning_codes)
+    )
+    result.density_context_row = outcome.density_context_row
+    result.density_map_scope_used = outcome.density_map_scope_used
+    result.density_full_map_bytes = outcome.density_full_map_bytes
+    result.density_edstats_map_bytes = outcome.density_edstats_map_bytes
+    if outcome.failed:
+        result.reason_codes = list(
+            dict.fromkeys(result.reason_codes + [outcome.reason_code])
+        )
+        result.error = outcome.error
+        result.confidence_inputs_missing_reason = outcome.reason_code
+        result.ccp4_timeout_log_path = outcome.ccp4_timeout_log_path
 
 
 def _identification_reason_codes(rows: list[MetalStatsRow]) -> list[ReasonCode]:
@@ -427,18 +511,17 @@ def append_site_fields(
 
 
 def run_bond_stage(
-    result: EntryResult,
+    pdb_id: str,
     cfg: WorkerConfig,
     inputs: EntryInputs,
     structure: StructureContext,
     rows: list[MetalStatsRow],
     header: list[str],
-) -> BondAnalysisResult:
+) -> BondOutcome:
     """Evaluate the contacts around each site, unless ``--no-bonds`` cleared it.
 
-    Returns ``(bond_rows, candidate_rows, site_summaries, bond_meta)``. A
-    bond-stage failure must not lose the EDSTATS rows already computed, so it
-    is recorded on ``result`` and the empty defaults are returned instead.
+    A bond-stage failure must not lose the EDSTATS rows already computed, so
+    it is recorded on the outcome and the empty analysis is returned instead.
     """
     analysis = BondAnalysisResult(
         bond_rows=[],
@@ -450,6 +533,7 @@ def run_bond_stage(
             messages=[],
         ),
     )
+    outcome = BondOutcome(analysis)
     if not cfg.bonds:
         non_finite_metals = [
             metal
@@ -464,12 +548,12 @@ def run_bond_stage(
                 "geometry unavailable for selected metal site(s) with "
                 "non-finite coordinates"
             )
-        return analysis
+        return outcome
 
     bond_started = time.monotonic()
     try:
-        analysis = run_bond_analysis(
-            result.pdb_id,
+        outcome.analysis = run_bond_analysis(
+            pdb_id,
             inputs.pdb,
             rows,
             header,
@@ -483,16 +567,23 @@ def run_bond_stage(
             connection_path=inputs.source_coordinate_path,
         )
     except Exception as e:  # noqa: BLE001
-        result.error = truncate(
+        outcome.error = truncate(
             f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
+    finally:
+        outcome.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)
+    return outcome
+
+
+def _apply_bond_outcome(result: EntryResult, outcome: BondOutcome) -> None:
+    """Fold the bond stage into the entry result."""
+    if outcome.failed:
+        result.error = outcome.error
         result.reason_codes = list(
             dict.fromkeys(result.reason_codes + [ReasonCode.BOND_STAGE_FAILURE])
         )
         result.confidence_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
-    finally:
-        result.timings["bond_analysis_s"] = round(time.monotonic() - bond_started, 3)
-    return analysis
+    result.timings.update(outcome.timings)
 
 
 def _finalize_result(
@@ -528,10 +619,9 @@ def _finalize_result(
 def _prepare_analysis_inputs(
     pdb_id: str,
     cfg: WorkerConfig,
-    result: EntryResult,
     entry: str,
     work_dir: str,
-) -> tuple[EntryInputs, StructureContext]:
+) -> tuple[EntryInputs, StructureContext, InputProvenance]:
     """Prepare the same first-model PDB for EDSTATS and Gemmi."""
     manual_inputs = cfg.manual_inputs
     data_json: str | None = None
@@ -565,14 +655,16 @@ def _prepare_analysis_inputs(
     if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
         model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
     pdb, input_model_count = first_model_pdb(source_pdb, model1_pdb)
-    result.source_coordinate_format = source_format
-    result.analysis_coordinate_format = analysis_format
-    result.coordinate_conversion_performed = converted
-    result.pdb_redo_is_twin = pdb_redo_metadata.is_twin
-    result.pdb_redo_version = pdb_redo_metadata.version
-    result.pdb_redo_date = pdb_redo_metadata.date
-    result.source_coordinate_path = source_coordinate_provenance_path(
-        cfg, pdb_id, source_coordinate_path
+    provenance = InputProvenance(
+        source_coordinate_format=source_format,
+        analysis_coordinate_format=analysis_format,
+        coordinate_conversion_performed=converted,
+        pdb_redo_is_twin=pdb_redo_metadata.is_twin,
+        pdb_redo_version=pdb_redo_metadata.version,
+        pdb_redo_date=pdb_redo_metadata.date,
+        source_coordinate_path=source_coordinate_provenance_path(
+            cfg, pdb_id, source_coordinate_path
+        ),
     )
     inputs = EntryInputs(
         work_dir=work_dir,
@@ -586,60 +678,70 @@ def _prepare_analysis_inputs(
         source_coordinate_path=source_coordinate_path,
     )
     structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
-    return inputs, structure
+    return inputs, structure, provenance
 
 
-def _finish_if_no_analyzable_metals(
-    result: EntryResult, structure: StructureContext
-) -> bool:
-    """Finish early only when density and contact stages cannot produce output."""
-    if structure.metal_atoms(METALS_SET, canonical=True):
-        return False
+def _apply_input_provenance(result: EntryResult, provenance: InputProvenance) -> None:
+    """Record where the analyzed coordinates and metadata came from."""
+    result.source_coordinate_format = provenance.source_coordinate_format
+    result.analysis_coordinate_format = provenance.analysis_coordinate_format
+    result.coordinate_conversion_performed = provenance.coordinate_conversion_performed
+    result.pdb_redo_is_twin = provenance.pdb_redo_is_twin
+    result.pdb_redo_version = provenance.pdb_redo_version
+    result.pdb_redo_date = provenance.pdb_redo_date
+    result.source_coordinate_path = provenance.source_coordinate_path
+
+
+def _early_outcome(structure: StructureContext) -> EarlyOutcome | None:
+    """Finish early when neither density nor contact stages can produce output.
+
+    Entries above the site limit are excluded before any map is calculated;
+    entries without a selected metal need no analysis, unless unknown element
+    symbols make metal absence indeterminate.
+    """
+    selected = structure.metal_atoms(METALS_SET, canonical=True)
+    if len(selected) > MAX_ANALYZED_METAL_SITES:
+        return EarlyOutcome(
+            status=EntryStatus.OK,
+            n_metals=len(selected),
+            n_bonds=0,
+            n_candidates=0,
+            reason_codes=(ReasonCode.METAL_SITE_LIMIT_EXCEEDED,),
+            metal_site_limit_exceeded=True,
+        )
+    if selected:
+        return None
     if structure.unknown_element_atom_count:
-        # Unknown elements prevent a reliable no-metals result.
         unknown_count = structure.unknown_element_atom_count
-        result.status = EntryStatus.PARTIAL
-        result.reason_codes = [ReasonCode.METAL_PRESENCE_INDETERMINATE]
-        result.error = truncate(
-            "cannot establish metal absence: "
-            f"{unknown_count} atom(s) have missing or invalid element symbols",
-            MAX_MANIFEST_STATUS_DETAIL_CHARS,
+        return EarlyOutcome(
+            status=EntryStatus.PARTIAL,
+            n_metals=0,
+            n_bonds=None,
+            n_candidates=None,
+            reason_codes=(ReasonCode.METAL_PRESENCE_INDETERMINATE,),
+            error=truncate(
+                "cannot establish metal absence: "
+                f"{unknown_count} atom(s) have missing or invalid element symbols",
+                MAX_MANIFEST_STATUS_DETAIL_CHARS,
+            ),
+            confidence_inputs_missing_reason=ReasonCode.METAL_PRESENCE_INDETERMINATE,
         )
-        result.n_metals = 0
-        result.confidence_inputs_missing_reason = (
-            ReasonCode.METAL_PRESENCE_INDETERMINATE
-        )
-        return True
-
-    # Skip map and contact calculations when no canonical metal site exists.
-    result.status = EntryStatus.OK
-    result.n_metals = 0
-    result.rows = []
-    result.bond_rows = []
-    result.candidate_rows = []
-    result.n_bonds = 0
-    result.n_candidates = 0
-    result.no_metals = True
-    return True
+    return EarlyOutcome(
+        status=EntryStatus.OK, n_metals=0, n_bonds=0, n_candidates=0, no_metals=True
+    )
 
 
-def _finish_if_metal_site_limit_exceeded(
-    result: EntryResult, structure: StructureContext
-) -> bool:
-    selected_count = len(structure.metal_atoms(METALS_SET, canonical=True))
-    if selected_count <= MAX_ANALYZED_METAL_SITES:
-        return False
-
-    result.status = EntryStatus.OK
-    result.n_metals = selected_count
-    result.rows = []
-    result.bond_rows = []
-    result.candidate_rows = []
-    result.n_bonds = 0
-    result.n_candidates = 0
-    result.reason_codes = [ReasonCode.METAL_SITE_LIMIT_EXCEEDED]
-    result.metal_site_limit_exceeded = True
-    return True
+def _apply_early_outcome(result: EntryResult, outcome: EarlyOutcome) -> None:
+    """Record an entry that finished before density analysis."""
+    result.status = outcome.status
+    result.n_metals = outcome.n_metals
+    result.n_bonds = outcome.n_bonds
+    result.n_candidates = outcome.n_candidates
+    result.reason_codes = list(outcome.reason_codes)
+    result.error = outcome.error
+    result.no_metals = outcome.no_metals
+    result.metal_site_limit_exceeded = outcome.metal_site_limit_exceeded
+    result.confidence_inputs_missing_reason = outcome.confidence_inputs_missing_reason
 
 
 def process(pdb_id: str) -> EntryResult:
@@ -684,10 +786,11 @@ def _process_entry(pdb_id: str) -> EntryResult:
                 kind="entry",
                 preserve=cfg.keep,
             )
-        inputs, structure = _prepare_analysis_inputs(
-            pdb_id, cfg, result, entry, work_dir
+        inputs, structure, provenance = _prepare_analysis_inputs(
+            pdb_id, cfg, entry, work_dir
         )
         result.timings["input_structure_s"] = round(time.monotonic() - t0, 3)
+        _apply_input_provenance(result, provenance)
         result.analysis_coordinate_format = structure.analysis_coordinate_format
         result.input_model_count = structure.input_model_count
         result.model_analyzed = structure.model_analyzed
@@ -707,17 +810,23 @@ def _process_entry(pdb_id: str) -> EntryResult:
                     result.warning_codes + [WarningCode.ZERO_OCCUPANCY_METAL_EXCLUDED]
                 )
             )
-        if _finish_if_metal_site_limit_exceeded(result, structure):
+        early = _early_outcome(structure)
+        if early is not None:
+            _apply_early_outcome(result, early)
             return result
-        if _finish_if_no_analyzable_metals(result, structure):
-            return result
-        rows, header = _run_density_stage(result, cfg, inputs, structure)
-        identification_reason_codes = _identification_reason_codes(rows)
-        bond_analysis = run_bond_stage(result, cfg, inputs, structure, rows, header)
+        density = _run_density_stage(pdb_id, cfg, inputs, structure)
+        _apply_density_outcome(result, density)
+        identification_reason_codes = _identification_reason_codes(density.rows)
+        bond = run_bond_stage(
+            pdb_id, cfg, inputs, structure, density.rows, density.header
+        )
+        _apply_bond_outcome(result, bond)
         # An empty header already has a density-failure code; check completeness
         # only for a successfully produced table.
         sites_without_density = (
-            _sites_without_density_rows(rows, structure) if header else []
+            _sites_without_density_rows(density.rows, structure)
+            if density.header
+            else []
         )
         if sites_without_density:
             identification_reason_codes = list(
@@ -733,12 +842,12 @@ def _process_entry(pdb_id: str) -> EntryResult:
                 len(sites_without_density),
                 sites_without_density,
             )
-        append_site_fields(rows, bond_analysis.site_summaries, structure)
-        result.rows = rows
-        result.bond_rows = bond_analysis.bond_rows
-        result.candidate_rows = bond_analysis.candidate_rows
+        append_site_fields(density.rows, bond.analysis.site_summaries, structure)
+        result.rows = density.rows
+        result.bond_rows = bond.analysis.bond_rows
+        result.candidate_rows = bond.analysis.candidate_rows
         _finalize_result(
-            result, identification_reason_codes, bond_analysis.metadata, structure
+            result, identification_reason_codes, bond.analysis.metadata, structure
         )
     except FileNotFoundError as e:
         result.status = EntryStatus.SKIP

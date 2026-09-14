@@ -299,6 +299,27 @@ class RunLog:
         elapsed_s: float,
         diagnostics_path: str,
     ) -> str:
+        sections = (
+            self._header_lines(exit_code, finished_at, elapsed_s, diagnostics_path),
+            self._provenance_lines(),
+            self._configuration_lines(),
+            self._outcome_lines(elapsed_s),
+            self._output_lines(),
+            self._stage_timing_lines(),
+            self._exception_lines(),
+            self._slowest_entry_lines(),
+            self._diagnostics_lines(diagnostics_path),
+        )
+        return "\n".join(line for section in sections for line in section)
+
+    def _header_lines(
+        self,
+        exit_code: int,
+        finished_at: datetime,
+        elapsed_s: float,
+        diagnostics_path: str,
+    ) -> list[str]:
+        """Run identity, timing, and the host it ran on."""
         lines = [
             "Alchemy run report",
             "==================",
@@ -331,7 +352,11 @@ class RunLog:
                 else "unknown"
             )
         )
+        return lines
 
+    def _provenance_lines(self) -> list[str]:
+        """Software versions, reference identities, and the analysis policy."""
+        lines: list[str] = []
         lines.extend(
             ["", "Provenance and analysis policy", "------------------------------"]
         )
@@ -360,7 +385,11 @@ class RunLog:
                 f"Density-map scope requested: {self.args.density_map_scope}",
             ]
         )
+        return lines
 
+    def _configuration_lines(self) -> list[str]:
+        """Invocation options and the execution choices resolved from them."""
+        lines: list[str] = []
         lines.extend(
             [
                 "",
@@ -384,7 +413,11 @@ class RunLog:
             ):
                 continue
             lines.append(f"  {name}: {self._detail_value(name, value)}")
+        return lines
 
+    def _outcome_lines(self, elapsed_s: float) -> list[str]:
+        """Entry counts, status and code tallies, and throughput."""
+        lines: list[str] = []
         status_counts = Counter(entry["status"] for entry in self.entries)
         reason_counts = Counter(
             reason for entry in self.entries for reason in entry["reason_codes"]
@@ -428,7 +461,11 @@ class RunLog:
         )
         if self.driver_error:
             lines.append(f"Driver error: {self._clean(self.driver_error)}")
+        return lines
 
+    def _output_lines(self) -> list[str]:
+        """Output files with row counts, confidence status, and leftover details."""
+        lines: list[str] = []
         summary = dict(self.summary)
         if "confidence_rows" not in summary and "confidence_rows_written" in summary:
             summary["confidence_rows"] = summary.pop("confidence_rows_written")
@@ -492,7 +529,11 @@ class RunLog:
             lines.append("Additional completion details:")
             for name, value in sorted(summary.items()):
                 lines.append(f"  {name}: {self._detail_value(name, value)}")
+        return lines
 
+    def _stage_timing_lines(self) -> list[str]:
+        """Per-stage totals summed over entries."""
+        lines: list[str] = []
         stage_values: dict[str, list[float]] = {}
         for entry in self.entries:
             for name, value in entry["timings"].items():
@@ -522,7 +563,11 @@ class RunLog:
                     f"{sum(values) / len(values):.3f} | {max(values):.3f} | "
                     f"{max_entry['pdbID']}"
                 )
+        return lines
 
+    def _exception_lines(self) -> list[str]:
+        """Policy exclusions and every entry that did not finish ok."""
+        lines: list[str] = []
         lines.extend(["", "Exceptions and exclusions", "-------------------------"])
         excluded_entries = [
             entry for entry in self.entries if entry["metal_site_limit_exceeded"]
@@ -571,7 +616,11 @@ class RunLog:
                     f"{'|'.join(entry['reason_codes']) or '-'} | "
                     f"{self._clean(entry['error']) or '-'}"
                 )
+        return lines
 
+    def _slowest_entry_lines(self) -> list[str]:
+        """The twenty longest-running entries."""
+        lines: list[str] = []
         lines.extend(["", "Slowest entries", "---------------"])
         if not self.entries:
             lines.append("No entries were processed.")
@@ -588,14 +637,18 @@ class RunLog:
                     f"{entry['n_bonds']} | {entry['n_candidates']} | "
                     f"{'|'.join(entry['reason_codes']) or '-'}"
                 )
+        return lines
 
+    def _diagnostics_lines(self, diagnostics_path: str) -> list[str]:
+        """Where the complete per-entry diagnostics live."""
+        lines: list[str] = []
         lines.extend(["", "Entry diagnostics", "-----------------"])
         lines.append(
             "Complete per-entry outcomes, timings, map sizes, memory estimates, "
             f"reasons, warnings, and status details: {diagnostics_path}"
         )
         lines.append("")
-        return "\n".join(lines)
+        return lines
 
     def write(self, exit_code: int) -> str:
         """Write the timestamped run report without overwriting either artifact."""

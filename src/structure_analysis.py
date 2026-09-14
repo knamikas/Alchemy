@@ -1358,19 +1358,22 @@ def _prepare_atom_inventory(
 
     # Gemmi bins every atom during NeighborSearch construction, including atoms
     # Alchemy never adds explicitly, so non-finite coordinates must be absent.
-    spatial_model = model.clone()
-    for chain_index, chain in enumerate(model):
-        for residue_index, residue in enumerate(chain):
-            invalid_indices = [
-                atom_index
-                for atom_index, atom in enumerate(residue)
-                if not all(
-                    math.isfinite(value)
-                    for value in (atom.pos.x, atom.pos.y, atom.pos.z)
-                )
-            ]
-            for atom_index in reversed(invalid_indices):
-                del spatial_model[chain_index][residue_index][atom_index]
+    # The model is cloned only when there is something to remove.
+    invalid_positions = [
+        (chain_index, residue_index, atom_index)
+        for chain_index, chain in enumerate(model)
+        for residue_index, residue in enumerate(chain)
+        for atom_index, atom in enumerate(residue)
+        if not all(
+            math.isfinite(value) for value in (atom.pos.x, atom.pos.y, atom.pos.z)
+        )
+    ]
+    spatial_model = model
+    if invalid_positions:
+        spatial_model = model.clone()
+        # Deleting from the end keeps the earlier indices valid.
+        for chain_index, residue_index, atom_index in reversed(invalid_positions):
+            del spatial_model[chain_index][residue_index][atom_index]
 
     return _AtomInventory(
         source_atoms=source_atoms,

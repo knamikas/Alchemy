@@ -536,9 +536,15 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
 
 def test_documented_thresholds_match_the_constants() -> None:
     """Verify documented thresholds match the constants used by the code."""
-    from coordination.analysis import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
+    from coordination.analysis import (
+        CANDIDATE_SEARCH_RADIUS,
+        FIRST_SPHERE_TOLERANCE,
+    )
     from coordination.schema import ZSCORE_OUTLIER_CUTOFF
-    from density_analysis import CCP4_TOOL_TIMEOUT_S, MODEL_ENVELOPE_BORDER_ANGSTROM
+    from density_analysis import (
+        CCP4_TOOL_TIMEOUT_S,
+        MODEL_ENVELOPE_BORDER_ANGSTROM,
+    )
     from driver.resources import AUTO_WORKER_MEMORY_BYTES
     from structure_analysis import OVERFULL_OCCUPANCY_NI_FRACTION
 

@@ -6,7 +6,6 @@ the existing metadata without rewriting it.
 """
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -14,9 +13,20 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(REPO_ROOT, "src", "data")
-TABLE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
-SIDECAR_PATH = os.path.join(DATA_DIR, "metal_distances_info.meta.json")
+SOURCE_DIR = os.path.join(REPO_ROOT, "src")
+if SOURCE_DIR not in sys.path:
+    sys.path.insert(0, SOURCE_DIR)
+
+from reference_data import (  # noqa: E402
+    CHECKSUM_SIDECARS,
+    DONOR_DISTANCE_PATH,
+    load_literature,
+    sha256,
+)
+
+# The runtime loader owns the bundled path and the sidecar key it verifies.
+TABLE_PATH = DONOR_DISTANCE_PATH
+SIDECAR_PATH, HASH_KEY = CHECKSUM_SIDECARS[DONOR_DISTANCE_PATH]
 
 #: Published in the sidecar's ``sources``; the table carries no in-band citation.
 SOURCES = [
@@ -40,20 +50,8 @@ SOURCES = [
 ]
 
 
-def sha256(path: str) -> str:
-    """Return the hexadecimal SHA-256 digest of a file."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(65536), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def count_rows(path: str) -> int:
     """Count the rows through the loader, so the count matches what it accepts."""
-    sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-    from reference_data import load_literature
-
     return len(load_literature(path))
 
 
@@ -61,7 +59,7 @@ def build_metadata(path: str, generated: str) -> dict[str, object]:
     """Build the distance-table provenance sidecar payload."""
     return {
         "generated": generated,
-        "distance_table_sha256": sha256(path),
+        HASH_KEY: sha256(path),
         "reference_distance_count": count_rows(path),
         "sources": SOURCES,
         "format": (
@@ -92,7 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.check:
         try:
             with open(SIDECAR_PATH, encoding="utf-8") as handle:
-                recorded = json.load(handle).get("distance_table_sha256")
+                recorded = json.load(handle).get(HASH_KEY)
         except OSError:
             print(f"no sidecar at {SIDECAR_PATH}")
             return 1
@@ -114,7 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         f"stamped {os.path.basename(TABLE_PATH)}: "
         f"{metadata['reference_distance_count']} distances, "
-        f"sha256 {metadata['distance_table_sha256']}"
+        f"sha256 {metadata[HASH_KEY]}"
     )
     return 0
 

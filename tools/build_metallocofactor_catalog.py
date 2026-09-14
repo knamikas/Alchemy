@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
 import json
 import os
 import re
@@ -28,11 +27,19 @@ if str(SOURCE_DIR) not in sys.path:
     sys.path.insert(0, str(SOURCE_DIR))
 
 from metal_elements import METAL_ELEMENTS  # noqa: E402
+from reference_data import (  # noqa: E402
+    CHECKSUM_SIDECARS,
+    COFACTOR_CATALOG_PATH,
+    DATA_DIR,
+    sha256,
+)
 
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
-DEFAULT_OUTPUT_DIR = SOURCE_DIR / "data"
-CATALOG_FILENAME = "metallocofactors_id.txt"
-METADATA_FILENAME = "metallocofactors_id.meta.json"
+# The runtime loader owns the bundled paths and the sidecar key it verifies.
+DEFAULT_OUTPUT_DIR = Path(DATA_DIR)
+CATALOG_FILENAME = os.path.basename(COFACTOR_CATALOG_PATH)
+_SIDECAR_PATH, CATALOG_HASH_KEY = CHECKSUM_SIDECARS[COFACTOR_CATALOG_PATH]
+METADATA_FILENAME = os.path.basename(_SIDECAR_PATH)
 COMPONENT_ID_PATTERN = re.compile(r"[A-Z0-9]+")
 ELEMENT_PATTERN = re.compile(r"([A-Z][a-z]?)(\d*)")
 
@@ -215,17 +222,6 @@ def _verify_canonical_classes(classes: Mapping[str, str]) -> None:
         raise ValueError("canonical cofactor classification changed: " + details)
 
 
-def _sha256(path: str) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        while True:
-            chunk = handle.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def formula_has_metal(formula: str) -> bool:
     """Return whether a chemical formula contains a recognized metal."""
     return any(element in METAL_ELEMENTS for element in element_counts(formula))
@@ -293,7 +289,7 @@ def download_ccd(temp_dir: str) -> tuple[str, dict[str, str | None]]:
     _decompress_ccd(compressed_path, cif_path)
     return cif_path, {
         "source": CCD_URL,
-        "compressed_sha256": _sha256(compressed_path),
+        "compressed_sha256": sha256(compressed_path),
         **response_metadata,
     }
 
@@ -310,7 +306,7 @@ def prepare_local_ccd(
     if source_path.lower().endswith(".gz"):
         cif_path = os.path.join(temp_dir, "components.cif")
         _decompress_ccd(source_path, cif_path)
-        provenance["compressed_sha256"] = _sha256(source_path)
+        provenance["compressed_sha256"] = sha256(source_path)
         return cif_path, provenance
     return source_path, provenance
 
@@ -412,15 +408,15 @@ def rebuild_catalog(output_dir: str, ccd_path: str | None = None) -> dict[str, o
 
         temporary_catalog = os.path.join(temp_dir, CATALOG_FILENAME)
         counts = build_metallocofactors_list(prepared_ccd, temporary_catalog)
-        catalog_hash = _sha256(temporary_catalog)
+        catalog_hash = sha256(temporary_catalog)
         metadata: dict[str, object] = {
             "generated": datetime.now(UTC).isoformat(),
             "ccd_source": ccd_provenance["source"],
-            "ccd_sha256": _sha256(prepared_ccd),
+            "ccd_sha256": sha256(prepared_ccd),
             "ccd_compressed_sha256": ccd_provenance.get("compressed_sha256"),
             "ccd_etag": ccd_provenance.get("etag"),
             "ccd_last_modified": ccd_provenance.get("last_modified"),
-            "catalog_sha256": catalog_hash,
+            CATALOG_HASH_KEY: catalog_hash,
             "counts": counts,
         }
         temporary_metadata = os.path.join(temp_dir, METADATA_FILENAME)
@@ -442,8 +438,8 @@ def report_status(output_dir: str) -> dict[str, Any]:
     metadata_path = os.path.join(output_dir, METADATA_FILENAME)
     with open(metadata_path, encoding="utf-8", errors="strict") as handle:
         metadata: dict[str, Any] = json.load(handle)
-    actual_hash = _sha256(catalog_path)
-    recorded_hash = metadata.get("catalog_sha256")
+    actual_hash = sha256(catalog_path)
+    recorded_hash = metadata.get(CATALOG_HASH_KEY)
 
     print(f"Generated: {metadata.get('generated', 'unknown')}")
     entry_count = metadata.get("counts", {}).get("catalog_entries", "unknown")
@@ -454,9 +450,14 @@ def report_status(output_dir: str) -> dict[str, Any]:
         f"cluster, {counts.get('heme_entries', 'unknown')} heme"
     )
     print(f"Catalog SHA-256: {actual_hash}")
+    # Match the runtime loader: metadata without a checksum is rejected there
+    # too, so reporting it as merely "legacy" would hide a broken bundle.
     if recorded_hash is None:
-        print("Recorded hash: unavailable in legacy metadata")
-    elif recorded_hash != actual_hash:
+        raise RuntimeError(
+            f"{METADATA_FILENAME} records no {CATALOG_HASH_KEY}; the runtime "
+            "loader rejects this catalog. Rebuild it to stamp the checksum."
+        )
+    if recorded_hash != actual_hash:
         raise RuntimeError(
             "catalog checksum does not match its metadata: "
             f"recorded {recorded_hash}, actual {actual_hash}"

@@ -546,7 +546,7 @@ def _driver_child(
         environment.resolve_ccp4_environment = lambda args: (dict(os.environ), None)
         # These scenarios require the requested process topology; inheriting a
         # CI container's memory cap can serialize them and test a different case.
-        driver_pool.automatic_worker_limits = lambda **_kwargs: (  # type: ignore[attr-defined]
+        driver_pool.worker_limits_for_budget = lambda _budget: (  # type: ignore[assignment, attr-defined]
             max(1, len(script)),
             None,
         )

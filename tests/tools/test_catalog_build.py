@@ -346,6 +346,134 @@ def test_a_bond_naming_an_absent_atom_is_ignored_rather_than_fatal() -> None:
     assert catalog.classify_component(component_block("FES", atoms, bonds)) == "cluster"
 
 
+def _ccd_document(
+    path: Path,
+    components: Mapping[str, tuple[str, Mapping[str, str], Iterable[tuple[str, str]]]],
+) -> str:
+    """Write a small components.cif: ``{id: (formula, atoms, bonds)}``."""
+    document = gemmi.cif.Document()
+    for component_id, (formula, atoms, bonds) in components.items():
+        block = document.add_new_block(component_id)
+        block.set_pair("_chem_comp.id", component_id)
+        block.set_pair("_chem_comp.formula", gemmi.cif.quote(formula))
+        atom_loop = block.init_loop(
+            "_chem_comp_atom.", ["comp_id", "atom_id", "type_symbol"]
+        )
+        for atom_id, element in atoms.items():
+            atom_loop.add_row([component_id, atom_id, element])
+        bond_loop = block.init_loop(
+            "_chem_comp_bond.", ["comp_id", "atom_id_1", "atom_id_2"]
+        )
+        for atom_1, atom_2 in bonds:
+            bond_loop.add_row([component_id, atom_1, atom_2])
+    document.write_file(str(path))
+    return str(path)
+
+
+def _canonical_ccd() -> dict[
+    str, tuple[str, Mapping[str, str], Iterable[tuple[str, str]]]
+]:
+    """Every canonical cofactor plus the cases the builder must skip or keep."""
+    components: dict[str, tuple[str, Mapping[str, str], Iterable[tuple[str, str]]]] = {}
+    for component_id, structural_class in catalog.CANONICAL_CLASSES.items():
+        if structural_class == catalog.CLASS_HEME:
+            atoms, bonds = porphyrin()
+            components[component_id] = ("C34 H32 Fe N4 O4", atoms, bonds)
+        else:
+            atoms, bonds = iron_sulfur_cube()
+            components[component_id] = ("Fe4 S4", atoms, bonds)
+    # A plain metal complex with no structural class, a single-atom ion the
+    # builder skips, and a metal-free component it never lists.
+    components["XYZ"] = ("C2 H6 Zn", {"ZN": "ZN", "C1": "C"}, [("ZN", "C1")])
+    components["ZN"] = ("Zn", {"ZN": "ZN"}, [])
+    components["ALA"] = ("C3 H7 N O2", {"N": "N", "CA": "C"}, [("N", "CA")])
+    return components
+
+
+def test_rebuild_from_a_local_ccd_writes_a_loader_verifiable_catalog(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The offline build path: classify, write atomically, stamp, and report.
+
+    The result is read back through ``reference_data`` and through the tool's
+    own ``--status`` view, so the checksum key and file names agree with the
+    runtime loader rather than merely with each other.
+    """
+    import reference_data
+
+    ccd = _ccd_document(tmp_path / "components.cif", _canonical_ccd())
+    output_dir = tmp_path / "data"
+
+    metadata = catalog.rebuild_catalog(str(output_dir), ccd_path=ccd)
+
+    catalog_path = output_dir / catalog.CATALOG_FILENAME
+    rows = [line.split("\t") for line in catalog_path.read_text().splitlines()]
+    assert [row[0] for row in rows] == sorted([*catalog.CANONICAL_CLASSES, "XYZ"]), (
+        "ions and metal-free components must not be listed"
+    )
+    classes = {row[0]: row[2] for row in rows}
+    assert classes["XYZ"] == ""
+    assert {k: v for k, v in classes.items() if v} == catalog.CANONICAL_CLASSES
+    assert metadata[catalog.CATALOG_HASH_KEY] == reference_data.sha256(
+        str(catalog_path)
+    )
+    assert metadata["counts"]["catalog_entries"] == len(rows)
+    assert metadata["counts"]["skipped_ions"] == 1
+
+    ids, clusters, hemes = reference_data.catalog(str(catalog_path))
+    assert "XYZ" in ids and "ZN" not in ids
+    assert clusters == {
+        k for k, v in catalog.CANONICAL_CLASSES.items() if v == "cluster"
+    }
+    assert hemes == {k for k, v in catalog.CANONICAL_CLASSES.items() if v == "heme"}
+
+    capsys.readouterr()
+    catalog.report_status(str(output_dir))
+    assert "Integrity: verified" in capsys.readouterr().out
+
+
+def test_a_compressed_ccd_records_both_checksums(tmp_path: Path) -> None:
+    """The archive the wwPDB serves is gzip; both digests go into the sidecar."""
+    import gzip
+
+    import reference_data
+
+    plain = _ccd_document(tmp_path / "components.cif", _canonical_ccd())
+    compressed = tmp_path / "components.cif.gz"
+    with open(plain, "rb") as source, gzip.open(compressed, "wb") as target:
+        target.write(source.read())
+
+    metadata = catalog.rebuild_catalog(str(tmp_path / "data"), ccd_path=str(compressed))
+
+    assert metadata["ccd_compressed_sha256"] == reference_data.sha256(str(compressed))
+    assert metadata["ccd_sha256"] == reference_data.sha256(plain)
+
+
+def test_rebuild_refuses_a_ccd_that_loses_a_canonical_cofactor(
+    tmp_path: Path,
+) -> None:
+    """A build that would drop HEM must fail before touching the bundle."""
+    components = _canonical_ccd()
+    del components["HEM"]
+    ccd = _ccd_document(tmp_path / "components.cif", components)
+    output_dir = tmp_path / "data"
+
+    with pytest.raises(ValueError, match="canonical cofactor classification changed"):
+        catalog.rebuild_catalog(str(output_dir), ccd_path=ccd)
+
+    assert not (output_dir / catalog.CATALOG_FILENAME).exists()
+    assert not (output_dir / catalog.METADATA_FILENAME).exists()
+
+
+def test_status_rejects_metadata_without_a_checksum(tmp_path: Path) -> None:
+    """``--status`` holds the bundle to the runtime loader's standard."""
+    (tmp_path / catalog.CATALOG_FILENAME).write_text("HEM\tC34\theme\n")
+    (tmp_path / catalog.METADATA_FILENAME).write_text('{"generated": "x"}\n')
+
+    with pytest.raises(RuntimeError, match="records no catalog_sha256"):
+        catalog.report_status(str(tmp_path))
+
+
 def _load_stamp_tool() -> ModuleType:
     """Import the distance-table stamper by path, like the catalog builder."""
     path = os.path.join(REPO_ROOT, "tools", "stamp_distance_table.py")
