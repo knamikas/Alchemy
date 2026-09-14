@@ -15,8 +15,8 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 
 from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
-from driver.output_lock import create_owned_scratch_directory
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS, OutputTargets
+from scratch import create_owned_scratch_directory
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult
 
 # DictReader uses None for missing cells and stores surplus cells under a None key.

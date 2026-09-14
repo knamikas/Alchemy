@@ -36,7 +36,6 @@ from density_analysis import (
     MtzfixValidationError,
     run_density_analysis,
 )
-from driver.output_lock import create_owned_scratch_directory
 from inputs import (
     ensure_entry_available,
     entry_dir_for,
@@ -51,6 +50,7 @@ from metal_elements import METAL_ELEMENTS
 from metal_identification import extract_metal_statistics
 from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
+from scratch import create_owned_scratch_directory
 from structure_analysis import NAN, StructureContext, load_structure
 from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult, WorkerConfig
 from worker_memory import release_idle_memory

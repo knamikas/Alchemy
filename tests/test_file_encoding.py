@@ -82,10 +82,12 @@ if "utf" in locale.getencoding().lower().replace("-", ""):
 
 from crystallization_conditions import SUMMARY_COLUMNS, write_review_queue
 from driver import pool, resume
+from driver.confidence import ConfidencePlan
+from driver.layout import OutputLayout
 from driver.writers import MANIFEST_COLUMNS
 
-layout = pool.OutputLayout(output_dir)
-targets = pool.output_targets_for_run(layout, pool.ConfidencePlan())
+layout = OutputLayout(output_dir)
+targets = pool.output_targets_for_run(layout, ConfidencePlan())
 # Escapes keep the script ASCII: the C-locale child cannot decode argv otherwise.
 detail = "resolution 1.8 \u00c5, pH 7.5 \u00b1 0.2"
 

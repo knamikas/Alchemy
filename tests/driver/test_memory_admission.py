@@ -18,7 +18,9 @@ import cli
 import worker
 import worker_memory
 from codes import EntryStatus
+from driver import confidence as driver_confidence
 from driver import dispatch, pool, resources
+from driver import layout as driver_layout
 from driver.memory_admission import MemoryAdmission
 from driver.runlog import RunLog
 from worker_contracts import EntryResult, WorkerConfig
@@ -289,8 +291,8 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
             ids,
             cast(WorkerConfig, None),
             4,
-            pool.OutputLayout(str(tmp_path)),
-            pool.ConfidencePlan(),
+            driver_layout.OutputLayout(str(tmp_path)),
+            driver_confidence.ConfidencePlan(),
             log,
             resources.MemoryPlan(
                 [

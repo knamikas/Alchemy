@@ -8,46 +8,45 @@ write results, confidence scores, and the final report.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
-import re
 from collections.abc import Collection, Sequence
-from typing import Any, Literal, NamedTuple, TextIO
+from typing import NamedTuple, TextIO
 
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
-from ccp4_setup import REPO_DIR
-from confidence_score import (
-    ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
-)
 from confidence_score import (
     CONFIDENCE_INPUT_COLUMNS,
     REFERENCE_METADATA_FILE,
-    ConfidenceReference,
-    classify_without_reference,
-    complete_confidence_site_count,
-    finalize_database_confidence,
-    prepare_result_confidence_inputs,
-    score_against_reference,
     validate_scored_reference,
-)
-from confidence_score import (
-    load_reference as load_confidence_reference,
 )
 from crystallization_conditions import (
     CONDITION_COLUMNS,
     SUMMARY_COLUMNS,
     CrystallizationMetadataError,
     prefetch_rcsb_crystallization_metadata,
-    write_review_queue,
 )
-from driver import dispatch, environment
+from driver import confidence, dispatch, environment
+from driver.confidence import (
+    ConfidencePlan,
+    classify_run,
+    confidence_rows_for,
+    plan_confidence,
+)
 from driver.dispatch import BatchTally
+from driver.entries import (
+    schedule_entries,
+)
 from driver.errors import DriverError
+from driver.layout import (
+    OutputLayout,
+    prepare_output_directory,
+)
 from driver.output_lock import (
     OutputDirectoryBusyError,
     OutputDirectoryLock,
     OutputDirectoryLockError,
-    sweep_owned_scratch_directories,
+)
+from driver.report import (
+    report_batch,
 )
 from driver.resources import (
     MemoryPlan,
@@ -58,20 +57,13 @@ from driver.resources import (
 )
 from driver.resume import (
     ResumeStaging,
-    load_done,
     manifest_values_by_id,
     remove_stale_disabled_bond_outputs,
     resume_replacement_succeeded,
     validate_resume_schemas,
 )
 from driver.runlog import RunLog
-from driver.writers import STATS_COLUMNS, OutputTargets, OutputWriters, manifest_row
-from inputs import (
-    ensure_entry_available,
-    enumerate_entries,
-    infer_pdb_id_from_path,
-    read_data_json_properties,
-)
+from driver.writers import OutputTargets, OutputWriters, manifest_row
 from metal_identification import DENSITY_CONTEXT_COLUMNS
 from reference_data import (
     cofactor_ids,
@@ -80,198 +72,10 @@ from reference_data import (
 )
 from run_config import RunConfig
 from run_logging import level_for_verbosity, logger_for, worker_level
+from scratch import sweep_owned_scratch_directories
 from worker_contracts import EntryResult, WorkerConfig
 
-DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
-    REPO_DIR, "src", "data", "confidence_reference"
-)
-
 logger = logger_for(__name__)
-
-
-def resolve_confidence_reference_dir(
-    output_dir: str, configured_dir: str | None = None
-) -> tuple[str | None, tuple[str, ...]]:
-    """Find a frozen confidence reference, honoring an explicit override."""
-    candidates: tuple[str, ...]
-    if configured_dir is not None:
-        candidates = (configured_dir,)
-    else:
-        candidates = (
-            os.path.join(output_dir, "confidence_reference"),
-            DEFAULT_CONFIDENCE_REFERENCE_DIR,
-        )
-    for candidate in candidates:
-        metadata_path = os.path.join(candidate, REFERENCE_METADATA_FILE)
-        if os.path.isfile(metadata_path):
-            return candidate, candidates
-    return None, candidates
-
-
-def load_ids_from_file(path: str) -> list[str]:
-    """Read PDB IDs from comma- or newline-separated text.
-
-    Use utf-8-sig to accept byte-order marks from Windows editors and exports.
-    """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"id file not found: {path}")
-    ids: list[str] = []
-    with open(path, encoding="utf-8-sig") as fh:
-        for lineno, raw_line in enumerate(fh, 1):
-            line = raw_line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            for token in re.split(r"[,\s]+", line):
-                if not token:
-                    continue
-                if not re.fullmatch(r"[A-Za-z0-9]{4}", token):
-                    raise ValueError(f"invalid PDB id {token!r} at {path}:{lineno}")
-                ids.append(token.lower())
-    return list(dict.fromkeys(ids))
-
-
-def select_entry_ids(
-    args: RunConfig, cache_root: str
-) -> tuple[list[str], str, dict[str, str | None] | None]:
-    """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
-    root = args.pdb_redo_root or cache_root
-    if args.pdb_file or args.mtz_file or args.cif_file:
-        pdb_id = (
-            args.id
-            or infer_pdb_id_from_path(args.cif_file)
-            or infer_pdb_id_from_path(args.pdb_file)
-            or infer_pdb_id_from_path(args.mtz_file)
-        )
-        if not pdb_id:
-            raise DriverError(
-                "Manual input mode requires --id or a file name that contains "
-                "a 4-character PDB id."
-            )
-        if args.data_json:
-            try:
-                read_data_json_properties(args.data_json)
-            except ValueError as exc:
-                raise DriverError(f"Invalid --data-json: {exc}") from None
-        return (
-            [pdb_id],
-            root,
-            {
-                "pdb_file": args.pdb_file,
-                "mtz_file": args.mtz_file,
-                "cif_file": args.cif_file,
-                "data_json": args.data_json,
-            },
-        )
-
-    if args.id:
-        try:
-            used_root = ensure_entry_available(args.id, args.pdb_redo_root, cache_root)
-        except FileNotFoundError:
-            raise DriverError(
-                f"Entry {args.id} not found locally and download failed."
-            ) from None
-        except OSError as exc:
-            # Report cache and filesystem failures as usage errors without mislabeling
-            # them as missing entries.
-            raise DriverError(
-                f"Entry {args.id} could not be prepared: {type(exc).__name__}: {exc}"
-            ) from None
-        if used_root != args.pdb_redo_root:
-            logger.info("auto-downloaded %s into cache at %s", args.id, cache_root)
-        return [args.id], used_root, None
-
-    if args.id_file:
-        try:
-            ids = load_ids_from_file(args.id_file)
-        except (FileNotFoundError, ValueError) as exc:
-            raise DriverError(str(exc)) from None
-        logger.info("loaded %d IDs from %s", len(ids), args.id_file)
-        return ids, root, None
-
-    if not args.pdb_redo_root:
-        raise DriverError(
-            "Supply --pdb-redo-root to process a local PDB-REDO mirror, "
-            "or choose entries with --id, --id-file, or manual input files."
-        )
-    logger.info("enumerating final PDB-REDO entries under %s", root)
-    # Resume subtracts finished entries from the full set, so enumeration can
-    # stop early only when not resuming.
-    limit = args.max_pdbs if (args.max_pdbs and not args.resume) else None
-    return enumerate_entries(root, limit=limit), root, None
-
-
-class OutputLayout:
-    """Paths to run artifacts derived from the output directory."""
-
-    def __init__(self, output_dir: str) -> None:
-        """Derive every run artifact path from an output directory."""
-        self.output_dir = output_dir
-        self.manifest = os.path.join(output_dir, "manifest.csv")
-        self.stats = os.path.join(output_dir, "metal_sites_all.csv")
-        self.density_context = os.path.join(output_dir, "density_context_all.csv")
-        self.bonds = os.path.join(output_dir, "metal_bonds_all.csv")
-        self.candidates = os.path.join(output_dir, "metal_contact_candidates_all.csv")
-        self.confidence_inputs = os.path.join(output_dir, "confidence_inputs_all.csv")
-        self.confidence_scores = os.path.join(output_dir, "confidence_scores_all.csv")
-        self.crystallization_conditions = os.path.join(
-            output_dir, "crystallization_conditions_all.csv"
-        )
-        self.crystallization_summary = os.path.join(
-            output_dir, "crystallization_summary_all.csv"
-        )
-        self.review_queue = os.path.join(output_dir, "review_queue_all.csv")
-        self.reference_dir = os.path.join(output_dir, "confidence_reference")
-        self.legacy_scientific_outputs = (
-            os.path.join(output_dir, "metal_stats_all.csv"),
-            os.path.join(output_dir, "metal_candidates_all.csv"),
-        )
-
-    @property
-    def core(self) -> tuple[str, str, str, str]:
-        """The four always-written outputs, in resume-validation order."""
-        return (self.manifest, self.stats, self.bonds, self.candidates)
-
-
-ConfidenceMode = Literal["database", "reference", "classification"]
-
-
-class ConfidencePlan:
-    """Whether this run scores confidence, and against what.
-
-    ``database`` streams the inputs an uncapped full-database run finalizes
-    into a new reference; ``reference`` scores against one that already exists;
-    ``classification`` emits raw-threshold verdicts without empirical ranking;
-    ``None`` means confidence analysis is off because bonds are disabled.
-    """
-
-    def __init__(self) -> None:
-        """Initialize a disabled confidence-analysis plan."""
-        self.mode: ConfidenceMode | None = None
-        self.reference: ConfidenceReference | None = None
-        self.stream_path: str | None = None
-        self.columns: Sequence[str] | None = None
-        # A resumed ``reference`` run also extends the inputs stream a prior
-        # database run left behind, so the two stay row-for-row aligned.
-        self.synchronize_inputs: bool = False
-
-    @property
-    def enabled(self) -> bool:
-        """Return whether confidence analysis is enabled."""
-        return self.mode is not None
-
-    @property
-    def output_path(self) -> str:
-        """The confidence stream this run writes; set whenever a mode is."""
-        if self.stream_path is None:
-            raise RuntimeError("confidence output path is not configured")
-        return self.stream_path
-
-    @property
-    def scored_reference(self) -> ConfidenceReference:
-        """The frozen reference a ``reference`` run scores against."""
-        if self.reference is None:
-            raise RuntimeError("confidence reference is not configured")
-        return self.reference
 
 
 def output_targets_for_run(layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
@@ -368,98 +172,6 @@ def _load_cofactor_catalog() -> frozenset[str]:
         raise DriverError(f"Invalid bundled metallocofactor catalog: {exc}") from None
 
 
-def _prepare_output_directory(output_dir: str) -> None:
-    """Create ``--output-dir`` before its stable lock file is opened."""
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-    except OSError as exc:
-        raise DriverError(
-            f"Cannot use --output-dir {output_dir}: {exc.strerror or exc}"
-        ) from None
-
-
-def _classify_run(args: RunConfig) -> tuple[str, bool]:
-    """Return the run mode and whether this is an uncapped full-database run.
-
-    Only the full-database mode can build a new confidence reference.
-    """
-    manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
-    database_run = (
-        not args.id
-        and not args.id_file
-        and not manual_requested
-        and args.max_pdbs is None
-    )
-    run_mode = (
-        "manual"
-        if manual_requested
-        else "single"
-        if args.id
-        else "id_file"
-        if args.id_file
-        else "database"
-        if database_run
-        else "capped_database"
-    )
-    return run_mode, database_run
-
-
-def plan_confidence(
-    args: RunConfig,
-    layout: OutputLayout,
-    database_run: bool,
-    run_log: RunLog,
-) -> ConfidencePlan:
-    """Decide this run's confidence mode before any entry is processed."""
-    plan = ConfidencePlan()
-    if not args.bonds:
-        return plan
-    if database_run:
-        # A full-database run builds its own reference. Warn about an existing-reference
-        # option without rejecting commands shared with smaller runs.
-        if args.confidence_reference_dir:
-            logger.warning(
-                "--confidence-reference-dir is ignored on an uncapped "
-                "full-database run: that run builds the reference later runs "
-                "are scored against, so it cannot be scored against an "
-                "existing one. Cap the run with --max-pdbs to use %s.",
-                args.confidence_reference_dir,
-            )
-        plan.mode = "database"
-        plan.stream_path = layout.confidence_inputs
-        plan.columns = CONFIDENCE_INPUT_COLUMNS
-        return plan
-
-    reference_dir, searched_dirs = resolve_confidence_reference_dir(
-        args.output_dir, args.confidence_reference_dir
-    )
-    if reference_dir is None:
-        logger.info(
-            "no frozen confidence reference is installed, so Alchemy will "
-            "emit authoritative PASS/REVIEW/SUSPECT classifications without "
-            "empirical ranking scores. Complete an uncapped full-database run "
-            "or pass --confidence-reference-dir to add rankings. (searched: %s)",
-            ", ".join(searched_dirs),
-        )
-        plan.mode = "classification"
-        plan.stream_path = layout.confidence_scores
-        plan.columns = (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
-        return plan
-
-    try:
-        plan.reference = load_confidence_reference(reference_dir)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise DriverError(f"Invalid confidence reference: {exc}") from None
-    run_log.details["confidence_reference_dir"] = reference_dir
-    plan.mode = "reference"
-    plan.stream_path = layout.confidence_scores
-    plan.columns = (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS)
-    plan.synchronize_inputs = bool(args.resume) and os.path.isfile(
-        layout.confidence_inputs
-    )
-    return plan
-
-
 def _check_resume_is_compatible(
     args: RunConfig,
     layout: OutputLayout,
@@ -505,69 +217,6 @@ def _check_resume_is_compatible(
             raise DriverError(f"Cannot resume confidence output: {exc}") from None
 
 
-def schedule_entries(
-    args: RunConfig,
-    layout: OutputLayout,
-    cache_root: str,
-    run_log: RunLog,
-) -> tuple[list[str], str, dict[str, str | None] | None]:
-    """Return ``(ids, root, manual_inputs)`` for the entries this run will do.
-
-    ``--resume`` removes finished entries before ``--max-pdbs`` caps what is
-    left; capping first would re-offer the same finished prefix forever.
-    """
-    ids, root, manual_inputs = select_entry_ids(args, cache_root)
-    run_log.details["entries_selected_before_resume"] = len(ids)
-    run_log.details["resolved_input_root"] = root
-
-    if args.resume:
-        bonds_required = bool(args.bonds)
-        bond_output_present = os.path.isfile(layout.bonds)
-        candidate_output_present = os.path.isfile(layout.candidates)
-        normally_done = load_done(
-            layout.manifest,
-            bonds_required=bonds_required,
-            bond_output_present=bond_output_present,
-            candidate_output_present=candidate_output_present,
-        )
-        if args.retry_partials:
-            done = load_done(
-                layout.manifest,
-                bonds_required=bonds_required,
-                bond_output_present=bond_output_present,
-                candidate_output_present=candidate_output_present,
-                retry_partial_ids=ids,
-            )
-            reselected = normally_done - done
-            run_log.details["terminal_partials_reselected"] = len(reselected)
-            logger.info(
-                "selected %d terminal partial entr%s for retry",
-                len(reselected),
-                "y" if len(reselected) == 1 else "ies",
-            )
-        else:
-            done = normally_done
-        # Normalize IDs for manifest comparison while preserving on-disk path spelling.
-        ids = [i for i in ids if i.lower() not in done]
-    if args.max_pdbs is not None:
-        ids = ids[: args.max_pdbs]
-    run_log.details["entries_scheduled"] = len(ids)
-    return ids, root, manual_inputs
-
-
-def _finalize_confidence_reference(layout: OutputLayout) -> tuple[int, int, int]:
-    """Score the streamed inputs and freeze the database reference."""
-    try:
-        return finalize_database_confidence(
-            layout.confidence_inputs,
-            layout.confidence_scores,
-            layout.reference_dir,
-            manifest_path=layout.manifest,
-        )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise DriverError(f"Confidence finalization failed: {exc}") from None
-
-
 def _finish_without_entries(
     args: RunConfig, layout: OutputLayout, plan: ConfidencePlan
 ) -> int:
@@ -577,7 +226,7 @@ def _finish_without_entries(
         and plan.mode == "database"
         and os.path.isfile(layout.confidence_inputs)
     ):
-        total, scored, cohort = _finalize_confidence_reference(layout)
+        total, scored, cohort = confidence.finalize_confidence_reference(layout)
         logger.info(
             "no entries required retry; finalized %d confidence rows "
             "(%d scored; database cohort %d) -> %s",
@@ -587,10 +236,10 @@ def _finish_without_entries(
             layout.confidence_scores,
         )
         logger.info("confidence reference -> %s", layout.reference_dir)
-        _finalize_review_queue(layout)
+        confidence.finalize_review_queue(layout)
         return 0
     if plan.enabled:
-        _finalize_review_queue(layout)
+        confidence.finalize_review_queue(layout)
     logger.info("no entries to process")
     return 0
 
@@ -820,28 +469,6 @@ def _open_writers(
     )
 
 
-def confidence_rows_for(
-    result: EntryResult, plan: ConfidencePlan
-) -> list[dict[str, Any]]:
-    """Prepare one entry's confidence rows, scoring against a reference if available."""
-    if result.metal_site_limit_exceeded:
-        return []
-    rows = prepare_result_confidence_inputs(
-        result.rows, result.bond_rows, STATS_COLUMNS
-    )
-    rows = complete_confidence_site_count(
-        rows,
-        result.pdb_id,
-        result.n_metals,
-        result.confidence_inputs_missing_reason,
-    )
-    if plan.reference is not None:
-        rows = score_against_reference(rows, plan.reference)
-    elif plan.mode == "classification":
-        rows = classify_without_reference(rows)
-    return rows
-
-
 def should_write_entry(
     resuming: bool, result: EntryResult, prior_ids: set[str]
 ) -> bool:
@@ -1026,149 +653,6 @@ def process_entries(
     return tally, writers
 
 
-def _finalize_review_queue(layout: OutputLayout) -> int:
-    """Regenerate the derived triage view from canonical completed outputs."""
-    try:
-        return write_review_queue(
-            layout.confidence_scores,
-            layout.crystallization_summary,
-            layout.review_queue,
-            (*CONFIDENCE_INPUT_COLUMNS, *CONFIDENCE_ANALYSIS_COLUMNS),
-        )
-    except (OSError, ValueError) as exc:
-        raise DriverError(f"Review queue finalization failed: {exc}") from None
-
-
-def _report_batch(
-    args: RunConfig,
-    layout: OutputLayout,
-    plan: ConfidencePlan,
-    tally: BatchTally,
-    writers: OutputWriters,
-    run_log: RunLog,
-) -> int:
-    """Report batch results, finalize eligible confidence outputs, and return the exit code.
-
-    Build a database reference only when no recoverable entries remain.
-    """
-    print(
-        f"Done. ok={tally.counts['ok']} partial={tally.counts['partial']} "
-        f"skip={tally.counts['skip']} error={tally.counts['error']} "
-        f"no_metals={tally.no_metals} "
-        f"metal_site_limit_exceeded={tally.metal_site_limit_exceeded}; "
-        f"{writers.n_rows} metal/cofactor rows -> {layout.stats}",
-        flush=True,
-    )
-    if args.bonds:
-        print(f"      {writers.n_bonds} bond rows -> {layout.bonds}", flush=True)
-        print(
-            f"      {writers.n_candidates} candidate rows -> {layout.candidates}",
-            flush=True,
-        )
-    print(
-        f"      {writers.n_crystallization_conditions} crystallization condition "
-        f"rows -> {layout.crystallization_conditions}",
-        flush=True,
-    )
-    print(
-        f"      {writers.n_crystallization_summaries} crystallization summary "
-        f"rows -> {layout.crystallization_summary}",
-        flush=True,
-    )
-    print(
-        f"      {writers.n_density_contexts} density context rows -> "
-        f"{layout.density_context}",
-        flush=True,
-    )
-    database_run = plan.mode == "database"
-    exit_code = tally.exit_code(database_run=database_run)
-    if plan.mode == "database":
-        # Finalize when no recoverable entries remain. Known deterministic exclusions
-        # are recorded in reference metadata and do not prevent completion.
-        unfinished = tally.recoverable_incompleteness()
-        if unfinished == 0:
-            permanent = tally.terminal_errors
-            if permanent:
-                logger.warning(
-                    "finalizing the confidence reference with %d permanently "
-                    "failed entr%s: no retry can add them, and their absence "
-                    "is recorded in the reference metadata",
-                    permanent,
-                    "y" if permanent == 1 else "ies",
-                )
-            total, scored, cohort = _finalize_confidence_reference(layout)
-            run_log.summary.update(
-                confidence_status="finalized",
-                confidence_rows=total,
-                confidence_scored_rows=scored,
-                confidence_reference_cohort=cohort,
-                confidence_scores_path=layout.confidence_scores,
-                confidence_reference_path=layout.reference_dir,
-            )
-            print(
-                f"      {total} confidence rows ({scored} scored; "
-                f"reference cohort {cohort}) -> {layout.confidence_scores}",
-                flush=True,
-            )
-            print(f"      confidence reference -> {layout.reference_dir}", flush=True)
-        else:
-            run_log.summary["confidence_status"] = "not_finalized_incomplete_run"
-            run_log.summary["confidence_recoverable_entries"] = unfinished
-            print(
-                f"      confidence inputs were retained, but the database "
-                f"reference was not finalized: {unfinished} entr"
-                f"{'y' if unfinished == 1 else 'ies'} could still be added by "
-                f"--resume (missing inputs, lost workers, or retryable "
-                f"processing failures).",
-                flush=True,
-            )
-    elif plan.mode == "reference":
-        cohort_size = plan.scored_reference.cohort_size
-        print(
-            f"      {writers.n_confidence} confidence rows compared with "
-            f"database cohort {cohort_size} -> "
-            f"{layout.confidence_scores}",
-            flush=True,
-        )
-        run_log.summary.update(
-            confidence_status="scored_against_reference",
-            confidence_reference_cohort=cohort_size,
-            confidence_scores_path=layout.confidence_scores,
-        )
-    elif plan.mode == "classification":
-        print(
-            f"      {writers.n_confidence} confidence classifications "
-            f"(empirical ranking unavailable) -> {layout.confidence_scores}",
-            flush=True,
-        )
-        run_log.summary.update(
-            confidence_status="classified_without_reference",
-            confidence_rows=writers.n_confidence,
-            confidence_scores_path=layout.confidence_scores,
-        )
-    if plan.enabled and os.path.isfile(layout.confidence_scores):
-        review_rows = _finalize_review_queue(layout)
-        run_log.summary.update(
-            review_queue_rows=review_rows,
-            review_queue_path=layout.review_queue,
-        )
-        print(
-            f"      {review_rows} REVIEW/SUSPECT rows -> {layout.review_queue}",
-            flush=True,
-        )
-    if exit_code:
-        logger.warning(
-            "completed with incomplete entries: errors=%d "
-            "(recoverable=%d, terminal=%d), skips=%d, retryable_partials=%d",
-            tally.counts["error"],
-            tally.recoverable_errors,
-            tally.terminal_errors,
-            tally.counts["skip"],
-            tally.retryable_partials,
-        )
-    return exit_code
-
-
 def run(args: RunConfig, run_log: RunLog) -> int:
     """Execute one batch, returning its exit code."""
     try:
@@ -1188,7 +672,7 @@ def _execute_with_output_lock(
     """Run every output-reading and output-writing phase under one lease."""
     sweep_owned_scratch_directories(args.output_dir)
     layout = OutputLayout(args.output_dir)
-    run_mode, database_run = _classify_run(args)
+    run_mode, database_run = classify_run(args)
     run_log.details["run_mode"] = run_mode
 
     plan = plan_confidence(args, layout, database_run, run_log)
@@ -1225,7 +709,7 @@ def _execute_with_output_lock(
     tally, writers = process_entries(
         args, ids, cfg, workers, layout, plan, run_log, memory_plan
     )
-    return _report_batch(args, layout, plan, tally, writers, run_log)
+    return report_batch(args, layout, plan, tally, writers, run_log)
 
 
 def _execute(args: RunConfig, run_log: RunLog) -> int:
@@ -1234,7 +718,7 @@ def _execute(args: RunConfig, run_log: RunLog) -> int:
     env, _ = environment.resolve_ccp4_environment(args)
     if env is None:
         return 0  # --configure-ccp4 saved a setup path and ran nothing else.
-    _prepare_output_directory(args.output_dir)
+    prepare_output_directory(args.output_dir)
     try:
         with OutputDirectoryLock(args.output_dir, run_log.command):
             return _execute_with_output_lock(args, run_log, cofactors, env)

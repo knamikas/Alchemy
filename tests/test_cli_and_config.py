@@ -19,7 +19,8 @@ import ccp4_setup
 import cli
 import confidence_score
 import density_analysis as density
-from driver import environment, errors, pool
+from driver import confidence as driver_confidence
+from driver import environment, errors
 
 
 def _option_help(option: str) -> str:
@@ -229,10 +230,12 @@ def test_confidence_reference_is_discovered_in_output_before_repo_default(
     repository_reference.mkdir()
     (repository_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
     monkeypatch.setattr(
-        pool, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference)
+        driver_confidence, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference)
     )
 
-    selected, searched = pool.resolve_confidence_reference_dir(str(output_dir))
+    selected, searched = driver_confidence.resolve_confidence_reference_dir(
+        str(output_dir)
+    )
 
     assert selected == str(output_reference)
     assert searched == (str(output_reference), str(repository_reference))
@@ -245,7 +248,7 @@ def test_explicit_confidence_reference_is_authoritative(tmp_path: Path) -> None:
     (automatic_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
     explicit_reference = tmp_path / "explicit-reference"
 
-    selected, searched = pool.resolve_confidence_reference_dir(
+    selected, searched = driver_confidence.resolve_confidence_reference_dir(
         str(output_dir), str(explicit_reference)
     )
 

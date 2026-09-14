@@ -35,7 +35,12 @@ frozen reference when applicable.
    [main.py](../src/main.py), which delegates to
    [cli.py](../src/cli.py). The CLI validates arguments into an immutable
    `RunConfig`, configures diagnostics, and creates the run report object.
-2. [driver/pool.py](../src/driver/pool.py) loads the bundled cofactor catalog
+2. [driver/pool.py](../src/driver/pool.py) orchestrates the batch. Its
+   collaborators are [driver/layout.py](../src/driver/layout.py) for output
+   paths, [driver/entries.py](../src/driver/entries.py) for entry selection,
+   [driver/confidence.py](../src/driver/confidence.py) for the confidence
+   plan, and [driver/report.py](../src/driver/report.py) for the final
+   report. The pool loads the bundled cofactor catalog
    and resolves the CCP4 environment through
    [driver/environment.py](../src/driver/environment.py), which also records
    the Alchemy, Gemmi, and CCP4 versions for provenance.
@@ -158,7 +163,10 @@ Recovery spans several layers:
   stages replacements; an unsuccessful retry does not overwrite a protected
   previous result.
 - [driver/output_lock.py](../src/driver/output_lock.py) provides exclusive
-  output ownership and identifies scratch directories owned by Alchemy.
+  output ownership. [scratch.py](../src/scratch.py) creates the marked scratch
+  directories workers and resume staging use, and sweeps the ones an earlier
+  run left behind; it lives outside the driver so the worker does not import
+  driver code.
 - [run_logging.py](../src/run_logging.py) carries worker diagnostics to driver
   logging. [driver/runlog.py](../src/driver/runlog.py) writes the final report
   through the CLI's cleanup path, including interrupted or failed runs.

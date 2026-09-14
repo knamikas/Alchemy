@@ -28,12 +28,24 @@ from helpers import entry_result, read_csv
 import cli
 import density_analysis as density
 import main
+import scratch
 import structure_analysis
 import worker
 import worker_contracts
 from codes import EntryStatus
 from coordination import schema as coordination_schema
-from driver import dispatch, environment, output_lock, pool, resources, resume, runlog
+from driver import confidence as driver_confidence
+from driver import (
+    dispatch,
+    environment,
+    output_lock,
+    pool,
+    resources,
+    resume,
+    runlog,
+)
+from driver import entries as driver_entries
+from driver import layout as driver_layout
 from driver import pool as driver_pool
 from driver.progress import ProgressReporter
 from driver.runlog import RunLog
@@ -390,7 +402,12 @@ def test_a_metal_dense_entry_finishes_before_density_processing(
     assert result.rows == []
     assert result.bond_rows == []
     assert result.candidate_rows == []
-    assert pool.confidence_rows_for(result, pool.ConfidencePlan()) == []
+    assert (
+        driver_confidence.confidence_rows_for(
+            result, driver_confidence.ConfidencePlan()
+        )
+        == []
+    )
 
 
 def test_the_metal_site_limit_includes_exactly_one_hundred_sites(
@@ -631,7 +648,12 @@ class TestNoRecognizedMetalOutcome:
         assert result.no_metals is False
         assert "unknown_elements" in result.warning_codes
         assert result.confidence_inputs_missing_reason == "metal_presence_indeterminate"
-        assert pool.confidence_rows_for(result, pool.ConfidencePlan()) == []
+        assert (
+            driver_confidence.confidence_rows_for(
+                result, driver_confidence.ConfidencePlan()
+            )
+            == []
+        )
 
     def test_known_nonmetal_structure_remains_an_authoritative_negative(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1480,7 +1502,7 @@ class TestResumeStaging:
         scores: bool = False,
     ) -> OutputTargets:
         """Create the always-written CSVs, plus any confidence ones, by name."""
-        layout = driver_pool.OutputLayout(str(output_dir))
+        layout = driver_layout.OutputLayout(str(output_dir))
         targets = OutputTargets(
             manifest=layout.manifest,
             stats=layout.stats,
@@ -1570,7 +1592,7 @@ class TestResumeStaging:
         """
         output_dir = tmp_path / "output"
         output_dir.mkdir()
-        layout = driver_pool.OutputLayout(str(output_dir))
+        layout = driver_layout.OutputLayout(str(output_dir))
         headers = (
             (layout.manifest, MANIFEST_COLUMNS),
             (layout.stats, STATS_COLUMNS),
@@ -1620,7 +1642,7 @@ class TestResumeStaging:
                 cast(worker_contracts.WorkerConfig, None),
                 1,
                 layout,
-                driver_pool.ConfidencePlan(),
+                driver_confidence.ConfidencePlan(),
                 run_log,
                 resources.MemoryPlan(
                     [
@@ -1635,7 +1657,7 @@ class TestResumeStaging:
         if fail_merge:
             recovery = Path(run_log.summary["resume_staging_recovery_dir"])
             assert recovery.is_dir()
-            output_lock.sweep_owned_scratch_directories(str(output_dir))
+            scratch.sweep_owned_scratch_directories(str(output_dir))
             assert recovery.is_dir()
             assert [r[0] for r in read_csv(str(recovery / "manifest.csv"))[1:]] == [
                 "bbbb",
@@ -1660,7 +1682,7 @@ class TestResumeStaging:
     ) -> dict[str, Any]:
         """Run the halted-resume path and return the run-log summary."""
         args = _run_config(bonds=bonds, output_dir=str(tmp_path))
-        plan = driver_pool.ConfidencePlan()
+        plan = driver_confidence.ConfidencePlan()
         # ``enabled`` is derived from the mode, which is what a scoring run sets.
         plan.mode = "reference" if confidence else None
         run_log = RunLog(args, "pytest")
@@ -1731,7 +1753,7 @@ class TestResumeStaging:
             assert os.path.isdir(staging.dir)
             assert summary["resume_staging_recovery_dir"] == staging.dir
             assert "staged CSV schema" in summary["resume_staging_commit_error"]
-            output_lock.sweep_owned_scratch_directories(str(tmp_path))
+            scratch.sweep_owned_scratch_directories(str(tmp_path))
             assert os.path.isdir(staging.dir)
         finally:
             staging.discard()
@@ -1963,8 +1985,8 @@ class TestScheduleEntries:
 
     def _schedule(self, tmp_path: Path, args: RunConfig) -> tuple[list[str], RunLog]:
         run_log = RunLog(args, "pytest")
-        layout = pool.OutputLayout(str(tmp_path))
-        ids, _root, _manual = pool.schedule_entries(
+        layout = driver_layout.OutputLayout(str(tmp_path))
+        ids, _root, _manual = driver_entries.schedule_entries(
             args, layout, str(tmp_path), run_log
         )
         return ids, run_log
@@ -2024,7 +2046,7 @@ class TestWriteEntry:
 
     def test_the_manifest_row_is_written_after_every_data_row(self) -> None:
         writers = self._RecordingWriters()
-        plan = pool.ConfidencePlan()
+        plan = driver_confidence.ConfidencePlan()
         pool.write_entry(
             entry_result(),
             plan,
@@ -2050,7 +2072,7 @@ class TestWriteEntry:
         staging = cast(resume.ResumeStaging, SimpleNamespace(replacement_ids=set()))
         pool.write_entry(
             entry_result(),
-            pool.ConfidencePlan(),
+            driver_confidence.ConfidencePlan(),
             cast(OutputWriters, self._RecordingWriters()),
             staging,
             ({}, {}),
@@ -2421,7 +2443,7 @@ class TestOutputDirectoryLock:
         output_dir.mkdir()
         manifest = output_dir / "manifest.csv"
         manifest.write_bytes(b"existing manifest\n")
-        scratch = output_lock.create_owned_scratch_directory(
+        scratch_dir = scratch.create_owned_scratch_directory(
             str(output_dir), prefix=".alchemy-109m-", kind="entry"
         )
         id_file = tmp_path / "ids.txt"
@@ -2443,14 +2465,14 @@ class TestOutputDirectoryLock:
 
         assert exit_code == 1
         assert manifest.read_bytes() == b"existing manifest\n"
-        assert os.path.isdir(scratch)
+        assert os.path.isdir(scratch_dir)
         error = capsys.readouterr().err
         assert "already in use by another Alchemy run" in error
         assert "active batch" in error
 
 
 class TestLeakedWorkDirectorySweep:
-    """The startup sweep removes only disposable scratch owned by Alchemy."""
+    """The startup sweep removes only disposable scratch_dir owned by Alchemy."""
 
     def test_removes_per_entry_and_staging_directories(self, tmp_path: Path) -> None:
         """Both scratch shapes are swept, with their contents.
@@ -2458,18 +2480,18 @@ class TestLeakedWorkDirectorySweep:
         A per-entry directory is otherwise removed only on the normal
         completion path, and holds that entry's maps.
         """
-        entry: str | Path = output_lock.create_owned_scratch_directory(
+        entry: str | Path = scratch.create_owned_scratch_directory(
             str(tmp_path), prefix=".alchemy-109m-", kind="entry"
         )
         entry = tmp_path / os.path.basename(entry)
         (entry / "2mFo-DFc.map").write_text("stale", encoding="utf-8")
-        staging: str | Path = output_lock.create_owned_scratch_directory(
+        staging: str | Path = scratch.create_owned_scratch_directory(
             str(tmp_path), prefix=".alchemy-resume-", kind="resume"
         )
         staging = tmp_path / os.path.basename(staging)
         (staging / "manifest.csv").write_text("stale", encoding="utf-8")
 
-        removed = output_lock.sweep_owned_scratch_directories(str(tmp_path))
+        removed = scratch.sweep_owned_scratch_directories(str(tmp_path))
 
         assert removed == 2
         assert sorted(os.listdir(tmp_path)) == []
@@ -2486,7 +2508,7 @@ class TestLeakedWorkDirectorySweep:
         (tmp_path / ".alchemyrc").write_text("keep", encoding="utf-8")
         (tmp_path / ".alchemy-109m-unmarked").mkdir()
 
-        assert output_lock.sweep_owned_scratch_directories(str(tmp_path)) == 0
+        assert scratch.sweep_owned_scratch_directories(str(tmp_path)) == 0
         assert sorted(os.listdir(tmp_path)) == [
             ".alchemy-109m-unmarked",
             ".alchemyrc",
@@ -2496,14 +2518,14 @@ class TestLeakedWorkDirectorySweep:
         ]
 
     def test_preserved_scratch_is_not_swept(self, tmp_path: Path) -> None:
-        kept = output_lock.create_owned_scratch_directory(
+        kept = scratch.create_owned_scratch_directory(
             str(tmp_path),
             prefix=".alchemy-109m-",
             kind="entry",
             preserve=True,
         )
 
-        assert output_lock.sweep_owned_scratch_directories(str(tmp_path)) == 0
+        assert scratch.sweep_owned_scratch_directories(str(tmp_path)) == 0
         assert os.path.isdir(kept)
 
     def test_symlink_is_not_followed_even_if_its_target_is_marked(
@@ -2511,20 +2533,18 @@ class TestLeakedWorkDirectorySweep:
     ) -> None:
         target_root = tmp_path / "elsewhere"
         target_root.mkdir()
-        target = output_lock.create_owned_scratch_directory(
+        target = scratch.create_owned_scratch_directory(
             str(target_root), prefix=".alchemy-109m-", kind="entry"
         )
         link = tmp_path / ".alchemy-109m-link"
         link.symlink_to(target, target_is_directory=True)
 
-        assert output_lock.sweep_owned_scratch_directories(str(tmp_path)) == 0
+        assert scratch.sweep_owned_scratch_directories(str(tmp_path)) == 0
         assert link.is_symlink()
         assert os.path.isdir(target)
 
     def test_missing_directory_is_not_an_error(self, tmp_path: Path) -> None:
-        assert (
-            output_lock.sweep_owned_scratch_directories(str(tmp_path / "absent")) == 0
-        )
+        assert scratch.sweep_owned_scratch_directories(str(tmp_path / "absent")) == 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
@@ -2587,7 +2607,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
     )
     output_dir = tmp_path / "out"
     output_dir.mkdir()
-    leaked: str | Path = output_lock.create_owned_scratch_directory(
+    leaked: str | Path = scratch.create_owned_scratch_directory(
         str(output_dir), prefix=".alchemy-109m-", kind="entry"
     )
     leaked = output_dir / os.path.basename(leaked)
@@ -2704,16 +2724,16 @@ class TestDensityResultReachesTheResult:
     def test_keep_intermediates_decides_the_scratch_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool
     ) -> None:
-        """The scratch directory holds the maps, so only the flag may keep it."""
+        """The scratch_dir directory holds the maps, so only the flag may keep it."""
         self._entry(tmp_path, monkeypatch, self.density_result(), keep=keep)
 
-        scratch = [
+        scratch_dir = [
             name for name in os.listdir(tmp_path) if name.startswith(".alchemy-")
         ]
 
-        assert bool(scratch) is keep
+        assert bool(scratch_dir) is keep
         if keep:
-            marker = tmp_path / scratch[0] / output_lock.SCRATCH_MARKER_FILENAME
+            marker = tmp_path / scratch_dir[0] / scratch.SCRATCH_MARKER_FILENAME
             metadata = json.loads(marker.read_text(encoding="utf-8"))
             assert metadata["preserve"] is True
 

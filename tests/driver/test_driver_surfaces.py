@@ -27,7 +27,19 @@ import inputs
 import worker_contracts
 from codes import EntryStatus
 from coordination import schema as coordination_schema
-from driver import dispatch, errors, pool, resources, resume, runlog, writers
+from driver import confidence as driver_confidence
+from driver import (
+    dispatch,
+    errors,
+    pool,
+    resources,
+    resume,
+    runlog,
+    writers,
+)
+from driver import entries as driver_entries
+from driver import layout as driver_layout
+from driver import report as driver_report
 from driver.memory_admission import MemoryAdmission
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 
@@ -41,7 +53,7 @@ if TYPE_CHECKING:
 
 # This module deliberately exercises these implementation-level policy seams.
 _BatchTally = dispatch.BatchTally
-_report_batch = pool._report_batch  # pyright: ignore[reportPrivateUsage]
+_report_batch = driver_report.report_batch  # pyright: ignore[reportPrivateUsage]
 _MAX_WEB_PAGE_BYTES = inputs._MAX_WEB_PAGE_BYTES  # pyright: ignore[reportPrivateUsage]
 
 
@@ -643,8 +655,8 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
 ) -> None:
     """The finalization gate and process status must use the same policy."""
     args = cli.parse_args(["--output-dir", str(tmp_path)])
-    layout = pool.OutputLayout(str(tmp_path))
-    plan = pool.ConfidencePlan()
+    layout = driver_layout.OutputLayout(str(tmp_path))
+    plan = driver_confidence.ConfidencePlan()
     plan.mode = "database"
     tally = _tally_of(
         _entry(EntryStatus.ERROR, reason_codes=["deterministic_processing_error"])
@@ -652,11 +664,11 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
     run_log = runlog.RunLog(args, "pytest")
     finalized: list[str] = []
 
-    def finalize(_layout: pool.OutputLayout) -> tuple[int, int, str]:
+    def finalize(_layout: driver_layout.OutputLayout) -> tuple[int, int, str]:
         finalized.append(_layout.output_dir)
         return 0, 0, "test-cohort"
 
-    monkeypatch.setattr(pool, "_finalize_confidence_reference", finalize)
+    monkeypatch.setattr(driver_confidence, "finalize_confidence_reference", finalize)
 
     exit_code = _report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
@@ -672,18 +684,20 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
 ) -> None:
     """A retryable error must neither publish a reference nor report success."""
     args = cli.parse_args(["--output-dir", str(tmp_path)])
-    layout = pool.OutputLayout(str(tmp_path))
-    plan = pool.ConfidencePlan()
+    layout = driver_layout.OutputLayout(str(tmp_path))
+    plan = driver_confidence.ConfidencePlan()
     plan.mode = "database"
     tally = _tally_of(
         _entry(EntryStatus.ERROR, reason_codes=["unexpected_processing_error"])
     )
     run_log = runlog.RunLog(args, "pytest")
 
-    def must_not_finalize(_layout: pool.OutputLayout) -> tuple[int, int, str]:
+    def must_not_finalize(_layout: driver_layout.OutputLayout) -> tuple[int, int, str]:
         raise AssertionError("a recoverable error must defer finalization")
 
-    monkeypatch.setattr(pool, "_finalize_confidence_reference", must_not_finalize)
+    monkeypatch.setattr(
+        driver_confidence, "finalize_confidence_reference", must_not_finalize
+    )
 
     exit_code = _report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
@@ -713,7 +727,12 @@ def test_an_id_file_accepts_mixed_separators_and_comments(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    assert pool.load_ids_from_file(str(path)) == ["9myr", "6nlr", "9nxl", "1abc"]
+    assert driver_entries.load_ids_from_file(str(path)) == [
+        "9myr",
+        "6nlr",
+        "9nxl",
+        "1abc",
+    ]
 
 
 def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path: Path) -> None:
@@ -722,12 +741,12 @@ def test_an_id_file_reports_the_line_of_a_bad_id(tmp_path: Path) -> None:
     path.write_text("9myr\n6nlr\nnot-an-id\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"invalid PDB id .*ids\.txt:3"):
-        pool.load_ids_from_file(str(path))
+        driver_entries.load_ids_from_file(str(path))
 
 
 def test_a_missing_id_file_is_reported_clearly(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="id file not found"):
-        pool.load_ids_from_file(str(tmp_path / "absent.txt"))
+        driver_entries.load_ids_from_file(str(tmp_path / "absent.txt"))
 
 
 def _make_entry(
@@ -1179,7 +1198,7 @@ def test_mirror_batch_requires_an_explicit_root(tmp_path: Path) -> None:
     args = cli.parse_args([])
     assert args.pdb_redo_root is None
     with pytest.raises(errors.DriverError, match="Supply --pdb-redo-root"):
-        pool.select_entry_ids(args, str(tmp_path / "cache"))
+        driver_entries.select_entry_ids(args, str(tmp_path / "cache"))
 
 
 @pytest.mark.parametrize("cached", [False, True])
@@ -1203,7 +1222,7 @@ def test_single_id_uses_cache_without_a_mirror(
         populate("9myr", cache)
     monkeypatch.setattr(inputs, "download_entry_to_cache", download)
     args = cli.parse_args(["--id", "9myr"])
-    assert pool.select_entry_ids(args, cache) == (["9myr"], cache, None)
+    assert driver_entries.select_entry_ids(args, cache) == (["9myr"], cache, None)
     assert downloads == ([] if cached else ["9myr"])
 
 
@@ -1212,7 +1231,11 @@ def test_id_list_uses_cache_as_root_without_a_mirror(tmp_path: Path) -> None:
     ids.write_text("9myr\n109m\n")
     args = cli.parse_args(["--id-file", str(ids)])
     cache = str(tmp_path / "cache")
-    assert pool.select_entry_ids(args, cache) == (["9myr", "109m"], cache, None)
+    assert driver_entries.select_entry_ids(args, cache) == (
+        ["9myr", "109m"],
+        cache,
+        None,
+    )
 
 
 def test_an_unwritable_cache_is_reported_as_a_driver_error(
@@ -1229,11 +1252,11 @@ def test_an_unwritable_cache_is_reported_as_a_driver_error(
     def unwritable(pdb_id: str, mirror_root: str, cache_root: str) -> str:
         raise PermissionError(13, "Permission denied", str(cache_root))
 
-    monkeypatch.setattr(pool, "ensure_entry_available", unwritable)
+    monkeypatch.setattr(driver_entries, "ensure_entry_available", unwritable)
     args = cli.parse_args(["--id", "9myr", "--pdb-redo-root", str(tmp_path / "mirror")])
 
     with pytest.raises(errors.DriverError) as excinfo:
-        pool.select_entry_ids(args, str(tmp_path / "cache"))
+        driver_entries.select_entry_ids(args, str(tmp_path / "cache"))
 
     message = str(excinfo.value)
     assert "PermissionError" in message
@@ -1821,7 +1844,7 @@ def test_manual_run_rejects_invalid_explicit_data_json_before_scheduling(
     )
 
     with pytest.raises(errors.DriverError, match=r"Invalid --data-json:.*not found"):
-        pool.select_entry_ids(args, str(tmp_path / "cache"))
+        driver_entries.select_entry_ids(args, str(tmp_path / "cache"))
 
 
 def test_intermediates_are_discarded_unless_asked_for() -> None:
@@ -1844,7 +1867,7 @@ def test_an_id_file_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
     path = tmp_path / "ids.txt"
     path.write_text("9myr, 6nlr\n", encoding="utf-8-sig")
 
-    assert pool.load_ids_from_file(str(path)) == ["9myr", "6nlr"]
+    assert driver_entries.load_ids_from_file(str(path)) == ["9myr", "6nlr"]
 
 
 @pytest.mark.parametrize(
@@ -2015,7 +2038,7 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
         ) -> None:
             messages.append(record.getMessage())
 
-    alchemy_logger = logging.getLogger("alchemy.pool")
+    alchemy_logger = logging.getLogger("alchemy.confidence")
     handler = _Capture()
     previous_level = alchemy_logger.level
     alchemy_logger.addHandler(handler)
@@ -2023,8 +2046,11 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
     try:
         # ``None`` for the run log: the uncapped-database branch returns before
         # it is touched, and the parameter is not declared Optional.
-        plan = pool.plan_confidence(
-            args, pool.OutputLayout("/tmp/out"), True, cast("runlog.RunLog", None)
+        plan = driver_confidence.plan_confidence(
+            args,
+            driver_layout.OutputLayout("/tmp/out"),
+            True,
+            cast("runlog.RunLog", None),
         )
     finally:
         alchemy_logger.removeHandler(handler)
@@ -2049,9 +2075,9 @@ def test_targeted_run_without_reference_still_plans_classifications(
             str(tmp_path / "absent-reference"),
         ]
     )
-    plan = pool.plan_confidence(
+    plan = driver_confidence.plan_confidence(
         args,
-        pool.OutputLayout(str(tmp_path)),
+        driver_layout.OutputLayout(str(tmp_path)),
         False,
         cast("runlog.RunLog", None),
     )
@@ -2069,7 +2095,9 @@ def test_fresh_targeted_run_automatically_uses_the_manuscript_reference(
 ) -> None:
     args = cli.parse_args(["--id", "9myr", "--output-dir", str(tmp_path)])
     run_log = runlog.RunLog(args, "pytest")
-    plan = pool.plan_confidence(args, pool.OutputLayout(str(tmp_path)), False, run_log)
+    plan = driver_confidence.plan_confidence(
+        args, driver_layout.OutputLayout(str(tmp_path)), False, run_log
+    )
 
     assert plan.mode == "reference"
     assert plan.reference is not None
@@ -2077,7 +2105,7 @@ def test_fresh_targeted_run_automatically_uses_the_manuscript_reference(
     assert plan.reference.cohort_size == 330978
     assert (
         run_log.details["confidence_reference_dir"]
-        == pool.DEFAULT_CONFIDENCE_REFERENCE_DIR
+        == driver_confidence.DEFAULT_CONFIDENCE_REFERENCE_DIR
     )
 
 

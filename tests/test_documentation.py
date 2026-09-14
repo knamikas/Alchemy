@@ -16,6 +16,7 @@ import pytest
 from helpers import REPO_ROOT, SRC_DIR
 
 from codes import ReasonCode
+from driver import confidence as driver_confidence
 from driver import environment
 from driver.writers import STATS_COLUMNS
 
@@ -191,20 +192,19 @@ def test_launcher_docstring_points_to_project_documentation() -> None:
 def test_default_paths_resolve_from_the_checkout_root() -> None:
     """Verify modules resolve REPO_DIR to the project root."""
     import ccp4_setup
-    from driver import pool
 
     assert ccp4_setup.REPO_DIR == REPO_ROOT
     # Read out of the module namespace: what is under test is the value
-    # ``driver.pool`` itself binds, so importing the name from ``ccp4_setup``
+    # ``driver.confidence`` itself binds, so importing the name from ``ccp4_setup``
     # to satisfy no-implicit-reexport would assert the line above twice.
-    assert vars(pool)["REPO_DIR"] == REPO_ROOT, (
-        "driver.pool must import REPO_DIR rather than recompute it: two "
+    assert vars(driver_confidence)["REPO_DIR"] == REPO_ROOT, (
+        "driver.confidence must import REPO_DIR rather than recompute it: two "
         f"dirname calls from {os.path.join(SRC_DIR, 'driver')} name src/, "
         "not the checkout"
     )
     assert (
         os.path.join(REPO_ROOT, "src", "data", "confidence_reference")
-        == pool.DEFAULT_CONFIDENCE_REFERENCE_DIR
+        == driver_confidence.DEFAULT_CONFIDENCE_REFERENCE_DIR
     )
 
 

@@ -34,6 +34,7 @@ import reference_data
 import worker
 import worker_contracts
 from codes import EntryStatus
+from driver import confidence as driver_confidence
 from driver import dispatch, environment, runlog, writers
 from driver import pool as driver_pool
 from driver.writers import MANIFEST_COLUMNS
@@ -1095,7 +1096,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         str(tmp_path / "cache"),
         frozenset({"HEM"}),
         None,
-        driver_pool.ConfidencePlan(),
+        driver_confidence.ConfidencePlan(),
         run_log,
         identity=driver_pool.AnalysisIdentity.current(),
     )
@@ -1145,7 +1146,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         None,  # type: ignore[arg-type]
         frozenset(),
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
-        driver_pool.ConfidencePlan(),
+        driver_confidence.ConfidencePlan(),
         runlog.RunLog(manual, "pytest"),
         identity=driver_pool.AnalysisIdentity.current(),
     )
