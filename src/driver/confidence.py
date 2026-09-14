@@ -180,7 +180,7 @@ class ConfidencePlan:
 class DatabasePlan(ConfidencePlan):
     """Stream compact inputs; finalize them into a new reference when complete."""
 
-    mode = "database"
+    mode: ClassVar[ConfidenceMode | None] = "database"
 
     def __init__(self, layout: OutputLayout) -> None:
         """Stream to the inputs file the finalization reads back."""
@@ -257,7 +257,7 @@ class DatabasePlan(ConfidencePlan):
 class ReferencePlan(ConfidencePlan):
     """Score each entry against a frozen reference as it completes."""
 
-    mode = "reference"
+    mode: ClassVar[ConfidenceMode | None] = "reference"
 
     def __init__(
         self,
@@ -329,7 +329,7 @@ class ReferencePlan(ConfidencePlan):
 class ClassificationPlan(ConfidencePlan):
     """Emit raw-threshold verdicts without empirical ranking: no reference exists."""
 
-    mode = "classification"
+    mode: ClassVar[ConfidenceMode | None] = "classification"
 
     def __init__(self, layout: OutputLayout) -> None:
         """Write classifications straight into the scores file."""
