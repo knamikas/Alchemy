@@ -194,6 +194,11 @@ _TEMP_RE = re.compile(
 _UNITLESS_KELVIN_RANGE = (150.0, 400.0)
 
 RCSB_GRAPHQL_URL = "https://data.rcsb.org/graphql"
+#: Attempts per GraphQL batch before the prefetch reports the batch failed.
+RCSB_REQUEST_ATTEMPTS = 3
+RCSB_REQUEST_TIMEOUT_S = 60
+#: Exponential back-off base between attempts, in seconds.
+RCSB_RETRY_BACKOFF_BASE_S = 2
 RCSB_CACHE_SCHEMA_VERSION = 1
 RCSB_BATCH_SIZE = 200
 RCSB_GRAPHQL_QUERY = """
@@ -715,9 +720,11 @@ def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> dict[str, object]:
         method="POST",
     )
     last_error: BaseException | None = None
-    for attempt in range(3):
+    for attempt in range(RCSB_REQUEST_ATTEMPTS):
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(
+                request, timeout=RCSB_REQUEST_TIMEOUT_S
+            ) as response:
                 loaded: object = json.load(response)
             if not isinstance(loaded, dict):
                 raise ValueError("response is not a JSON object")
@@ -739,10 +746,11 @@ def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> dict[str, object]:
             urllib.error.URLError,
         ) as exc:
             last_error = exc
-            if attempt < 2:
-                time.sleep(2**attempt)
+            if attempt < RCSB_REQUEST_ATTEMPTS - 1:
+                time.sleep(RCSB_RETRY_BACKOFF_BASE_S**attempt)
     raise CrystallizationMetadataError(
-        f"RCSB Data API request failed after 3 attempts: {last_error}"
+        f"RCSB Data API request failed after {RCSB_REQUEST_ATTEMPTS} attempts: "
+        f"{last_error}"
     )
 
 

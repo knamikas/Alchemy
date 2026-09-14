@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import (
     Any,
-    NamedTuple,
     NoReturn,
     cast,
 )
@@ -26,40 +25,11 @@ from helpers import AtomRef, AtomSpec, ResidueSpec, StructureBuilder, approx
 import coordinate_conversion as conversion
 import reference_data
 from codes import CandidateSource
-from coordination import analysis as coordination_analysis
 from coordination import declared_connections
-from coordination import schema as coordination_schema
 from structure_analysis import ResidueSelection, StructureContext, load_structure
 
-#: Identity of one selected metal site, as ``run_bond_analysis`` keys summaries.
-SummaryKey = tuple[int, int, int, int]
 
-
-class Analysis(NamedTuple):
-    """Everything one ``run_bond_analysis`` call produced, plus its context."""
-
-    context: StructureContext
-    rows: list[coordination_schema.BondRow]
-    candidates: list[coordination_schema.CandidateRow]
-    summaries: dict[SummaryKey, dict[str, Any]]
-    metadata: coordination_analysis.BondAnalysisMetadata
-
-    def rows_for(
-        self, atom_name: str, resnum: str | None = None
-    ) -> list[coordination_schema.BondRow]:
-        return [
-            row
-            for row in self.rows
-            if row["neighbor_atom"] == atom_name
-            and (resnum is None or row["neighbor_resnum"] == resnum)
-        ]
-
-    @property
-    def declared_rows(self) -> list[coordination_schema.BondRow]:
-        return [row for row in self.rows if row["declared_connection"]]
-
-
-def write_source_and_analysis(
+def _write_source_and_analysis(
     builder: StructureBuilder, directory: str | Path, fmt: str
 ) -> tuple[str, str]:
     """Write ``builder`` as the source file and return ``(source, analysis)``.
@@ -80,7 +50,7 @@ def write_source_and_analysis(
     raise ValueError(f"unknown source format {fmt!r}")
 
 
-def blank_struct_conn_atom_names(path: str, *partners: int) -> None:
+def _blank_struct_conn_atom_names(path: str, *partners: int) -> None:
     """Remove selected partner atom names from every source declaration."""
     document = gemmi.cif.read(path)
     block = document.sole_block()
@@ -92,33 +62,7 @@ def blank_struct_conn_atom_names(path: str, *partners: int) -> None:
     document.write_file(path)
 
 
-def analyze(
-    analysis_pdb: str,
-    connection_path: str | None = None,
-    dpi_inputs: Mapping[str, object] | None = None,
-    pdb_id: str = "test",
-) -> Analysis:
-    """Run the real bond analysis over an already-written analysis PDB."""
-    context = load_structure(pdb_id, analysis_pdb)
-    result = coordination_analysis.run_bond_analysis(
-        pdb_id,
-        analysis_pdb,
-        [],
-        list(helpers.EDSTATS_HEADER),
-        dpi_inputs if dpi_inputs is not None else helpers.dpi_inputs(),
-        structure=context,
-        connection_path=connection_path,
-    )
-    return Analysis(
-        context,
-        result.bond_rows,
-        result.candidate_rows,
-        result.site_summaries,
-        result.metadata,
-    )
-
-
-def zinc_histidine_site(
+def _zinc_histidine_site(
     donor_pos: Sequence[float] = (2.03, 0.0, 0.0),
     *,
     chain: str = "A",
@@ -144,7 +88,7 @@ def zinc_histidine_site(
     return builder, his, zinc
 
 
-def partner_address(
+def _partner_address(
     chain: str,
     resname: str,
     seqid: int,
@@ -252,12 +196,12 @@ def test_connection_source_labels_reach_the_bond_row(tmp_path: Path) -> None:
     for fmt in SOURCE_FORMATS:
         directory = tmp_path / fmt
         directory.mkdir()
-        builder, his, zinc = zinc_histidine_site()
+        builder, his, zinc = _zinc_histidine_site()
         builder.add_connection(
             zinc.ref("ZN"), his.ref("NE2"), name="m1", reported_distance=2.03
         )
-        source, analysis_pdb = write_source_and_analysis(builder, directory, fmt)
-        result = analyze(analysis_pdb, connection_path=source)
+        source, analysis_pdb = _write_source_and_analysis(builder, directory, fmt)
+        result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
         (row,) = result.declared_rows
         labels[fmt] = row["coordination_source"]
     assert labels == {"pdb": "LINK", "cif": "struct_conn"}
@@ -274,7 +218,7 @@ def test_analysis_chain_names_reverses_conversion_shortening(tmp_path: Path) -> 
         origin=(20.0, 20.0, 20.0),
     )
     builder.add_metal("ZN", 1, chain="BBB", pos=(0.0, 0.0, 0.0))
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
     mapping = declared_connections.analysis_chain_names(source)
     context = load_structure("test", analysis_pdb)
@@ -287,8 +231,8 @@ def test_analysis_chain_names_reverses_conversion_shortening(tmp_path: Path) -> 
 
 def test_analysis_chain_names_is_empty_for_a_pdb_source(tmp_path: Path) -> None:
     """A PDB source is analyzed as deposited, so no chain renaming is replayed."""
-    builder, _, _ = zinc_histidine_site()
-    source, _ = write_source_and_analysis(builder, tmp_path, "pdb")
+    builder, _, _ = _zinc_histidine_site()
+    source, _ = _write_source_and_analysis(builder, tmp_path, "pdb")
     assert declared_connections.analysis_chain_names(source) == {}
 
 
@@ -296,8 +240,8 @@ def test_analysis_chain_names_omits_chains_conversion_leaves_alone(
     tmp_path: Path,
 ) -> None:
     """Short mmCIF chain names survive conversion, so the mapping stays empty."""
-    builder, _, _ = zinc_histidine_site()
-    source, _ = write_source_and_analysis(builder, tmp_path, "cif")
+    builder, _, _ = _zinc_histidine_site()
+    source, _ = _write_source_and_analysis(builder, tmp_path, "cif")
     assert declared_connections.analysis_chain_names(source) == {}
 
 
@@ -330,10 +274,10 @@ def test_analysis_atom_for_partner_resolves_author_identity(tmp_path: Path) -> N
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
 
     plain = declared_connections.analysis_atom_for_partner(
-        context, partner_address("A", "HIS", 10, "NE2"), {}
+        context, _partner_address("A", "HIS", 10, "NE2"), {}
     )
     with_icode = declared_connections.analysis_atom_for_partner(
-        context, partner_address("A", "HIS", 10, "NE2", icode="A"), {}
+        context, _partner_address("A", "HIS", 10, "NE2", icode="A"), {}
     )
 
     assert plain is not None and with_icode is not None
@@ -355,9 +299,9 @@ def test_analysis_atom_for_partner_applies_the_chain_name_mapping(
         origin=(20.0, 20.0, 20.0),
     )
     builder.add_metal("ZN", 1, chain="BBB", pos=(0.0, 0.0, 0.0))
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
     context = load_structure("test", analysis_pdb)
-    address = partner_address("AAA", "HIS", 10, "NE2")
+    address = _partner_address("AAA", "HIS", 10, "NE2")
 
     assert declared_connections.analysis_atom_for_partner(context, address, {}) is None
     resolved = declared_connections.analysis_atom_for_partner(
@@ -370,16 +314,16 @@ def test_analysis_atom_for_partner_applies_the_chain_name_mapping(
 @pytest.mark.parametrize(
     "address, reason",
     [
-        (partner_address("A", "HIS", 999, "NE2"), "no residue with that number"),
-        (partner_address("Z", "HIS", 10, "NE2"), "no residue in that chain"),
-        (partner_address("A", "GLU", 10, "NE2"), "component does not match"),
+        (_partner_address("A", "HIS", 999, "NE2"), "no residue with that number"),
+        (_partner_address("Z", "HIS", 10, "NE2"), "no residue in that chain"),
+        (_partner_address("A", "GLU", 10, "NE2"), "component does not match"),
         (
-            partner_address("A", "HIS", 10, "NE2", icode="B"),
+            _partner_address("A", "HIS", 10, "NE2", icode="B"),
             "insertion code does not match",
         ),
-        (partner_address("A", "HIS", 10, "OXT"), "residue holds no such atom"),
+        (_partner_address("A", "HIS", 10, "OXT"), "residue holds no such atom"),
         (
-            partner_address("A", "HIS", 10, "NE2", altloc="C"),
+            _partner_address("A", "HIS", 10, "NE2", altloc="C"),
             "residue holds no such conformer",
         ),
     ],
@@ -388,7 +332,7 @@ def test_analysis_atom_for_partner_returns_none_for_unmatched_identity(
     tmp_path: Path, address: gemmi.CRA, reason: str
 ) -> None:
     """An identity that names no atom of the analysis model resolves to None."""
-    builder, _, _ = zinc_histidine_site()
+    builder, _, _ = _zinc_histidine_site()
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
     assert (
         declared_connections.analysis_atom_for_partner(context, address, {}) is None
@@ -397,9 +341,9 @@ def test_analysis_atom_for_partner_returns_none_for_unmatched_identity(
 
 def test_analysis_atom_for_partner_refuses_an_ambiguous_residue(tmp_path: Path) -> None:
     """Two residues sharing one author identity resolve to None, not to the first."""
-    builder, _, _ = zinc_histidine_site()
+    builder, _, _ = _zinc_histidine_site()
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
-    address = partner_address("A", "HIS", 10, "NE2")
+    address = _partner_address("A", "HIS", 10, "NE2")
     single = declared_connections.analysis_atom_for_partner(context, address, {})
     assert single is not None
 
@@ -430,7 +374,7 @@ def test_analysis_atom_for_partner_tolerates_an_unresolvable_address(
     tmp_path: Path, cra: gemmi.CRA
 ) -> None:
     """A partner gemmi could not locate at all resolves to None without raising."""
-    builder, _, _ = zinc_histidine_site()
+    builder, _, _ = _zinc_histidine_site()
     context = load_structure("test", builder.write_pdb(tmp_path / "s.pdb"))
     assert declared_connections.analysis_atom_for_partner(context, cra, {}) is None
 
@@ -442,7 +386,7 @@ def conformer_context(
     positions: Sequence[Sequence[float]] = ((2.03, 0.0, 0.0), (2.20, 0.0, 0.0)),
 ) -> tuple[StructureBuilder, StructureContext]:
     """Load a HIS whose NE2 is split into conformers A and B."""
-    builder, his, _ = zinc_histidine_site()
+    builder, his, _ = _zinc_histidine_site()
     builder.add_conformers(
         his,
         [
@@ -491,7 +435,7 @@ def test_selected_conformer_atom_is_none_when_the_conformer_lacks_the_atom(
     tmp_path: Path,
 ) -> None:
     """No same-named atom on the selected conformer means no analyzable counterpart."""
-    builder, his, _ = zinc_histidine_site()
+    builder, his, _ = _zinc_histidine_site()
     his.atoms = [atom for atom in his.atoms if atom.name not in ("NE2", "ND1")] + [
         AtomSpec("NE2", "N", (2.03, 0.0, 0.0), occupancy=0.35, altloc="A"),
         AtomSpec("ND1", "N", (2.05, 0.0, 0.0), occupancy=0.65, altloc="B"),
@@ -533,7 +477,7 @@ def test_regression_declared_partner_survives_the_ter_serial_shift(
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="m1", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
     # The premise: the conversion inserted a TER ahead of the metal, so the
     # metal's analysis serial differs from its source _atom_site.id.
@@ -557,7 +501,7 @@ def test_regression_declared_partner_survives_the_ter_serial_shift(
     )
     assert metal_serial == source_serial + 1
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     declared = result.declared_rows
     assert len(declared) == 1, [
@@ -613,9 +557,9 @@ def test_regression_declared_distance_matches_the_declaration_in_both_formats(
             name=f"m{residue.seqid}",
             reported_distance=distance,
         )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, fmt)
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, fmt)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     declared = {
         (row["neighbor_resname"], row["neighbor_atom"]): row
@@ -633,13 +577,13 @@ def test_regression_metal_may_be_the_second_declared_partner(
     tmp_path: Path, fmt: str
 ) -> None:
     """Partner order is immaterial for both LINK and ``_struct_conn`` records."""
-    builder, histidine, zinc = zinc_histidine_site()
+    builder, histidine, zinc = _zinc_histidine_site()
     builder.add_connection(
         histidine.ref("NE2"), zinc.ref("ZN"), name="donor-first", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, fmt)
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, fmt)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
     assert (row["metal_element"], row["metal_atom"]) == ("ZN", "ZN")
@@ -675,7 +619,7 @@ def test_declared_partner_resolves_through_shortened_and_renamed_components(
     builder.add_connection(
         cofactor.ref("ZN"), his.ref("NE2"), name="m1", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
     remarks = [
         line
@@ -684,7 +628,7 @@ def test_declared_partner_resolves_through_shortened_and_renamed_components(
     ]
     assert any("A1L A1LU6" in line for line in remarks)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
     assert (row["metal_resname"], row["metal_chain"]) == ("A1LU6", "B")
@@ -725,15 +669,17 @@ def test_declared_partner_is_distinguished_by_insertion_code(
     builder.add_connection(
         zinc.ref("ZN"), tagged.ref("NE2"), name="ic", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, fmt)
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, fmt)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
     assert (row["neighbor_resnum"], row["neighbor_icode"]) == ("10A", "A")
     assert row["distance"] == approx(2.03, abs=1e-6)
     (decoy,) = [
-        candidate for candidate in result.rows if candidate["neighbor_resnum"] == "10"
+        candidate
+        for candidate in result.bond_rows
+        if candidate["neighbor_resnum"] == "10"
     ]
     assert decoy["coordination_status"] == "inferred"
     assert decoy["distance"] == approx(2.60, abs=1e-6)
@@ -749,7 +695,7 @@ def test_regression_declaration_on_a_deselected_conformer_yields_one_row(
     fabricate a multi-donor group and count the site twice in the confidence
     denominator.
     """
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_conformers(
         his,
         [
@@ -761,9 +707,9 @@ def test_regression_declaration_on_a_deselected_conformer_yields_one_row(
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2", altloc="A"), name="m1", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, fmt)
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, fmt)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert (
         result.context.residues_for_author("HIS", "A", "10")[0].selected_altloc == "B"
@@ -785,7 +731,7 @@ def test_regression_declaration_on_a_deselected_conformer_yields_one_row(
         len(
             [
                 candidate
-                for candidate in result.candidates
+                for candidate in result.candidate_rows
                 if candidate["neighbor_atom"] == "NE2"
             ]
         )
@@ -797,7 +743,7 @@ def test_declaration_on_the_selected_conformer_needs_no_substitution(
     tmp_path: Path,
 ) -> None:
     """Naming the selected conformer resolves without the substitution warning."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_conformers(
         his,
         [
@@ -809,9 +755,9 @@ def test_declaration_on_the_selected_conformer_needs_no_substitution(
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2", altloc="B"), name="m1", reported_distance=2.20
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
     assert row["neighbor_altloc"] == "B"
@@ -825,7 +771,7 @@ def test_declaration_is_dropped_when_the_selected_conformer_lacks_the_atom(
     tmp_path: Path,
 ) -> None:
     """A declared atom absent from the analyzed conformer is reported, not guessed."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     his.atoms = [atom for atom in his.atoms if atom.name not in ("NE2", "ND1")] + [
         AtomSpec("NE2", "N", (2.03, 0.0, 0.0), occupancy=0.35, altloc="A"),
         AtomSpec("ND1", "N", (2.05, 0.0, 0.0), occupancy=0.65, altloc="B"),
@@ -836,9 +782,9 @@ def test_declaration_is_dropped_when_the_selected_conformer_lacks_the_atom(
         name="m1",
         reported_distance=2.03,
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
     assert "declared_connection_resolution_incomplete" in (
@@ -857,10 +803,10 @@ def test_broken_amino_acid_connection_is_outside_metal_analysis(tmp_path: Path) 
     builder.add_connection(
         asparagine.ref("ND2"), serine.ref("OG"), name="broken-aa", type="covale"
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
-    blank_struct_conn_atom_names(source, 1, 2)
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
+    _blank_struct_conn_atom_names(source, 1, 2)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert "declared_connection_resolution_incomplete" not in (
         result.metadata.partial_reason_codes
@@ -873,14 +819,14 @@ def test_broken_amino_acid_connection_is_outside_metal_analysis(tmp_path: Path) 
 
 def test_broken_connection_that_names_a_metal_is_partial(tmp_path: Path) -> None:
     """A missing donor name remains material when the other partner is Zn."""
-    builder, histidine, zinc = zinc_histidine_site()
+    builder, histidine, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"), histidine.ref("NE2"), name="broken-metal", type="covale"
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
-    blank_struct_conn_atom_names(source, 2)
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
+    _blank_struct_conn_atom_names(source, 2)
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert "declared_connection_resolution_incomplete" in (
         result.metadata.partial_reason_codes
@@ -897,7 +843,7 @@ def test_partner_absent_from_the_analyzed_model_is_reported(tmp_path: Path) -> N
     def build(
         with_glutamate: bool,
     ) -> tuple[StructureBuilder, ResidueSpec, ResidueSpec | None]:
-        builder, _, zinc = zinc_histidine_site()
+        builder, _, zinc = _zinc_histidine_site()
         glutamate: ResidueSpec | None = None
         if with_glutamate:
             glutamate = builder.add_amino_acid(
@@ -918,7 +864,7 @@ def test_partner_absent_from_the_analyzed_model_is_reported(tmp_path: Path) -> N
     analysis_builder, _, _ = build(False)
     analysis_pdb = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
     assert "declared_connection_resolution_incomplete" in (
@@ -941,16 +887,16 @@ def test_cluster_metal_absent_from_the_model_is_reported(tmp_path: Path) -> None
         AtomSpec("S1", "S", (41.35, 21.15, 20.0)),
     ]
 
-    source_builder, histidine, _ = zinc_histidine_site()
+    source_builder, histidine, _ = _zinc_histidine_site()
     cluster = source_builder.add_hetero_residue("FES", 2, cluster_atoms, chain="C")
     source_builder.add_connection(
         cluster.ref("FE1"), histidine.ref("NE2"), name="cluster", reported_distance=2.2
     )
     source = source_builder.write_cif(tmp_path / "source.cif")
-    analysis_builder, _, _ = zinc_histidine_site()
+    analysis_builder, _, _ = _zinc_histidine_site()
     analysis_pdb = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
     assert "declared_connection_resolution_incomplete" in (
@@ -1075,12 +1021,12 @@ def test_resolved_element_is_authoritative(
 
 def test_unparsable_connection_file_is_reported_and_not_fatal(tmp_path: Path) -> None:
     """A source file gemmi cannot read degrades to a partial result."""
-    builder, _, _ = zinc_histidine_site()
+    builder, _, _ = _zinc_histidine_site()
     analysis_pdb = builder.write_pdb(tmp_path / "analysis.pdb")
     broken = tmp_path / "broken.cif"
     broken.write_text("this is not a coordinate file\n", encoding="utf-8")
 
-    result = analyze(analysis_pdb, connection_path=str(broken))
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=str(broken))
 
     assert "declared_connection_resolution_incomplete" in (
         result.metadata.partial_reason_codes
@@ -1097,14 +1043,14 @@ def test_declaration_between_two_metals_is_not_a_coordination_row(
     tmp_path: Path,
 ) -> None:
     """A metal-metal LINK describes a cluster, not a metal-donor contact."""
-    builder, _, zinc = zinc_histidine_site()
+    builder, _, zinc = _zinc_histidine_site()
     second = builder.add_metal("ZN", 2, chain="B", pos=(3.2, 0.0, 0.0))
     builder.add_connection(
         zinc.ref("ZN"), second.ref("ZN"), name="mm", reported_distance=3.2
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
     assert "declared_connection_resolution_incomplete" not in (
@@ -1126,9 +1072,9 @@ def test_declaration_to_a_non_donor_element_is_ignored(tmp_path: Path) -> None:
     builder.add_connection(
         zinc.ref("ZN"), his.ref("CE1"), name="c1", reported_distance=2.90
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.rows_for("CE1") == []
     assert result.declared_rows == []
@@ -1167,14 +1113,14 @@ def test_declaration_inside_a_cofactor_is_not_an_external_contact(
     builder.add_connection(
         cluster.ref("FE1"), cluster.ref("S1"), name="internal", reported_distance=1.77
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.rows_for("S1") == []
     assert result.declared_rows == []
     assert [
-        entry for entry in result.candidates if entry["neighbor_atom"] == "S1"
+        entry for entry in result.candidate_rows if entry["neighbor_atom"] == "S1"
     ] == []
 
 
@@ -1182,13 +1128,13 @@ def test_declaration_merges_with_a_coincident_proximity_candidate(
     tmp_path: Path,
 ) -> None:
     """One atom image yields one row that carries both provenances."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="m1", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.rows_for("NE2")
     assert row["coordination_status"] == "declared"
@@ -1196,7 +1142,7 @@ def test_declaration_merges_with_a_coincident_proximity_candidate(
     assert row["distance"] == approx(2.03, abs=1e-6)
 
     (candidate,) = [
-        entry for entry in result.candidates if entry["neighbor_atom"] == "NE2"
+        entry for entry in result.candidate_rows if entry["neighbor_atom"] == "NE2"
     ]
     assert set(candidate["candidate_source"].split("|")) == {
         "proximity_4A",
@@ -1212,13 +1158,13 @@ def test_declared_contact_is_retained_beyond_the_search_radius(tmp_path: Path) -
     The row exists only because the model declared it, and carries the measured
     distance rather than the reported one.
     """
-    builder, his, zinc = zinc_histidine_site(donor_pos=(6.50, 0.0, 0.0))
+    builder, his, zinc = _zinc_histidine_site(donor_pos=(6.50, 0.0, 0.0))
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="far", reported_distance=6.50
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.rows_for("NE2")
     assert row["coordination_status"] == "declared"
@@ -1226,7 +1172,7 @@ def test_declared_contact_is_retained_beyond_the_search_radius(tmp_path: Path) -
     assert row["contact_scope"] == "explicit"
 
     (candidate,) = [
-        entry for entry in result.candidates if entry["neighbor_atom"] == "NE2"
+        entry for entry in result.candidate_rows if entry["neighbor_atom"] == "NE2"
     ]
     assert candidate["candidate_source"] == "LINK"
     assert candidate["first_sphere_eligible"] is False
@@ -1249,12 +1195,14 @@ def test_declared_zero_occupancy_donor_is_candidate_evidence_not_a_bond(
     builder.add_connection(
         zinc.ref("ZN"), histidine.ref("NE2"), name="zero", reported_distance=5.0
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.rows_for("NE2") == []
-    (candidate,) = [row for row in result.candidates if row["neighbor_atom"] == "NE2"]
+    (candidate,) = [
+        row for row in result.candidate_rows if row["neighbor_atom"] == "NE2"
+    ]
     assert candidate["candidate_source"] == "LINK"
     assert candidate["declared_connection"] is True
     assert candidate["neighbor_occupancy"] == approx(0.0)
@@ -1278,14 +1226,14 @@ def test_declared_contact_outside_first_sphere_keeps_measured_geometry(
     eligibility, and their Zbond is calculated whenever the literature reference
     and DPI exist.
     """
-    builder, his, zinc = zinc_histidine_site(donor_pos=(3.90, 0.0, 0.0))
+    builder, his, zinc = _zinc_histidine_site(donor_pos=(3.90, 0.0, 0.0))
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="long", reported_distance=3.90
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
     data_json = helpers.write_data_json(tmp_path / "data.json")
 
-    result = analyze(
+    result = helpers.analyze_bonds(
         analysis_pdb,
         connection_path=source,
         dpi_inputs=helpers.dpi_inputs(
@@ -1306,7 +1254,7 @@ def test_declared_contact_outside_first_sphere_keeps_measured_geometry(
     assert row["coordination_status"] == "declared"
 
     (candidate,) = [
-        entry for entry in result.candidates if entry["neighbor_atom"] == "NE2"
+        entry for entry in result.candidate_rows if entry["neighbor_atom"] == "NE2"
     ]
     assert candidate["first_sphere_eligible"] is False
 
@@ -1329,9 +1277,9 @@ def test_declaration_overrides_the_typical_donor_table(tmp_path: Path) -> None:
     builder.add_connection(
         zinc.ref("ZN"), arginine.ref("NH1"), name="n1", reported_distance=2.30
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.rows_for("NH1")
     assert row["coordination_status"] == "declared"
@@ -1340,7 +1288,7 @@ def test_declaration_overrides_the_typical_donor_table(tmp_path: Path) -> None:
     assert row["context_warning"] is True
     assert "declared_non_typical_donor" in row["context_warning_reasons"].split("|")
 
-    summary = next(iter(result.summaries.values()))
+    summary = next(iter(result.site_summaries.values()))
     assert summary["declared_donor_override_contact_count"] == 1
     assert summary["context_warning"] is True
 
@@ -1366,11 +1314,11 @@ def test_declared_symmetry_contact_uses_the_nearest_image(tmp_path: Path) -> Non
     builder.add_connection(
         zinc.ref("ZN"), water.ref("O"), name="sym", asu="any", reported_distance=1.0
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
-    (row,) = [entry for entry in result.rows if entry["neighbor_resname"] == "HOH"]
+    (row,) = [entry for entry in result.bond_rows if entry["neighbor_resname"] == "HOH"]
     assert row["coordination_status"] == "declared"
     assert row["distance"] == approx(1.0, abs=1e-6)
     assert row["contact_scope"] == "crystallographic"
@@ -1444,7 +1392,7 @@ def test_mmcif_declaration_carries_its_identity_type_and_link_id(
     tmp_path: Path,
 ) -> None:
     """MmCIF preserves the declaration's own id, type and link id."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"),
         his.ref("NE2"),
@@ -1453,9 +1401,9 @@ def test_mmcif_declaration_carries_its_identity_type_and_link_id(
         link_id="ZN-NE2",
         reported_distance=2.03,
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
     assert row["connection_id"] == "c1"
@@ -1469,7 +1417,7 @@ def test_pdb_link_declaration_is_still_identified_without_an_id_field(
     tmp_path: Path,
 ) -> None:
     """A legacy LINK carries no identifier, so the row gets a generated one."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"),
         his.ref("NE2"),
@@ -1477,9 +1425,9 @@ def test_pdb_link_declaration_is_still_identified_without_an_id_field(
         link_id="ZN-NE2",
         reported_distance=2.03,
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "pdb")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "pdb")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
     assert row["connection_id"]
@@ -1493,7 +1441,7 @@ def test_absent_reported_distance_is_blank_not_zero(tmp_path: Path) -> None:
     Deposited ``LINK`` records often stop before the distance columns, and
     ``0.0`` there would read as a coincident pair.
     """
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="m1", reported_distance=2.03
     )
@@ -1509,7 +1457,7 @@ def test_absent_reported_distance_is_blank_not_zero(tmp_path: Path) -> None:
             for line in lines
         )
 
-    result = analyze(analysis_pdb, connection_path=analysis_pdb)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=analysis_pdb)
 
     (row,) = result.declared_rows
     assert row["connection_reported_distance"] == ""
@@ -1520,16 +1468,16 @@ def test_multiple_declarations_for_one_atom_image_are_all_recorded(
     tmp_path: Path,
 ) -> None:
     """Two declarations of the same contact merge into one row keeping both ids."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="first", reported_distance=2.03
     )
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="second", reported_distance=2.03
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.rows_for("NE2")
     assert row["connection_id"].split("|") == ["first", "second"]
@@ -1540,7 +1488,7 @@ def test_multiple_declaration_fields_preserve_record_correspondence(
     tmp_path: Path,
 ) -> None:
     """Parallel declaration columns retain repeated and blank record slots."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"),
         his.ref("NE2"),
@@ -1556,9 +1504,9 @@ def test_multiple_declaration_fields_preserve_record_correspondence(
         link_id="ZN-NE2",
         reported_distance=2.03,
     )
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.rows_for("NE2")
     assert row["coordination_source"] == "struct_conn|struct_conn"
@@ -1571,13 +1519,13 @@ def test_multiple_declaration_fields_preserve_record_correspondence(
 
 def test_connection_path_defaults_to_the_analyzed_coordinates(tmp_path: Path) -> None:
     """Omitting ``connection_path`` reads declarations from the analyzed PDB."""
-    builder, his, zinc = zinc_histidine_site()
+    builder, his, zinc = _zinc_histidine_site()
     builder.add_connection(
         zinc.ref("ZN"), his.ref("NE2"), name="m1", reported_distance=2.03
     )
     analysis_pdb = builder.write_pdb(tmp_path / "analysis.pdb")
 
-    result = analyze(analysis_pdb, connection_path=None)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=None)
 
     (row,) = result.declared_rows
     assert row["coordination_source"] == "LINK"
@@ -1586,10 +1534,10 @@ def test_connection_path_defaults_to_the_analyzed_coordinates(tmp_path: Path) ->
 
 def test_a_file_without_declarations_produces_no_declared_rows(tmp_path: Path) -> None:
     """With no ``_struct_conn``/``LINK`` records every contact stays inferred."""
-    builder, _, _ = zinc_histidine_site()
-    source, analysis_pdb = write_source_and_analysis(builder, tmp_path, "cif")
+    builder, _, _ = _zinc_histidine_site()
+    source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
 
-    result = analyze(analysis_pdb, connection_path=source)
+    result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     assert result.declared_rows == []
     (row,) = result.rows_for("NE2")
@@ -1672,16 +1620,7 @@ def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(
     analysis_builder = StructureBuilder()
     analysis_builder.add_metal("ZN", 99, chain="Z", pos=(20.0, 20.0, 20.0))
     analysis = analysis_builder.write_pdb(tmp_path / "analysis.pdb")
-    context = load_structure("test", analysis)
-    result = coordination_analysis.run_bond_analysis(
-        "test",
-        analysis,
-        [],
-        list(helpers.EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-        connection_path=source,
-    )
+    result = helpers.analyze_bonds(analysis, connection_path=source)
     rows = result.bond_rows
     candidates = result.candidate_rows
     metadata = result.metadata
@@ -1721,16 +1660,7 @@ def test_declared_donor_outside_the_standard_residues_is_kept_as_evidence(
     )
     path = builder.write_cif(tmp_path / "nucleotide.cif")
 
-    context = load_structure("test", path)
-    result = coordination_analysis.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(helpers.EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-        connection_path=path,
-    )
+    result = helpers.analyze_bonds(path, connection_path=path)
     rows = result.bond_rows
     candidates = result.candidate_rows
     metadata = result.metadata

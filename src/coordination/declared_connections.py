@@ -9,13 +9,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence, Set
-from typing import (
-    TYPE_CHECKING,
-    NamedTuple,
-    Protocol,
-    TypedDict,
-    cast,
-)
+from typing import NamedTuple, Protocol, TypedDict, cast
+
+import gemmi
 
 from codes import CandidateSource, ContactScope, WarningCode
 from coordination.contact_record import Candidate, DeclaredConnectionRecord
@@ -29,9 +25,6 @@ from structure_analysis import (
     pbc_translation,
     position_distance,
 )
-
-if TYPE_CHECKING:
-    import gemmi
 
 
 class PartnerLocator(Protocol):
@@ -89,8 +82,6 @@ def analysis_chain_names(connection_path: str) -> dict[str, str]:
     the conversion mapping. A source PDB is extracted textually and keeps its
     chain names, so its mapping is empty.
     """
-    import gemmi
-
     if connection_source(connection_path) != CandidateSource.STRUCT_CONN:
         return {}
     copy = gemmi.read_structure(connection_path)
@@ -194,8 +185,6 @@ def declared_candidate_geometry(
     connection: gemmi.Connection,
 ) -> _CandidateGeometry:
     """Return contact geometry for a resolved declared connection."""
-    import gemmi
-
     asu = connection.asu
     if asu == gemmi.Asu.Same or (
         asu == gemmi.Asu.Any and not structure.symmetry_search_available
@@ -424,8 +413,6 @@ def collect_declared_candidates(
     insertion code, component, atom name, altloc -- and re-pointed onto their
     residue's selected conformer.
     """
-    import gemmi
-
     if not connection_path:
         return [], [], []
     source = connection_source(connection_path)

@@ -393,20 +393,6 @@ _AtomIndex = tuple[int, int, int]
 _AuthorResidueKey = tuple[str, str, str]
 
 
-def _empty_atom_index() -> dict[_AtomIndex, AtomSite]:
-    return {}
-
-
-def _empty_residue_index() -> dict[_AtomIndex, ResidueSelection]:
-    return {}
-
-
-def _empty_author_residue_index() -> dict[
-    _AuthorResidueKey, tuple[ResidueSelection, ...]
-]:
-    return {}
-
-
 @dataclass
 class StructureContext:
     """Gemmi structure plus deterministic first-model analysis metadata."""
@@ -448,21 +434,21 @@ class StructureContext:
     analysis_coordinate_format: str
     warning_codes: tuple[str, ...]
     _spatial_model: gemmi.Model = field(repr=False)
-    _atom_by_indices: Mapping[tuple[int, int, int], AtomSite] = field(
-        repr=False, default_factory=_empty_atom_index
+    _atom_by_indices: Mapping[_AtomIndex, AtomSite] = field(
+        repr=False, default_factory=dict
     )
-    _residue_by_key: Mapping[tuple[int, int, int], ResidueSelection] = field(
-        repr=False, default_factory=_empty_residue_index
+    _residue_by_key: Mapping[_AtomIndex, ResidueSelection] = field(
+        repr=False, default_factory=dict
     )
-    _residues_by_author: Mapping[tuple[str, str, str], tuple[ResidueSelection, ...]] = (
-        field(repr=False, default_factory=_empty_author_residue_index)
+    _residues_by_author: Mapping[_AuthorResidueKey, tuple[ResidueSelection, ...]] = (
+        field(repr=False, default_factory=dict)
     )
     _residues_by_source_author: Mapping[
-        tuple[str, str, str], tuple[ResidueSelection, ...]
-    ] = field(repr=False, default_factory=_empty_author_residue_index)
+        _AuthorResidueKey, tuple[ResidueSelection, ...]
+    ] = field(repr=False, default_factory=dict)
     residues_by_coordinate_author_index: Mapping[
-        tuple[str, str, str], tuple[ResidueSelection, ...]
-    ] = field(repr=False, default_factory=_empty_author_residue_index)
+        _AuthorResidueKey, tuple[ResidueSelection, ...]
+    ] = field(repr=False, default_factory=dict)
 
     @property
     def strict_ncs_operation_count(self) -> int:

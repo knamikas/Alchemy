@@ -55,34 +55,6 @@ def blank_if_unmeasured(value: Any) -> Any:
     return "" if value is None else value
 
 
-def _empty_result_codes() -> list[str]:
-    return []
-
-
-def _empty_result_timings() -> dict[str, float]:
-    return {}
-
-
-def _empty_metal_stats_rows() -> list[MetalStatsRow]:
-    return []
-
-
-def _empty_bond_rows() -> list[BondRow]:
-    return []
-
-
-def _empty_candidate_rows() -> list[CandidateRow]:
-    return []
-
-
-def _empty_csv_rows() -> list[dict[str, Any]]:
-    return []
-
-
-def _empty_csv_row() -> dict[str, Any]:
-    return {}
-
-
 @dataclass(slots=True)
 class EntryResult:
     """Keep an unrun stage distinguishable from one that measured zero."""
@@ -103,20 +75,18 @@ class EntryResult:
     no_metals: bool = False
     metal_site_limit_exceeded: bool = False
 
-    rows: list[MetalStatsRow] = field(default_factory=_empty_metal_stats_rows)
-    bond_rows: list[BondRow] = field(default_factory=_empty_bond_rows)
-    candidate_rows: list[CandidateRow] = field(default_factory=_empty_candidate_rows)
-    crystallization_condition_rows: list[dict[str, Any]] = field(
-        default_factory=_empty_csv_rows
-    )
-    crystallization_summary_row: dict[str, Any] = field(default_factory=_empty_csv_row)
-    density_context_row: dict[str, Any] = field(default_factory=_empty_csv_row)
+    rows: list[MetalStatsRow] = field(default_factory=list)
+    bond_rows: list[BondRow] = field(default_factory=list)
+    candidate_rows: list[CandidateRow] = field(default_factory=list)
+    crystallization_condition_rows: list[dict[str, Any]] = field(default_factory=list)
+    crystallization_summary_row: dict[str, Any] = field(default_factory=dict)
+    density_context_row: dict[str, Any] = field(default_factory=dict)
     n_bonds: int | None = None
     n_candidates: int | None = None
 
-    reason_codes: list[str] = field(default_factory=_empty_result_codes)
-    warning_codes: list[str] = field(default_factory=_empty_result_codes)
-    timings: dict[str, float] = field(default_factory=_empty_result_timings)
+    reason_codes: list[str] = field(default_factory=list)
+    warning_codes: list[str] = field(default_factory=list)
+    timings: dict[str, float] = field(default_factory=dict)
 
     density_map_scope_used: str = ""
     density_full_map_bytes: int = 0

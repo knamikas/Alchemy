@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from helpers import entry_result
 
 import cli
 import worker
@@ -127,7 +128,7 @@ def test_cleanup_runs_after_analysis_locals_are_released(
         pass
 
     refs: list[weakref.ReferenceType[Payload]] = []
-    result = entry_result()
+    result = entry_result(pdb_id="test")
     released: list[bool] = []
 
     def analyze(_: str) -> EntryResult:
@@ -158,7 +159,7 @@ def test_unsupported_allocator_still_collects_garbage(
 def test_housekeeping_failure_cannot_change_an_entry_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = entry_result()
+    result = entry_result(pdb_id="test")
 
     def failed_cleanup() -> None:
         raise OSError("optional allocator operation unavailable")
@@ -169,18 +170,6 @@ def test_housekeeping_failure_cannot_change_an_entry_result(
     monkeypatch.setattr(worker, "_process_entry", analyze)
     monkeypatch.setattr(worker, "release_idle_memory", failed_cleanup)
     assert worker.process("test") is result
-
-
-def entry_result() -> EntryResult:
-    return EntryResult(
-        pdb_id="test",
-        alchemy_commit="test",
-        gemmi_version="test",
-        ccp4_version="test",
-        reference_data_id="test",
-        analysis_config_id="test",
-        refinement_state="final",
-    )
 
 
 @pytest.mark.parametrize(
@@ -242,7 +231,7 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
         time.sleep(0.15 if first_wave else 0.03)
         with lock:
             finished += 1
-        result = entry_result()
+        result = entry_result(pdb_id="test")
         result.pdb_id = pdb_id
         result.status = EntryStatus.OK
         result.no_metals = True
@@ -323,3 +312,118 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
     assert len(rows) == len(ids)
     assert {r["pdbID"] for r in rows} == set(ids)
     assert {r["status"] for r in rows} == {"ok"}
+
+
+def test_weighted_admission_skips_a_blocked_large_entry() -> None:
+    gib = 1024**3
+    active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
+    pending = [
+        resources.EntryMemoryEstimate("large", 7 * gib, "test"),
+        resources.EntryMemoryEstimate("small", gib, "test"),
+    ]
+
+    admitted = dispatch.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active)
+
+    assert admitted is not None and admitted.pdb_id == "small"
+    assert [estimate.pdb_id for estimate in pending] == ["large"]
+
+
+def test_oversized_entry_is_admitted_only_after_active_work_drains() -> None:
+    gib = 1024**3
+    active = [resources.EntryMemoryEstimate("active-small", 2 * gib, "test")]
+    pending = [resources.EntryMemoryEstimate("large", 7 * gib, "test")]
+
+    assert dispatch.pop_admissible_estimate(pending, 2 * gib, 5 * gib, active) is None
+    admitted = dispatch.pop_admissible_estimate(pending, 0, 5 * gib, [])
+    assert admitted is not None and admitted.pdb_id == "large"
+
+
+def test_high_memory_entry_allows_two_ordinary_companions() -> None:
+    gib = 1024**3
+    large = resources.EntryMemoryEstimate("large", 3 * gib, "test")
+    first = resources.EntryMemoryEstimate("first", 2 * gib, "test")
+    second = resources.EntryMemoryEstimate("second", 2 * gib, "test")
+    pending = [first, second]
+
+    admitted = dispatch.pop_admissible_estimate(pending, 3 * gib, 20 * gib, [large])
+    assert admitted == first
+
+    admitted = dispatch.pop_admissible_estimate(
+        pending, 5 * gib, 20 * gib, [large, first]
+    )
+    assert admitted == second
+
+
+def test_ordinary_companions_are_bounded_by_the_budget_not_a_count() -> None:
+    """A large machine must keep filling worker slots past the third companion.
+
+    Capping companions by count throttled a 250 GiB node to the concurrency a
+    30 GiB workstation needed, which serialized the mid-sized tail of a
+    full-database run.
+    """
+    gib = 1024**3
+    active = [
+        resources.EntryMemoryEstimate("large", 3 * gib, "test"),
+        resources.EntryMemoryEstimate("first", 2 * gib, "test"),
+        resources.EntryMemoryEstimate("second", 2 * gib, "test"),
+    ]
+    pending = [resources.EntryMemoryEstimate("third", 2 * gib, "test")]
+
+    admitted = dispatch.pop_admissible_estimate(pending, 7 * gib, 20 * gib, active)
+    assert admitted is not None and admitted.pdb_id == "third"
+
+    exhausted = [resources.EntryMemoryEstimate("fourth", 2 * gib, "test")]
+    assert (
+        dispatch.pop_admissible_estimate(exhausted, 19 * gib, 20 * gib, active) is None
+    )
+
+
+def test_high_memory_entries_overlap_within_the_total_byte_budget() -> None:
+    gib = 1024**3
+    active = [resources.EntryMemoryEstimate("large", 3 * gib, "test")]
+    pending = [resources.EntryMemoryEstimate("another-large", 4 * gib, "test")]
+
+    admitted = dispatch.pop_admissible_estimate(pending, 3 * gib, 20 * gib, active)
+    assert admitted is not None and admitted.pdb_id == "another-large"
+
+
+def test_high_memory_admission_uses_the_total_budget_without_a_class_cap() -> None:
+    """A capable node may overlap large entries whenever their estimates fit."""
+    gib = 1024**3
+    active = [resources.EntryMemoryEstimate("large", 9 * gib, "test")]
+    pending = [
+        resources.EntryMemoryEstimate("another-large", 3 * gib, "test"),
+        resources.EntryMemoryEstimate("ordinary", 2 * gib, "test"),
+    ]
+
+    admitted = dispatch.pop_admissible_estimate(pending, 9 * gib, 20 * gib, active)
+    assert admitted is not None and admitted.pdb_id == "another-large"
+    assert [estimate.pdb_id for estimate in pending] == ["ordinary"]
+
+
+def test_memory_budget_backoff_converges_without_dropping_below_one_worker() -> None:
+    gib = 1024**3
+
+    unknown = MemoryAdmission(None, 2 * gib, 4 * gib)
+    unknown.back_off(0)
+    assert unknown.budget is None
+    admission = MemoryAdmission(20 * gib, 2 * gib, 4 * gib)
+    admission.back_off(0)
+    assert admission.budget == 16 * gib
+    for second in range(100):
+        admission.back_off(second)
+    assert admission.budget == 2 * gib
+
+
+def test_explicit_memory_limit_tracks_consumption_from_the_starting_probe() -> None:
+    gib = 1024**3
+    plan = resources.MemoryPlan(
+        [],
+        16 * gib,
+        4 * gib,
+        initial_available_bytes=64 * gib,
+        configured_limit_bytes=20 * gib,
+    )
+
+    assert dispatch.guarded_available_memory(plan, 60 * gib) == 16 * gib
+    assert dispatch.guarded_available_memory(plan, 42 * gib) == 0

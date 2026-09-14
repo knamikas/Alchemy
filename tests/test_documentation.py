@@ -208,38 +208,6 @@ def test_default_paths_resolve_from_the_checkout_root() -> None:
     )
 
 
-def test_the_density_cli_does_not_default_its_output_into_the_source_tree() -> None:
-    """Verify the density debug CLI writes outside src.
-
-    Inspect its parser statically because it is defined in the script entry block.
-    """
-    tree = ast.parse(_read(os.path.join(SRC_DIR, "density_analysis.py")))
-    defaults = [
-        keyword.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "attr", None) == "add_argument"
-        and any(
-            isinstance(arg, ast.Constant) and arg.value == "--out-dir"
-            for arg in node.args
-        )
-        for keyword in node.keywords
-        if keyword.arg == "default"
-    ]
-
-    assert len(defaults) == 1, "expected exactly one --out-dir default"
-    default = defaults[0]
-    assert isinstance(default, ast.Constant), (
-        "--out-dir must default to a literal path, not to a module constant "
-        "derived from __file__"
-    )
-    default_path = default.value
-    assert isinstance(default_path, str), (
-        f"--out-dir default is not a path: {default!r}"
-    )
-    assert not os.path.isabs(default_path), default_path
-
-
 @pytest.mark.parametrize(
     "path",
     DOC_PATHS + [LAUNCHER_PATH],

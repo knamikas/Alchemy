@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import Callable, Generator
@@ -208,6 +209,17 @@ def pytest_sessionfinish(
     if reporter is not None:
         reporter.write_sep("=", f"ERROR: {message}")
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.fixture(autouse=True)
+def _propagating_alchemy_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let ``alchemy`` log records reach ``caplog`` in every test.
+
+    ``configure_driver_logging`` turns propagation off for the process, so any
+    test that ran the CLI would otherwise silently empty ``caplog`` for the
+    rest of the session.
+    """
+    monkeypatch.setattr(logging.getLogger("alchemy"), "propagate", True)
 
 
 @pytest.fixture(scope="session")

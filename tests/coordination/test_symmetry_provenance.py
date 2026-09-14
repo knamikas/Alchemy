@@ -22,7 +22,6 @@ import codes
 import coordination.analysis as ba
 import structure_analysis as sa
 from coordination.contact_record import Candidate
-from coordination.schema import BondRow, CandidateRow
 from metal_elements import METAL_ELEMENTS
 
 # Use short cell edges so donors across a boundary have first-sphere images.
@@ -55,35 +54,6 @@ def _write_structure(
     return helpers.write_pdb(structure, path)
 
 
-class _Analysis:
-    """The four ``run_bond_analysis`` outputs plus the context they came from."""
-
-    def __init__(
-        self,
-        context: sa.StructureContext,
-        rows: list[BondRow],
-        candidates: list[CandidateRow],
-        summaries: dict[tuple[int, int, int, int], dict[str, Any]],
-        metadata: ba.BondAnalysisMetadata,
-    ) -> None:
-        self.context = context
-        self.rows = rows
-        self.candidates = candidates
-        self.summaries = summaries
-        self.metadata = metadata
-
-    @property
-    def summary(self) -> dict[str, Any]:
-        assert len(self.summaries) == 1, "expected a one-metal structure"
-        return next(iter(self.summaries.values()))
-
-    @property
-    def metal_xyz(self) -> tuple[float, float, float]:
-        metals = self.context.metal_atoms(METAL_ELEMENTS, canonical=True)
-        assert len(metals) == 1, "expected a one-metal structure"
-        return metals[0].xyz
-
-
 def _analyze(
     builder: StructureBuilder,
     tmp_path: Path,
@@ -91,7 +61,7 @@ def _analyze(
     *,
     ncs: Sequence[tuple[str, tuple[float, float, float]]] = (),
     with_dpi: bool = False,
-) -> _Analysis:
+) -> helpers.BondAnalysis:
     """Write ``builder`` and run the real bond analysis over it.
 
     ``with_dpi=True`` supplies the refinement metadata that makes the DPI
@@ -109,15 +79,12 @@ def _analyze(
         dpi_inputs = helpers.dpi_inputs(pdb_path=path, data_json=data_json)
     else:
         dpi_inputs = helpers.dpi_inputs()
-    result = ba.run_bond_analysis(
-        "test", path, stats_rows, header, dpi_inputs, structure=context
-    )
-    return _Analysis(
-        context,
-        result.bond_rows,
-        result.candidate_rows,
-        result.site_summaries,
-        result.metadata,
+    return helpers.analyze_bonds(
+        path,
+        dpi_inputs=dpi_inputs,
+        stats_rows=stats_rows,
+        header=header,
+        structure=context,
     )
 
 
@@ -136,40 +103,7 @@ def _deposited_neighbor() -> sa.AtomSite:
     atom indices, so a single neutral record is enough; the rest of the fields
     are the values ``load_structure`` would produce for it.
     """
-    gemmi_atom = gemmi.Atom()
-    gemmi_atom.name = "O"
-    gemmi_atom.element = gemmi.Element("O")
-    gemmi_atom.pos = gemmi.Position(0.0, 0.0, 0.0)
-    gemmi_atom.occ = 1.0
-    return sa.AtomSite(
-        pdb_id="test",
-        model_index=0,
-        model_id="1",
-        chain_index=0,
-        chain_id="A",
-        residue_index=0,
-        residue_name="HOH",
-        coordinate_residue_name="HOH",
-        residue_number=1,
-        insertion_code="",
-        resnum="1",
-        atom_index=0,
-        source_order=0,
-        atom_name="O",
-        altloc="",
-        element="O",
-        element_known=True,
-        occupancy=1.0,
-        occupancy_valid=True,
-        occupancy_status="valid",
-        serial=1,
-        x=0.0,
-        y=0.0,
-        z=0.0,
-        is_water=True,
-        is_hydrogen=False,
-        gemmi_atom=gemmi_atom,
-    )
+    return helpers.atom_site("O", atom_name="O", residue_name="HOH", is_water=True)
 
 
 def _cell_translation(row: Mapping[str, Any]) -> tuple[int, int, int]:
@@ -289,7 +223,7 @@ CRYSTALLOGRAPHIC_CASES = [
 ]
 
 
-_CaseFixture = tuple[_Analysis, tuple[float, float, float], str, str, bool]
+_CaseFixture = tuple[helpers.BondAnalysis, tuple[float, float, float], str, str, bool]
 
 
 @pytest.fixture(params=SYMMETRY_CASES, ids=_CASE_IDS)
@@ -311,8 +245,8 @@ def test_symmetry_case_reports_the_expected_operation_and_scope(
     """
     analysis, _, code, scope, _ = symmetry_case
 
-    assert len(analysis.rows) == 1
-    row = analysis.rows[0]
+    assert len(analysis.bond_rows) == 1
+    row = analysis.bond_rows[0]
     assert row["symmetry_operation"] == code
     assert row["contact_scope"] == scope
     assert row["distance"] == approx(2.09, abs=1e-3)
@@ -328,7 +262,7 @@ def test_transformed_neighbor_position_reproduces_the_reported_distance(
     somewhere else entirely.
     """
     analysis, _, _, _, _ = symmetry_case
-    row = analysis.rows[0]
+    row = analysis.bond_rows[0]
 
     recomputed = sa.position_distance(analysis.metal_xyz, _transformed_position(row))
 
@@ -347,8 +281,8 @@ def test_published_image_positions_are_rounded_in_both_streams(
     """
     analysis, _, _, _, _ = symmetry_case
 
-    published = [_transformed_position(row) for row in analysis.rows]
-    published += [_transformed_position(row) for row in analysis.candidates]
+    published = [_transformed_position(row) for row in analysis.bond_rows]
+    published += [_transformed_position(row) for row in analysis.candidate_rows]
 
     assert published, "the fixture must have produced rows for this to mean anything"
     for position in published:
@@ -364,7 +298,7 @@ def test_cell_translation_agrees_with_the_symmetry_code(
     them disagreeing cannot tell which of the two is the lie.
     """
     analysis, _, _, _, _ = symmetry_case
-    row = analysis.rows[0]
+    row = analysis.bond_rows[0]
 
     op_number, code_translation = _decode_symmetry_code(row["symmetry_operation"])
 
@@ -382,7 +316,7 @@ def test_transformed_neighbor_is_the_image_not_the_deposited_atom(
     so the two must differ by the amount the geometry demands.
     """
     analysis, deposited, _, scope, _ = symmetry_case
-    row = analysis.rows[0]
+    row = analysis.bond_rows[0]
     transformed = _transformed_position(row)
     deposited_distance = sa.position_distance(analysis.metal_xyz, deposited)
 
@@ -413,7 +347,7 @@ def test_crystallographic_image_matches_an_independent_transform(
     """
     builder, ncs, deposited = factory()
     analysis = _analyze(builder, tmp_path, _case_id(factory), ncs=ncs)
-    row = analysis.rows[0]
+    row = analysis.bond_rows[0]
 
     op_number, _ = _decode_symmetry_code(row["symmetry_operation"])
     expected = _apply_spacegroup_operation(
@@ -434,20 +368,20 @@ def test_candidate_rows_carry_the_same_image_geometry(
 
     matching = [
         candidate
-        for candidate in analysis.candidates
+        for candidate in analysis.candidate_rows
         if candidate["neighbor_atom"] == "O"
     ]
     assert len(matching) == 1
     candidate = matching[0]
 
     assert candidate["assigned_as_bond"] is True
-    assert candidate["contact_id"] == analysis.rows[0]["contact_id"]
+    assert candidate["contact_id"] == analysis.bond_rows[0]["contact_id"]
     assert candidate["symmetry_operation"] == code
     assert candidate["contact_scope"] == scope
     assert _transformed_position(candidate) == approx(
-        _transformed_position(analysis.rows[0]), abs=1e-9
+        _transformed_position(analysis.bond_rows[0]), abs=1e-9
     )
-    assert _cell_translation(candidate) == _cell_translation(analysis.rows[0])
+    assert _cell_translation(candidate) == _cell_translation(analysis.bond_rows[0])
     recomputed = sa.position_distance(
         analysis.metal_xyz, _transformed_position(candidate)
     )
@@ -470,11 +404,11 @@ def test_every_bond_row_position_matches_its_distance_in_a_mixed_site(
     builder.add_water(103, (0.5, 0.5, 18.31), chain="B")  # -c image, 2.19 A
     analysis = _analyze(builder, tmp_path, "mixed")
 
-    assert len(analysis.rows) == 3
-    scopes = sorted(row["contact_scope"] for row in analysis.rows)
+    assert len(analysis.bond_rows) == 3
+    scopes = sorted(row["contact_scope"] for row in analysis.bond_rows)
     assert scopes == ["crystallographic", "crystallographic", "explicit"]
 
-    for row in analysis.rows:
+    for row in analysis.bond_rows:
         recomputed = sa.position_distance(
             analysis.metal_xyz, _transformed_position(row)
         )
@@ -547,7 +481,7 @@ def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(
     assert len(collapsed) == 1
 
     analysis = _analyze(_axis_site(0.0), tmp_path, "axis_full")
-    assert len(analysis.rows) == 1
+    assert len(analysis.bond_rows) == 1
     assert analysis.summary["candidate_contact_count"] == 1
 
 
@@ -561,8 +495,8 @@ def test_special_position_collapse_keeps_the_explicit_image(tmp_path: Path) -> N
     """
     analysis = _analyze(_axis_site(0.025), tmp_path, "prefer")
 
-    assert len(analysis.rows) == 1
-    row = analysis.rows[0]
+    assert len(analysis.bond_rows) == 1
+    row = analysis.bond_rows[0]
     assert row["contact_scope"] == "explicit"
     assert row["symmetry_operation"] == "1_555"
     assert row["symmetry_contact"] is False
@@ -608,7 +542,7 @@ def test_images_collapse_only_within_the_special_position_cutoff(
 
     assert len(collapsed) == expected_contacts
     analysis = _analyze(builder, tmp_path, f"sep_full_{offset}")
-    assert len(analysis.rows) == expected_contacts
+    assert len(analysis.bond_rows) == expected_contacts
 
 
 def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse() -> None:
@@ -720,8 +654,8 @@ def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
     builder = _axis_site(0.025, donor="aspartate")
 
     collapsed = _analyze(builder, tmp_path, "chelate")
-    assert len(collapsed.rows) == 2
-    assert sorted(row["neighbor_atom"] for row in collapsed.rows) == ["OD1", "OD2"]
+    assert len(collapsed.bond_rows) == 2
+    assert sorted(row["neighbor_atom"] for row in collapsed.bond_rows) == ["OD1", "OD2"]
     assert collapsed.summary["candidate_contact_count"] == 2
     assert collapsed.summary["multi_donor_residue_group_count"] == 1
     assert collapsed.summary["multi_donor_contact_count"] == 2
@@ -735,7 +669,7 @@ def test_failing_to_collapse_inflates_coordination_and_invents_a_group(
     monkeypatch.setattr(ba, "SPECIAL_POSITION_DEDUP_CUTOFF", 0.0)
     uncollapsed = _analyze(builder, tmp_path, "chelate_raw")
 
-    assert len(uncollapsed.rows) == 4
+    assert len(uncollapsed.bond_rows) == 4
     assert uncollapsed.summary["candidate_contact_count"] == 4
     assert uncollapsed.summary["multi_donor_residue_group_count"] == 2
     assert uncollapsed.summary["multi_donor_contact_count"] == 4
@@ -789,7 +723,7 @@ def test_purely_explicit_site_declares_no_generated_dependence(
     assert summary["generated_contact_scope"] == "none"
     assert summary["coordination_depends_on_crystallographic_symmetry"] is False
     assert summary["coordination_depends_on_strict_ncs"] is False
-    assert all(row["contact_scope"] == "explicit" for row in analysis.rows)
+    assert all(row["contact_scope"] == "explicit" for row in analysis.bond_rows)
 
 
 def test_purely_generated_site_reports_no_explicit_contacts(tmp_path: Path) -> None:
@@ -840,9 +774,9 @@ def test_mixed_site_keeps_the_two_counts_apart(tmp_path: Path) -> None:
     assert summary["coordination_depends_on_crystallographic_symmetry"] is True
     assert summary["coordination_depends_on_strict_ncs"] is False
 
-    scopes = sorted(row["contact_scope"] for row in analysis.rows)
+    scopes = sorted(row["contact_scope"] for row in analysis.bond_rows)
     assert scopes == ["crystallographic", "explicit"]
-    assert [row["symmetry_contact"] for row in analysis.rows].count(True) == 1
+    assert [row["symmetry_contact"] for row in analysis.bond_rows].count(True) == 1
 
 
 def test_strict_ncs_site_does_not_claim_a_crystallographic_dependence(
@@ -870,7 +804,7 @@ def test_strict_ncs_site_does_not_claim_a_crystallographic_dependence(
     assert summary["coordination_depends_on_strict_ncs"] is True
     assert summary["coordination_depends_on_crystallographic_symmetry"] is False
 
-    row = analysis.rows[0]
+    row = analysis.bond_rows[0]
     assert row["contact_scope"] == "strict_ncs"
     assert row["strict_ncs_contact"] is True
     assert row["crystallographic_contact"] is False
@@ -903,7 +837,7 @@ def test_both_provenances_present_report_the_combined_scope(tmp_path: Path) -> N
     assert summary["coordination_depends_on_crystallographic_symmetry"] is True
     assert summary["coordination_depends_on_strict_ncs"] is True
 
-    assert sorted(row["contact_scope"] for row in analysis.rows) == [
+    assert sorted(row["contact_scope"] for row in analysis.bond_rows) == [
         "crystallographic",
         "strict_ncs",
     ]
@@ -964,7 +898,7 @@ def test_generated_images_can_change_the_geometry_verdict(tmp_path: Path) -> Non
     assert summary["image_inclusive_geometry_status"] == "suspect"
     assert summary["geometry_classification_changes_with_generated_images"] is True
 
-    (outlier,) = [row for row in analysis.rows if row["geometry_outlier"]]
+    (outlier,) = [row for row in analysis.bond_rows if row["geometry_outlier"]]
     assert outlier["contact_scope"] == "crystallographic"
     assert outlier["distance"] == approx(1.35, abs=1e-3)
 

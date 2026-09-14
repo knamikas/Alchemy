@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 import csv
 import dataclasses
-import logging
 import multiprocessing
 import os
 import pickle
@@ -24,11 +23,11 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
+import helpers
 import pytest
 
 import analysis_config
 import cli
-import density_analysis as density
 import main
 import reference_data
 import worker
@@ -95,19 +94,13 @@ def _reference_cfg(
 ) -> worker_contracts.WorkerConfig:
     """Build the worker config exactly as ``driver_pool.run`` assembles it."""
     env = dict(os.environ)
-    return worker_contracts.WorkerConfig(
+    return helpers.worker_config(
         root=os.path.join(output_dir, "root"),
         mirror_root=os.path.join(output_dir, "mirror"),
         cache_root=os.path.join(output_dir, "cache"),
         env=env,
         output_dir=output_dir,
         cofactors=reference_data.cofactor_ids(),
-        keep=False,
-        bonds=True,
-        density_map_scope="model-envelope",
-        ccp4_timeout_s=density.CCP4_TOOL_TIMEOUT_S,
-        log_level=logging.INFO,
-        allow_download=False,
         manual_inputs=manual_inputs,
         alchemy_commit=environment.alchemy_commit(),
         gemmi_version=environment.gemmi_version(),

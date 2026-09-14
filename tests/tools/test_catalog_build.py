@@ -18,15 +18,15 @@ import pytest
 from helpers import REPO_ROOT
 
 
-def _load_tool() -> ModuleType:
-    """Import the builder by path.
+def _load_tool(filename: str, module_name: str) -> ModuleType:
+    """Import one ``tools/`` script by path.
 
     ``tools/`` must stay off ``sys.path``: it holds developer utilities the
     pipeline never imports, and a ``src`` module importing one would go
     unnoticed for the whole session.
     """
-    path = os.path.join(REPO_ROOT, "tools", "build_metallocofactor_catalog.py")
-    spec = importlib.util.spec_from_file_location("_catalog_builder", path)
+    path = os.path.join(REPO_ROOT, "tools", filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -34,7 +34,7 @@ def _load_tool() -> ModuleType:
     return module
 
 
-catalog = _load_tool()
+catalog = _load_tool("build_metallocofactor_catalog.py", "_catalog_builder")
 
 
 def component_block(
@@ -474,18 +474,7 @@ def test_status_rejects_metadata_without_a_checksum(tmp_path: Path) -> None:
         catalog.report_status(str(tmp_path))
 
 
-def _load_stamp_tool() -> ModuleType:
-    """Import the distance-table stamper by path, like the catalog builder."""
-    path = os.path.join(REPO_ROOT, "tools", "stamp_distance_table.py")
-    spec = importlib.util.spec_from_file_location("_distance_stamper", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-stamper = _load_stamp_tool()
+stamper = _load_tool("stamp_distance_table.py", "_distance_stamper")
 
 
 def test_the_committed_sidecar_matches_the_committed_table(

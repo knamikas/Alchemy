@@ -13,13 +13,12 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import Any, Optional, cast
+
+import gemmi
 
 from codes import ReasonCode
 from structure_analysis import NAN, StructureContext, count_ni
-
-if TYPE_CHECKING:
-    import gemmi
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +47,6 @@ def asu_volume(mtz_path: str, pdb_path: str) -> float:
 
     Prefer the MTZ, which matches the diffraction data; fall back to CRYST1.
     """
-    import gemmi
-
     cell: gemmi.UnitCell | None
     sg: gemmi.SpaceGroup | None
     cell = sg = None

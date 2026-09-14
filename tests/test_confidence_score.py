@@ -11,6 +11,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+import confidence_oracle as oracle
 import helpers
 import pytest
 from helpers import approx
@@ -190,9 +191,7 @@ def _write_input_csv(
 
 
 def _read_csv_rows(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
-    with open(path, newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        return list(reader.fieldnames or ()), list(reader)
+    return helpers.read_csv(path)[0], helpers.read_csv_dicts(path)
 
 
 def _reference() -> cs.ConfidenceReference:
@@ -1060,3 +1059,26 @@ def test_cli_output_paths_are_created(tmp_path: Path) -> None:
     cs.score_file_against_reference(input_path, str(output_path), _reference())
     assert output_path.is_file()
     assert os.path.getsize(output_path) > 0
+
+
+def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> None:
+    """The raw thresholds ``confidence_oracle`` re-implements are Alchemy's own.
+
+    ``assert_policy_was_applied`` is an independent oracle only while the two
+    copies agree.
+    """
+    assert oracle.DENSITY_THRESHOLDS == (
+        cs.DENSITY_REVIEW_THRESHOLD,
+        cs.DENSITY_SUSPECT_THRESHOLD,
+    )
+    assert oracle.GEOMETRY_THRESHOLDS == (
+        cs.GEOMETRY_REVIEW_THRESHOLD,
+        cs.GEOMETRY_SUSPECT_THRESHOLD,
+    )
+
+    published = oracle.reference_metadata(oracle.frozen_reference(tmp_path / "policy"))
+    assert published["density_thresholds"] == {"review": 3.0, "suspect": 6.0}
+    assert published["geometry_thresholds"] == {"review": 1.0, "suspect": 2.0}
+    assert published["geometry_statistic"] == "rms_finite_score_eligible_zbond"
+    assert published["overall_rule"] == "any_suspect_or_review_plus_review"
+    assert published["support_score_method"] == ("reverse_average_rank_empirical_cdf")

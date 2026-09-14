@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from typing import (
     TYPE_CHECKING,
     Any,
+    NamedTuple,
     Protocol,
     cast,
 )
@@ -27,9 +28,12 @@ import pytest
 
 if TYPE_CHECKING:
     # Keep source imports lazy; these imports are for annotations only.
+    from coordination.analysis import AtomKey, BondAnalysisMetadata
+    from coordination.schema import BondRow, CandidateRow
     from output_rows import MetalStatsRow
-    from structure_analysis import StructureContext
-    from worker_contracts import EntryResult
+    from run_config import RunConfig
+    from structure_analysis import AtomSite, StructureContext
+    from worker_contracts import EntryResult, WorkerConfig
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +101,252 @@ def read_csv(path: _StrPath) -> list[list[str]]:
 
     with open(path, newline="", encoding="utf-8") as handle:
         return list(csv.reader(handle))
+
+
+def read_csv_dicts(path: _StrPath) -> list[dict[str, str]]:
+    """Every data row of a CSV file keyed by its header."""
+    import csv
+
+    with open(path, newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def run_config(**overrides: Any) -> RunConfig:
+    """The CLI's default ``RunConfig`` with field overrides applied."""
+    import cli
+
+    return replace(cli.parse_args([]), **overrides)
+
+
+def worker_config(**overrides: Any) -> WorkerConfig:
+    """A complete ``WorkerConfig`` with placeholder paths and provenance.
+
+    Every path points under ``/nonexistent`` so a test that reaches the file
+    system by mistake fails instead of reading the checkout.
+    """
+    import logging
+
+    from density_analysis import CCP4_TOOL_TIMEOUT_S
+    from worker_contracts import WorkerConfig
+
+    fields: dict[str, Any] = {
+        "root": "/nonexistent/root",
+        "mirror_root": "/nonexistent/mirror",
+        "cache_root": "/nonexistent/cache",
+        "env": {},
+        "output_dir": "/nonexistent/output",
+        "cofactors": frozenset(),
+        "keep": False,
+        "bonds": True,
+        "density_map_scope": "model-envelope",
+        "ccp4_timeout_s": CCP4_TOOL_TIMEOUT_S,
+        "log_level": logging.INFO,
+        "allow_download": False,
+        "manual_inputs": None,
+        **PLACEHOLDER_PROVENANCE,
+    }
+    fields.update(overrides)
+    return WorkerConfig(**fields)
+
+
+def write_manifest(
+    path: _StrPath,
+    rows: Sequence[Mapping[str, Any]],
+    columns: Sequence[str] | None = None,
+) -> str:
+    """Write a manifest CSV with the real schema and the given partial rows.
+
+    Missing columns are blank except the boolean flags, which default to
+    ``"false"`` because the resume reader treats a blank flag as malformed.
+    """
+    import csv
+
+    from driver.writers import MANIFEST_COLUMNS
+
+    columns = list(columns if columns is not None else MANIFEST_COLUMNS)
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            values = {
+                "no_metals": "false",
+                "metal_site_limit_exceeded": "false",
+                **row,
+            }
+            writer.writerow({column: values.get(column, "") for column in columns})
+    return str(path)
+
+
+def write_mtz(
+    path: _StrPath,
+    columns: Mapping[str, str],
+    rows: Sequence[Sequence[float]],
+    *,
+    cell: tuple[float, float, float, float, float, float] = (40, 40, 40, 90, 90, 90),
+    spacegroup: str = "P 1",
+    title: str = "",
+    dataset: str = "test",
+) -> str:
+    """Write a small MTZ whose data columns follow the base H, K, L columns.
+
+    ``columns`` maps each extra label to its MTZ column type, and every row
+    is ``(h, k, l, *values)`` with one value per extra column.
+    """
+    import numpy as np
+
+    mtz = gemmi.Mtz(with_base=True)
+    if title:
+        mtz.title = title
+    mtz.spacegroup = gemmi.find_spacegroup_by_name(spacegroup)
+    mtz.cell = gemmi.UnitCell(*cell)
+    dataset_id = mtz.add_dataset(dataset).id
+    for label, column_type in columns.items():
+        mtz.add_column(label, column_type, dataset_id)
+    mtz.set_data(np.asarray(rows, dtype=np.float32))
+    mtz.write_to_file(str(path))
+    return str(path)
+
+
+def atom_site(
+    element: str,
+    *,
+    atom_name: str = "",
+    residue_name: str = "",
+    is_water: bool = False,
+    occupancy: float = 1.0,
+    altloc: str = "",
+    pos: Sequence[float] = (0.0, 0.0, 0.0),
+    **overrides: Any,
+) -> AtomSite:
+    """Build one production ``AtomSite`` from a single neutral deposited record.
+
+    The identity fields are the values ``load_structure`` would produce for
+    residue 1 of chain A; pass any ``AtomSite`` field as an override. Unlike
+    the structure builder, this can express an invalid occupancy.
+    """
+    from structure_analysis import AtomSite, valid_occupancy
+
+    occupancy = float(occupancy)
+    occupancy_valid = bool(overrides.pop("occupancy_valid", valid_occupancy(occupancy)))
+    occupancy_status = overrides.pop(
+        "occupancy_status", "valid" if occupancy_valid else "invalid_value"
+    )
+    source_order = int(overrides.pop("source_order", 0))
+    gemmi_atom = gemmi.Atom()
+    gemmi_atom.name = atom_name
+    gemmi_atom.element = gemmi.Element(element)
+    gemmi_atom.pos = gemmi.Position(*[float(value) for value in pos])
+    gemmi_atom.occ = occupancy if math.isfinite(occupancy) else 0.0
+    if altloc:
+        gemmi_atom.altloc = altloc
+    fields: dict[str, Any] = {
+        "pdb_id": "test",
+        "model_index": 0,
+        "model_id": "1",
+        "chain_index": 0,
+        "chain_id": "A",
+        "residue_index": 0,
+        "residue_name": residue_name,
+        "coordinate_residue_name": residue_name,
+        "residue_number": 1,
+        "insertion_code": "",
+        "resnum": "1",
+        "atom_index": source_order,
+        "source_order": source_order,
+        "atom_name": atom_name,
+        "altloc": altloc,
+        "element": element,
+        "element_known": True,
+        "occupancy": occupancy,
+        "occupancy_valid": occupancy_valid,
+        "occupancy_status": occupancy_status,
+        "serial": source_order + 1,
+        "x": float(pos[0]),
+        "y": float(pos[1]),
+        "z": float(pos[2]),
+        "is_water": is_water,
+        "is_hydrogen": element in ("H", "D"),
+        "gemmi_atom": gemmi_atom,
+    }
+    fields.update(overrides)
+    return AtomSite(**fields)
+
+
+class BondAnalysis(NamedTuple):
+    """Everything one ``run_bond_analysis`` call produced, plus its context."""
+
+    context: StructureContext
+    bond_rows: list[BondRow]
+    candidate_rows: list[CandidateRow]
+    site_summaries: dict[AtomKey, dict[str, Any]]
+    metadata: BondAnalysisMetadata
+
+    @property
+    def summary(self) -> dict[str, Any]:
+        """The one site summary of a one-metal structure."""
+        assert len(self.site_summaries) == 1, "expected a one-metal structure"
+        return next(iter(self.site_summaries.values()))
+
+    @property
+    def metal_xyz(self) -> tuple[float, float, float]:
+        """Cartesian position of the one metal of a one-metal structure."""
+        from metal_elements import METAL_ELEMENTS
+
+        metals = self.context.metal_atoms(METAL_ELEMENTS, canonical=True)
+        assert len(metals) == 1, "expected a one-metal structure"
+        return metals[0].xyz
+
+    def rows_for(self, atom_name: str, resnum: str | None = None) -> list[BondRow]:
+        """Bond rows whose neighbor is ``atom_name`` (optionally in ``resnum``)."""
+        return [
+            row
+            for row in self.bond_rows
+            if row["neighbor_atom"] == atom_name
+            and (resnum is None or row["neighbor_resnum"] == resnum)
+        ]
+
+    @property
+    def declared_rows(self) -> list[BondRow]:
+        """Bond rows that came from a source declaration."""
+        return [row for row in self.bond_rows if row["declared_connection"]]
+
+
+def analyze_bonds(
+    path: _StrPath,
+    *,
+    pdb_id: str = "test",
+    dpi_inputs: Mapping[str, object] | None = None,
+    connection_path: _StrPath | None = None,
+    stats_rows: Sequence[Mapping[str, Any]] = (),
+    header: Sequence[str] | None = None,
+    structure: StructureContext | None = None,
+) -> BondAnalysis:
+    """Run the real bond analysis over an analysis PDB and keep its context.
+
+    Without ``dpi_inputs`` the DPI is unavailable, so every geometry status is
+    ``insufficient data``; pass ``dpi_inputs(data_json=...)`` to make it finite.
+    Pass ``structure`` when the caller already loaded ``path``.
+    """
+    from coordination.analysis import run_bond_analysis
+    from structure_analysis import load_structure
+
+    context = load_structure(pdb_id, str(path)) if structure is None else structure
+    result = run_bond_analysis(
+        pdb_id,
+        str(path),
+        list(stats_rows),
+        list(EDSTATS_HEADER if header is None else header),
+        _default_dpi_inputs() if dpi_inputs is None else dpi_inputs,
+        structure=context,
+        connection_path=None if connection_path is None else str(connection_path),
+    )
+    return BondAnalysis(
+        context,
+        result.bond_rows,
+        result.candidate_rows,
+        result.site_summaries,
+        result.metadata,
+    )
 
 
 class _PdbWritable(Protocol):
@@ -824,6 +1074,10 @@ def dpi_inputs(
         "pdb_path": None if pdb_path is None else str(pdb_path),
         "mtz_path": None if mtz_path is None else str(mtz_path),
     }
+
+
+#: ``analyze_bonds`` takes a parameter named ``dpi_inputs``; keep the builder reachable.
+_default_dpi_inputs = dpi_inputs
 
 
 # Use an independent EDSTATS 1.0.9 header so production schema changes

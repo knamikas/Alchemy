@@ -566,7 +566,7 @@ def run_bond_stage(
             structure=structure,
             connection_path=inputs.source_coordinate_path,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         outcome.error = truncate(
             f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
@@ -853,7 +853,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
         result.status = EntryStatus.SKIP
         result.reason_codes = [ReasonCode.MISSING_INPUT]
         result.error = truncate(f"missing input: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS)
-    except Exception as e:  # noqa: BLE001 - one bad entry must not kill the batch
+    except Exception as e:  # one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = EntryStatus.ERROR
         result.reason_codes = [

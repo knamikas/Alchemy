@@ -19,8 +19,11 @@ import ccp4_setup
 import cli
 import confidence_score
 import density_analysis as density
+import main
+import scratch
 from driver import confidence as driver_confidence
 from driver import environment, errors
+from run_config import RunConfig
 
 
 def _option_help(option: str) -> str:
@@ -503,3 +506,206 @@ def test_ccp4_timeout_help_states_its_default() -> None:
     """A reader must see the budget without reading the source."""
     help_text = _option_help("--ccp4-timeout")
     assert f"default: {density.CCP4_TOOL_TIMEOUT_S}" in help_text
+
+
+def _resolved_ccp4_environment(
+    _args: RunConfig,
+) -> tuple[dict[str, str], None]:
+    return dict(os.environ), None
+
+
+class TestPositiveInt:
+    """``positive_int`` is the argparse gate for --workers/--max-pdbs/etc."""
+
+    # Use Any to test non-string programmatic inputs outside the annotated CLI contract.
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("1", 1),
+            ("2", 2),
+            ("28", 28),
+            ("  7  ", 7),  # int() tolerates surrounding whitespace
+            ("+3", 3),
+            ("1000000", 1000000),
+            (5, 5),  # already an int (programmatic callers)
+        ],
+    )
+    def test_accepts_integers_of_at_least_one(self, value: Any, expected: int) -> None:
+        assert cli.positive_int(value) == expected
+        assert isinstance(cli.positive_int(value), int)
+
+    @pytest.mark.parametrize("value", ["0", "-1", "-28", 0, -3])
+    def test_rejects_zero_and_negative(self, value: Any) -> None:
+        with pytest.raises(argparse.ArgumentTypeError) as excinfo:
+            cli.positive_int(value)
+        assert "at least 1" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "1.5",
+            "2.0",
+            "abc",
+            "",
+            " ",
+            "1e3",
+            "0x2",
+            None,
+            "nan",
+            "inf",
+            "1,000",
+        ],
+    )
+    def test_rejects_non_integer_text(self, value: Any) -> None:
+        with pytest.raises(argparse.ArgumentTypeError) as excinfo:
+            cli.positive_int(value)
+        assert "positive integer" in str(excinfo.value)
+
+    def test_boundary_is_one_not_zero(self) -> None:
+        assert cli.positive_int("1") == 1
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.positive_int("0")
+
+
+@pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
+def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value: str) -> None:
+    """IDs are lowercased so cache paths and manifest keys cannot diverge."""
+    assert cli.parse_pdb_id(value) == value.lower()
+
+
+@pytest.mark.parametrize("value", ["abc", "abcde", "ab-c", "ab c", "", "9my_"])
+def test_malformed_pdb_ids_are_rejected(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match="four alphanumeric"):
+        cli.parse_pdb_id(value)
+
+
+def test_intermediates_are_discarded_unless_asked_for() -> None:
+    """Verify intermediate retention is opt-in.
+
+    Per-entry maps are large, so ``process`` keys its scratch cleanup off this
+    flag.
+    """
+    assert cli.parse_args([]).keep_intermediates is False
+    assert cli.parse_args(["--keep-intermediates"]).keep_intermediates is True
+
+
+@pytest.mark.parametrize(
+    "argv, fragment",
+    [
+        (["--pdb-file", "/tmp/1abc.pdb"], "requires --mtz-file"),
+        (["--cif-file", "/tmp/1abc.cif"], "requires --mtz-file"),
+        (["--mtz-file", "/tmp/1abc.mtz"], "requires --pdb-file or --cif-file"),
+        (
+            [
+                "--pdb-file",
+                "/tmp/1abc.pdb",
+                "--cif-file",
+                "/tmp/1abc.cif",
+                "--mtz-file",
+                "/tmp/1abc.mtz",
+            ],
+            "not both",
+        ),
+    ],
+    ids=["pdb-alone", "cif-alone", "mtz-alone", "pdb-and-cif"],
+)
+def test_incomplete_manual_input_is_a_usage_error(
+    argv: list[str], fragment: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Manual mode needs coordinates and reflections, and only one of each.
+
+    These reached a worker before failing, and were reported as an unexpected
+    processing error rather than as the usage mistake they are. Supplying both
+    coordinate forms silently used the cif and ignored the pdb.
+    """
+    with pytest.raises(SystemExit):
+        cli.parse_args(argv)
+
+    assert fragment in capsys.readouterr().err
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions required")
+def test_unwritable_output_dir_exits_cleanly_naming_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A read-only destination exits like every other unusable input.
+
+    CCP4 resolution is stubbed because it runs before the directory is created,
+    and would otherwise fail on a machine with no CCP4 installed.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+
+    monkeypatch.setattr(
+        environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+    )
+    parent = tmp_path / "readonly"
+    parent.mkdir()
+    parent.chmod(0o500)
+    output_dir = parent / "output"
+    id_file = tmp_path / "ids.txt"
+    id_file.write_text("109m\n", encoding="utf-8")
+
+    try:
+        exit_code = main.main(
+            [
+                "--id-file",
+                str(id_file),
+                "--output-dir",
+                str(output_dir),
+                "--pdb-redo-root",
+                str(tmp_path / "absent-mirror"),
+                "--pdb-redo-cache",
+                str(tmp_path / "cache"),
+            ]
+        )
+    finally:
+        parent.chmod(0o700)
+
+    # 1 is the driver's code for a fixable failure; argparse owns 2.
+    assert exit_code == 1
+    message = capsys.readouterr().err
+    assert str(output_dir) in message, message
+    assert "Traceback" not in message
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses a POSIX-only stub env")
+def test_a_run_sweeps_leaked_scratch_before_processing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep is wired into the driver, not merely available to it.
+
+    Driven through ``main.main`` so that deleting the call site fails the test.
+    The run itself fails for want of a mirror: sweeping happens at startup, so
+    even a failing run must leave the directory clean.
+    """
+    monkeypatch.setattr(
+        environment, "resolve_ccp4_environment", _resolved_ccp4_environment
+    )
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    leaked: str | Path = scratch.create_owned_scratch_directory(
+        str(output_dir), prefix=".alchemy-109m-", kind="entry"
+    )
+    leaked = output_dir / os.path.basename(leaked)
+    (leaked / "2mFo-DFc.map").write_text("stale map bytes", encoding="utf-8")
+    id_file = tmp_path / "ids.txt"
+    id_file.write_text("109m\n", encoding="utf-8")
+
+    main.main(
+        [
+            "--id-file",
+            str(id_file),
+            "--output-dir",
+            str(output_dir),
+            "--pdb-redo-root",
+            str(tmp_path / "absent-mirror"),
+            "--pdb-redo-cache",
+            str(tmp_path / "cache"),
+        ]
+    )
+
+    leftovers = sorted(
+        name for name in os.listdir(output_dir) if name.startswith(".alchemy-")
+    )
+    assert leftovers == [], f"the run left scratch behind: {leftovers}"

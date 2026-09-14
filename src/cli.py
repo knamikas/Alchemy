@@ -354,9 +354,8 @@ def _install_termination_handler() -> (
     Return the previous signal handler, or None if installation fails.
     """
 
-    def _raise_interrupt(  # noqa: ARG001 - signal API
-        signum: int, frame: FrameType | None
-    ) -> None:
+    def _raise_interrupt(signum: int, frame: FrameType | None) -> None:
+        del signum, frame  # fixed by the signal-handler signature
         raise KeyboardInterrupt
 
     try:

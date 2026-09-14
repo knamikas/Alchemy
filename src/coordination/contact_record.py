@@ -18,11 +18,6 @@ class DeclaredConnectionRecord(TypedDict):
     connection_reported_distance: float
 
 
-def _declared_connection_records() -> list[DeclaredConnectionRecord]:
-    """Return a fresh, fully typed declaration-provenance collection."""
-    return []
-
-
 @dataclass(frozen=True, slots=True)
 class DonorPolicy:
     """Record whether donor chemistry permits an inferred contact."""
@@ -90,9 +85,7 @@ class Candidate:
     candidate_sources: set[CandidateSource]
     #: One record per source declaration binding this image, with the fixed
     #: keys ``declared_candidate_for_connection`` writes.
-    declared_connections: list[DeclaredConnectionRecord] = field(
-        default_factory=_declared_connection_records
-    )
+    declared_connections: list[DeclaredConnectionRecord] = field(default_factory=list)
     #: Set only on declaration-derived candidates; proximity discovery leaves
     #: it unset because the metal is already the search centre.
     metal: AtomSite | None = None

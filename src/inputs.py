@@ -12,6 +12,7 @@ from typing import Any, Protocol, cast
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
+import gemmi
 import numpy as np
 import numpy.typing as npt
 
@@ -93,7 +94,10 @@ _HTML_PREFIXES = (b"<!doctype", b"<html", b"<?xml")
 
 # Skip content probes for large files; opening every mirror entry adds
 # substantial I/O just to reject small proxy or login pages.
-_MAX_WEB_PAGE_BYTES = 1024 * 1024
+MAX_WEB_PAGE_BYTES = 1024 * 1024
+
+#: Seconds to wait for each PDB-REDO download before giving the entry up.
+DOWNLOAD_TIMEOUT_S = 30.0
 
 
 def _looks_like_a_web_page(path: str, size: int | None = None) -> bool:
@@ -102,7 +106,7 @@ def _looks_like_a_web_page(path: str, size: int | None = None) -> bool:
     ``size`` lets a caller that has already stat-ed the file skip the read for
     anything too large to be a page.
     """
-    if size is not None and size > _MAX_WEB_PAGE_BYTES:
+    if size is not None and size > MAX_WEB_PAGE_BYTES:
         return False
     try:
         with open(path, "rb") as handle:
@@ -189,8 +193,6 @@ def read_resolution(
         except (TypeError, ValueError):
             if explicit:
                 raise
-    import gemmi
-
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
@@ -228,13 +230,6 @@ def read_pdb_redo_metadata(
     )
 
 
-def read_pdb_redo_is_twin(
-    data_json_path: str | None, *, required: bool = False
-) -> bool:
-    """Return the validated PDB-REDO twinning flag."""
-    return read_pdb_redo_metadata(data_json_path, required=required).is_twin
-
-
 def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
     """Return the common finite resolution range of both EDSTATS maps.
 
@@ -242,8 +237,6 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
     limits must describe reflections for which all four values are present,
     rather than the overall range of unrelated columns in the MTZ.
     """
-    import gemmi
-
     mtz = gemmi.read_mtz_file(mtz_path)
     columns: list[gemmi.Mtz.Column] = []
     missing: list[str] = []
@@ -301,14 +294,15 @@ def _remove_partial_download(tmp: str) -> None:
         os.remove(tmp)
 
 
-def _response_content_length(response: object, url: str) -> int | None:
+class _HttpResponse(Protocol):
+    """The one header accessor ``download_stream`` needs from ``urlopen``."""
+
+    def getheader(self, name: str) -> object: ...
+
+
+def _response_content_length(response: _HttpResponse, url: str) -> int | None:
     """Return a validated HTTP Content-Length, or ``None`` when absent."""
-    getheader = getattr(response, "getheader", None)
-    if callable(getheader):
-        value = getheader("Content-Length")
-    else:
-        headers = getattr(response, "headers", None)
-        value = headers.get("Content-Length") if headers is not None else None
+    value = response.getheader("Content-Length")
     if value in (None, ""):
         return None
     text = value.decode("ascii") if isinstance(value, bytes) else str(value)
@@ -323,7 +317,7 @@ def _response_content_length(response: object, url: str) -> int | None:
     return length
 
 
-def download_stream(url: str, dst: str, timeout: float = 30) -> str:
+def download_stream(url: str, dst: str, timeout: float = DOWNLOAD_TIMEOUT_S) -> str:
     """Download a URL to dst, raising FileNotFoundError if no usable file results.
 
     Handle both request failures and interrupted or truncated response bodies,

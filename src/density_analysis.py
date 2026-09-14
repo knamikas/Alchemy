@@ -58,13 +58,25 @@ def _mtz_column_data(column: object) -> _MtzColumnData:
 
 REFMAC_TWIN_IDENTITY_TOLERANCE = 1e-3
 
+# CCP4 map header layout: 256 four-byte words, of which the pipeline reads the
+# grid counts, the storage mode, the start indices, the unit-cell sampling, and
+# the axis order (all 1-based axis ids).
+CCP4_MAP_HEADER_BYTES = 1024
+_CCP4_HEADER_WORDS = 256
+_CCP4_HEADER_COUNTS = slice(0, 3)
+_CCP4_HEADER_MODE = 3
+_CCP4_HEADER_STARTS = slice(4, 7)
+_CCP4_HEADER_SAMPLING = slice(7, 10)
+_CCP4_HEADER_AXES = slice(16, 19)
+_CCP4_MAP_MODES = (0, 1, 2, 6, 12)
+
 
 @dataclass(frozen=True)
 class DensityResult:
     """Density-stage output paths, provenance, and timings for one entry."""
 
     # stats_out is the only output the pipeline parses; the remaining paths
-    # exist so the debug CLI and --keep-intermediates can name what was written.
+    # exist so --keep-intermediates can name what was written.
     stats_out: str
     rszd: str
     fo_map: str
@@ -582,20 +594,20 @@ class _DensityMapBuilder:
         for a translated deposited model.
         """
         with open(path, "rb") as handle:
-            header = handle.read(1024)
-        if len(header) != 1024:
+            header = handle.read(CCP4_MAP_HEADER_BYTES)
+        if len(header) != CCP4_MAP_HEADER_BYTES:
             raise RuntimeError(
                 f"MAPMASK produced an invalid CCP4 map header for {self.pdb_id}: {path}"
             )
         for byte_order in ("<", ">"):
-            words = struct.unpack(f"{byte_order}256i", header)
-            counts = words[0:3]
-            mode = words[3]
-            starts = words[4:7]
-            sampling = words[7:10]
-            axes = words[16:19]
+            words = struct.unpack(f"{byte_order}{_CCP4_HEADER_WORDS}i", header)
+            counts = words[_CCP4_HEADER_COUNTS]
+            mode = words[_CCP4_HEADER_MODE]
+            starts = words[_CCP4_HEADER_STARTS]
+            sampling = words[_CCP4_HEADER_SAMPLING]
+            axes = words[_CCP4_HEADER_AXES]
             if (
-                mode not in (0, 1, 2, 6, 12)
+                mode not in _CCP4_MAP_MODES
                 or any(value <= 0 for value in counts + sampling)
                 or sorted(axes) != [1, 2, 3]
             ):
@@ -739,53 +751,4 @@ def run_density_analysis(
         density_map_scope_used=map_result.scope_used,
         full_map_bytes=map_result.full_map_bytes,
         edstats_map_bytes=map_result.edstats_map_bytes,
-    )
-
-
-if __name__ == "__main__":
-    import argparse
-
-    p = argparse.ArgumentParser(
-        description=(
-            "Run mtzfix + fft x2 + optional model-envelope mapmask "
-            "+ edstats on a single structure."
-        )
-    )
-    p.add_argument("pdb_id", metavar="pdbID")
-    p.add_argument("mtz", help="MTZ with FWT/PHWT/DELFWT/PHDELWT columns")
-    p.add_argument("pdb", help="coordinate file (edstats XYZIN)")
-    # Keep generated maps and logs out of src/.
-    p.add_argument(
-        "--out-dir",
-        default=".",
-        help="directory for maps, logs and stats output (default: %(default)s)",
-    )
-    p.add_argument(
-        "--reslo",
-        type=float,
-        required=True,
-        help="low resolution limit (larger number)",
-    )
-    p.add_argument(
-        "--reshi",
-        type=float,
-        required=True,
-        help="high resolution limit (smaller number)",
-    )
-    p.add_argument(
-        "--density-map-scope", choices=DENSITY_MAP_SCOPES, default="model-envelope"
-    )
-    p.add_argument("--keep-full-maps", action="store_true")
-    args = p.parse_args()
-    print(
-        run_density_analysis(
-            args.pdb_id,
-            args.mtz,
-            args.pdb,
-            args.out_dir,
-            args.reslo,
-            args.reshi,
-            map_scope=args.density_map_scope,
-            keep_full_maps=args.keep_full_maps,
-        )
     )

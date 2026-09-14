@@ -11,6 +11,7 @@ import math
 import os
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import gemmi
 import helpers
@@ -57,51 +58,25 @@ def _site(
     occupancy: float = 1.0,
     source_order: int = 0,
     element: str = "C",
-    occupancy_valid: bool | None = None,
-    occupancy_status: str | None = None,
-    residue_index: int = 0,
     pos: Sequence[float] = (0.0, 0.0, 0.0),
+    **overrides: Any,
 ) -> sa.AtomSite:
-    """Build one ``AtomSite`` directly; the builder cannot express bad occupancy."""
-    if occupancy_valid is None:
-        occupancy_valid = sa.valid_occupancy(occupancy)
-    if occupancy_status is None:
-        occupancy_status = "valid" if occupancy_valid else "invalid_value"
-    atom = gemmi.Atom()
-    atom.name = atom_name
-    atom.element = gemmi.Element(element)
-    atom.pos = gemmi.Position(*[float(value) for value in pos])
-    atom.occ = float(occupancy) if math.isfinite(float(occupancy)) else 0.0
-    if altloc:
-        atom.altloc = altloc
-    return sa.AtomSite(
-        pdb_id="test",
-        model_index=0,
-        model_id="1",
-        chain_index=0,
-        chain_id="A",
-        residue_index=residue_index,
-        residue_name="HIS",
-        coordinate_residue_name="HIS",
-        residue_number=10,
-        insertion_code="",
-        resnum="10",
-        atom_index=source_order,
-        source_order=source_order,
+    """One atom of ``HIS A 10`` built directly; the builder cannot express bad occupancy.
+
+    ``residue_index``, ``occupancy_valid`` and ``occupancy_status`` pass through
+    as overrides.
+    """
+    return helpers.atom_site(
+        element,
         atom_name=atom_name,
+        residue_name="HIS",
+        occupancy=occupancy,
         altloc=altloc,
-        element=element,
-        element_known=True,
-        occupancy=float(occupancy),
-        occupancy_valid=bool(occupancy_valid),
-        occupancy_status=occupancy_status,
-        serial=source_order + 1,
-        x=float(pos[0]),
-        y=float(pos[1]),
-        z=float(pos[2]),
-        is_water=False,
-        is_hydrogen=element in ("H", "D"),
-        gemmi_atom=atom,
+        pos=pos,
+        source_order=source_order,
+        residue_number=10,
+        resnum="10",
+        **overrides,
     )
 
 

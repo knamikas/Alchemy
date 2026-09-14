@@ -78,11 +78,6 @@ DENSITY_CONTEXT_COLUMNS = (
 DENSITY_CONTEXT_STATUSES = frozenset(("available", "not_computed"))
 
 
-def _empty_float_values() -> list[float]:
-    """Return a typed list for strict type checkers inspecting dataclass fields."""
-    return []
-
-
 @dataclass
 class _DensityContextAccumulator:
     """Compact non-target RSZD distributions collected during table parsing."""
@@ -92,9 +87,9 @@ class _DensityContextAccumulator:
     ordinary_residue_count: int = 0
     ordinary_nonwater_residue_count: int = 0
     water_residue_count: int = 0
-    ordinary_values: list[float] = field(default_factory=_empty_float_values)
-    ordinary_nonwater_values: list[float] = field(default_factory=_empty_float_values)
-    water_values: list[float] = field(default_factory=_empty_float_values)
+    ordinary_values: list[float] = field(default_factory=list)
+    ordinary_nonwater_values: list[float] = field(default_factory=list)
+    water_values: list[float] = field(default_factory=list)
 
     def observe(
         self,

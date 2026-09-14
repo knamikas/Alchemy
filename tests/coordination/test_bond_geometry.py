@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import os
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ from typing import Any
 import gemmi
 import helpers
 import pytest
-from helpers import EDSTATS_HEADER, AtomSpec, StructureBuilder, approx
+from helpers import AtomSpec, StructureBuilder, approx
 
 import codes
 import coordinate_conversion
@@ -24,7 +23,6 @@ import worker
 from codes import EntryStatus
 from coordination import donor_chemistry
 from coordination.contact_record import Candidate
-from coordination.schema import BondRow, CandidateRow
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import (
     AtomSite,
@@ -32,13 +30,6 @@ from structure_analysis import (
     count_ni,
     load_structure,
 )
-
-_AnalysisResult = tuple[
-    list[BondRow],
-    list[CandidateRow],
-    dict[ba.AtomKey, dict[str, Any]],
-    ba.BondAnalysisMetadata,
-]
 
 # Transcribed from README.md's geometry-inference donor table.
 README_SIDE_CHAIN_DONORS: dict[str, set[str]] = {
@@ -67,37 +58,6 @@ README_EXCLUDED_ATOMS: list[tuple[str, str]] = [
     ("ARG", "NH1"),
     ("ARG", "NH2"),
 ]
-
-REFERENCE_TABLE = os.path.join(helpers.SRC_DIR, "data", "metal_distances_info.txt")
-
-# ``CA`` here is the backbone-carbonyl pseudo residue ``_bonding_key`` maps
-# every main-chain ``O`` onto, not calcium.
-REFERENCE_RESIDUE_TOKENS = helpers.STANDARD_AMINO_ACIDS | {"HOH", "CA"}
-
-REFERENCE_TABLE_HEADER = ["residue", "atom", "metal", "avg_bond_dist", "st_dev"]
-
-# A dropped row is invisible at runtime: the pair falls back to the same-element
-# target and loses its sigma, hence its z-score.
-EXPECTED_REFERENCE_ROW_COUNT = 79
-
-REFERENCE_METALS = ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN", "NI")
-
-# The keys whose loss is least visible: every metal's water reference, the
-# thiolate and imidazole rows that define transition-metal sites, the
-# carboxylate rows, and the backbone-carbonyl pseudo residue.
-REQUIRED_REFERENCE_KEYS: frozenset[tuple[str, str, str]] = frozenset(
-    [("HOH", "O", metal) for metal in REFERENCE_METALS]
-    + [("ASP", "O", metal) for metal in REFERENCE_METALS]
-    + [("GLU", "O", metal) for metal in REFERENCE_METALS]
-    + [("CA", "O", metal) for metal in REFERENCE_METALS]
-    + [
-        (residue, "O", metal)
-        for residue in ("SER", "THR", "TYR")
-        for metal in ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN")
-    ]
-    + [("HIS", "N", metal) for metal in ("MN", "FE", "CO", "CU", "ZN", "NI")]
-    + [("CYS", "S", metal) for metal in ("MN", "FE", "CO", "CU", "ZN", "NI")]
-)
 
 
 def _probe_structure(
@@ -141,9 +101,8 @@ def _probe_structure(
 
 def _analyze(
     path: str, *, data_json: str | None = None, resolution: float = 1.50
-) -> _AnalysisResult:
-    """Run the real bond analysis on ``path`` and return its four outputs."""
-    context = load_structure("test", path)
+) -> helpers.BondAnalysis:
+    """Run the real bond analysis on ``path``; ``data_json`` makes the DPI finite."""
     if data_json is None:
         inputs = helpers.dpi_inputs(resolution=resolution)
     else:
@@ -153,15 +112,7 @@ def _analyze(
             data_json=data_json,
             resolution=resolution,
         )
-    result = ba.run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
-    )
-    return (
-        result.bond_rows,
-        result.candidate_rows,
-        result.site_summaries,
-        result.metadata,
-    )
+    return helpers.analyze_bonds(path, dpi_inputs=inputs)
 
 
 def test_site_summaries_report_modeled_metal_proximity(tmp_path: Path) -> None:
@@ -173,16 +124,8 @@ def test_site_summaries_report_modeled_metal_proximity(tmp_path: Path) -> None:
     # Modeled absence is neither an analyzed site nor proximity evidence.
     builder.add_metal("CO", 4, chain="B", pos=(1.0, 0.0, 0.0), occupancy=0.0)
     path = builder.write_cif(tmp_path / "metal_proximity.cif")
-    context = load_structure("test", path)
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-    )
+    analysis = helpers.analyze_bonds(path)
+    context = analysis.context
 
     assert analysis.candidate_rows == []
     metals = {metal.element: metal for metal in context.metal_atoms(METAL_ELEMENTS)}
@@ -213,16 +156,8 @@ def test_site_summaries_report_crystallographic_special_positions(
     builder.add_metal("FE", 2, pos=(2.0, 3.0, 4.0), occupancy=1.0)
     builder.add_metal("MG", 3, pos=(10.0, 3.0, 10.0), occupancy=0.25)
     path = builder.write_cif(tmp_path / "special_positions.cif")
-    context = load_structure("test", path)
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-    )
+    analysis = helpers.analyze_bonds(path)
+    context = analysis.context
 
     metals = {metal.element: metal for metal in context.metal_atoms(METAL_ELEMENTS)}
     summaries = {
@@ -250,17 +185,9 @@ def test_special_position_fields_are_blank_without_symmetry(tmp_path: Path) -> N
     builder = StructureBuilder(cell=None, spacegroup=None)
     builder.add_metal("ZN", 1, occupancy=0.5)
     path = builder.write_cif(tmp_path / "no_symmetry.cif")
-    context = load_structure("test", path)
+    analysis = helpers.analyze_bonds(path)
+    context = analysis.context
     metal = context.metal_atoms(METAL_ELEMENTS)[0]
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-    )
 
     summary = analysis.site_summaries[metal.source_key]
     assert summary["metal_special_position"] == ""
@@ -281,18 +208,10 @@ def test_special_position_detection_excludes_strict_ncs(tmp_path: Path) -> None:
     transform.vec.fromlist([0.5, 0.0, 0.0])
     structure.ncs.append(gemmi.NcsOp(transform, "1", False))
     path = helpers.write_pdb(structure, tmp_path / "strict_ncs.pdb")
-    context = load_structure("test", path)
+    analysis = helpers.analyze_bonds(path)
+    context = analysis.context
     metal = context.metal_atoms(METAL_ELEMENTS)[0]
     assert context.strict_ncs_operation_count == 1
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-    )
 
     summary = analysis.site_summaries[metal.source_key]
     assert summary["metal_special_position"] is False
@@ -309,17 +228,9 @@ def test_site_and_contact_rows_report_local_b_factor_context(tmp_path: Path) -> 
     builder.add_water(102, (0.0, 2.09, 0.0), chain="B", b_iso=20.0)
     builder.add_water(103, (0.0, 0.0, 2.09), chain="B", b_iso=30.0)
     path = builder.write_cif(tmp_path / "b_factors.cif")
-    context = load_structure("test", path)
+    analysis = helpers.analyze_bonds(path)
+    context = analysis.context
     metal = context.metal_atoms(["ZN"])[0]
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-    )
 
     summary = analysis.site_summaries[metal.source_key]
     assert summary["donor_b_iso_count"] == 3
@@ -352,17 +263,9 @@ def test_nonpositive_b_factor_leaves_ratio_and_similarity_unavailable(
     builder.add_metal("ZN", 1, chain="B", b_iso=0.0)
     builder.add_water(101, (2.09, 0.0, 0.0), chain="B", b_iso=10.0)
     path = builder.write_cif(tmp_path / "zero_b_factor.cif")
-    context = load_structure("test", path)
+    analysis = helpers.analyze_bonds(path)
+    context = analysis.context
     metal = context.metal_atoms(["ZN"])[0]
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(),
-        structure=context,
-    )
 
     summary = analysis.site_summaries[metal.source_key]
     assert summary["donor_b_iso_count"] == 1
@@ -394,18 +297,11 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
         return parsed
 
     monkeypatch.setattr(gemmi, "read_structure", read_parsed_structure)
-    context = load_structure("test", path)
-    metal = context.metal_atoms(["ZN"])[0]
-
-    analysis = ba.run_bond_analysis(
-        "test",
-        path,
-        [],
-        list(EDSTATS_HEADER),
-        helpers.dpi_inputs(resolution=1.5),
-        structure=context,
-        connection_path="",
+    analysis = helpers.analyze_bonds(
+        path, dpi_inputs=helpers.dpi_inputs(resolution=1.5), connection_path=""
     )
+    context = analysis.context
+    metal = context.metal_atoms(["ZN"])[0]
     rows = analysis.bond_rows
     candidates = analysis.candidate_rows
     summaries = analysis.site_summaries
@@ -467,91 +363,6 @@ def _only(rows: Sequence[Mapping[str, Any]], atom_name: str) -> Mapping[str, Any
     return matches[0]
 
 
-def _atom_site(
-    element: str,
-    residue_name: str = "",
-    atom_name: str = "",
-    is_water: bool = False,
-) -> AtomSite:
-    """Build a real ``AtomSite`` for pure-function tests.
-
-    Only the chemistry fields matter here; the identity and occupancy fields
-    are filled with a single neutral deposited record so the object under test
-    is the production dataclass rather than a stand-in.
-    """
-    gemmi_atom = gemmi.Atom()
-    gemmi_atom.name = atom_name
-    gemmi_atom.element = gemmi.Element(element)
-    gemmi_atom.pos = gemmi.Position(0.0, 0.0, 0.0)
-    gemmi_atom.occ = 1.0
-    return AtomSite(
-        pdb_id="test",
-        model_index=0,
-        model_id="1",
-        chain_index=0,
-        chain_id="A",
-        residue_index=0,
-        residue_name=residue_name,
-        coordinate_residue_name=residue_name,
-        residue_number=1,
-        insertion_code="",
-        resnum="1",
-        atom_index=0,
-        source_order=0,
-        atom_name=atom_name,
-        altloc="",
-        element=element,
-        element_known=True,
-        occupancy=1.0,
-        occupancy_valid=True,
-        occupancy_status="valid",
-        serial=1,
-        x=0.0,
-        y=0.0,
-        z=0.0,
-        is_water=is_water,
-        is_hydrogen=element in ("H", "D"),
-        gemmi_atom=gemmi_atom,
-    )
-
-
-def _parse_reference_table(
-    path: str,
-) -> list[tuple[int, str, str, str, float, float]]:
-    """Parse metal_distances_info.txt strictly, skipping nothing.
-
-    ``reference_data.load_literature`` drops any line whose numeric columns do
-    not parse; copying that rule would make the comparison against
-    ``literature_distances()`` a tautology.
-    """
-    with open(path, encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-
-    assert lines, f"{path} is empty"
-    assert lines[0].split() == REFERENCE_TABLE_HEADER, (
-        f"{path}:1: unexpected header {lines[0]!r}"
-    )
-
-    records: list[tuple[int, str, str, str, float, float]] = []
-    for lineno, line in enumerate(lines[1:], start=2):
-        if not line.strip():
-            continue  # blank separator between metal blocks
-        fields = line.split()
-        assert len(fields) == 5, (
-            f"{path}:{lineno}: expected 5 whitespace-separated columns, got "
-            f"{len(fields)}: {line!r}"
-        )
-        residue, atom, metal, mu_text, stdev_text = fields
-        try:
-            mu, stdev = float(mu_text), float(stdev_text)
-        except ValueError as exc:
-            raise AssertionError(
-                f"{path}:{lineno}: distance columns are not numbers: {line!r}"
-            ) from exc
-        records.append((lineno, residue, atom, metal, mu, stdev))
-    return records
-
-
 def test_inferred_donor_table_matches_the_documented_atom_list() -> None:
     """The donor table is exactly README's list: backbone O plus named side chains."""
     expected = {
@@ -591,7 +402,7 @@ def test_named_side_chain_donors_become_inferred_bonds(
         resname=resname,
         positions={atom_name: (2.0, 0.0, 0.0)},
     )
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
     assert candidate["inferred_donor_allowed"] is True
@@ -618,7 +429,7 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(
     path = _probe_structure(
         tmp_path, f"{resname}_O.pdb", resname=resname, positions={"O": (2.0, 0.0, 0.0)}
     )
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "O")
     assert candidate["inferred_donor_allowed"] is True
@@ -645,7 +456,7 @@ def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path: Path) -
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     builder.add_water(101, (2.09, 0.0, 0.0), chain="B")
     path = builder.write_pdb(tmp_path / "water.pdb")
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "O")
     row = _only(rows, "O")
@@ -663,7 +474,7 @@ def test_water_oxygen_is_a_donor_and_other_water_atoms_are_not(tmp_path: Path) -
         "HOH", 101, [AtomSpec("N", "N", (2.09, 0.0, 0.0))], chain="B"
     )
     path = builder.write_pdb(tmp_path / "odd_water.pdb")
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "N")
     assert candidate["inferred_donor_allowed"] is False
@@ -686,7 +497,7 @@ def test_excluded_nitrogen_donors_never_become_inferred_bonds(
         resname=resname,
         positions={atom_name: (2.0, 0.0, 0.0)},
     )
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
     assert candidate["assigned_as_bond"] is False
@@ -718,8 +529,8 @@ def test_a_distant_non_typical_atom_does_not_warn_the_site(tmp_path: Path) -> No
         tmp_path, "arg_far.pdb", resname="ARG", positions={"NH1": (3.6, 0.0, 0.0)}
     )
 
-    _, near_candidates, near_summaries, _ = _analyze(near)
-    _, far_candidates, far_summaries, _ = _analyze(far)
+    _, _, near_candidates, near_summaries, _ = _analyze(near)
+    _, _, far_candidates, far_summaries, _ = _analyze(far)
 
     assert _only(near_candidates, "NH1")["first_sphere_eligible"] is True
     assert _only(far_candidates, "NH1")["first_sphere_eligible"] is False
@@ -747,7 +558,7 @@ def test_n_terminal_nitrogen_is_a_donor_only_at_the_chain_start(
         positions={"N": (2.0, 0.0, 0.0)},
         probe_index=probe_index,
     )
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "N")
     assert candidate["neighbor_resnum"] == str(10 + probe_index)
@@ -769,7 +580,7 @@ def test_n_terminal_histidine_n_does_not_borrow_side_chain_reference(
         positions={"N": (2.0, 0.0, 0.0), "NE2": (0.0, 2.03, 0.0)},
         probe_index=0,
     )
-    rows, candidates, _, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, candidates, _, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     backbone_candidate = _only(candidates, "N")
     assert backbone_candidate["inferred_donor_rule"] == "n_terminal_nitrogen"
@@ -806,7 +617,7 @@ def test_c_terminal_oxygens_are_donors_only_at_the_chain_end(
         positions={atom_name: (2.0, 0.0, 0.0)},
         probe_index=probe_index,
     )
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, atom_name)
     assert candidate["inferred_donor_allowed"] is allowed
@@ -832,7 +643,7 @@ def test_a_single_residue_chain_is_both_polymer_termini(tmp_path: Path) -> None:
             probe_index=0,
             chain_length=1,
         )
-        rows, candidates, _, _ = _analyze(path)
+        _, rows, candidates, _, _ = _analyze(path)
         assert _only(candidates, atom_name)["inferred_donor_rule"] == rule
         assert len(rows) == 1
 
@@ -869,8 +680,7 @@ def test_unmodeled_polymer_endpoints_do_not_create_a_terminal_donor(
         cif_path, str(tmp_path / "internal_only.pdb")
     )
 
-    rows, candidates, _, _ = _analyze(pdb_path)
-    context = load_structure("test", pdb_path)
+    context, rows, candidates, _, _ = _analyze(pdb_path)
 
     candidate = _only(candidates, "N")
     assert candidate["inferred_donor_allowed"] is False
@@ -900,7 +710,7 @@ def test_incomplete_pdb_seqres_does_not_create_a_terminal_donor(tmp_path: Path) 
     path = str(tmp_path / "incomplete_seqres.pdb")
     helpers.write_pdb(structure, path)
 
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "N")
     assert candidate["inferred_donor_allowed"] is False
@@ -929,8 +739,7 @@ def test_terminal_rules_require_a_real_polymer_residue(tmp_path: Path) -> None:
     )
     path = builder.write_pdb(tmp_path / "free_ala.pdb")
 
-    rows, candidates, _, _ = _analyze(path)
-    context = load_structure("test", path)
+    context, rows, candidates, _, _ = _analyze(path)
     entity_types = {
         residue.name: residue.entity_type
         for chain in context.model
@@ -965,8 +774,8 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     """An exact reference sets target = mu and cutoff = mu + 0.75 A."""
     # ``first_sphere_rule`` reads only element, residue name, atom name and
     # water flag, so the remaining fields carry neutral values.
-    metal_site = _atom_site(metal)
-    neighbor = _atom_site(
+    metal_site = helpers.atom_site(metal)
+    neighbor = helpers.atom_site(
         element, residue_name=residue, atom_name=atom, is_water=is_water
     )
     mu = reference_data.literature_distances()[expected_key][0]
@@ -989,8 +798,8 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     the table (water, 2.09 A). The kind is flagged because a fallback target
     may not be used for a z-score.
     """
-    metal_site = _atom_site("ZN")
-    neighbor = _atom_site("O", residue_name="ASN", atom_name="OD1")
+    metal_site = helpers.atom_site("ZN")
+    neighbor = helpers.atom_site("O", residue_name="ASN", atom_name="OD1")
     widest_zn_o = max(
         mu
         for (_, atom, metal), (mu, _sd) in reference_data.literature_distances().items()
@@ -1033,7 +842,7 @@ def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path: Path) 
         metal="K",
         positions={"SG": (2.5, 0.0, 0.0)},
     )
-    rows, candidates, _, metadata = _analyze(path)
+    _, rows, candidates, _, metadata = _analyze(path)
 
     candidate = _only(candidates, "SG")
     assert candidate["eligibility_status"] == "missing_assignment_reference"
@@ -1058,7 +867,7 @@ def test_first_sphere_membership_at_the_exact_cutoff_boundary(
         resname="HIS",
         positions={"NE2": (distance, 0.0, 0.0)},
     )
-    rows, candidates, _, _ = _analyze(path)
+    _, rows, candidates, _, _ = _analyze(path)
 
     candidate = _only(candidates, "NE2")
     assert candidate["candidate_distance"] == approx(distance)
@@ -1086,8 +895,8 @@ def test_dpi_never_widens_the_chemical_cutoff(tmp_path: Path) -> None:
     )
     bad_dpi = _dpi_metadata(tmp_path, nrefcnt=200, rffin=0.45)
 
-    no_dpi_rows, no_dpi_candidates, _, _ = _analyze(path)
-    dpi_rows, dpi_candidates, summaries, _ = _analyze(
+    _, no_dpi_rows, no_dpi_candidates, _, _ = _analyze(path)
+    _, dpi_rows, dpi_candidates, summaries, _ = _analyze(
         path, data_json=bad_dpi, resolution=3.5
     )
 
@@ -1114,7 +923,7 @@ def test_the_broad_search_radius_is_not_a_bond_cutoff(tmp_path: Path) -> None:
     builder.add_water(101, (3.5, 0.0, 0.0), chain="B")
     builder.add_water(102, (0.0, 2.09, 0.0), chain="B")
     path = builder.write_pdb(tmp_path / "second_shell.pdb")
-    rows, candidates, summaries, _ = _analyze(path)
+    _, rows, candidates, summaries, _ = _analyze(path)
 
     assert ba.CANDIDATE_SEARCH_RADIUS == 4.0
     distances = sorted(round(c["candidate_distance"], 3) for c in candidates)
@@ -1140,8 +949,7 @@ def test_overfull_occupancy_far_from_the_metal_is_not_charged_to_the_site(
         atom_names=[atom.name for atom in distant.atoms if not atom.altloc],
     )
     path = builder.write_pdb(tmp_path / "distant_overfull.pdb")
-    context = load_structure("test", path)
-    _rows, _candidates, summaries, _meta = _analyze(path)
+    context, _rows, _candidates, summaries, _meta = _analyze(path)
     summary = next(iter(summaries.values()))
 
     assert context.overfull_occupancy_site_count > 0
@@ -1164,7 +972,7 @@ def test_overfull_occupancy_on_the_metal_is_charged_to_the_site(tmp_path: Path) 
         atom_names=["ZN"],
     )
     path = builder.write_pdb(tmp_path / "metal_overfull.pdb")
-    _rows, _candidates, summaries, _meta = _analyze(path)
+    _, _rows, _candidates, summaries, _meta = _analyze(path)
     summary = next(iter(summaries.values()))
 
     assert summary["metal_overfull_occupancy"] is True
@@ -1295,7 +1103,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
     path = _probe_structure(
         tmp_path, "zscore.pdb", resname="ASP", positions={"OD1": (2.40, 0.0, 0.0)}
     )
-    rows, _, _, metadata = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, _, _, metadata = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     assert metadata.partial_reason_codes == []
     row = _only(rows, "OD1")
@@ -1568,17 +1376,12 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path: Path) -> None:
     path = _atom_count_structure(
         tmp_path, "row_dpi.pdb", 400, cell_edge=60.0, donor_distance=2.20
     )
-    context = load_structure("test", path)
-    inputs = helpers.dpi_inputs(
-        pdb_path=path,
-        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+    analysis = _analyze(
+        path,
         data_json=helpers.write_data_json(
             tmp_path / "row.json", nrefcnt=46656, rffin=0.243
         ),
         resolution=1.90,
-    )
-    analysis = ba.run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
     )
     rows = analysis.bond_rows
     summaries = analysis.site_summaries
@@ -1703,7 +1506,7 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(
     The two files carry different cells and space groups, so the returned volume
     says which one was used.
     """
-    numpy = pytest.importorskip("numpy")  # only needed to give the MTZ data
+    pytest.importorskip("numpy")  # only needed to give the MTZ data
 
     builder = StructureBuilder(
         cell=(100.0, 100.0, 100.0, 90.0, 90.0, 90.0), spacegroup="P 1"
@@ -1711,12 +1514,13 @@ def test_asu_volume_prefers_the_mtz_cell_over_the_coordinate_file(
     builder.add_metal("ZN", 1, chain="B", pos=(0.0, 0.0, 0.0))
     pdb_path = builder.write_pdb(tmp_path / "coords.pdb")
 
-    mtz = gemmi.Mtz(with_base=True)
-    mtz.cell = gemmi.UnitCell(40.0, 40.0, 40.0, 90.0, 90.0, 90.0)
-    mtz.spacegroup = gemmi.find_spacegroup_by_name("P 21 21 21")
-    mtz.set_data(numpy.array([[0.0, 0.0, 1.0]], dtype="float32"))
-    mtz_path = str(tmp_path / "data.mtz")
-    mtz.write_to_file(mtz_path)
+    mtz_path = helpers.write_mtz(
+        tmp_path / "data.mtz",
+        {},
+        [[0.0, 0.0, 1.0]],
+        cell=(40.0, 40.0, 40.0, 90.0, 90.0, 90.0),
+        spacegroup="P 21 21 21",
+    )
 
     assert dpi_module.asu_volume(mtz_path, pdb_path) == approx(40.0**3 / 4)
     assert dpi_module.asu_volume(
@@ -2032,17 +1836,11 @@ def test_every_dpi_reason_code_reaches_the_site_summary(tmp_path: Path) -> None:
     path = _atom_count_structure(
         tmp_path, "summary.pdb", 16, cell_edge=100.0, donor_distance=2.09
     )
-    context = load_structure("test", path)
-    inputs = helpers.dpi_inputs(
-        pdb_path=path,
-        mtz_path=os.path.join(str(tmp_path), "absent.mtz"),
+    analysis = _analyze(
+        path,
         data_json=helpers.write_data_json(
             tmp_path / "no_nref.json", nrefcnt=None, rffin=0.20
         ),
-    )
-
-    analysis = ba.run_bond_analysis(
-        "test", path, [], list(EDSTATS_HEADER), inputs, structure=context
     )
     rows = analysis.bond_rows
     summaries = analysis.site_summaries
@@ -2070,7 +1868,7 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path: Path) -> 
     fallback = _probe_structure(
         tmp_path, "lys.pdb", resname="LYS", positions={"NZ": (2.10, 0.0, 0.0)}
     )
-    fallback_rows, fallback_candidates, _, _ = _analyze(
+    _, fallback_rows, fallback_candidates, _, _ = _analyze(
         fallback, data_json=_dpi_metadata(tmp_path)
     )
 
@@ -2091,7 +1889,7 @@ def test_unassessable_geometry_renders_blank_and_never_false(tmp_path: Path) -> 
     covered = _probe_structure(
         tmp_path, "asp_nodpi.pdb", resname="ASP", positions={"OD1": (1.99, 0.0, 0.0)}
     )
-    no_dpi_rows, _, _, metadata = _analyze(covered)
+    _, no_dpi_rows, _, _, metadata = _analyze(covered)
 
     row = _only(no_dpi_rows, "OD1")
     assert metadata.partial_reason_codes == ["missing_dpi_metadata_source"]
@@ -2108,7 +1906,7 @@ def test_assessed_geometry_columns_are_complementary_booleans(tmp_path: Path) ->
     path = _probe_structure(
         tmp_path, "assessed.pdb", resname="ASP", positions={"OD1": (1.99, 0.0, 0.0)}
     )
-    rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     row = _only(rows, "OD1")
     assert isinstance(row["geometry_outlier"], bool)
@@ -2124,7 +1922,7 @@ def test_assessed_geometry_columns_are_complementary_booleans(tmp_path: Path) ->
 
 def _bidentate(
     tmp_path: Path, name: str, d1: float, d2: float, *, data_json: str | None = None
-) -> _AnalysisResult:
+) -> helpers.BondAnalysis:
     """Asp chelating a Zn through both carboxylate oxygens."""
     path = _probe_structure(
         tmp_path,
@@ -2140,7 +1938,7 @@ def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path: Path) -> No
     path = _probe_structure(
         tmp_path, "mono.pdb", resname="HIS", positions={"NE2": (2.03, 0.0, 0.0)}
     )
-    rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     row = _only(rows, "NE2")
     assert row["multi_donor_detected"] is False
@@ -2154,7 +1952,7 @@ def test_a_single_donor_contact_is_not_a_multi_donor_group(tmp_path: Path) -> No
 
 def test_two_donors_of_one_residue_form_a_consistent_group(tmp_path: Path) -> None:
     """Two well-behaved contacts to one residue image: detected, not suspect."""
-    rows, _, summaries, _ = _bidentate(
+    _, rows, _, summaries, _ = _bidentate(
         tmp_path, "chelate_ok.pdb", 1.99, 2.00, data_json=_dpi_metadata(tmp_path)
     )
 
@@ -2184,7 +1982,7 @@ def test_one_outlier_makes_the_whole_group_suspect_but_only_it_an_outlier(
     multi_donor_geometry_status=suspect ...; the particular unusual bonds retain
     geometry_outlier=true."
     """
-    rows, _, summaries, _ = _bidentate(
+    _, rows, _, summaries, _ = _bidentate(
         tmp_path, "chelate_bad.pdb", 1.99, 2.40, data_json=_dpi_metadata(tmp_path)
     )
 
@@ -2221,7 +2019,7 @@ def test_a_group_with_no_assessable_member_is_indeterminate(tmp_path: Path) -> N
     The same geometry that is "suspect" with a DPI must not become "consistent"
     when the DPI is unavailable.
     """
-    rows, _, summaries, _ = _bidentate(tmp_path, "chelate_nodpi.pdb", 1.99, 2.40)
+    _, rows, _, summaries, _ = _bidentate(tmp_path, "chelate_nodpi.pdb", 1.99, 2.40)
 
     assert len(rows) == 2
     for row in rows:
@@ -2255,7 +2053,7 @@ def test_backbone_and_side_chain_contacts_share_one_residue_group(
         resname="ASP",
         positions={"OD1": (1.99, 0.0, 0.0), "O": (0.0, 2.07, 0.0)},
     )
-    rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     assert {row["neighbor_atom"] for row in rows} == {"OD1", "O"}
     for row in rows:
@@ -2286,7 +2084,7 @@ def test_separate_residues_are_separate_groups(tmp_path: Path) -> None:
         positions={"OD1": (0.0, 1.99, 0.0)},
     )
     path = builder.write_pdb(tmp_path / "two_residues.pdb")
-    rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     assert len(rows) == 2
     for row in rows:
@@ -2312,7 +2110,7 @@ def test_group_size_has_no_upper_limit(tmp_path: Path) -> None:
         },
         probe_index=0,
     )
-    rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
+    _, rows, _, summaries, _ = _analyze(path, data_json=_dpi_metadata(tmp_path))
 
     # N is allowed here because this residue is the polymer's first.
     assert {row["neighbor_atom"] for row in rows} == {"OD1", "OD2", "O", "N"}
@@ -2320,158 +2118,3 @@ def test_group_size_has_no_upper_limit(tmp_path: Path) -> None:
         assert row["multi_donor_detected"] is True
         assert row["multi_donor_contact_count"] == 4
     assert next(iter(summaries.values()))["multi_donor_contact_count"] == 4
-
-
-def test_reference_table_holds_exactly_the_expected_rows_and_keys() -> None:
-    """Every bundled row is present, parsed strictly and reachable through ``LIT``.
-
-    ``load_literature`` silently drops any row whose numeric columns do not
-    parse, so a corrupted ``CYS S CU`` line would demote Cu-thiolate bonds to
-    the element fallback without raising anything.
-    """
-    records = _parse_reference_table(REFERENCE_TABLE)
-    assert len(records) == EXPECTED_REFERENCE_ROW_COUNT
-
-    keys = {
-        (residue, atom, metal) for _lineno, residue, atom, metal, _mu, _sd in records
-    }
-    assert keys == REQUIRED_REFERENCE_KEYS
-    # Named individually so a failure says which chemistry was lost.
-    for key in (
-        ("CYS", "S", "CU"),
-        ("CYS", "S", "ZN"),
-        ("CYS", "S", "FE"),
-        ("HIS", "N", "ZN"),
-        ("HIS", "N", "NI"),
-        ("HOH", "O", "MG"),
-        ("ASP", "O", "CA"),
-        ("CA", "O", "K"),
-    ):
-        assert key in keys, f"{key} is missing from {REFERENCE_TABLE}"
-
-    assert len(reference_data.literature_distances()) == EXPECTED_REFERENCE_ROW_COUNT
-    assert set(reference_data.literature_distances()) == keys
-    assert {
-        (residue, atom, metal): (mu, stdev)
-        for _lineno, residue, atom, metal, mu, stdev in records
-    } == reference_data.literature_distances()
-
-
-@pytest.mark.parametrize(
-    "corruption",
-    [
-        "CYS S CU 2.two 0.2",  # a typo in the mean
-        "CYS S CU 2.20",  # a lost column
-        "CYS S CU 2.20 0.2 0.3",  # a stray extra column
-    ],
-)
-def test_the_strict_parser_rejects_a_corrupted_row(
-    tmp_path: Path, corruption: str
-) -> None:
-    """Both parsers refuse the three ways a row can be damaged.
-
-    A parser that dropped a bad row would make the row-count and key assertions
-    above vacuous.
-    """
-    with open(REFERENCE_TABLE, encoding="utf-8") as handle:
-        text = handle.read()
-    damaged = tmp_path / "metal_distances_info.txt"
-    damaged.write_text(text + corruption + "\n", encoding="utf-8")
-
-    with pytest.raises(AssertionError):
-        _parse_reference_table(str(damaged))
-
-    with pytest.raises(ValueError, match="metal_distances_info.txt line"):
-        reference_data.load_literature(str(damaged))
-
-
-def test_reference_table_has_no_duplicate_keys() -> None:
-    """A repeated (residue, atom, metal) key would be silently overwritten.
-
-    ``load_literature`` builds a dict, so a duplicate row is invisible at
-    runtime.
-    """
-    records = _parse_reference_table(REFERENCE_TABLE)
-    seen: dict[tuple[str, str, str], int] = {}
-    duplicates: list[tuple[tuple[str, str, str], int, int]] = []
-    for lineno, residue, atom, metal, _mu, _sd in records:
-        key = (residue, atom, metal)
-        if key in seen:
-            duplicates.append((key, seen[key], lineno))
-        seen[key] = lineno
-
-    assert duplicates == []
-    assert len(records) == len(reference_data.literature_distances())
-    assert set(seen) == set(reference_data.literature_distances())
-
-
-def test_reference_table_values_are_physically_plausible() -> None:
-    """Every bundled distance is a positive, credible metal-ligand bond length."""
-    records = _parse_reference_table(REFERENCE_TABLE)
-    assert records, "the reference table must not be empty"
-
-    for lineno, residue, atom, metal, mu, stdev in records:
-        where = f"{REFERENCE_TABLE}:{lineno} ({residue} {atom} {metal})"
-        assert residue in REFERENCE_RESIDUE_TOKENS, where
-        assert atom in {"N", "O", "S"}, where
-        assert metal in METAL_ELEMENTS, where
-        assert 1.5 <= mu <= 3.5, f"{where}: implausible mean {mu}"
-        assert 0.0 < stdev <= 0.5, f"{where}: implausible sigma {stdev}"
-        # A spread that large relative to the mean would make |Z| meaningless.
-        assert stdev < mu / 4.0, where
-        # The 4 A discovery radius must never clip a first sphere.
-        assert mu + ba.FIRST_SPHERE_TOLERANCE <= ba.CANDIDATE_SEARCH_RADIUS, where
-
-    parsed = {
-        (residue, atom, metal): (mu, stdev)
-        for _lineno, residue, atom, metal, mu, stdev in records
-    }
-    assert parsed == reference_data.literature_distances()
-
-
-def test_reference_table_is_internally_consistent_by_donor_element() -> None:
-    """Chemistry cross-checks the numbers: S donors are longer than O donors.
-
-    One metal's oxygen references also cluster rather than scatter. Both break
-    if a row's metal or donor column is transposed.
-    """
-    by_metal: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
-        lambda: defaultdict(list)
-    )
-    for (_residue, atom, metal), (
-        mu,
-        _sd,
-    ) in reference_data.literature_distances().items():
-        by_metal[metal][atom].append(mu)
-
-    assert set(by_metal) >= {"ZN", "CA", "MG", "K", "NA", "FE", "CU", "MN", "CO", "NI"}
-    for metal, by_atom in by_metal.items():
-        oxygens = by_atom.get("O", [])
-        assert oxygens, f"{metal} has no oxygen reference"
-        assert max(oxygens) - min(oxygens) < 0.6, (
-            f"{metal} oxygen references are implausibly scattered: {oxygens}"
-        )
-        if "S" in by_atom:
-            assert min(by_atom["S"]) > max(oxygens), (
-                f"{metal}-S should exceed {metal}-O: {by_atom['S']} vs {oxygens}"
-            )
-        # Water is the commonest first-sphere donor in the PDB, so every metal
-        # must define it.
-        assert ("HOH", "O", metal) in reference_data.literature_distances()
-
-
-def test_reference_table_ranks_ions_by_size() -> None:
-    """Larger ions have longer water bonds: K > Na > Ca > Mn > Zn > Mg.
-
-    Ionic radius fixes this ordering, which catches a shuffled metal column that
-    the per-row range checks let through.
-    """
-    water = {
-        metal: reference_data.literature_distances()[("HOH", "O", metal)][0]
-        for metal in ("K", "NA", "CA", "MN", "ZN", "MG")
-    }
-    assert (
-        water["K"] > water["NA"] > water["CA"] > water["MN"] > water["ZN"] > water["MG"]
-    )
-    assert water["ZN"] == approx(2.09)
-    assert reference_data.literature_distances()[("HIS", "N", "ZN")][0] == approx(2.03)

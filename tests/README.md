@@ -21,9 +21,13 @@ mypy src tests tools
 
 Alchemy supports Python 3.11 or later and requires `gemmi` 0.7 or later.
 
-Tests under `coordination/`, `driver/`, and `tools/` follow the corresponding
-source subsystems. Whole-run coverage lives under `integration/`. Shared
-fixtures and builders remain in `conftest.py` and `helpers.py`.
+Each test module is named after the source module it covers: flat modules in
+`src/` have flat test modules here, and `coordination/`, `driver/`, and
+`tools/` mirror the corresponding source packages. Whole-run coverage lives
+under `integration/`. Shared fixtures and builders remain in `conftest.py` and
+`helpers.py`; `test_helpers.py` tests the builders themselves, and
+`confidence_oracle.py` is an independent re-implementation of the scoring
+policy used to cross-check `src/confidence_score`.
 
 ## Common commands
 

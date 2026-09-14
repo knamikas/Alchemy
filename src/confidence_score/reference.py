@@ -114,7 +114,7 @@ def write_reference(
     geometry_counts: Mapping[float, int],
     input_row_count: int,
     cohort_provenance: Mapping[str, Any] | None = None,
-) -> "ConfidenceReference":
+) -> ConfidenceReference:
     """Write reusable component distributions and their policy metadata."""
     density_counts = _normalized_metric_counts(density_counts)
     geometry_counts = _normalized_metric_counts(geometry_counts)
@@ -178,7 +178,7 @@ def write_reference(
     )
 
 
-def load_reference(reference_dir: str) -> "ConfidenceReference":
+def load_reference(reference_dir: str) -> ConfidenceReference:
     """Load and strictly validate a frozen database confidence reference."""
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     with open(metadata_path, encoding="utf-8") as handle:
@@ -314,7 +314,7 @@ def _score_prepared_row(
 
 
 def score_against_reference(
-    rows: Sequence[dict[str, Any]], reference: "ConfidenceReference"
+    rows: Sequence[dict[str, Any]], reference: ConfidenceReference
 ) -> list[dict[str, Any]]:
     """Score prepared rows against a frozen database reference."""
     return [_score_prepared_row(row, reference)[0] for row in rows]
@@ -415,7 +415,7 @@ def finalize_database_confidence(
 
 
 def score_file_against_reference(
-    input_path: str, output_path: str, reference: "ConfidenceReference"
+    input_path: str, output_path: str, reference: ConfidenceReference
 ) -> tuple[int, int]:
     """Score a compact input CSV against a loaded frozen reference."""
     output_tmp = output_path + ".tmp"
@@ -451,7 +451,7 @@ def score_file_against_reference(
     return total, scored
 
 
-def validate_scored_reference(path: str, reference: "ConfidenceReference") -> None:
+def validate_scored_reference(path: str, reference: ConfidenceReference) -> None:
     """Refuse resume output containing rows from another frozen reference."""
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)

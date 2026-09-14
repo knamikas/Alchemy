@@ -51,6 +51,9 @@ CPU_TOPOLOGY_ROOT = "/sys/devices/system/cpu"
 
 _PROPERTIES_PATTERN = re.compile(r'"properties"\s*:\s*')
 _PROPERTY_PREFIX_LIMIT = 4 * 1024**2
+_PROPERTY_READ_CHUNK_BYTES = 64 * 1024
+#: Fixed size of the CCP4 map header that precedes the grid values.
+CCP4_MAP_HEADER_BYTES = 1024
 
 
 @dataclass(frozen=True)
@@ -424,7 +427,9 @@ def _read_properties_prefix(path: str) -> dict[str, object] | None:
     try:
         with _open_text(path) as handle:
             while len(data) < _PROPERTY_PREFIX_LIMIT:
-                chunk = handle.read(min(65536, _PROPERTY_PREFIX_LIMIT - len(data)))
+                chunk = handle.read(
+                    min(_PROPERTY_READ_CHUNK_BYTES, _PROPERTY_PREFIX_LIMIT - len(data))
+                )
                 if not chunk:
                     break
                 data += chunk
@@ -470,7 +475,7 @@ def estimate_from_properties(
         )
         for axis in axes
     )
-    one_map = 1024 + math.prod(grid) * MAP_VALUE_BYTES
+    one_map = CCP4_MAP_HEADER_BYTES + math.prod(grid) * MAP_VALUE_BYTES
     combined_maps = DENSITY_MAP_COUNT * one_map
     peak = math.ceil(
         (combined_maps * MAP_PEAK_COPIES + WORKER_FIXED_OVERHEAD_BYTES)

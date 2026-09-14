@@ -5,9 +5,6 @@ from __future__ import annotations
 import os
 
 from driver.errors import DriverError
-from run_logging import logger_for
-
-logger = logger_for(__name__)
 
 
 class OutputLayout:

@@ -13,6 +13,8 @@ import os
 import sys
 from typing import IO
 
+from typing_extensions import override
+
 # Bound external output and traceback text in each record.
 MAX_RECORD_CHARS = 2000
 
@@ -66,10 +68,8 @@ class _BoundedMessage(logging.Filter):
         super().__init__()
         self.limit = limit
 
-    # typing.override requires Python 3.12; this project supports 3.11.
-    def filter(  # type: ignore[explicit-override]
-        self, record: logging.LogRecord
-    ) -> bool:
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
         if len(message) > self.limit:
             record.msg = truncate(message, self.limit)

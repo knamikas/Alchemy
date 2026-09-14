@@ -16,11 +16,9 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from statistics import median
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    cast,
-)
+from typing import Any, cast
+
+import gemmi
 
 from codes import (
     CandidateSource,
@@ -73,10 +71,6 @@ from structure_analysis import (
     pbc_translation,
     position_distance,
 )
-
-if TYPE_CHECKING:
-    import gemmi
-
 
 CANDIDATE_SEARCH_RADIUS = 4.0
 # Context-only radius for nearby modeled metals. This does not assert a
@@ -182,8 +176,6 @@ def _metal_special_position_summaries(
         return summaries
 
     try:
-        import gemmi
-
         spacegroup = cast(
             "gemmi.SpaceGroup | None", structure.structure.find_spacegroup()
         )
@@ -443,8 +435,6 @@ def _polymer_terminal_position(
     structure: StructureContext, atom: AtomSite
 ) -> tuple[bool, bool]:
     """Return ``(is_n_terminal, is_c_terminal)`` for a polymer residue."""
-    import gemmi
-
     selected = structure.residue_for_atom(atom)
     if selected.source_polymer_position:
         position = selected.source_polymer_position

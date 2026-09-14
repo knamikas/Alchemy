@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import Protocol, cast
+
+import gemmi
 
 from structure_analysis import (
     OCCUPANCY_DEFAULT_REMARK_PREFIX,
@@ -17,11 +19,6 @@ from structure_analysis import (
     RESNAME_REMARK_PREFIX,
     blank_if_missing,
 )
-
-if TYPE_CHECKING:
-    # Keep Gemmi imports lazy; this import is for type checking only.
-    import gemmi
-
 
 # The one-character chain ids accepted by both Gemmi and the CCP4 tools.
 LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -83,8 +80,6 @@ def _cif_atom_data(
     code, not necessarily an integer; a temporary in-memory parse with generated
     numeric ids carries each source row number through any Gemmi reordering.
     """
-    import gemmi
-
     document = gemmi.cif.read(cif_path)
     atom_blocks: list[tuple[gemmi.cif.Block, list[str]]] = []
     for block in document:
@@ -222,8 +217,6 @@ def residue_conversion_records(
 
 def _source_residue_records(structure: gemmi.Structure) -> list[_SourceRecord]:
     """Snapshot source-mmCIF residue identities before legacy conversion."""
-    import gemmi
-
     polymer_sequence_lengths = {
         str(entity.name): len(entity.full_sequence)
         for entity in structure.entities
@@ -312,8 +305,6 @@ def _pack_legacy_pdb_residue_ids(structure: gemmi.Structure) -> None:
     chains stay together, TER records preserve their boundaries, and sequence
     numbers never exceed the portable four-column decimal PDB range.
     """
-    import gemmi
-
     for model in structure:
         chain_slot = 0
         next_residue_number = 1
@@ -534,8 +525,6 @@ def _write_cif_conversion_provenance(
 
 def cif_to_pdb(cif_path: str, dst: str) -> str:
     """Convert mmCIF to PDB without discarding occupancy or CCD provenance."""
-    import gemmi
-
     if not os.path.exists(cif_path):
         raise FileNotFoundError(cif_path)
     (
@@ -599,8 +588,6 @@ def first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
     the model count. MODEL/ENDMDL records are removed because EDSTATS emits a
     synthetic separator residue for even a one-model wrapper.
     """
-    import gemmi
-
     structure = gemmi.read_structure(pdb_path)
     model_count = len(structure)
     if model_count == 0:

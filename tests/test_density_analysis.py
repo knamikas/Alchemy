@@ -13,7 +13,7 @@ from typing import IO, Any, NoReturn
 import gemmi
 import numpy as np
 import pytest
-from helpers import approx
+from helpers import approx, write_mtz
 
 import density_analysis as density
 import inputs
@@ -34,26 +34,20 @@ def _write_refmac_mtz(
     difference: tuple[float, float] = (2.0, 2.0),
 ) -> str:
     """Write two raw-Refmac reflections: one centric and one acentric."""
-    mtz = gemmi.Mtz(with_base=True)
-    mtz.title = title
-    mtz.spacegroup = gemmi.find_spacegroup_by_name("P 21")
-    mtz.cell = gemmi.UnitCell(40, 50, 60, 90, 100, 90)
-    dataset = mtz.add_dataset("refmac")
-    for label, column_type in density.REFMAC_TWIN_COLUMNS.items():
-        mtz.add_column(label, column_type, dataset.id)
-
     # For both rows C=10, raw D=2 and raw A=14, hence A-C=2D. In P 21,
     # (1,0,0) is centric while (1,1,0) is acentric.
-    rows = np.asarray(
+    return write_mtz(
+        path,
+        density.REFMAC_TWIN_COLUMNS,
         [
             [1, 0, 0, 20, 1, 10, 0, 14, 0, difference[0], 0, 0.8],
             [1, 1, 0, 20, 1, 10, 0, 14, 0, difference[1], 0, 0.8],
         ],
-        dtype=np.float32,
+        cell=(40, 50, 60, 90, 100, 90),
+        spacegroup="P 21",
+        title=title,
+        dataset="refmac",
     )
-    mtz.set_data(rows)
-    mtz.write_to_file(str(path))
-    return str(path)
 
 
 def test_refmac_twin_normalization_uses_edstats_centric_convention(
@@ -119,7 +113,7 @@ def test_twin_routing_requires_explicit_boolean_metadata(
 ) -> None:
     path = tmp_path / "data.json"
     path.write_text(json.dumps({"properties": {"ISTWIN": value}}), encoding="utf-8")
-    assert inputs.read_pdb_redo_is_twin(str(path)) is expected
+    assert inputs.read_pdb_redo_metadata(str(path)).is_twin is expected
 
 
 def test_pdb_redo_metadata_includes_the_source_revision(tmp_path: Path) -> None:
@@ -154,7 +148,7 @@ def test_explicit_twin_metadata_read_failures_are_not_non_twin(
         path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError):
-        inputs.read_pdb_redo_is_twin(str(path), required=True)
+        inputs.read_pdb_redo_metadata(str(path), required=True)
 
 
 def _fake_ccp4_run_factory(mtzfix_log_text: str) -> Callable[..., SimpleNamespace]:

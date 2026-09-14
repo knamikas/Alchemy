@@ -6,15 +6,18 @@ import json
 import os
 import subprocess
 import sys
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import IO, Any, Protocol, cast
 
 import pytest
-from helpers import SRC_DIR
+from helpers import SRC_DIR, STANDARD_AMINO_ACIDS, approx
 
+import coordination.analysis as ba
 import reference_data
+from metal_elements import METAL_ELEMENTS
 
 _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
     "coordination.analysis",
@@ -490,3 +493,229 @@ def test_the_unambiguous_ids_still_cover_the_metals_that_matter() -> None:
 
     for symbol in ("ZN", "FE", "MG", "CA", "MN", "CU", "NI", "CO", "K", "NA"):
         assert symbol in UNAMBIGUOUS_METAL_COMPONENT_IDS, symbol
+
+
+# The bundled distance table itself, read by a strict parser independent of
+# ``load_literature`` so the comparison against it is not a tautology.
+_REFERENCE_TABLE = os.path.join(SRC_DIR, "data", "metal_distances_info.txt")
+
+# ``CA`` here is the backbone-carbonyl pseudo residue ``_bonding_key`` maps
+# every main-chain ``O`` onto, not calcium.
+_REFERENCE_RESIDUE_TOKENS = STANDARD_AMINO_ACIDS | {"HOH", "CA"}
+
+_REFERENCE_TABLE_HEADER = ["residue", "atom", "metal", "avg_bond_dist", "st_dev"]
+
+# A dropped row is invisible at runtime: the pair falls back to the same-element
+# target and loses its sigma, hence its z-score.
+_EXPECTED_REFERENCE_ROW_COUNT = 79
+
+_REFERENCE_METALS = ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN", "NI")
+
+# The keys whose loss is least visible: every metal's water reference, the
+# thiolate and imidazole rows that define transition-metal sites, the
+# carboxylate rows, and the backbone-carbonyl pseudo residue.
+_REQUIRED_REFERENCE_KEYS: frozenset[tuple[str, str, str]] = frozenset(
+    [("HOH", "O", metal) for metal in _REFERENCE_METALS]
+    + [("ASP", "O", metal) for metal in _REFERENCE_METALS]
+    + [("GLU", "O", metal) for metal in _REFERENCE_METALS]
+    + [("CA", "O", metal) for metal in _REFERENCE_METALS]
+    + [
+        (residue, "O", metal)
+        for residue in ("SER", "THR", "TYR")
+        for metal in ("NA", "MG", "K", "CA", "MN", "FE", "CO", "CU", "ZN")
+    ]
+    + [("HIS", "N", metal) for metal in ("MN", "FE", "CO", "CU", "ZN", "NI")]
+    + [("CYS", "S", metal) for metal in ("MN", "FE", "CO", "CU", "ZN", "NI")]
+)
+
+
+def _parse_reference_table(
+    path: str,
+) -> list[tuple[int, str, str, str, float, float]]:
+    """Parse metal_distances_info.txt strictly, skipping nothing.
+
+    ``reference_data.load_literature`` drops any line whose numeric columns do
+    not parse; copying that rule would make the comparison against
+    ``literature_distances()`` a tautology.
+    """
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+
+    assert lines, f"{path} is empty"
+    assert lines[0].split() == _REFERENCE_TABLE_HEADER, (
+        f"{path}:1: unexpected header {lines[0]!r}"
+    )
+
+    records: list[tuple[int, str, str, str, float, float]] = []
+    for lineno, line in enumerate(lines[1:], start=2):
+        if not line.strip():
+            continue  # blank separator between metal blocks
+        fields = line.split()
+        assert len(fields) == 5, (
+            f"{path}:{lineno}: expected 5 whitespace-separated columns, got "
+            f"{len(fields)}: {line!r}"
+        )
+        residue, atom, metal, mu_text, stdev_text = fields
+        try:
+            mu, stdev = float(mu_text), float(stdev_text)
+        except ValueError as exc:
+            raise AssertionError(
+                f"{path}:{lineno}: distance columns are not numbers: {line!r}"
+            ) from exc
+        records.append((lineno, residue, atom, metal, mu, stdev))
+    return records
+
+
+def test_reference_table_holds_exactly_the_expected_rows_and_keys() -> None:
+    """Every bundled row is present, parsed strictly and reachable through ``LIT``.
+
+    ``load_literature`` silently drops any row whose numeric columns do not
+    parse, so a corrupted ``CYS S CU`` line would demote Cu-thiolate bonds to
+    the element fallback without raising anything.
+    """
+    records = _parse_reference_table(_REFERENCE_TABLE)
+    assert len(records) == _EXPECTED_REFERENCE_ROW_COUNT
+
+    keys = {
+        (residue, atom, metal) for _lineno, residue, atom, metal, _mu, _sd in records
+    }
+    assert keys == _REQUIRED_REFERENCE_KEYS
+    # Named individually so a failure says which chemistry was lost.
+    for key in (
+        ("CYS", "S", "CU"),
+        ("CYS", "S", "ZN"),
+        ("CYS", "S", "FE"),
+        ("HIS", "N", "ZN"),
+        ("HIS", "N", "NI"),
+        ("HOH", "O", "MG"),
+        ("ASP", "O", "CA"),
+        ("CA", "O", "K"),
+    ):
+        assert key in keys, f"{key} is missing from {_REFERENCE_TABLE}"
+
+    assert len(reference_data.literature_distances()) == _EXPECTED_REFERENCE_ROW_COUNT
+    assert set(reference_data.literature_distances()) == keys
+    assert {
+        (residue, atom, metal): (mu, stdev)
+        for _lineno, residue, atom, metal, mu, stdev in records
+    } == reference_data.literature_distances()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "CYS S CU 2.two 0.2",  # a typo in the mean
+        "CYS S CU 2.20",  # a lost column
+        "CYS S CU 2.20 0.2 0.3",  # a stray extra column
+    ],
+)
+def test_the_strict_parser_rejects_a_corrupted_row(
+    tmp_path: Path, corruption: str
+) -> None:
+    """Both parsers refuse the three ways a row can be damaged.
+
+    A parser that dropped a bad row would make the row-count and key assertions
+    above vacuous.
+    """
+    with open(_REFERENCE_TABLE, encoding="utf-8") as handle:
+        text = handle.read()
+    damaged = tmp_path / "metal_distances_info.txt"
+    damaged.write_text(text + corruption + "\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError):
+        _parse_reference_table(str(damaged))
+
+    with pytest.raises(ValueError, match="metal_distances_info.txt line"):
+        reference_data.load_literature(str(damaged))
+
+
+def test_reference_table_has_no_duplicate_keys() -> None:
+    """A repeated (residue, atom, metal) key would be silently overwritten.
+
+    ``load_literature`` builds a dict, so a duplicate row is invisible at
+    runtime.
+    """
+    records = _parse_reference_table(_REFERENCE_TABLE)
+    seen: dict[tuple[str, str, str], int] = {}
+    duplicates: list[tuple[tuple[str, str, str], int, int]] = []
+    for lineno, residue, atom, metal, _mu, _sd in records:
+        key = (residue, atom, metal)
+        if key in seen:
+            duplicates.append((key, seen[key], lineno))
+        seen[key] = lineno
+
+    assert duplicates == []
+    assert len(records) == len(reference_data.literature_distances())
+    assert set(seen) == set(reference_data.literature_distances())
+
+
+def test_reference_table_values_are_physically_plausible() -> None:
+    """Every bundled distance is a positive, credible metal-ligand bond length."""
+    records = _parse_reference_table(_REFERENCE_TABLE)
+    assert records, "the reference table must not be empty"
+
+    for lineno, residue, atom, metal, mu, stdev in records:
+        where = f"{_REFERENCE_TABLE}:{lineno} ({residue} {atom} {metal})"
+        assert residue in _REFERENCE_RESIDUE_TOKENS, where
+        assert atom in {"N", "O", "S"}, where
+        assert metal in METAL_ELEMENTS, where
+        assert 1.5 <= mu <= 3.5, f"{where}: implausible mean {mu}"
+        assert 0.0 < stdev <= 0.5, f"{where}: implausible sigma {stdev}"
+        # A spread that large relative to the mean would make |Z| meaningless.
+        assert stdev < mu / 4.0, where
+        # The 4 A discovery radius must never clip a first sphere.
+        assert mu + ba.FIRST_SPHERE_TOLERANCE <= ba.CANDIDATE_SEARCH_RADIUS, where
+
+    parsed = {
+        (residue, atom, metal): (mu, stdev)
+        for _lineno, residue, atom, metal, mu, stdev in records
+    }
+    assert parsed == reference_data.literature_distances()
+
+
+def test_reference_table_is_internally_consistent_by_donor_element() -> None:
+    """Chemistry cross-checks the numbers: S donors are longer than O donors.
+
+    One metal's oxygen references also cluster rather than scatter. Both break
+    if a row's metal or donor column is transposed.
+    """
+    by_metal: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for (_residue, atom, metal), (
+        mu,
+        _sd,
+    ) in reference_data.literature_distances().items():
+        by_metal[metal][atom].append(mu)
+
+    assert set(by_metal) >= {"ZN", "CA", "MG", "K", "NA", "FE", "CU", "MN", "CO", "NI"}
+    for metal, by_atom in by_metal.items():
+        oxygens = by_atom.get("O", [])
+        assert oxygens, f"{metal} has no oxygen reference"
+        assert max(oxygens) - min(oxygens) < 0.6, (
+            f"{metal} oxygen references are implausibly scattered: {oxygens}"
+        )
+        if "S" in by_atom:
+            assert min(by_atom["S"]) > max(oxygens), (
+                f"{metal}-S should exceed {metal}-O: {by_atom['S']} vs {oxygens}"
+            )
+        # Water is the commonest first-sphere donor in the PDB, so every metal
+        # must define it.
+        assert ("HOH", "O", metal) in reference_data.literature_distances()
+
+
+def test_reference_table_ranks_ions_by_size() -> None:
+    """Larger ions have longer water bonds: K > Na > Ca > Mn > Zn > Mg.
+
+    Ionic radius fixes this ordering, which catches a shuffled metal column that
+    the per-row range checks let through.
+    """
+    water = {
+        metal: reference_data.literature_distances()[("HOH", "O", metal)][0]
+        for metal in ("K", "NA", "CA", "MN", "ZN", "MG")
+    }
+    assert (
+        water["K"] > water["NA"] > water["CA"] > water["MN"] > water["ZN"] > water["MG"]
+    )
+    assert water["ZN"] == approx(2.09)
+    assert reference_data.literature_distances()[("HIS", "N", "ZN")][0] == approx(2.03)
