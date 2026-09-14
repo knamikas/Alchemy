@@ -90,22 +90,25 @@ def test_a_legacy_pdb_export_counts_as_usable_coordinates(
     assert inputs.has_final_files(entry_dir, "9myr")
 
 
-def test_final_file_candidates_rank_plain_over_gzipped_and_mmcif_over_pdb() -> None:
+def test_final_file_candidates_rank_plain_over_gzipped_and_mmcif_over_pdb(
+    tmp_path: Path,
+) -> None:
     """The first existing candidate is the file an analysis uses.
 
     Every caller that probes for an entry's final files shares this order, so
     the mirror, the worker's provenance path, and the driver's memory estimate
     all agree on which file wins.
     """
-    assert inputs.final_file_candidates("/mirror/my/9myr", "9myr", "mtz") == (
-        "/mirror/my/9myr/9myr_final.mtz",
-        "/mirror/my/9myr/9myr_final.mtz.gz",
+    entry_dir = tmp_path / "mirror" / "my" / "9myr"
+    assert inputs.final_file_candidates(str(entry_dir), "9myr", "mtz") == (
+        str(entry_dir / "9myr_final.mtz"),
+        str(entry_dir / "9myr_final.mtz.gz"),
     )
-    assert inputs.final_file_candidates("/mirror/my/9myr", "9myr", "coordinates") == (
-        "/mirror/my/9myr/9myr_final.cif",
-        "/mirror/my/9myr/9myr_final.cif.gz",
-        "/mirror/my/9myr/9myr_final.pdb",
-        "/mirror/my/9myr/9myr_final.pdb.gz",
+    assert inputs.final_file_candidates(str(entry_dir), "9myr", "coordinates") == (
+        str(entry_dir / "9myr_final.cif"),
+        str(entry_dir / "9myr_final.cif.gz"),
+        str(entry_dir / "9myr_final.pdb"),
+        str(entry_dir / "9myr_final.pdb.gz"),
     )
 
 
