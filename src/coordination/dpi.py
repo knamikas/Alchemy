@@ -12,7 +12,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import gemmi
 
@@ -75,7 +75,7 @@ def asu_volume(mtz_path: str, pdb_path: str) -> float:
             # Gemmi returns None for a name it does not recognize, but its
             # bundled stub declares a plain SpaceGroup return.
             sg = cast(
-                Optional["gemmi.SpaceGroup"],
+                "gemmi.SpaceGroup | None",
                 gemmi.find_spacegroup_by_name(st.spacegroup_hm),
             )
         except Exception:
@@ -107,6 +107,68 @@ def rfree_from_pdb(pdb_path: str) -> float:
     return NAN
 
 
+def _unavailable(
+    reason: str,
+    resolution: float,
+    *,
+    rfree: float = NAN,
+    nobs: float = NAN,
+    va: float = NAN,
+) -> DpiComponents:
+    """Return a NaN DPI with ``reason`` and whatever inputs were already read."""
+    return DpiComponents(
+        dpi=NAN,
+        resolution=resolution,
+        reason_code=reason,
+        r_free=rfree,
+        reflection_count=nobs,
+        asu_volume=va,
+    )
+
+
+def _read_pdb_redo_properties(data_json: str) -> dict[str, Any]:
+    """Return the ``properties`` block of a PDB-REDO ``data.json``.
+
+    An unreadable or unparseable file yields an empty block, so every term is
+    then reported as missing rather than as a failed calculation.
+    """
+    try:
+        with open(data_json, encoding="utf-8") as f:
+            properties: dict[str, Any] = json.load(f).get("properties", {})
+    except (OSError, ValueError):
+        return {}
+    return properties
+
+
+def _metadata_terms(properties: dict[str, Any], pdb_path: str) -> tuple[float, float]:
+    """Return ``(rfree, nobs)`` from PDB-REDO properties, or the header fallback.
+
+    Raises ``TypeError`` or ``ValueError`` when a present value is not numeric.
+    """
+    nobs = properties.get("NREFCNT")
+    rfree = properties.get("RFFIN")
+    rfree = (
+        float(rfree) if rfree is not None and rfree != "" else rfree_from_pdb(pdb_path)
+    )
+    nobs = float(nobs) if nobs is not None and nobs != "" else NAN
+    return rfree, nobs
+
+
+def _invalid_term_reason(
+    structure: StructureContext, nobs: float, rfree: float, va: float
+) -> str:
+    """Name the first formula term that rules out the DPI, in reporting order."""
+    if structure.occupancy_validation_failed:
+        return ReasonCode.INVALID_OCCUPANCY
+    if not math.isfinite(nobs) or nobs <= 0:
+        return ReasonCode.MISSING_OR_INVALID_REFLECTION_COUNT
+    if not math.isfinite(rfree) or rfree <= 0:
+        return ReasonCode.MISSING_OR_INVALID_RFREE
+    if not math.isfinite(va) or va <= 0:
+        return ReasonCode.MISSING_OR_INVALID_ASU_VOLUME
+    return ReasonCode.INVALID_DPI_ATOM_COUNT
+
+
 def calculate_dpi_components(
     structure: StructureContext, dpi_inputs: DpiInputs
 ) -> DpiComponents:
@@ -119,49 +181,17 @@ def calculate_dpi_components(
     data_json = dpi_inputs.data_json
     if not data_json:
         # Distinguish missing manual metadata from a failed DPI calculation.
-        return DpiComponents(
-            NAN,
-            resolution,
-            ReasonCode.MISSING_DPI_METADATA_SOURCE,
-            NAN,
-            NAN,
-            NAN,
-        )
+        return _unavailable(ReasonCode.MISSING_DPI_METADATA_SOURCE, resolution)
 
-    rfree_value = NAN
-    nobs_value = NAN
-    va_value = NAN
+    rfree = nobs = va = NAN
     try:
-        props: dict[str, Any] = {}
+        properties = _read_pdb_redo_properties(data_json)
         try:
-            with open(data_json, encoding="utf-8") as f:
-                props = json.load(f).get("properties", {})
-        except (OSError, ValueError):
-            props = {}
-
-        nobs = props.get("NREFCNT")
-        rfree = props.get("RFFIN")
-        try:
-            rfree = (
-                float(rfree)
-                if rfree is not None and rfree != ""
-                else rfree_from_pdb(dpi_inputs.pdb_path or "")
-            )
-            nobs = float(nobs) if nobs is not None and nobs != "" else NAN
+            rfree, nobs = _metadata_terms(properties, dpi_inputs.pdb_path or "")
         except (TypeError, ValueError):
             # Present but not numeric: a metadata defect, not a failed calculation.
-            return DpiComponents(
-                NAN,
-                resolution,
-                ReasonCode.INVALID_DPI_METADATA,
-                NAN,
-                NAN,
-                NAN,
-            )
-        rfree_value = rfree
-        nobs_value = nobs
+            return _unavailable(ReasonCode.INVALID_DPI_METADATA, resolution)
         va = asu_volume(dpi_inputs.mtz_path or "", dpi_inputs.pdb_path or "")
-        va_value = va
         ni = count_ni(structure)
 
         if not (
@@ -173,39 +203,28 @@ def calculate_dpi_components(
             and va > 0
             and ni > 0
         ):
-            if structure.occupancy_validation_failed:
-                reason = ReasonCode.INVALID_OCCUPANCY
-            elif not math.isfinite(nobs) or nobs <= 0:
-                reason = ReasonCode.MISSING_OR_INVALID_REFLECTION_COUNT
-            elif not math.isfinite(rfree) or rfree <= 0:
-                reason = ReasonCode.MISSING_OR_INVALID_RFREE
-            elif not math.isfinite(va) or va <= 0:
-                reason = ReasonCode.MISSING_OR_INVALID_ASU_VOLUME
-            else:
-                reason = ReasonCode.INVALID_DPI_ATOM_COUNT
-            return DpiComponents(
-                NAN,
+            return _unavailable(
+                _invalid_term_reason(structure, nobs, rfree, va),
                 resolution,
-                reason,
-                rfree_value,
-                nobs_value,
-                va_value,
+                rfree=rfree,
+                nobs=nobs,
+                va=va,
             )
         dpi = 1.28 * (ni**0.5) * (va ** (1 / 3)) * (nobs ** (-5 / 6)) * rfree
         return DpiComponents(
-            round(dpi, 4),
-            resolution,
-            "",
-            rfree_value,
-            nobs_value,
-            va_value,
+            dpi=round(dpi, 4),
+            resolution=resolution,
+            reason_code="",
+            r_free=rfree,
+            reflection_count=nobs,
+            asu_volume=va,
         )
     except Exception:
-        return DpiComponents(
-            NAN,
-            resolution,
+        # Anything the guarded reads above did not anticipate.
+        return _unavailable(
             ReasonCode.DPI_CALCULATION_FAILED,
-            rfree_value,
-            nobs_value,
-            va_value,
+            resolution,
+            rfree=rfree,
+            nobs=nobs,
+            va=va,
         )

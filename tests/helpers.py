@@ -184,7 +184,7 @@ def write_manifest(
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
         for row in rows:
-            values = {
+            values: dict[str, Any] = {
                 "no_metals": "false",
                 "metal_site_limit_exceeded": "false",
                 **row,
@@ -237,10 +237,13 @@ def atom_site(
     """Build one production ``AtomSite`` from a single neutral deposited record.
 
     The identity fields are the values ``load_structure`` would produce for
-    residue 1 of chain A; pass any ``AtomSite`` field as an override. Unlike
-    the structure builder, this can express an invalid occupancy.
+    residue 1 of chain A; pass any ``AtomSite`` or ``ResidueIdentity`` field
+    as an override. Unlike the structure builder, this can express an invalid
+    occupancy.
     """
-    from structure_analysis import AtomSite, valid_occupancy
+    from dataclasses import fields as dataclass_fields
+
+    from structure_analysis import AtomSite, ResidueIdentity, valid_occupancy
 
     occupancy = float(occupancy)
     occupancy_valid = bool(overrides.pop("occupancy_valid", valid_occupancy(occupancy)))
@@ -255,8 +258,7 @@ def atom_site(
     gemmi_atom.occ = occupancy if math.isfinite(occupancy) else 0.0
     if altloc:
         gemmi_atom.altloc = altloc
-    fields: dict[str, Any] = {
-        "pdb_id": "test",
+    identity: dict[str, Any] = {
         "model_index": 0,
         "model_id": "1",
         "chain_index": 0,
@@ -267,6 +269,12 @@ def atom_site(
         "residue_number": 1,
         "insertion_code": "",
         "resnum": "1",
+    }
+    for identity_field in dataclass_fields(ResidueIdentity):
+        if identity_field.name in overrides:
+            identity[identity_field.name] = overrides.pop(identity_field.name)
+    fields: dict[str, Any] = {
+        "identity": ResidueIdentity(**identity),
         "atom_index": source_order,
         "source_order": source_order,
         "atom_name": atom_name,
@@ -276,7 +284,6 @@ def atom_site(
         "occupancy": occupancy,
         "occupancy_valid": occupancy_valid,
         "occupancy_status": occupancy_status,
-        "serial": source_order + 1,
         "x": float(pos[0]),
         "y": float(pos[1]),
         "z": float(pos[2]),

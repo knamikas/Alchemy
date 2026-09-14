@@ -1,5 +1,12 @@
 """Define donor residues and atoms used by coordination-analysis rules."""
 
+from __future__ import annotations
+
+import gemmi
+
+from codes import NeighborClass
+from structure_analysis import AtomSite
+
 # Waters are recognized separately with Gemmi's Residue.is_water(), which also
 # handles WAT, H2O, and DOD.
 AA: frozenset[str] = frozenset(
@@ -62,3 +69,15 @@ C_TERMINAL_DONOR_ATOMS: frozenset[str] = frozenset(("OXT", "OT1", "OT2"))
 # Discovery only. The atom-level table above, not this element set, controls
 # geometry-only bond inference.
 DONOR_ELEMENTS: frozenset[str] = frozenset(("N", "O", "S"))
+
+
+def neighbor_class(neighbor: AtomSite) -> NeighborClass:
+    """Classify a donor atom's residue by Gemmi's component tables."""
+    if neighbor.is_water:
+        return NeighborClass.WATER
+    residue_info = gemmi.find_tabulated_residue(neighbor.residue_name)
+    if residue_info.is_nucleic_acid():
+        return NeighborClass.NUCLEOTIDE
+    if residue_info.is_amino_acid():
+        return NeighborClass.AMINO_ACID
+    return NeighborClass.OTHER

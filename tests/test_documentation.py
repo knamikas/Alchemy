@@ -508,7 +508,7 @@ def test_documented_thresholds_match_the_constants() -> None:
         CANDIDATE_SEARCH_RADIUS,
         FIRST_SPHERE_TOLERANCE,
     )
-    from coordination.schema import ZSCORE_OUTLIER_CUTOFF
+    from coordination.contact_record import ZSCORE_OUTLIER_CUTOFF
     from density_analysis import (
         CCP4_TOOL_TIMEOUT_S,
         MODEL_ENVELOPE_BORDER_ANGSTROM,

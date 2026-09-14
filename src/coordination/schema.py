@@ -5,20 +5,22 @@ reject missing or extra fields before output projection can lose information.
 """
 
 import hashlib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any, ClassVar
 
-import gemmi
 from typing_extensions import override
 
-from codes import CoordinationStatus, NeighborClass
-from coordination.contact_record import Candidate, MultiDonorResult
+from codes import CoordinationStatus
+from coordination.contact_record import ZSCORE_OUTLIER_CUTOFF, Candidate
+from coordination.donor_chemistry import neighbor_class
 from output_rows import CsvValue
-from structure_analysis import NAN, AtomSite, StructureContext
-
-# Publish the outlier cutoff with results so older files retain their threshold.
-ZSCORE_OUTLIER_CUTOFF = 6.0
-
+from structure_analysis import (
+    NAN,
+    AtomSite,
+    ContactImage,
+    ResidueSelection,
+    StructureContext,
+)
 
 # Share columns with the writers; retain published candidate field names.
 BOND_COLUMNS = [
@@ -331,6 +333,12 @@ class _CsvRow(Mapping[str, Any]):
     indices: ClassVar[dict[str, int]] = {}
     schema_name: ClassVar[str] = "CSV"
 
+    @override
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Derive the column lookup from the subclass's column order."""
+        super().__init_subclass__(**kwargs)
+        cls.indices = {column: index for index, column in enumerate(cls.columns)}
+
     def __init__(self, values: Mapping[str, Any]) -> None:
         check_row_schema(values, self.columns, self.schema_name)
         ordered: list[CsvValue] = []
@@ -361,7 +369,6 @@ class BondRow(_CsvRow):
     """Validate and serialize one row in the bond output schema."""
 
     columns = tuple(BOND_COLUMNS)
-    indices = {column: index for index, column in enumerate(columns)}
     schema_name = "metal_bonds_all.csv"
 
 
@@ -369,7 +376,6 @@ class CandidateRow(_CsvRow):
     """Validate and serialize one row in the candidate output schema."""
 
     columns = tuple(CANDIDATE_COLUMNS)
-    indices = {column: index for index, column in enumerate(columns)}
     schema_name = "metal_contact_candidates_all.csv"
 
 
@@ -389,11 +395,11 @@ def contact_identifier(pdb_id: str, metal: AtomSite, contact: Candidate) -> str:
         neighbor.output_chain_index,
         neighbor.output_residue_index,
         neighbor.atom_index,
-        contact.contact_scope,
-        contact.strict_ncs_operation_id,
-        contact.symmetry_image_index,
-        contact.symmetry_operation,
-        *contact.translation,
+        contact.image.scope,
+        contact.image.strict_ncs_operation_id,
+        contact.image.image_index,
+        contact.image.symmetry_operation,
+        *contact.image.translation,
     )
     # A fixed-width digest keeps joins manageable while retaining every field
     # that distinguishes generated images of the same deposited donor atom.
@@ -454,41 +460,87 @@ def _donor_output_values(candidate: Candidate) -> dict[str, bool | str | None]:
     }
 
 
-def _neighbor_class(neighbor: AtomSite) -> NeighborClass:
-    if neighbor.is_water:
-        return NeighborClass.WATER
-    residue_info = gemmi.find_tabulated_residue(neighbor.residue_name)
-    if residue_info.is_nucleic_acid():
-        return NeighborClass.NUCLEOTIDE
-    if residue_info.is_amino_acid():
-        return NeighborClass.AMINO_ACID
-    return NeighborClass.OTHER
-
-
-def context_warning_values(
-    candidate: Candidate,
-    include_proximal: bool = False,
-    multi_donor: MultiDonorResult | None = None,
-) -> dict[str, Any]:
-    """Return contextual warning fields for a candidate contact."""
-    reasons: list[str] = []
-    policy = candidate.donor_policy()
-    eligibility = candidate.eligibility()
-    if candidate.neighbor.occupancy_valid and candidate.neighbor.occupancy == 0.0:
-        reasons.append("zero_occupancy_neighbor")
-    if not policy.inferred_allowed:
-        if candidate.declared_connections:
-            reasons.append("declared_non_typical_donor")
-        elif eligibility.first_sphere_eligible:
-            reasons.append("non_typical_first_sphere_candidate")
-        elif include_proximal:
-            reasons.append("non_typical_proximal_candidate")
-    if multi_donor is not None and multi_donor.contains_suspect_bond:
-        reasons.append("suspect_multi_donor_group")
-    reasons = list(dict.fromkeys(reasons))
+def _context_warning_values(reasons: Sequence[str]) -> dict[str, Any]:
+    """Serialize the context-warning reasons analysis attached to a contact."""
     return {
         "context_warning": bool(reasons),
         "context_warning_reasons": "|".join(reasons),
+    }
+
+
+def _metal_values(metal: AtomSite) -> dict[str, Any]:
+    """Serialize the metal identity columns shared by bond and candidate rows."""
+    return {
+        "metal_resname": metal.residue_name,
+        "metal_chain": metal.chain_id,
+        "metal_resnum": metal.resnum,
+        "metal_element": metal.element,
+        "metal_atom": metal.atom_name,
+        "metal_icode": metal.insertion_code,
+        "metal_altloc": metal.altloc,
+        "metal_occupancy": metal.occupancy,
+        "metal_model_index": metal.model_index,
+        "metal_chain_index": metal.output_chain_index,
+        "metal_residue_index": metal.output_residue_index,
+        "metal_atom_index": metal.atom_index,
+    }
+
+
+def _neighbor_values(neighbor: AtomSite) -> dict[str, Any]:
+    """Serialize the neighbor identity columns shared by bond and candidate rows."""
+    return {
+        "neighbor_resname": neighbor.residue_name,
+        "neighbor_chain": neighbor.chain_id,
+        "neighbor_resnum": neighbor.resnum,
+        "neighbor_atom": neighbor.atom_name,
+        "neighbor_element": neighbor.element,
+        "neighbor_b_iso": round(neighbor.b_iso, 3),
+        "neighbor_icode": neighbor.insertion_code,
+        "neighbor_altloc": neighbor.altloc,
+        "neighbor_occupancy": neighbor.occupancy,
+        "neighbor_class": neighbor_class(neighbor),
+        "neighbor_model_index": neighbor.model_index,
+        "neighbor_chain_index": neighbor.output_chain_index,
+        "neighbor_residue_index": neighbor.output_residue_index,
+        "neighbor_atom_index": neighbor.atom_index,
+    }
+
+
+def _conformer_values(
+    prefix: str, atom: AtomSite, residue: ResidueSelection
+) -> dict[str, Any]:
+    """Serialize one partner's occupancy validity and conformer selection.
+
+    Bond rows carry these for both partners under the ``metal_`` and
+    ``neighbor_`` prefixes; candidate rows omit them.
+    """
+    return {
+        f"{prefix}_occupancy_valid": atom.occupancy_valid,
+        f"{prefix}_occupancy_status": atom.occupancy_status,
+        f"{prefix}_conformer_mean_occupancy": residue.selected_conformer_mean_occupancy,
+        f"{prefix}_altloc_options": residue.altloc_options,
+        f"{prefix}_altloc_selection_fallback": residue.altloc_selection_fallback,
+    }
+
+
+def _image_values(image: ContactImage) -> dict[str, Any]:
+    """Serialize a contact image's symmetry provenance and transformed position."""
+    x, y, z = image.position
+    tx, ty, tz = image.translation
+    return {
+        "contact_scope": image.scope,
+        "symmetry_contact": image.symmetry_contact,
+        "crystallographic_contact": image.crystallographic_contact,
+        "strict_ncs_contact": image.strict_ncs_contact,
+        "strict_ncs_operation_id": image.strict_ncs_operation_id,
+        "symmetry_image_index": image.image_index,
+        "symmetry_operation": image.symmetry_operation,
+        "cell_translation_x": tx,
+        "cell_translation_y": ty,
+        "cell_translation_z": tz,
+        "transformed_neighbor_x": round(x, 6),
+        "transformed_neighbor_y": round(y, 6),
+        "transformed_neighbor_z": round(z, 6),
     }
 
 
@@ -570,6 +622,12 @@ def stats_extra_values(
         ),
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
     }
+    # Summary values win over anything computed above. The site summary holds
+    # ``coordination.analysis.SUMMARY_OWNED_STATS_EXTRA_COLUMNS`` (analysis.py
+    # raises if it drifts) plus the density-context columns the worker adds;
+    # neither overlaps the structure-level fields computed here, so the
+    # ``update`` never replaces one of them. The ``setdefault`` blanks the
+    # summary columns only for a density row that joined no metal site.
     for column in STATS_EXTRA_COLUMNS:
         values.setdefault(column, summary.get(column, ""))
     values.update(
@@ -587,36 +645,28 @@ def bond_row(
     resolution: float,
     sigma: tuple[float, float, float],
     parent_type: str,
+    context_reasons: Sequence[str],
 ) -> BondRow:
     """Build a validated bond-output row from an analyzed contact."""
     neighbor = contact.neighbor
     metal_residue = structure.residue_for_atom(metal)
     neighbor_residue = structure.residue_for_atom(neighbor)
-    x, y, z = contact.transformed_position
-    tx, ty, tz = contact.translation
     mag, neg, pos = sigma
-    connection_values = _connection_output_values(contact)
-    donor_values = _donor_output_values(contact)
     geometry = contact.geometry()
     multi_donor = contact.multi_donor()
-    context_values = context_warning_values(contact, multi_donor=multi_donor)
     return BondRow(
         {
             "pdbID": pdb_id,
             "metal_site_id": metal_site_identifier(pdb_id, metal),
             "contact_id": contact_identifier(pdb_id, metal, contact),
-            "metal_resname": metal.residue_name,
-            "metal_chain": metal.chain_id,
-            "metal_resnum": metal.resnum,
-            "metal_element": metal.element,
-            "neighbor_resname": neighbor.residue_name,
-            "neighbor_atom": neighbor.atom_name,
-            "neighbor_element": neighbor.element,
-            "neighbor_b_iso": round(neighbor.b_iso, 3),
+            **_metal_values(metal),
+            **_conformer_values("metal", metal, metal_residue),
+            **_neighbor_values(neighbor),
+            **_conformer_values("neighbor", neighbor, neighbor_residue),
             "distance": geometry.distance,
-            **connection_values,
-            **donor_values,
-            **context_values,
+            **_connection_output_values(contact),
+            **_donor_output_values(contact),
+            **_context_warning_values(context_reasons),
             "literature_distance": geometry.literature_distance,
             "literature_stdev": geometry.literature_stdev,
             "zscore": geometry.zscore,
@@ -628,41 +678,6 @@ def bond_row(
             "parent_type": parent_type,
             "bonded_to": _bonded_to(neighbor.is_water),
             "model_id": structure.analyzed_model_id,
-            "metal_model_index": metal.model_index,
-            "metal_chain_index": metal.output_chain_index,
-            "metal_residue_index": metal.output_residue_index,
-            "metal_atom_index": metal.atom_index,
-            "metal_atom": metal.atom_name,
-            "metal_icode": metal.insertion_code,
-            "metal_altloc": metal.altloc,
-            "metal_occupancy": metal.occupancy,
-            "metal_occupancy_valid": metal.occupancy_valid,
-            "metal_occupancy_status": metal.occupancy_status,
-            "metal_conformer_mean_occupancy": (
-                metal_residue.selected_conformer_mean_occupancy
-            ),
-            "metal_altloc_options": metal_residue.altloc_options,
-            "metal_altloc_selection_fallback": (
-                metal_residue.altloc_selection_fallback
-            ),
-            "neighbor_chain": neighbor.chain_id,
-            "neighbor_resnum": neighbor.resnum,
-            "neighbor_icode": neighbor.insertion_code,
-            "neighbor_model_index": neighbor.model_index,
-            "neighbor_chain_index": neighbor.output_chain_index,
-            "neighbor_residue_index": neighbor.output_residue_index,
-            "neighbor_atom_index": neighbor.atom_index,
-            "neighbor_altloc": neighbor.altloc,
-            "neighbor_occupancy": neighbor.occupancy,
-            "neighbor_occupancy_valid": neighbor.occupancy_valid,
-            "neighbor_occupancy_status": neighbor.occupancy_status,
-            "neighbor_conformer_mean_occupancy": (
-                neighbor_residue.selected_conformer_mean_occupancy
-            ),
-            "neighbor_altloc_options": neighbor_residue.altloc_options,
-            "neighbor_altloc_selection_fallback": (
-                neighbor_residue.altloc_selection_fallback
-            ),
             "alternative_conformers_present": (
                 metal_residue.alternative_conformers_present
                 or neighbor_residue.alternative_conformers_present
@@ -671,7 +686,6 @@ def bond_row(
                 metal_residue.altloc_selection_fallback
                 or neighbor_residue.altloc_selection_fallback
             ),
-            "neighbor_class": _neighbor_class(neighbor),
             "reference_covered": geometry.reference_covered,
             "geometry_outlier": geometry.outlier,
             "geometry_consistent": geometry.consistent,
@@ -682,19 +696,7 @@ def bond_row(
             "score_eligible": multi_donor.score_eligible,
             "score_exclusion_reason": multi_donor.score_exclusion_reason,
             "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
-            "contact_scope": contact.contact_scope,
-            "symmetry_contact": contact.symmetry_contact,
-            "crystallographic_contact": contact.crystallographic_contact,
-            "strict_ncs_contact": contact.strict_ncs_contact,
-            "strict_ncs_operation_id": contact.strict_ncs_operation_id,
-            "symmetry_image_index": contact.symmetry_image_index,
-            "symmetry_operation": contact.symmetry_operation,
-            "cell_translation_x": tx,
-            "cell_translation_y": ty,
-            "cell_translation_z": tz,
-            "transformed_neighbor_x": round(x, 6),
-            "transformed_neighbor_y": round(y, 6),
-            "transformed_neighbor_z": round(z, 6),
+            **_image_values(contact.image),
         }
     )
 
@@ -706,14 +708,9 @@ def candidate_row(
     candidate: Candidate,
     *,
     assigned_as_bond: bool,
+    context_reasons: Sequence[str],
 ) -> CandidateRow:
     """Return one discovered or declared candidate as a candidate CSV row."""
-    neighbor = candidate.neighbor
-    x, y, z = candidate.transformed_position
-    tx, ty, tz = candidate.translation
-    connection_values = _connection_output_values(candidate)
-    donor_values = _donor_output_values(candidate)
-    context_values = context_warning_values(candidate, include_proximal=True)
     eligibility = candidate.eligibility()
     return CandidateRow(
         {
@@ -725,55 +722,19 @@ def candidate_row(
             "eligibility_status": eligibility.status,
             "eligibility_reason": eligibility.reason,
             "first_sphere_eligible": eligibility.first_sphere_eligible,
-            "candidate_distance": round(candidate.distance_raw, 3),
+            "candidate_distance": round(candidate.image.distance, 3),
             "assignment_target": eligibility.assignment_target,
             "assignment_tolerance": eligibility.assignment_tolerance,
             "first_sphere_cutoff": eligibility.first_sphere_cutoff,
             "assignment_reference_kind": eligibility.assignment_reference_kind,
             "assignment_reference": eligibility.assignment_reference,
             "inferred_contact_eligible": eligibility.inferred_contact_eligible,
-            **donor_values,
-            **context_values,
-            **connection_values,
-            "metal_resname": metal.residue_name,
-            "metal_chain": metal.chain_id,
-            "metal_resnum": metal.resnum,
-            "metal_element": metal.element,
-            "metal_atom": metal.atom_name,
-            "metal_icode": metal.insertion_code,
-            "metal_altloc": metal.altloc,
-            "metal_occupancy": metal.occupancy,
+            **_donor_output_values(candidate),
+            **_context_warning_values(context_reasons),
+            **_connection_output_values(candidate),
+            **_metal_values(metal),
             "model_id": structure.analyzed_model_id,
-            "metal_model_index": metal.model_index,
-            "metal_chain_index": metal.output_chain_index,
-            "metal_residue_index": metal.output_residue_index,
-            "metal_atom_index": metal.atom_index,
-            "neighbor_resname": neighbor.residue_name,
-            "neighbor_chain": neighbor.chain_id,
-            "neighbor_resnum": neighbor.resnum,
-            "neighbor_atom": neighbor.atom_name,
-            "neighbor_element": neighbor.element,
-            "neighbor_b_iso": round(neighbor.b_iso, 3),
-            "neighbor_icode": neighbor.insertion_code,
-            "neighbor_altloc": neighbor.altloc,
-            "neighbor_occupancy": neighbor.occupancy,
-            "neighbor_class": _neighbor_class(neighbor),
-            "neighbor_model_index": neighbor.model_index,
-            "neighbor_chain_index": neighbor.output_chain_index,
-            "neighbor_residue_index": neighbor.output_residue_index,
-            "neighbor_atom_index": neighbor.atom_index,
-            "contact_scope": candidate.contact_scope,
-            "symmetry_contact": candidate.symmetry_contact,
-            "crystallographic_contact": candidate.crystallographic_contact,
-            "strict_ncs_contact": candidate.strict_ncs_contact,
-            "strict_ncs_operation_id": candidate.strict_ncs_operation_id,
-            "symmetry_image_index": candidate.symmetry_image_index,
-            "symmetry_operation": candidate.symmetry_operation,
-            "cell_translation_x": tx,
-            "cell_translation_y": ty,
-            "cell_translation_z": tz,
-            "transformed_neighbor_x": round(x, 6),
-            "transformed_neighbor_y": round(y, 6),
-            "transformed_neighbor_z": round(z, 6),
+            **_neighbor_values(candidate.neighbor),
+            **_image_values(candidate.image),
         }
     )

@@ -21,11 +21,12 @@ import coordination.schema as coordination_schema
 import reference_data
 import worker
 from codes import EligibilityReason, EligibilityStatus, EntryStatus, ReferenceKind
-from coordination import donor_chemistry
+from coordination import contact_record, donor_chemistry
 from coordination.contact_record import Candidate
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import (
     AtomSite,
+    ContactImage,
     StructureContext,
     count_ni,
     load_structure,
@@ -334,23 +335,24 @@ def _dpi_metadata(
     return helpers.write_data_json(tmp_path / name, nrefcnt=nrefcnt, rffin=rffin)
 
 
-def _contact(neighbor: AtomSite, **fields: Any) -> Candidate:
+def _contact(neighbor: AtomSite, *, distance: float = 0.0) -> Candidate:
     """A ``Candidate`` whose untouched discovery fields carry inert values."""
-    defaults: dict[str, Any] = {
-        "candidate_sources": {codes.CandidateSource.PROXIMITY_4A},
-        "distance_raw": 0.0,
-        "transformed_position": (0.0, 0.0, 0.0),
-        "symmetry_contact": False,
-        "crystallographic_contact": False,
-        "strict_ncs_contact": False,
-        "strict_ncs_operation_id": "",
-        "contact_scope": codes.ContactScope.EXPLICIT,
-        "symmetry_image_index": 0,
-        "symmetry_operation": "1_555",
-        "translation": (0, 0, 0),
-    }
-    defaults.update(fields)
-    return Candidate(neighbor=neighbor, **defaults)
+    image = ContactImage(
+        distance=distance,
+        position=(0.0, 0.0, 0.0),
+        crystallographic_contact=False,
+        strict_ncs_contact=False,
+        strict_ncs_operation_id="",
+        scope=codes.ContactScope.EXPLICIT,
+        image_index=0,
+        symmetry_operation="1_555",
+        translation=(0, 0, 0),
+    )
+    return Candidate(
+        neighbor=neighbor,
+        image=image,
+        candidate_sources={codes.CandidateSource.PROXIMITY_4A},
+    )
 
 
 def _only(rows: Sequence[Mapping[str, Any]], atom_name: str) -> Mapping[str, Any]:
@@ -1004,7 +1006,7 @@ def test_zscore_denominator_carries_exactly_one_dpi() -> None:
 
     assert ba.zscore(dist, mu, sigma, dpi) == approx(single)
     assert single == approx(6.0)
-    assert two_atom < coordination_schema.ZSCORE_OUTLIER_CUTOFF < single
+    assert two_atom < contact_record.ZSCORE_OUTLIER_CUTOFF < single
     assert ba.zscore(dist, mu, sigma, dpi) != approx(two_atom)
 
 
@@ -1052,11 +1054,11 @@ def test_outlier_flag_switches_at_absolute_z_of_six(
     builder.add_water(101, (2.09, 0.0, 0.0), chain="B")
     context = load_structure("test", builder.write_pdb(tmp_path / "w.pdb"))
     water = next(residue for residue in context.residues if residue.is_water)
-    contact = _contact(water.contact_atoms[0], distance_raw=distance)
+    contact = _contact(water.contact_atoms[0], distance=distance)
 
     ba.annotate_contacts([contact], "ZN", 0.12)
 
-    assert coordination_schema.ZSCORE_OUTLIER_CUTOFF == 6.0
+    assert contact_record.ZSCORE_OUTLIER_CUTOFF == 6.0
     geometry = contact.geometry()
     assert geometry.literature_distance == approx(2.09)
     assert geometry.literature_stdev == approx(0.05)
@@ -1086,7 +1088,7 @@ def test_outlier_verdict_uses_unrounded_distance_and_zscore(
     water = next(residue for residue in context.residues if residue.is_water)
     denominator = math.sqrt(0.12**2 + 0.05**2)
     distance = 2.09 + raw_zscore * denominator
-    contact = _contact(water.contact_atoms[0], distance_raw=distance)
+    contact = _contact(water.contact_atoms[0], distance=distance)
 
     ba.annotate_contacts([contact], "ZN", 0.12)
 
@@ -1117,7 +1119,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
 
     expected = round((row["distance"] - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2), 4)
     assert row["zscore"] == approx(expected)
-    assert expected > coordination_schema.ZSCORE_OUTLIER_CUTOFF
+    assert expected > contact_record.ZSCORE_OUTLIER_CUTOFF
     assert row["geometry_outlier"] is True
     assert row["geometry_consistent"] is False
     assert row["zscore_outlier_cutoff"] == approx(6.0)

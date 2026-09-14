@@ -475,7 +475,10 @@ def test_metal_on_a_two_fold_axis_collapses_the_coincident_donor_image(
     raw, collapsed = _raw_and_deduplicated(context)
 
     assert len(raw) == 2
-    assert {candidate.symmetry_operation for candidate in raw} == {"1_555", "2_555"}
+    assert {candidate.image.symmetry_operation for candidate in raw} == {
+        "1_555",
+        "2_555",
+    }
     source_keys = {candidate.neighbor.source_key for candidate in raw}
     assert len(source_keys) == 1, "both images are of one deposited atom"
     assert len(collapsed) == 1
@@ -534,9 +537,7 @@ def test_images_collapse_only_within_the_special_position_cutoff(
 
     raw, collapsed = _raw_and_deduplicated(context)
     assert len(raw) == 2
-    measured = sa.position_distance(
-        raw[0].transformed_position, raw[1].transformed_position
-    )
+    measured = sa.position_distance(raw[0].image.position, raw[1].image.position)
     assert measured == approx(separation, abs=1e-6)
     assert (measured <= ba.SPECIAL_POSITION_DEDUP_CUTOFF) is (expected_contacts == 1)
 
@@ -552,22 +553,24 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse() -> None:
     neighbor = _deposited_neighbor()
 
     def candidate(x: float, *, symmetry: bool) -> Candidate:
-        return Candidate(
-            neighbor=neighbor,
-            distance_raw=2.0,
-            transformed_position=(x, 0.0, 0.0),
-            symmetry_contact=symmetry,
+        image = sa.ContactImage(
+            distance=2.0,
+            position=(x, 0.0, 0.0),
             crystallographic_contact=symmetry,
             strict_ncs_contact=False,
             strict_ncs_operation_id="",
-            contact_scope=(
+            scope=(
                 codes.ContactScope.CRYSTALLOGRAPHIC
                 if symmetry
                 else codes.ContactScope.EXPLICIT
             ),
-            symmetry_image_index=int(symmetry),
+            image_index=int(symmetry),
             symmetry_operation="2_555" if symmetry else "1_555",
             translation=(0, 0, 0),
+        )
+        return Candidate(
+            neighbor=neighbor,
+            image=image,
             candidate_sources={
                 codes.CandidateSource.STRUCT_CONN
                 if symmetry
@@ -577,10 +580,7 @@ def test_images_exactly_at_the_point_eight_angstrom_cutoff_collapse() -> None:
 
     origin = candidate(0.0, symmetry=False)
     boundary = candidate(0.8, symmetry=True)
-    assert (
-        sa.position_distance(origin.transformed_position, boundary.transformed_position)
-        == 0.8
-    )
+    assert sa.position_distance(origin.image.position, boundary.image.position) == 0.8
 
     collapsed = ba.deduplicate_special_position_contacts([origin, boundary])
     assert len(collapsed) == 1
@@ -693,9 +693,12 @@ def test_collapse_is_independent_of_the_neighbor_search_order(tmp_path: Path) ->
     reversed_result = ba.deduplicate_special_position_contacts(list(reversed(raw)))
 
     assert len(collapsed) == len(reversed_result) == 1
-    assert reversed_result[0].symmetry_operation == collapsed[0].symmetry_operation
-    assert reversed_result[0].transformed_position == approx(
-        collapsed[0].transformed_position, abs=1e-9
+    assert (
+        reversed_result[0].image.symmetry_operation
+        == collapsed[0].image.symmetry_operation
+    )
+    assert reversed_result[0].image.position == approx(
+        collapsed[0].image.position, abs=1e-9
     )
 
 

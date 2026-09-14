@@ -5,13 +5,12 @@ from typing import TypedDict
 
 from codes import (
     CandidateSource,
-    ContactScope,
     EligibilityReason,
     EligibilityStatus,
     MultiDonorStatus,
     ReferenceKind,
 )
-from structure_analysis import AtomSite
+from structure_analysis import AtomSite, ContactImage
 
 
 class DeclaredConnectionRecord(TypedDict):
@@ -49,9 +48,17 @@ class EligibilityResult:
     assignment_reference: str
 
 
+# |z| at or above this is a geometry outlier. It is published with every bond
+# and site row so older result files retain the threshold they were scored with.
+ZSCORE_OUTLIER_CUTOFF = 6.0
+
+
 @dataclass(frozen=True, slots=True)
 class GeometryResult:
-    """Record a candidate contact's reference-based geometry assessment."""
+    """Record a candidate contact's reference-based geometry assessment.
+
+    ``outlier`` compares ``zscore`` against ``ZSCORE_OUTLIER_CUTOFF``.
+    """
 
     distance: float
     literature_distance: float
@@ -79,20 +86,13 @@ class Candidate:
     """Carry one donor-like atom image through coordination analysis stages."""
 
     neighbor: AtomSite
-    distance_raw: float
-    transformed_position: tuple[float, float, float]
-    symmetry_contact: bool
-    crystallographic_contact: bool
-    strict_ncs_contact: bool
-    strict_ncs_operation_id: str
-    contact_scope: ContactScope
-    symmetry_image_index: int
-    symmetry_operation: str
-    translation: tuple[int, int, int]
+    image: ContactImage
     candidate_sources: set[CandidateSource]
     #: One record per source declaration binding this image, with the fixed
     #: keys ``declared_candidate_for_connection`` writes.
-    declared_connections: list[DeclaredConnectionRecord] = field(default_factory=list)
+    declared_connections: list[DeclaredConnectionRecord] = field(
+        default_factory=list[DeclaredConnectionRecord]
+    )
     #: Set only on declaration-derived candidates; proximity discovery leaves
     #: it unset because the metal is already the search centre.
     metal: AtomSite | None = None

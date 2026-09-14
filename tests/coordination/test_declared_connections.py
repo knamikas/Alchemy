@@ -926,7 +926,7 @@ def test_declaration_naming_a_metal_survives_a_failed_resolution() -> None:
     )
 
     assert resolved.failure_exception_name == "RuntimeError"
-    assert resolved.selected_conformer_atoms is None
+    assert resolved.atoms == (None, None)
     assert resolved.declares_metal is True
 
     candidate, issues, warnings = (
@@ -1381,11 +1381,11 @@ def test_declared_geometry_honors_each_asu_constraint(
         context, metal, neighbor, connection
     )
 
-    assert geometry["distance_raw"] == approx(expected_distance, abs=1e-6)
-    assert geometry["contact_scope"] == expected_scope
-    assert geometry["symmetry_contact"] is (expected_scope != "explicit")
-    assert geometry["crystallographic_contact"] is (expected_scope != "explicit")
-    assert geometry["symmetry_operation"] == expected_operation
+    assert geometry.distance == approx(expected_distance, abs=1e-6)
+    assert geometry.scope == expected_scope
+    assert geometry.symmetry_contact is (expected_scope != "explicit")
+    assert geometry.crystallographic_contact is (expected_scope != "explicit")
+    assert geometry.symmetry_operation == expected_operation
 
 
 def test_mmcif_declaration_carries_its_identity_type_and_link_id(
@@ -1592,14 +1592,14 @@ def test_declared_contact_through_an_ncs_image_is_labelled_strict_ncs(
 
     # The proximity path's verdict for the same image is the oracle.
     crystallographic, strict_ncs, ncs_id, scope = context.image_provenance(
-        geometry["symmetry_image_index"], geometry["translation"]
+        geometry.image_index, geometry.translation
     )
     assert (strict_ncs, ncs_id, scope) == (True, "1", "strict_ncs")
 
-    assert geometry["strict_ncs_contact"] == strict_ncs
-    assert geometry["strict_ncs_operation_id"] == ncs_id
-    assert geometry["crystallographic_contact"] == crystallographic
-    assert geometry["contact_scope"] == scope
+    assert geometry.strict_ncs_contact == strict_ncs
+    assert geometry.strict_ncs_operation_id == ncs_id
+    assert geometry.crystallographic_contact == crystallographic
+    assert geometry.scope == scope
 
 
 def test_declaration_with_two_unresolved_partners_leaves_an_audit_trace(

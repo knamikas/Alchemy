@@ -11,7 +11,7 @@ import os
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from typing import NamedTuple, Protocol, cast
 
 import gemmi
 
@@ -109,6 +109,16 @@ def pbc_translation(image: object) -> tuple[int, int, int]:
     return int(shift_a), int(shift_b), int(shift_c)
 
 
+def spacegroup_or_none(structure: gemmi.Structure) -> gemmi.SpaceGroup | None:
+    """Return the structure's space group, or ``None`` if Gemmi cannot name it.
+
+    The binding returns ``None`` for an unidentified space group although its
+    bundled stub declares a plain ``SpaceGroup``; this is the one place that
+    narrows it, so malformed entries get an explicit boundary.
+    """
+    return cast("gemmi.SpaceGroup | None", structure.find_spacegroup())
+
+
 def _residue_number(residue: gemmi.Residue) -> int:
     number = residue.seqid.num
     if number is None:
@@ -183,11 +193,17 @@ class RawOccupancy:
         )
 
 
-@dataclass
-class AtomSite:
-    """One deposited atom record with stable source-model indices."""
+@dataclass(frozen=True, slots=True)
+class ResidueIdentity:
+    """Where one residue sits in the analyzed model and how its authors name it.
 
-    pdb_id: str
+    ``chain_id``, ``residue_name`` and ``resnum`` report the source author
+    identity. When conversion packed a very large mmCIF into a legacy-PDB
+    namespace, the analysis coordinates (and EDSTATS) instead see the
+    ``coordinate_*`` identity, and the ``source_*`` indices place the residue
+    in the source model rather than the analysis model.
+    """
+
     model_index: int
     model_id: str
     chain_index: int
@@ -198,6 +214,150 @@ class AtomSite:
     residue_number: int
     insertion_code: str
     resnum: str
+    coordinate_chain_id: str = ""
+    coordinate_resnum: str = ""
+    source_polymer_position: str = ""
+    source_chain_index: int | None = None
+    source_residue_index: int | None = None
+
+    @property
+    def key(self) -> tuple[int, int, int]:
+        """Return stable model, chain, and residue indices."""
+        return self.model_index, self.chain_index, self.residue_index
+
+    @property
+    def author_key(self) -> tuple[str, str, str]:
+        """Return the source author residue identity."""
+        return self.residue_name, self.chain_id, self.resnum
+
+    @property
+    def coordinate_author_key(self) -> tuple[str, str, str]:
+        """Return the author identity present in the analysis coordinates."""
+        return (
+            self.coordinate_residue_name,
+            self.coordinate_chain_id or self.chain_id,
+            self.coordinate_resnum or self.resnum,
+        )
+
+    @property
+    def output_chain_index(self) -> int:
+        """Return the source-facing chain index used in output identities."""
+        return (
+            self.chain_index
+            if self.source_chain_index is None
+            else self.source_chain_index
+        )
+
+    @property
+    def output_residue_index(self) -> int:
+        """Return the source-facing residue index used in output identities."""
+        return (
+            self.residue_index
+            if self.source_residue_index is None
+            else self.source_residue_index
+        )
+
+
+class _ResidueIdentityAccess:
+    """Expose a composed ``ResidueIdentity`` as flat read-only attributes.
+
+    Atoms and residues are addressed by their author fields throughout the
+    analysis, so both record types present the identity as their own fields.
+    """
+
+    identity: ResidueIdentity
+
+    @property
+    def model_index(self) -> int:
+        """Return the analyzed model's index within the coordinate file."""
+        return self.identity.model_index
+
+    @property
+    def model_id(self) -> str:
+        """Return the analyzed model's deposited number."""
+        return self.identity.model_id
+
+    @property
+    def chain_index(self) -> int:
+        """Return the chain's index within the analyzed model."""
+        return self.identity.chain_index
+
+    @property
+    def chain_id(self) -> str:
+        """Return the source author chain name."""
+        return self.identity.chain_id
+
+    @property
+    def residue_index(self) -> int:
+        """Return the residue's index within its chain."""
+        return self.identity.residue_index
+
+    @property
+    def residue_name(self) -> str:
+        """Return the source component name."""
+        return self.identity.residue_name
+
+    @property
+    def coordinate_residue_name(self) -> str:
+        """Return the component name present in the analysis coordinates."""
+        return self.identity.coordinate_residue_name
+
+    @property
+    def residue_number(self) -> int:
+        """Return the source author sequence number."""
+        return self.identity.residue_number
+
+    @property
+    def insertion_code(self) -> str:
+        """Return the source author insertion code, or an empty string."""
+        return self.identity.insertion_code
+
+    @property
+    def resnum(self) -> str:
+        """Return the source author sequence number with its insertion code."""
+        return self.identity.resnum
+
+    @property
+    def coordinate_chain_id(self) -> str:
+        """Return the chain name present in the analysis coordinates."""
+        return self.identity.coordinate_chain_id
+
+    @property
+    def coordinate_resnum(self) -> str:
+        """Return the residue number present in the analysis coordinates."""
+        return self.identity.coordinate_resnum
+
+    @property
+    def source_polymer_position(self) -> str:
+        """Return the deposited polymer position code, or an empty string."""
+        return self.identity.source_polymer_position
+
+    @property
+    def source_chain_index(self) -> int | None:
+        """Return the chain index in the source model, if it differs."""
+        return self.identity.source_chain_index
+
+    @property
+    def source_residue_index(self) -> int | None:
+        """Return the residue index in the source model, if it differs."""
+        return self.identity.source_residue_index
+
+    @property
+    def output_chain_index(self) -> int:
+        """Return the source-facing chain index used in output identities."""
+        return self.identity.output_chain_index
+
+    @property
+    def output_residue_index(self) -> int:
+        """Return the source-facing residue index used in output identities."""
+        return self.identity.output_residue_index
+
+
+@dataclass
+class AtomSite(_ResidueIdentityAccess):
+    """One deposited atom record with stable source-model indices."""
+
+    identity: ResidueIdentity
     atom_index: int
     source_order: int
     atom_name: str
@@ -207,23 +367,12 @@ class AtomSite:
     occupancy: float
     occupancy_valid: bool
     occupancy_status: str
-    serial: int | None
     x: float
     y: float
     z: float
     is_water: bool
     is_hydrogen: bool
     gemmi_atom: gemmi.Atom = field(repr=False, compare=False)
-    # The Gemmi atom carries the legacy-PDB identity EDSTATS sees, which for a
-    # very large mmCIF structure is a packed one-character namespace rather than
-    # the source author identity that ``chain_id``/``resnum`` above report.
-    coordinate_chain_id: str = ""
-    coordinate_residue_number: int | None = None
-    coordinate_insertion_code: str = ""
-    coordinate_resnum: str = ""
-    source_polymer_position: str = ""
-    source_chain_index: int | None = None
-    source_residue_index: int | None = None
 
     @property
     def pos(self) -> gemmi.Position:
@@ -248,25 +397,7 @@ class AtomSite:
     @property
     def residue_key(self) -> tuple[int, int, int]:
         """Return stable model, chain, and residue indices."""
-        return self.model_index, self.chain_index, self.residue_index
-
-    @property
-    def output_chain_index(self) -> int:
-        """Return the source-facing chain index used in output identities."""
-        return (
-            self.chain_index
-            if self.source_chain_index is None
-            else self.source_chain_index
-        )
-
-    @property
-    def output_residue_index(self) -> int:
-        """Return the source-facing residue index used in output identities."""
-        return (
-            self.residue_index
-            if self.source_residue_index is None
-            else self.source_residue_index
-        )
+        return self.identity.key
 
     @property
     def source_key(self) -> tuple[int, int, int, int]:
@@ -330,19 +461,10 @@ def _occupancy_weighted_atom_count(atoms: Iterable[AtomSite]) -> float:
 
 
 @dataclass
-class ResidueSelection:
+class ResidueSelection(_ResidueIdentityAccess):
     """All source sites and the selected canonical sites for one residue."""
 
-    model_index: int
-    model_id: str
-    chain_index: int
-    chain_id: str
-    residue_index: int
-    residue_name: str
-    coordinate_residue_name: str
-    residue_number: int
-    insertion_code: str
-    resnum: str
+    identity: ResidueIdentity
     is_water: bool
     source_atoms: tuple[AtomSite, ...]
     contact_atoms: tuple[AtomSite, ...]
@@ -354,32 +476,21 @@ class ResidueSelection:
     selected_over_blank_duplicate_count: int
     malformed_duplicate_atom_name_count: int
     chemical_atom_site_count: int
-    coordinate_chain_id: str = ""
-    coordinate_residue_number: int | None = None
-    coordinate_insertion_code: str = ""
-    coordinate_resnum: str = ""
-    source_polymer_position: str = ""
-    source_chain_index: int | None = None
-    source_residue_index: int | None = None
 
     @property
     def key(self) -> tuple[int, int, int]:
         """Return stable model, chain, and residue indices."""
-        return self.model_index, self.chain_index, self.residue_index
+        return self.identity.key
 
     @property
     def author_key(self) -> tuple[str, str, str]:
         """Return the source author residue identity."""
-        return self.residue_name, self.chain_id, self.resnum
+        return self.identity.author_key
 
     @property
     def coordinate_author_key(self) -> tuple[str, str, str]:
         """Return the author identity present in the analysis coordinates."""
-        return (
-            self.coordinate_residue_name,
-            self.coordinate_chain_id or self.chain_id,
-            self.coordinate_resnum or self.resnum,
-        )
+        return self.identity.coordinate_author_key
 
     @property
     def elements(self) -> frozenset[str]:
@@ -391,6 +502,17 @@ class ResidueSelection:
 
 _AtomIndex = tuple[int, int, int]
 _AuthorResidueKey = tuple[str, str, str]
+#: Residues sharing one author identity, in model order.
+_ResidueIndex = Mapping[_AuthorResidueKey, tuple[ResidueSelection, ...]]
+
+
+class ImageProvenance(NamedTuple):
+    """How a Gemmi cell image relates to the explicit asymmetric unit."""
+
+    crystallographic: bool
+    strict_ncs: bool
+    ncs_operation_id: str
+    scope: ContactScope
 
 
 @dataclass
@@ -398,7 +520,6 @@ class StructureContext:
     """Gemmi structure plus deterministic first-model analysis metadata."""
 
     pdb_id: str
-    path: str
     structure: gemmi.Structure
     model: gemmi.Model
     model_index: int
@@ -435,20 +556,23 @@ class StructureContext:
     warning_codes: tuple[str, ...]
     _spatial_model: gemmi.Model = field(repr=False)
     _atom_by_indices: Mapping[_AtomIndex, AtomSite] = field(
-        repr=False, default_factory=dict
+        repr=False, default_factory=dict[_AtomIndex, AtomSite]
     )
     _residue_by_key: Mapping[_AtomIndex, ResidueSelection] = field(
-        repr=False, default_factory=dict
+        repr=False, default_factory=dict[_AtomIndex, ResidueSelection]
     )
-    _residues_by_author: Mapping[_AuthorResidueKey, tuple[ResidueSelection, ...]] = (
-        field(repr=False, default_factory=dict)
+    _residues_by_author: _ResidueIndex = field(
+        repr=False,
+        default_factory=dict[_AuthorResidueKey, tuple[ResidueSelection, ...]],
     )
-    _residues_by_source_author: Mapping[
-        _AuthorResidueKey, tuple[ResidueSelection, ...]
-    ] = field(repr=False, default_factory=dict)
-    residues_by_coordinate_author_index: Mapping[
-        _AuthorResidueKey, tuple[ResidueSelection, ...]
-    ] = field(repr=False, default_factory=dict)
+    _residues_by_source_author: _ResidueIndex = field(
+        repr=False,
+        default_factory=dict[_AuthorResidueKey, tuple[ResidueSelection, ...]],
+    )
+    _residues_by_coordinate_author: _ResidueIndex = field(
+        repr=False,
+        default_factory=dict[_AuthorResidueKey, tuple[ResidueSelection, ...]],
+    )
 
     @property
     def strict_ncs_operation_count(self) -> int:
@@ -464,7 +588,7 @@ class StructureContext:
         self,
         image_index: int,
         cell_translation: tuple[int, int, int],
-    ) -> tuple[bool, bool, str, str]:
+    ) -> ImageProvenance:
         """Classify a Gemmi cell image as crystallographic and/or strict NCS.
 
         ``setup_cell_images()`` orders the identity first, then the remaining
@@ -502,7 +626,7 @@ class StructureContext:
             scope = ContactScope.CRYSTALLOGRAPHIC
         else:
             scope = ContactScope.EXPLICIT
-        return crystallographic, strict_ncs, ncs_operation_id, scope
+        return ImageProvenance(crystallographic, strict_ncs, ncs_operation_id, scope)
 
     def atom_for_indices(
         self, chain_index: int, residue_index: int, atom_index: int
@@ -538,7 +662,7 @@ class StructureContext:
         self, residue_name: str, chain_id: str, resnum: str
     ) -> tuple[ResidueSelection, ...]:
         """Return residues matching the analysis-coordinate author identity."""
-        return self.residues_by_coordinate_author_index.get(
+        return self._residues_by_coordinate_author.get(
             (str(residue_name), str(chain_id), str(resnum)), ()
         )
 
@@ -600,6 +724,75 @@ class StructureContext:
                 atom.gemmi_atom, atom.chain_index, atom.residue_index, atom.atom_index
             )
         return search
+
+
+@dataclass(frozen=True, slots=True)
+class ContactImage:
+    """Geometry and provenance of one neighbor image around a metal.
+
+    ``position`` is the neighbor's coordinates in the image that touches the
+    metal; ``distance`` is measured to that image. The identity image of the
+    explicit asymmetric unit carries the fixed ``1_555`` operation, a zero
+    translation, and no symmetry provenance.
+    """
+
+    distance: float
+    position: tuple[float, float, float]
+    crystallographic_contact: bool
+    strict_ncs_contact: bool
+    strict_ncs_operation_id: str
+    scope: ContactScope
+    image_index: int
+    symmetry_operation: str
+    translation: tuple[int, int, int]
+
+    @property
+    def symmetry_contact(self) -> bool:
+        """Whether the image is generated by any symmetry operation."""
+        return self.crystallographic_contact or self.strict_ncs_contact
+
+    @classmethod
+    def explicit(cls, metal: AtomSite, neighbor: AtomSite) -> ContactImage:
+        """Return the deposited neighbor in the explicit asymmetric unit."""
+        return cls(
+            distance=position_distance(metal.xyz, neighbor.xyz),
+            position=neighbor.xyz,
+            crystallographic_contact=False,
+            strict_ncs_contact=False,
+            strict_ncs_operation_id="",
+            scope=ContactScope.EXPLICIT,
+            image_index=0,
+            symmetry_operation="1_555",
+            translation=(0, 0, 0),
+        )
+
+    @classmethod
+    def from_nearest_image(
+        cls,
+        structure: StructureContext,
+        nearest: gemmi.NearestImage,
+        position: gemmi.Position,
+    ) -> ContactImage:
+        """Return the image Gemmi selected, classified against ``structure``.
+
+        ``position`` is the neighbor already transformed into that image;
+        callers compute it because Gemmi offers two routes that differ in the
+        last bits.
+        """
+        translation = pbc_translation(nearest)
+        image_index = int(nearest.sym_idx)
+        provenance = structure.image_provenance(image_index, translation)
+        return cls(
+            distance=float(nearest.dist()),
+            position=(float(position.x), float(position.y), float(position.z)),
+            crystallographic_contact=provenance.crystallographic,
+            strict_ncs_contact=provenance.strict_ncs,
+            strict_ncs_operation_id=provenance.ncs_operation_id,
+            scope=provenance.scope,
+            image_index=image_index,
+            symmetry_operation=nearest.symmetry_code(),
+            translation=translation,
+        )
 
 
 def _raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
@@ -1018,16 +1211,7 @@ def select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
     )
     chemical_sites = len({atom.chemical_site_identity for atom in atoms})
     return ResidueSelection(
-        model_index=first.model_index,
-        model_id=first.model_id,
-        chain_index=first.chain_index,
-        chain_id=first.chain_id,
-        residue_index=first.residue_index,
-        residue_name=first.residue_name,
-        coordinate_residue_name=first.coordinate_residue_name,
-        residue_number=first.residue_number,
-        insertion_code=first.insertion_code,
-        resnum=first.resnum,
+        identity=first.identity,
         is_water=first.is_water,
         source_atoms=tuple(sorted(atoms, key=lambda atom: atom.source_order)),
         contact_atoms=tuple(contact_atoms),
@@ -1039,19 +1223,21 @@ def select_residue(atoms: Sequence[AtomSite]) -> ResidueSelection:
         selected_over_blank_duplicate_count=selected_over_blank,
         malformed_duplicate_atom_name_count=malformed_duplicates,
         chemical_atom_site_count=chemical_sites,
-        coordinate_chain_id=first.coordinate_chain_id,
-        coordinate_residue_number=first.coordinate_residue_number,
-        coordinate_insertion_code=first.coordinate_insertion_code,
-        coordinate_resnum=first.coordinate_resnum,
-        source_polymer_position=first.source_polymer_position,
-        source_chain_index=first.source_chain_index,
-        source_residue_index=first.source_residue_index,
     )
 
 
-def _symmetry_metadata(
-    structure: gemmi.Structure,
-) -> tuple[bool, str, int, tuple[str, ...]]:
+@dataclass(frozen=True, slots=True)
+class _SymmetryMetadata:
+    """Whether Gemmi image searches can run, and the operations they cover."""
+
+    search_available: bool
+    failure_reason: str
+    crystallographic_operation_count: int
+    strict_ncs_operation_ids: tuple[str, ...]
+
+
+def _symmetry_metadata(structure: gemmi.Structure) -> _SymmetryMetadata:
+    """Prepare cell images and record why symmetry searches are unavailable."""
     strict_ncs_ids = tuple(
         str(operation.id).strip() or f"strict_ncs_{index}"
         for index, operation in enumerate(
@@ -1059,32 +1245,24 @@ def _symmetry_metadata(
             start=1,
         )
     )
+
+    def unavailable(reason: str) -> _SymmetryMetadata:
+        return _SymmetryMetadata(False, reason, 0, strict_ncs_ids)
+
     try:
         cell = structure.cell
         if not cell.is_crystal() or cell.volume <= 0:
-            return False, "missing_or_invalid_unit_cell", 0, strict_ncs_ids
-        spacegroup = cast("gemmi.SpaceGroup | None", structure.find_spacegroup())
+            return unavailable("missing_or_invalid_unit_cell")
+        spacegroup = spacegroup_or_none(structure)
         if spacegroup is None:
-            # The binding returns None for unidentified space groups despite its
-            # non-optional stub, so malformed entries need an explicit boundary.
-            return (
-                False,
-                "missing_or_invalid_space_group",
-                0,
-                strict_ncs_ids,
-            )
+            return unavailable("missing_or_invalid_space_group")
         operation_count = len(list(spacegroup.operations()))
         if operation_count <= 0:
-            return False, "missing_or_invalid_space_group", 0, strict_ncs_ids
+            return unavailable("missing_or_invalid_space_group")
         structure.setup_cell_images()
-        return True, "", operation_count, strict_ncs_ids
+        return _SymmetryMetadata(True, "", operation_count, strict_ncs_ids)
     except Exception as exc:  # malformed symmetry must fail one entry, not the batch
-        return (
-            False,
-            f"symmetry_setup_failed:{type(exc).__name__}",
-            0,
-            strict_ncs_ids,
-        )
+        return unavailable(f"symmetry_setup_failed:{type(exc).__name__}")
 
 
 @dataclass(frozen=True)
@@ -1175,8 +1353,58 @@ def _source_model_data(path: str, model: gemmi.Model) -> _SourceModelData:
     )
 
 
+def _residue_identity(
+    model_id: str,
+    chain_index: int,
+    chain: gemmi.Chain,
+    residue_index: int,
+    residue: gemmi.Residue,
+    source: _SourceModelData,
+) -> ResidueIdentity:
+    """Join a Gemmi residue's coordinate identity with its source provenance.
+
+    Without an embedded mapping the coordinate identity is the source identity.
+    """
+    coordinate_number = _residue_number(residue)
+    coordinate_insertion = blank_if_missing(residue.seqid.icode)
+    coordinate_resnum = f"{coordinate_number}{coordinate_insertion}"
+    coordinate_residue_name = str(residue.name)
+    coordinate_chain_id = str(chain.name)
+    source_identity = source.source_residue_identities.get(
+        (0, coordinate_residue_name, coordinate_chain_id, coordinate_resnum),
+        SourceResidueIdentity(
+            residue_name=coordinate_residue_name,
+            chain_id=coordinate_chain_id,
+            residue_number=coordinate_number,
+            insertion_code=coordinate_insertion,
+        ),
+    )
+    if source_identity.residue_number is None:
+        source_number = coordinate_number
+        source_insertion = coordinate_insertion
+    else:
+        source_number = source_identity.residue_number
+        source_insertion = source_identity.insertion_code
+    return ResidueIdentity(
+        model_index=0,
+        model_id=model_id,
+        chain_index=chain_index,
+        chain_id=source_identity.chain_id,
+        residue_index=residue_index,
+        residue_name=source_identity.residue_name,
+        coordinate_residue_name=coordinate_residue_name,
+        residue_number=source_number,
+        insertion_code=source_insertion,
+        resnum=f"{source_number}{source_insertion}",
+        coordinate_chain_id=coordinate_chain_id,
+        coordinate_resnum=coordinate_resnum,
+        source_polymer_position=source_identity.polymer_position,
+        source_chain_index=source_identity.chain_index,
+        source_residue_index=source_identity.residue_index,
+    )
+
+
 def _build_atom_sites(
-    pdb_id: str,
     model: gemmi.Model,
     model_id: str,
     source: _SourceModelData,
@@ -1185,31 +1413,10 @@ def _build_atom_sites(
     gemmi_order = 0
     for chain_index, chain in enumerate(model):
         for residue_index, residue in enumerate(chain):
-            coordinate_number = _residue_number(residue)
-            coordinate_insertion = blank_if_missing(residue.seqid.icode)
-            coordinate_resnum = f"{coordinate_number}{coordinate_insertion}"
-            coordinate_residue_name = str(residue.name)
-            coordinate_chain_id = str(chain.name)
-            source_identity = source.source_residue_identities.get(
-                (0, coordinate_residue_name, coordinate_chain_id, coordinate_resnum),
-                SourceResidueIdentity(
-                    residue_name=coordinate_residue_name,
-                    chain_id=coordinate_chain_id,
-                    residue_number=coordinate_number,
-                    insertion_code=coordinate_insertion,
-                ),
+            identity = _residue_identity(
+                model_id, chain_index, chain, residue_index, residue, source
             )
-            source_number = (
-                coordinate_number
-                if source_identity.residue_number is None
-                else source_identity.residue_number
-            )
-            source_insertion = (
-                coordinate_insertion
-                if source_identity.residue_number is None
-                else source_identity.insertion_code
-            )
-            source_resnum = f"{source_number}{source_insertion}"
+            is_water = bool(residue.is_water())
             for atom_index, atom in enumerate(residue):
                 raw = (
                     source.raw_matches[gemmi_order]
@@ -1232,17 +1439,7 @@ def _build_atom_sites(
                 )
                 all_sites.append(
                     AtomSite(
-                        pdb_id=pdb_id,
-                        model_index=0,
-                        model_id=model_id,
-                        chain_index=chain_index,
-                        chain_id=source_identity.chain_id,
-                        residue_index=residue_index,
-                        residue_name=source_identity.residue_name,
-                        coordinate_residue_name=coordinate_residue_name,
-                        residue_number=source_number,
-                        insertion_code=source_insertion,
-                        resnum=source_resnum,
+                        identity=identity,
                         atom_index=atom_index,
                         source_order=source_order,
                         atom_name=str(atom.name).strip(),
@@ -1252,20 +1449,12 @@ def _build_atom_sites(
                         occupancy=occupancy,
                         occupancy_valid=occupancy_valid,
                         occupancy_status=occupancy_status,
-                        serial=atom.serial,
                         x=float(atom.pos.x),
                         y=float(atom.pos.y),
                         z=float(atom.pos.z),
-                        is_water=bool(residue.is_water()),
+                        is_water=is_water,
                         is_hydrogen=(element_known and element in ("H", "D")),
                         gemmi_atom=atom,
-                        coordinate_chain_id=coordinate_chain_id,
-                        coordinate_residue_number=coordinate_number,
-                        coordinate_insertion_code=coordinate_insertion,
-                        coordinate_resnum=coordinate_resnum,
-                        source_polymer_position=source_identity.polymer_position,
-                        source_chain_index=source_identity.chain_index,
-                        source_residue_index=source_identity.residue_index,
                     )
                 )
                 gemmi_order += 1
@@ -1380,35 +1569,10 @@ def _prepare_atom_inventory(
     )
 
 
-def load_structure(
-    pdb_id: str,
-    path: str,
-    source_model_count: int | None = None,
-) -> StructureContext:
-    """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
-    structure = gemmi.read_structure(path)
-    if len(structure) == 0:
-        raise ValueError("coordinate file contains no models")
-    input_model_count = (
-        len(structure) if source_model_count is None else source_model_count
-    )
-    if input_model_count < len(structure):
-        raise ValueError(
-            "source model count cannot be smaller than the analysis model count"
-        )
-    model = structure[0]
-    model_id = str(model.num)
-    source = _source_model_data(path, model)
-    all_sites = _build_atom_sites(pdb_id, model, model_id, source)
-
-    inventory = _prepare_atom_inventory(model, all_sites)
-    (
-        symmetry_available,
-        symmetry_reason,
-        crystallographic_operation_count,
-        strict_ncs_operation_ids,
-    ) = _symmetry_metadata(structure)
-
+def _warning_codes(
+    inventory: _AtomInventory, source: _SourceModelData, input_model_count: int
+) -> tuple[str, ...]:
+    """Return the structure-level warning codes in their published order."""
     warnings: list[str] = []
     if input_model_count > 1:
         warnings.append(WarningCode.MULTI_MODEL_STRUCTURE)
@@ -1434,35 +1598,47 @@ def load_structure(
         warnings.append(WarningCode.RAW_OCCUPANCY_MAPPING_FAILED)
     if source.legacy_identifiers_packed:
         warnings.append(WarningCode.LEGACY_PDB_IDENTIFIERS_PACKED)
+    return tuple(warnings)
 
-    atom_by_indices = {
-        (atom.chain_index, atom.residue_index, atom.atom_index): atom
-        for atom in inventory.contact_atoms
-    }
-    residue_by_key = {residue.key: residue for residue in inventory.residues}
-    by_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = defaultdict(
+
+@dataclass(frozen=True, slots=True)
+class _ResidueIndexes:
+    """Selected residues grouped by each author identity a caller may hold."""
+
+    #: Source identity plus, where it differs, the coordinate identity.
+    by_author: Mapping[_AuthorResidueKey, tuple[ResidueSelection, ...]]
+    by_source_author: Mapping[_AuthorResidueKey, tuple[ResidueSelection, ...]]
+    by_coordinate_author: Mapping[_AuthorResidueKey, tuple[ResidueSelection, ...]]
+
+
+def _residue_indexes(residues: Iterable[ResidueSelection]) -> _ResidueIndexes:
+    """Index selected residues by source, coordinate, and either identity."""
+    by_author: dict[_AuthorResidueKey, list[ResidueSelection]] = defaultdict(list)
+    by_source_author: dict[_AuthorResidueKey, list[ResidueSelection]] = defaultdict(
         list
     )
-    by_source_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = (
-        defaultdict(list)
+    by_coordinate_author: dict[_AuthorResidueKey, list[ResidueSelection]] = defaultdict(
+        list
     )
-    by_coordinate_author_lists: dict[tuple[str, str, str], list[ResidueSelection]] = (
-        defaultdict(list)
-    )
-    for selection in inventory.residues:
-        by_source_author_lists[selection.author_key].append(selection)
-        by_coordinate_author_lists[selection.coordinate_author_key].append(selection)
-        by_author_lists[selection.author_key].append(selection)
+    for selection in residues:
+        by_source_author[selection.author_key].append(selection)
+        by_coordinate_author[selection.coordinate_author_key].append(selection)
+        by_author[selection.author_key].append(selection)
         if selection.coordinate_author_key != selection.author_key:
-            by_author_lists[selection.coordinate_author_key].append(selection)
-    residues_by_author = {key: tuple(value) for key, value in by_author_lists.items()}
-    residues_by_source_author = {
-        key: tuple(value) for key, value in by_source_author_lists.items()
-    }
-    residues_by_coordinate_author = {
-        key: tuple(value) for key, value in by_coordinate_author_lists.items()
-    }
+            by_author[selection.coordinate_author_key].append(selection)
+    return _ResidueIndexes(
+        by_author={key: tuple(value) for key, value in by_author.items()},
+        by_source_author={key: tuple(value) for key, value in by_source_author.items()},
+        by_coordinate_author={
+            key: tuple(value) for key, value in by_coordinate_author.items()
+        },
+    )
 
+
+def _occupancy_validation_failed(
+    inventory: _AtomInventory, source: _SourceModelData
+) -> bool:
+    """Whether the deposited occupancies are unfit for an occupancy-weighted Ni."""
     # Unreadable occupancy makes Ni unknown; a known excess is judged relative to Ni.
     countable_ni = _occupancy_weighted_atom_count(inventory.source_atoms)
     if inventory.overfull_excess <= 0.0:
@@ -1473,15 +1649,40 @@ def load_structure(
         )
     else:
         overfull_invalidates_dpi = True
-    occupancy_failed = bool(
+    return bool(
         inventory.missing_occupancy_count
         or inventory.invalid_occupancy_count
         or overfull_invalidates_dpi
         or source.mapping_failed
     )
+
+
+def load_structure(
+    pdb_id: str,
+    path: str,
+    source_model_count: int | None = None,
+) -> StructureContext:
+    """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
+    structure = gemmi.read_structure(path)
+    if len(structure) == 0:
+        raise ValueError("coordinate file contains no models")
+    input_model_count = (
+        len(structure) if source_model_count is None else source_model_count
+    )
+    if input_model_count < len(structure):
+        raise ValueError(
+            "source model count cannot be smaller than the analysis model count"
+        )
+    model = structure[0]
+    model_id = str(model.num)
+    source = _source_model_data(path, model)
+    all_sites = _build_atom_sites(model, model_id, source)
+
+    inventory = _prepare_atom_inventory(model, all_sites)
+    symmetry = _symmetry_metadata(structure)
+    indexes = _residue_indexes(inventory.residues)
     return StructureContext(
         pdb_id=pdb_id,
-        path=path,
         structure=structure,
         model=model,
         model_index=0,
@@ -1493,7 +1694,7 @@ def load_structure(
         source_atoms=inventory.source_atoms,
         contact_atoms=inventory.contact_atoms,
         residues=inventory.residues,
-        occupancy_validation_failed=occupancy_failed,
+        occupancy_validation_failed=_occupancy_validation_failed(inventory, source),
         missing_occupancy_count=inventory.missing_occupancy_count,
         invalid_occupancy_count=inventory.invalid_occupancy_count,
         overfull_occupancy_site_count=inventory.overfull_site_count,
@@ -1512,18 +1713,21 @@ def load_structure(
         non_finite_coordinate_atom_count=inventory.non_finite_coordinate_count,
         raw_occupancy_mapping_failed=source.mapping_failed,
         raw_occupancy_mapping_failure_reason=source.mapping_reason,
-        symmetry_search_available=symmetry_available,
-        symmetry_search_failure_reason=symmetry_reason,
-        crystallographic_operation_count=crystallographic_operation_count,
-        strict_ncs_operation_ids=strict_ncs_operation_ids,
+        symmetry_search_available=symmetry.search_available,
+        symmetry_search_failure_reason=symmetry.failure_reason,
+        crystallographic_operation_count=symmetry.crystallographic_operation_count,
+        strict_ncs_operation_ids=symmetry.strict_ncs_operation_ids,
         analysis_coordinate_format=source.analysis_format,
-        warning_codes=tuple(warnings),
+        warning_codes=_warning_codes(inventory, source, input_model_count),
         _spatial_model=inventory.spatial_model,
-        _atom_by_indices=atom_by_indices,
-        _residue_by_key=residue_by_key,
-        _residues_by_author=residues_by_author,
-        _residues_by_source_author=residues_by_source_author,
-        residues_by_coordinate_author_index=residues_by_coordinate_author,
+        _atom_by_indices={
+            (atom.chain_index, atom.residue_index, atom.atom_index): atom
+            for atom in inventory.contact_atoms
+        },
+        _residue_by_key={residue.key: residue for residue in inventory.residues},
+        _residues_by_author=indexes.by_author,
+        _residues_by_source_author=indexes.by_source_author,
+        _residues_by_coordinate_author=indexes.by_coordinate_author,
     )
 
 

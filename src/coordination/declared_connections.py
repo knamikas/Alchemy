@@ -9,21 +9,20 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence, Set
-from typing import NamedTuple, Protocol, TypedDict, cast
+from typing import NamedTuple, Protocol
 
 import gemmi
 
-from codes import CandidateSource, ContactScope, WarningCode
+from codes import CandidateSource, WarningCode
 from coordination.contact_record import Candidate, DeclaredConnectionRecord
 from coordination.donor_chemistry import AA, DONOR_ELEMENTS
 from metal_elements import METAL_ELEMENTS, UNAMBIGUOUS_METAL_COMPONENT_IDS
 from structure_analysis import (
     NAN,
     AtomSite,
+    ContactImage,
     StructureContext,
     blank_if_missing,
-    pbc_translation,
-    position_distance,
 )
 
 
@@ -42,21 +41,6 @@ class PartnerLocator(Protocol):
 
 #: Identity of one selected metal atom, as ``AtomSite.source_key`` reports it.
 _MetalKey = tuple[int, int, int, int]
-
-
-class _CandidateGeometry(TypedDict):
-    """Geometry fields passed directly into ``Candidate`` construction."""
-
-    distance_raw: float
-    transformed_position: tuple[float, float, float]
-    symmetry_contact: bool
-    crystallographic_contact: bool
-    strict_ncs_contact: bool
-    strict_ncs_operation_id: str
-    contact_scope: ContactScope
-    symmetry_image_index: int
-    symmetry_operation: str
-    translation: tuple[int, int, int]
 
 
 def connection_source(path: str | None) -> CandidateSource:
@@ -105,6 +89,9 @@ def analysis_atom_for_partner(
     Returns ``None`` when the identity matches no residue, matches more than
     one, or names an atom the analyzed model does not hold.
     """
+    # Gemmi's stub declares these members non-optional although the binding
+    # returns ``None`` for an unmatched address, so a plain ``is None`` test
+    # would be flagged as unreachable.
     chain = getattr(cra, "chain", None)
     residue = getattr(cra, "residue", None)
     atom = getattr(cra, "atom", None)
@@ -183,24 +170,13 @@ def declared_candidate_geometry(
     metal: AtomSite,
     neighbor: AtomSite,
     connection: gemmi.Connection,
-) -> _CandidateGeometry:
-    """Return contact geometry for a resolved declared connection."""
+) -> ContactImage:
+    """Return the contact image for a resolved declared connection."""
     asu = connection.asu
     if asu == gemmi.Asu.Same or (
         asu == gemmi.Asu.Any and not structure.symmetry_search_available
     ):
-        return {
-            "distance_raw": position_distance(metal.xyz, neighbor.xyz),
-            "transformed_position": neighbor.xyz,
-            "symmetry_contact": False,
-            "crystallographic_contact": False,
-            "strict_ncs_contact": False,
-            "strict_ncs_operation_id": "",
-            "contact_scope": ContactScope.EXPLICIT,
-            "symmetry_image_index": 0,
-            "symmetry_operation": "1_555",
-            "translation": (0, 0, 0),
-        }
+        return ContactImage.explicit(metal, neighbor)
 
     if not structure.symmetry_search_available:
         raise ValueError(
@@ -210,47 +186,25 @@ def declared_candidate_geometry(
     nearest = cell.find_nearest_image(metal.pos, neighbor.pos, asu)
     transformed_fractional = cell.fract_image(nearest, cell.fractionalize(neighbor.pos))
     transformed = cell.orthogonalize(transformed_fractional)
-    translation = pbc_translation(nearest)
-    image_index = int(nearest.sym_idx)
     # ``same_asu()`` cannot classify this: after ``setup_cell_images`` the
     # image list holds the strict-NCS transforms too, so an NCS image is "not
     # the same ASU" and reads as crystallographic with no NCS operation id.
-    (
-        crystallographic_contact,
-        strict_ncs_contact,
-        strict_ncs_operation_id,
-        contact_scope,
-    ) = structure.image_provenance(image_index, translation)
-    return {
-        "distance_raw": float(nearest.dist()),
-        "transformed_position": (
-            float(transformed.x),
-            float(transformed.y),
-            float(transformed.z),
-        ),
-        "symmetry_contact": crystallographic_contact or strict_ncs_contact,
-        "crystallographic_contact": crystallographic_contact,
-        "strict_ncs_contact": strict_ncs_contact,
-        "strict_ncs_operation_id": strict_ncs_operation_id,
-        # ``image_provenance`` is intentionally broad at the structure layer;
-        # every value it returns here is a ``ContactScope`` member.
-        "contact_scope": cast(ContactScope, contact_scope),
-        "symmetry_image_index": image_index,
-        "symmetry_operation": nearest.symmetry_code(),
-        "translation": translation,
-    }
+    # ``from_nearest_image`` asks ``image_provenance`` instead.
+    return ContactImage.from_nearest_image(structure, nearest, transformed)
 
 
 class _PartnerResolution(NamedTuple):
-    """Results and failure details from resolving a declaration's two partners."""
+    """Both partners of one declaration resolved onto the analysis model."""
 
-    #: ``None`` exactly when ``failure_exception_name`` is set; otherwise the
-    #: two partners in declaration order, each ``None`` if it did not resolve.
-    selected_conformer_atoms: list[AtomSite | None] | None
+    #: The partners in declaration order, each ``None`` if it did not resolve;
+    #: both ``None`` when the source-model lookup itself failed.
+    atoms: tuple[AtomSite | None, AtomSite | None]
     declares_metal: bool
     conformer_deselected: bool
     conformer_substituted: bool
-    failure_exception_name: str | None
+    #: Class name of the exception a source-model lookup raised; empty when
+    #: both lookups completed.
+    failure_exception_name: str = ""
 
 
 def resolve_declared_partners(
@@ -291,9 +245,49 @@ def resolve_declared_partners(
             atoms.append(selected_atom)
     except Exception as exc:
         return _PartnerResolution(
-            None, declares_metal, False, False, type(exc).__name__
+            (None, None), declares_metal, False, False, type(exc).__name__
         )
-    return _PartnerResolution(atoms, declares_metal, deselected, substituted, None)
+    first, second = atoms
+    return _PartnerResolution((first, second), declares_metal, deselected, substituted)
+
+
+def _is_selected_metal(
+    atom: AtomSite | None, selected_metal_keys: Set[_MetalKey]
+) -> bool:
+    """Whether a resolved partner is one of the metal sites under analysis."""
+    return atom is not None and atom.source_key in selected_metal_keys
+
+
+def _metal_and_neighbor(
+    first: AtomSite, second: AtomSite, selected_metal_keys: Set[_MetalKey]
+) -> tuple[AtomSite, AtomSite] | None:
+    """Order two resolved partners as ``(metal, neighbor)``.
+
+    Returns ``None`` when neither or both partners are selected metals: the
+    former is a declaration unrelated to the analyzed sites and the latter a
+    metal-metal contact, and neither is a coordination candidate.
+    """
+    first_is_metal = _is_selected_metal(first, selected_metal_keys)
+    if first_is_metal == _is_selected_metal(second, selected_metal_keys):
+        return None
+    return (first, second) if first_is_metal else (second, first)
+
+
+def _declared_connection_record(
+    connection: gemmi.Connection, connection_id: str, source: CandidateSource
+) -> DeclaredConnectionRecord:
+    """Serialize the provenance a candidate keeps from its source declaration."""
+    reported_distance = float(connection.reported_distance)
+    if not math.isfinite(reported_distance) or reported_distance <= 0:
+        reported_distance = NAN
+    return {
+        "source": source,
+        "connection_id": connection_id,
+        "connection_type": _enum_name(connection.type),
+        "connection_link_id": str(connection.link_id).strip(),
+        "connection_asu": _enum_name(connection.asu),
+        "connection_reported_distance": reported_distance,
+    }
 
 
 def declared_candidate_for_connection(
@@ -311,14 +305,13 @@ def declared_candidate_for_connection(
     """
     issues: list[str] = []
     warnings: list[str] = []
-    if resolved.failure_exception_name is not None:
+    if resolved.failure_exception_name:
         if resolved.declares_metal:
             issues.append(
                 f"{source} {connection_id} resolution failed: "
                 f"{resolved.failure_exception_name}"
             )
         return None, issues, warnings
-
     if resolved.conformer_deselected:
         if resolved.declares_metal:
             issues.append(
@@ -327,31 +320,25 @@ def declared_candidate_for_connection(
             )
         return None, issues, warnings
 
-    # Bound whenever no failure name was recorded, which the guard above has
-    # already returned on.
-    first, second = cast("list[AtomSite | None]", resolved.selected_conformer_atoms)
-    first_is_metal = first is not None and first.source_key in selected_metal_keys
-    second_is_metal = second is not None and second.source_key in selected_metal_keys
-    connection_involves_metal = (
-        resolved.declares_metal or first_is_metal or second_is_metal
+    first, second = resolved.atoms
+    connection_involves_metal = resolved.declares_metal or any(
+        _is_selected_metal(atom, selected_metal_keys) for atom in resolved.atoms
     )
     if resolved.conformer_substituted and connection_involves_metal:
         warnings.append(WarningCode.DECLARED_CONNECTION_CONFORMER_SUBSTITUTED)
-    if first is None and second is None:
-        if connection_involves_metal:
-            issues.append(f"{source} {connection_id} neither partner resolved")
-        return None, issues, warnings
-    if not (first_is_metal or second_is_metal):
-        if connection_involves_metal and (first is None or second is None):
-            issues.append(f"{source} {connection_id} partner unresolved")
-        return None, issues, warnings
     if first is None or second is None:
-        issues.append(f"{source} {connection_id} partner unresolved")
+        if connection_involves_metal:
+            issues.append(
+                f"{source} {connection_id} neither partner resolved"
+                if first is None and second is None
+                else f"{source} {connection_id} partner unresolved"
+            )
         return None, issues, warnings
-    if first_is_metal and second_is_metal:
+    pair = _metal_and_neighbor(first, second, selected_metal_keys)
+    if pair is None:
         return None, issues, warnings
 
-    metal, neighbor = (first, second) if first_is_metal else (second, first)
+    metal, neighbor = pair
     if not (metal.coordinates_valid and neighbor.coordinates_valid):
         issues.append(
             f"{source} {connection_id} geometry unavailable: "
@@ -370,33 +357,23 @@ def declared_candidate_for_connection(
     if not donor_class_supported:
         warnings.append(WarningCode.DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES)
     try:
-        geometry = declared_candidate_geometry(structure, metal, neighbor, connection)
+        image = declared_candidate_geometry(structure, metal, neighbor, connection)
     except Exception as exc:
         issues.append(
             f"{source} {connection_id} geometry unresolved: {type(exc).__name__}: {exc}"
         )
         return None, issues, warnings
-    if neighbor.residue_key == metal.residue_key and not geometry["symmetry_contact"]:
+    if neighbor.residue_key == metal.residue_key and not image.symmetry_contact:
         return None, issues, warnings
 
-    reported_distance = float(connection.reported_distance)
-    if not math.isfinite(reported_distance) or reported_distance <= 0:
-        reported_distance = NAN
-
-    record: DeclaredConnectionRecord = {
-        "source": source,
-        "connection_id": connection_id,
-        "connection_type": _enum_name(connection.type),
-        "connection_link_id": str(connection.link_id).strip(),
-        "connection_asu": _enum_name(connection.asu),
-        "connection_reported_distance": reported_distance,
-    }
     candidate = Candidate(
         metal=metal,
         neighbor=neighbor,
-        **geometry,
+        image=image,
         candidate_sources={source},
-        declared_connections=[record],
+        declared_connections=[
+            _declared_connection_record(connection, connection_id, source)
+        ],
         donor_class_supported=donor_class_supported,
     )
     return candidate, issues, warnings

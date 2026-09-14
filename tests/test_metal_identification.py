@@ -119,8 +119,8 @@ def _remapped_structure(
     return replace(
         context,
         residues=ambiguous if all_residues is None else tuple(all_residues),
-        residues_by_coordinate_author_index={
-            **context.residues_by_coordinate_author_index,
+        _residues_by_coordinate_author={
+            **context._residues_by_coordinate_author,  # pyright: ignore[reportPrivateUsage]
             author_key: ambiguous,
         },
     )
@@ -1027,10 +1027,12 @@ def _repeated_coordinate_identity(context: StructureContext) -> StructureContext
     first, second = context.residues
     second = replace(
         second,
-        coordinate_residue_name="ZN",
-        coordinate_chain_id="B",
-        coordinate_residue_number=1,
-        coordinate_resnum="1",
+        identity=replace(
+            second.identity,
+            coordinate_residue_name="ZN",
+            coordinate_chain_id="B",
+            coordinate_resnum="1",
+        ),
     )
     return _remapped_structure(context, ("ZN", "B", "1"), (first, second))
 
@@ -1181,10 +1183,12 @@ def test_nr_is_resolved_within_its_own_chain(tmp_path: Path) -> None:
     first, second, third = context.residues
     third = replace(
         third,
-        coordinate_residue_name="MG",
-        coordinate_chain_id="B",
-        coordinate_residue_number=1,
-        coordinate_resnum="1",
+        identity=replace(
+            third.identity,
+            coordinate_residue_name="MG",
+            coordinate_chain_id="B",
+            coordinate_resnum="1",
+        ),
     )
     duplicated = _remapped_structure(
         context,
