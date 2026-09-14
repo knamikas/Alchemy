@@ -21,7 +21,7 @@ from density_analysis import (
     DENSITY_MAP_SCOPES,
     MODEL_ENVELOPE_BORDER_ANGSTROM,
 )
-from driver.pool import DEFAULT_ROOT, run
+from driver.pool import run
 from driver.runlog import RunLog
 from run_config import RunConfig
 from run_logging import (
@@ -115,7 +115,8 @@ def parse_args(argv: Sequence[str] | None = None) -> RunConfig:
         "--data-json", help="optional path to a local data.json for manual input mode"
     )
     ap.add_argument(
-        "--pdb-redo-root", default=DEFAULT_ROOT, help="root of the PDB-REDO mirror"
+        "--pdb-redo-root",
+        help="path to a local PDB-REDO mirror; required when no IDs or manual files are supplied",
     )
     ap.add_argument(
         "--pdb-redo-cache",

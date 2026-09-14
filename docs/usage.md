@@ -9,8 +9,8 @@ For batch execution and recovery, see the [operations guide](operations.md).
 ### Process a local PDB-REDO mirror
 
 If you omit `--id` and `--id-file`, Alchemy enumerates the entries under
-`--pdb-redo-root`. The default root is `/datasets/bioinfo/pdb-redo/`, with this
-layout:
+`--pdb-redo-root`. You must supply the path to your local mirror; there is no
+default mirror location. The mirror must use this layout:
 
 ```text
 ROOT/MIDDLE_TWO_ID_CHARACTERS/PDB_ID/
@@ -20,19 +20,20 @@ For example, run a capped batch from a local mirror with:
 
 ```bash
 ./alchemy \
-    --pdb-redo-root /datasets/bioinfo/pdb-redo \
+    --pdb-redo-root /path/to/pdb-redo \
     --max-pdbs 20 \
     --ccp4-setup CCP4_SETUP
 ```
 
-Replace `CCP4_SETUP` with the absolute path to the CCP4 setup script.
+Replace `/path/to/pdb-redo` with your mirror directory and `CCP4_SETUP` with
+the absolute path to the CCP4 setup script.
 
 ### Process requested PDB IDs
 
-Use `--id` for one entry or `--id-file` for a list. Alchemy first checks the
-configured mirror. If it doesn't find an entry there, it downloads the required
-PDB-REDO files into `--pdb-redo-cache`, which defaults to `pdb-redo-cache/` in
-the checkout.
+Use `--id` for one entry or `--id-file` for a list. A local mirror is optional.
+Alchemy checks the mirror if `--pdb-redo-root` is supplied, then checks
+`--pdb-redo-cache` and downloads any missing PDB-REDO files into that cache.
+The cache defaults to `pdb-redo-cache/` in the checkout.
 
 ```bash
 ./alchemy --id 9myr --ccp4-setup CCP4_SETUP

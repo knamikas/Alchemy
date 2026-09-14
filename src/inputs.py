@@ -400,14 +400,17 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
         raise FileNotFoundError(f"PDB-REDO entry {pdb_id} is missing final model files")
 
 
-def ensure_entry_available(pdb_id: str, mirror_root: str, cache_root: str) -> str:
+def ensure_entry_available(
+    pdb_id: str, mirror_root: str | None, cache_root: str
+) -> str:
     """Return the root containing the final model files: mirror, then cache.
 
     A cache miss triggers a download into ``cache_root``.
     """
-    mirror_entry = entry_dir_for(mirror_root, pdb_id)
-    if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdb_id):
-        return mirror_root
+    if mirror_root:
+        mirror_entry = entry_dir_for(mirror_root, pdb_id)
+        if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdb_id):
+            return mirror_root
     cache_entry = entry_dir_for(cache_root, pdb_id)
     if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
         return cache_root

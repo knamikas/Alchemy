@@ -1,8 +1,11 @@
-"""Schedule entry analysis, supervise workers, and publish batch results.
+"""Manage a batch of entry analyses from setup to final results.
 
-Track worker deaths because Pool replaces failed workers without returning
-their tasks. Bound shutdown waits because killed workers can leave queue
-locks held.
+Prepare the environment, select entries, and check whether a previous run
+can be resumed. Assign entries to worker processes as memory permits,
+collect their results, and write outputs and confidence scores.
+
+Handle worker crashes and limit shutdown waits so failed workers do not
+leave the batch stuck.
 """
 
 from __future__ import annotations
@@ -115,27 +118,27 @@ from worker import initialize_worker, process, worker_death_result
 from worker_contracts import EntryResult, WorkerConfig
 
 if TYPE_CHECKING:
-    # Annotate with concrete pool and queue classes; multiprocessing exposes factories.
+    # Import the actual Pool and Queue classes for type annotations.
     from logging.handlers import QueueListener
     from multiprocessing.pool import Pool as WorkerPool
     from multiprocessing.queues import Queue as WorkerLogQueue
 
 
-DEFAULT_ROOT = "/datasets/bioinfo/pdb-redo"
 DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
     REPO_DIR, "src", "data", "confidence_reference"
 )
 
 ALCHEMY_VERSION = __version__
-# Seconds of no completed entry, after a worker died without naming the entry
-# it held, before the remaining outstanding entries are failed retryably.
+# If checking the Git commit takes too long, record it as unknown
+# and continue the analysis.
+PROVENANCE_COMMAND_TIMEOUT_S = 1
+
+# If a worker dies and its entry is unknown, wait this many seconds
+# without any new results before marking all unfinished entries as failed.
+# Those entries can be retried on a later run.
 WORKER_STALL_GRACE_S = 600.0
 # Bound clean shutdown before forcefully stopping remaining workers.
 WORKER_SHUTDOWN_GRACE_S = 5.0
-
-# A timed-out provenance probe reports an unknown commit without failing the run.
-PROVENANCE_COMMAND_TIMEOUT_S = 1
-
 
 logger = logger_for(__name__)
 
@@ -415,7 +418,7 @@ def select_entry_ids(
     args: RunConfig, cache_root: str
 ) -> tuple[list[str], str, dict[str, str | None] | None]:
     """Resolve the run's work list, returning ``(ids, root, manual_inputs)``."""
-    root = args.pdb_redo_root
+    root = args.pdb_redo_root or cache_root
     if args.pdb_file or args.mtz_file or args.cif_file:
         pdb_id = (
             args.id
@@ -469,6 +472,11 @@ def select_entry_ids(
         logger.info("loaded %d IDs from %s", len(ids), args.id_file)
         return ids, root, None
 
+    if not args.pdb_redo_root:
+        raise DriverError(
+            "Supply --pdb-redo-root to process a local PDB-REDO mirror, "
+            "or choose entries with --id, --id-file, or manual input files."
+        )
     logger.info("enumerating final PDB-REDO entries under %s", root)
     # Resume subtracts finished entries from the full set, so enumeration can
     # stop early only when not resuming.

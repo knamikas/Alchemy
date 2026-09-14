@@ -13,7 +13,7 @@ class RunConfig:
     mtz_file: str | None
     cif_file: str | None
     data_json: str | None
-    pdb_redo_root: str
+    pdb_redo_root: str | None
     pdb_redo_cache: str
     pdb_metadata_cache: str
     crystallization_download: bool

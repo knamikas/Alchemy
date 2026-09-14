@@ -30,7 +30,7 @@ class WorkerConfig:
     """Immutable so every worker in a run receives the same configuration."""
 
     root: str
-    mirror_root: str
+    mirror_root: str | None
     cache_root: str
     env: dict[str, str]
     output_dir: str
@@ -54,7 +54,7 @@ class WorkerConfig:
         def __init__(
             self,
             root: str,
-            mirror_root: str,
+            mirror_root: str | None,
             cache_root: str,
             env: dict[str, str],
             output_dir: str,

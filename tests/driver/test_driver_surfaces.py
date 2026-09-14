@@ -1192,6 +1192,46 @@ def test_a_body_matching_content_length_is_promoted(
     assert destination.read_bytes() == body
 
 
+def test_mirror_batch_requires_an_explicit_root(tmp_path: Path) -> None:
+    args = cli.parse_args([])
+    assert args.pdb_redo_root is None
+    with pytest.raises(pool.DriverError, match="Supply --pdb-redo-root"):
+        pool.select_entry_ids(args, str(tmp_path / "cache"))
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_single_id_uses_cache_without_a_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached: bool
+) -> None:
+    cache = str(tmp_path / "cache")
+    downloads: list[str] = []
+
+    def populate(pdb_id: str, cache_root: str) -> None:
+        entry = Path(inputs.entry_dir_for(cache_root, pdb_id))
+        entry.mkdir(parents=True)
+        (entry / f"{pdb_id}_final.pdb").write_text("END\n")
+        (entry / f"{pdb_id}_final.mtz").write_bytes(b"MTZ ")
+
+    def download(pdb_id: str, cache_root: str) -> None:
+        downloads.append(pdb_id)
+        populate(pdb_id, cache_root)
+
+    if cached:
+        populate("9myr", cache)
+    monkeypatch.setattr(inputs, "download_entry_to_cache", download)
+    args = cli.parse_args(["--id", "9myr"])
+    assert pool.select_entry_ids(args, cache) == (["9myr"], cache, None)
+    assert downloads == ([] if cached else ["9myr"])
+
+
+def test_id_list_uses_cache_as_root_without_a_mirror(tmp_path: Path) -> None:
+    ids = tmp_path / "ids.txt"
+    ids.write_text("9myr\n109m\n")
+    args = cli.parse_args(["--id-file", str(ids)])
+    cache = str(tmp_path / "cache")
+    assert pool.select_entry_ids(args, cache) == (["9myr", "109m"], cache, None)
+
+
 def test_an_unwritable_cache_is_reported_as_a_driver_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
