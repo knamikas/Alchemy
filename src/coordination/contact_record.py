@@ -3,7 +3,14 @@
 from dataclasses import dataclass, field
 from typing import TypedDict
 
-from codes import CandidateSource, ContactScope, MultiDonorStatus
+from codes import (
+    CandidateSource,
+    ContactScope,
+    EligibilityReason,
+    EligibilityStatus,
+    MultiDonorStatus,
+    ReferenceKind,
+)
 from structure_analysis import AtomSite
 
 
@@ -31,14 +38,14 @@ class DonorPolicy:
 class EligibilityResult:
     """Record first-sphere eligibility and its assignment thresholds."""
 
-    status: str
-    reason: str
+    status: EligibilityStatus
+    reason: EligibilityReason
     first_sphere_eligible: bool
     inferred_contact_eligible: bool
     assignment_target: float
     assignment_tolerance: float
     first_sphere_cutoff: float
-    assignment_reference_kind: str
+    assignment_reference_kind: ReferenceKind
     assignment_reference: str
 
 

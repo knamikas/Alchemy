@@ -7,14 +7,17 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from worker_contracts import (
-    ALTLOC_POLICY,
-    MAX_ANALYZED_METAL_SITES,
-    MODEL_POLICY,
-    SYMMETRY_POLICY,
+ANALYSIS_CONFIG_SCHEMA_VERSION = 1
+
+MODEL_POLICY = "first"
+ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
+SYMMETRY_POLICY = (
+    "image-inclusive-primary-with-crystallographic-and-strict-ncs-provenance"
 )
 
-ANALYSIS_CONFIG_SCHEMA_VERSION = 1
+# A few metal-dense assemblies contribute thousands of correlated sites and
+# can dominate a database reference built from otherwise small entries.
+MAX_ANALYZED_METAL_SITES = 100
 
 
 def analysis_config_payload(*, reference_data_id: str) -> dict[str, Any]:

@@ -211,11 +211,11 @@ def test_non_utf8_stderr_is_reported_rather_than_losing_the_entry(
     with pytest.raises(RuntimeError) as excinfo:
         density.run_density_analysis(
             "test",
-            str(source),
-            str(pdb),
-            str(tmp_path / "out"),
-            20,
-            2,
+            mtz_path=str(source),
+            pdb_path=str(pdb),
+            out_dir=str(tmp_path / "out"),
+            reslo=20,
+            reshi=2,
             map_scope="full",
         )
 
@@ -301,11 +301,11 @@ def test_a_helper_holding_stderr_does_not_fake_a_timeout(
     with pytest.raises(RuntimeError) as excinfo:
         density.run_density_analysis(
             "test",
-            str(source),
-            str(pdb),
-            str(tmp_path / "out"),
-            20,
-            2,
+            mtz_path=str(source),
+            pdb_path=str(pdb),
+            out_dir=str(tmp_path / "out"),
+            reslo=20,
+            reshi=2,
             map_scope="full",
             tool_timeout_s=10,
         )
@@ -340,11 +340,11 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(
     with pytest.raises(density.MtzfixValidationError):
         density.run_density_analysis(
             "test",
-            str(source),
-            str(pdb),
-            str(tmp_path / "not_twin"),
-            20,
-            2,
+            mtz_path=str(source),
+            pdb_path=str(pdb),
+            out_dir=str(tmp_path / "not_twin"),
+            reslo=20,
+            reshi=2,
             map_scope="full",
             pdb_redo_is_twin=False,
         )
@@ -352,11 +352,11 @@ def test_mtzfix_retest_failure_normalizes_only_explicit_twins(
 
     result = density.run_density_analysis(
         "test",
-        str(source),
-        str(pdb),
-        str(tmp_path / "twin"),
-        20,
-        2,
+        mtz_path=str(source),
+        pdb_path=str(pdb),
+        out_dir=str(tmp_path / "twin"),
+        reslo=20,
+        reshi=2,
         map_scope="full",
         pdb_redo_is_twin=True,
     )
@@ -390,11 +390,11 @@ def test_generic_mtzfix_error_never_uses_twin_fallback(
     with pytest.raises(RuntimeError, match="mtzfix failed"):
         density.run_density_analysis(
             "test",
-            str(source),
-            str(pdb),
-            str(tmp_path / "out"),
-            20,
-            2,
+            mtz_path=str(source),
+            pdb_path=str(pdb),
+            out_dir=str(tmp_path / "out"),
+            reslo=20,
+            reshi=2,
             map_scope="full",
             pdb_redo_is_twin=True,
         )
@@ -432,11 +432,11 @@ def test_a_stalled_ccp4_program_is_killed_and_reported_with_its_partial_log(
     with pytest.raises(density.Ccp4ToolTimeoutError) as excinfo:
         density.run_density_analysis(
             "1abc",
-            str(source),
-            str(pdb),
-            str(tmp_path / "out"),
-            20.0,
-            2.0,
+            mtz_path=str(source),
+            pdb_path=str(pdb),
+            out_dir=str(tmp_path / "out"),
+            reslo=20.0,
+            reshi=2.0,
             map_scope="full",
             pdb_redo_is_twin=False,
             tool_timeout_s=900,
@@ -489,11 +489,11 @@ def test_the_ccp4_budget_applies_to_each_program_not_to_the_entry(
     monkeypatch.setattr("density_analysis.subprocess.run", fake_run)
     density.run_density_analysis(
         "1abc",
-        str(source),
-        str(pdb),
-        str(tmp_path / "out"),
-        20.0,
-        2.0,
+        mtz_path=str(source),
+        pdb_path=str(pdb),
+        out_dir=str(tmp_path / "out"),
+        reslo=20.0,
+        reshi=2.0,
         map_scope="full",
         pdb_redo_is_twin=False,
         tool_timeout_s=123,
@@ -580,11 +580,11 @@ def _run_envelope(
     monkeypatch.setattr("density_analysis.subprocess.run", fake_run)
     return density.run_density_analysis(
         "1abc",
-        str(source),
-        str(pdb),
-        str(tmp_path / "out"),
-        20.0,
-        2.0,
+        mtz_path=str(source),
+        pdb_path=str(pdb),
+        out_dir=str(tmp_path / "out"),
+        reslo=20.0,
+        reshi=2.0,
         map_scope="model-envelope",
         pdb_redo_is_twin=False,
         **kwargs,

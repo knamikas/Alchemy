@@ -24,11 +24,7 @@ from density_analysis import (
 from driver.pool import run
 from driver.runlog import RunLog
 from run_config import RunConfig
-from run_logging import (
-    configure_driver_logging,
-    level_for_verbosity,
-    logger_for,
-)
+from run_logging import configure_driver_logging, logger_for
 
 logger = logger_for(__name__)
 
@@ -369,10 +365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_args = None if argv is None else list(argv)
     args = parse_args(raw_args)
     try:
-        configure_driver_logging(
-            level=level_for_verbosity(args.verbose, args.quiet),
-            log_file=args.log_file,
-        )
+        configure_driver_logging(level=args.log_level, log_file=args.log_file)
     except OSError as exc:
         print(
             f"Cannot write --log-file {args.log_file}: {exc.strerror or exc}",

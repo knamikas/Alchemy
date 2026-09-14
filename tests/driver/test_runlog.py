@@ -93,7 +93,7 @@ class TestRunLog:
                 timings={"density_total_s": 2.5, "cleanup_s": 0.125},
                 reason_codes=["missing_first_sphere_reference"],
                 warning_codes=["multi_model_structure"],
-                error="first-sphere reference unavailable for ZN-N",
+                status_detail="first-sphere reference unavailable for ZN-N",
                 density_map_scope_used="model-envelope",
                 density_full_map_bytes=2048,
                 density_edstats_map_bytes=1024,

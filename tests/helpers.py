@@ -29,6 +29,7 @@ import pytest
 if TYPE_CHECKING:
     # Keep source imports lazy; these imports are for annotations only.
     from coordination.analysis import AtomKey, BondAnalysisMetadata
+    from coordination.dpi import DpiInputs
     from coordination.schema import BondRow, CandidateRow
     from output_rows import MetalStatsRow
     from run_config import RunConfig
@@ -74,24 +75,39 @@ PLACEHOLDER_PROVENANCE: Mapping[str, str] = {
 }
 
 
+#: The ``EntryResult`` fields holding a frozen provenance group.
+PROVENANCE_GROUPS = ("software", "pdb_redo", "coordinates", "density")
+
+
 def entry_result(pdb_id: str = "109m", **overrides: Any) -> EntryResult:
-    """A worker result skeleton plus overrides, as the driver would see it."""
+    """A worker result skeleton plus overrides, as the driver would see it.
+
+    Overrides use the flat published names: one naming a provenance field,
+    such as ``pdb_redo_is_twin``, is applied to the group that holds it.
+    """
+    from dataclasses import fields
+
     from codes import EntryStatus
-    from worker_contracts import EntryResult
+    from worker_contracts import EntryResult, PdbRedoProvenance, SoftwareProvenance
 
     result = EntryResult(
         pdb_id=pdb_id,
-        alchemy_commit=PLACEHOLDER_PROVENANCE["alchemy_commit"],
-        gemmi_version=PLACEHOLDER_PROVENANCE["gemmi_version"],
-        ccp4_version=PLACEHOLDER_PROVENANCE["ccp4_version"],
-        reference_data_id=PLACEHOLDER_PROVENANCE["reference_data_id"],
-        analysis_config_id=PLACEHOLDER_PROVENANCE["analysis_config_id"],
-        refinement_state="final",
+        software=SoftwareProvenance(**PLACEHOLDER_PROVENANCE),
+        pdb_redo=PdbRedoProvenance(refinement_state="final"),
     )
+    grouped = {
+        field.name: group
+        for group in PROVENANCE_GROUPS
+        for field in fields(getattr(result, group))
+    }
     for name, value in overrides.items():
         if name == "status":
             value = EntryStatus(value)
-        setattr(result, name, value)
+        if name in grouped:
+            group = grouped[name]
+            setattr(result, group, replace(getattr(result, group), **{name: value}))
+        else:
+            setattr(result, name, value)
     return result
 
 
@@ -130,16 +146,16 @@ def worker_config(**overrides: Any) -> WorkerConfig:
     from worker_contracts import WorkerConfig
 
     fields: dict[str, Any] = {
-        "root": "/nonexistent/root",
-        "mirror_root": "/nonexistent/mirror",
-        "cache_root": "/nonexistent/cache",
+        "input_root": "/nonexistent/root",
+        "pdb_redo_root": "/nonexistent/mirror",
+        "pdb_redo_cache": "/nonexistent/cache",
         "env": {},
         "output_dir": "/nonexistent/output",
         "cofactors": frozenset(),
-        "keep": False,
+        "keep_intermediates": False,
         "bonds": True,
         "density_map_scope": "model-envelope",
-        "ccp4_timeout_s": CCP4_TOOL_TIMEOUT_S,
+        "ccp4_timeout": CCP4_TOOL_TIMEOUT_S,
         "log_level": logging.INFO,
         "allow_download": False,
         "manual_inputs": None,
@@ -315,9 +331,9 @@ def analyze_bonds(
     path: _StrPath,
     *,
     pdb_id: str = "test",
-    dpi_inputs: Mapping[str, object] | None = None,
+    dpi_inputs: DpiInputs | None = None,
     connection_path: _StrPath | None = None,
-    stats_rows: Sequence[Mapping[str, Any]] = (),
+    stats_rows: Sequence[MetalStatsRow] = (),
     header: Sequence[str] | None = None,
     structure: StructureContext | None = None,
 ) -> BondAnalysis:
@@ -1062,18 +1078,20 @@ def dpi_inputs(
     mtz_path: _StrPath | None = None,
     data_json: _StrPath | None = None,
     resolution: float = 1.50,
-) -> dict[str, object]:
-    """Build the ``dpi_inputs`` mapping ``run_bond_analysis`` expects.
+) -> DpiInputs:
+    """Build the ``DpiInputs`` ``run_bond_analysis`` expects.
 
     With no ``data_json`` the DPI is unavailable by construction and
     ``run_bond_analysis`` reports ``missing_dpi_metadata_source``.
     """
-    return {
-        "resolution": resolution,
-        "data_json": None if data_json is None else str(data_json),
-        "pdb_path": None if pdb_path is None else str(pdb_path),
-        "mtz_path": None if mtz_path is None else str(mtz_path),
-    }
+    from coordination.dpi import DpiInputs
+
+    return DpiInputs(
+        resolution=resolution,
+        data_json=None if data_json is None else str(data_json),
+        pdb_path=None if pdb_path is None else str(pdb_path),
+        mtz_path=None if mtz_path is None else str(mtz_path),
+    )
 
 
 #: ``analyze_bonds`` takes a parameter named ``dpi_inputs``; keep the builder reachable.
@@ -1263,13 +1281,14 @@ def stats_rows_for_structure(
     from metal_identification import extract_metal_statistics
 
     stats_path = write_edstats_for_structure(path, context, **kwargs)
-    rows, header = extract_metal_statistics(
+    extraction = extract_metal_statistics(
         pdb_id if pdb_id is not None else context.pdb_id,
         stats_path,
         set(METAL_ELEMENTS) if metals is None else set(metals),
         set() if cofactors is None else set(cofactors),
         structure=context,
     )
+    rows, header = extraction.rows, extraction.header
     return rows, header, stats_path
 
 

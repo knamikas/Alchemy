@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Optional, cast
 
@@ -19,6 +18,20 @@ import gemmi
 
 from codes import ReasonCode
 from structure_analysis import NAN, StructureContext, count_ni
+
+
+@dataclass(frozen=True, slots=True)
+class DpiInputs:
+    """Entry-level metadata the DPI formula and its fallbacks read.
+
+    ``resolution`` is recorded alongside the DPI but is not a term of the
+    formula. Without ``data_json`` the DPI is unavailable by construction.
+    """
+
+    resolution: float
+    data_json: str | None = None
+    pdb_path: str | None = None
+    mtz_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,20 +108,15 @@ def rfree_from_pdb(pdb_path: str) -> float:
 
 
 def calculate_dpi_components(
-    structure: StructureContext, dpi_inputs: Mapping[str, Any]
+    structure: StructureContext, dpi_inputs: DpiInputs
 ) -> DpiComponents:
     """Return the DPI, its status, and its reusable numeric inputs. Never raises.
 
     Resolution is metadata only: it is implicit in va and nobs, not a term of
     the formula.
     """
-    resolution = dpi_inputs.get("resolution", NAN)
-    try:
-        resolution = float(resolution)
-    except (TypeError, ValueError):
-        resolution = NAN
-
-    data_json = dpi_inputs.get("data_json")
+    resolution = float(dpi_inputs.resolution)
+    data_json = dpi_inputs.data_json
     if not data_json:
         # Distinguish missing manual metadata from a failed DPI calculation.
         return DpiComponents(
@@ -137,7 +145,7 @@ def calculate_dpi_components(
             rfree = (
                 float(rfree)
                 if rfree is not None and rfree != ""
-                else rfree_from_pdb(dpi_inputs["pdb_path"])
+                else rfree_from_pdb(dpi_inputs.pdb_path or "")
             )
             nobs = float(nobs) if nobs is not None and nobs != "" else NAN
         except (TypeError, ValueError):
@@ -152,7 +160,7 @@ def calculate_dpi_components(
             )
         rfree_value = rfree
         nobs_value = nobs
-        va = asu_volume(dpi_inputs["mtz_path"], dpi_inputs["pdb_path"])
+        va = asu_volume(dpi_inputs.mtz_path or "", dpi_inputs.pdb_path or "")
         va_value = va
         ni = count_ni(structure)
 

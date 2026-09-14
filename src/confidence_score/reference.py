@@ -11,38 +11,27 @@ from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
 
 from analysis_config import analysis_config_id
-from confidence_score.prepare import (
-    _manifest_provenance,
-)
+from confidence_score.prepare import manifest_provenance
 from confidence_score.schema import (
     ANALYSIS_COLUMNS,
-    COHORT_WEIGHTING,
     CONFIDENCE_METHOD_VERSION,
-    CONFIDENCE_SCHEMA_VERSION,
-    DENSITY_REVIEW_THRESHOLD,
-    DENSITY_SUSPECT_THRESHOLD,
-    EDSTATS_SATURATION_MAGNITUDE,
-    GEOMETRY_REVIEW_THRESHOLD,
-    GEOMETRY_SUSPECT_THRESHOLD,
-    INPUT_STATUS_POLICY,
     METRIC_DECIMAL_PLACES,
     REFERENCE_DISTRIBUTION_FILE,
     REFERENCE_METADATA_FILE,
-    SCORE_DECIMAL_PLACES,
-    _confidence_csv_value,
-    _finite_float,
-    _format_decimal,
-    _read_csv,
-    _required_columns,
+    SCORING_POLICY_METADATA,
     canonical_metric,
     canonical_support_score,
+    confidence_csv_value,
+    finite_float,
+    format_decimal,
+    read_csv_table,
+    require_columns,
 )
 from confidence_score.scoring import (
     ConfidenceReference,
     score_site,
 )
 from reference_data import reference_data_id, sha256
-from worker_contracts import MAX_ANALYZED_METAL_SITES
 
 
 def _scoring_metadata() -> dict[str, Any]:
@@ -51,27 +40,7 @@ def _scoring_metadata() -> dict[str, Any]:
     Include reference_data_id because changed reference tables change the metrics.
     """
     return {
-        "confidence_method_version": CONFIDENCE_METHOD_VERSION,
-        "confidence_schema_version": CONFIDENCE_SCHEMA_VERSION,
-        "cohort_weighting": COHORT_WEIGHTING,
-        "score_decimal_places": SCORE_DECIMAL_PLACES,
-        "metric_decimal_places": METRIC_DECIMAL_PLACES,
-        "density_thresholds": {
-            "review": DENSITY_REVIEW_THRESHOLD,
-            "suspect": DENSITY_SUSPECT_THRESHOLD,
-        },
-        "density_saturation_value": EDSTATS_SATURATION_MAGNITUDE,
-        "density_saturation_policy": "suspect_with_zero_support",
-        "geometry_thresholds": {
-            "review": GEOMETRY_REVIEW_THRESHOLD,
-            "suspect": GEOMETRY_SUSPECT_THRESHOLD,
-        },
-        "support_score_method": "reverse_average_rank_empirical_cdf",
-        "geometry_statistic": "rms_finite_score_eligible_zbond",
-        "overall_rule": "any_suspect_or_review_plus_review",
-        "coverage_policy": "annotation_only_v1",
-        "input_status_policy": INPUT_STATUS_POLICY,
-        "maximum_entry_metal_sites": MAX_ANALYZED_METAL_SITES,
+        **SCORING_POLICY_METADATA,
         "reference_data_id": reference_data_id(),
         "analysis_config_id": analysis_config_id(reference_data_id=reference_data_id()),
     }
@@ -136,7 +105,7 @@ def write_reference(
                 writer.writerow(
                     (
                         component,
-                        _format_decimal(value, METRIC_DECIMAL_PLACES),
+                        format_decimal(value, METRIC_DECIMAL_PLACES),
                         counts[value],
                     )
                 )
@@ -169,13 +138,7 @@ def write_reference(
         json.dump(metadata, handle, indent=2, sort_keys=True)
         handle.write("\n")
     os.replace(metadata_tmp, metadata_path)
-    return ConfidenceReference(
-        sorted(density_counts),
-        [density_counts[value] for value in sorted(density_counts)],
-        sorted(geometry_counts),
-        [geometry_counts[value] for value in sorted(geometry_counts)],
-        metadata,
-    )
+    return ConfidenceReference.from_counts(density_counts, geometry_counts, metadata)
 
 
 def load_reference(reference_dir: str) -> ConfidenceReference:
@@ -184,24 +147,8 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
     with open(metadata_path, encoding="utf-8") as handle:
         metadata = json.load(handle)
     expected = _scoring_metadata()
-    for key in (
-        "confidence_method_version",
-        "confidence_schema_version",
-        "cohort_weighting",
-        "score_decimal_places",
-        "metric_decimal_places",
-        "density_thresholds",
-        "density_saturation_value",
-        "density_saturation_policy",
-        "geometry_thresholds",
-        "support_score_method",
-        "geometry_statistic",
-        "overall_rule",
-        "coverage_policy",
-        "input_status_policy",
-        "maximum_entry_metal_sites",
-        "analysis_config_id",
-    ):
+    # reference_data_id is checked separately below with a fuller explanation.
+    for key in (key for key in expected if key != "reference_data_id"):
         if metadata.get(key) != expected[key]:
             raise ValueError(
                 f"confidence reference {key} is incompatible with this code"
@@ -228,7 +175,9 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
         reference_dir,
         metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE),
     )
-    header, rows = _read_csv(distribution_path, "confidence reference distribution")
+    header, rows = read_csv_table(
+        distribution_path, "confidence reference distribution"
+    )
     if header != ("component", "value", "count"):
         raise ValueError("confidence reference distribution has invalid columns")
     component_counts: dict[str, Counter[float]] = {
@@ -237,7 +186,7 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
     }
     for row in rows:
         component = row["component"]
-        value = _finite_float(row["value"])
+        value = finite_float(row["value"])
         try:
             count = int(row["count"])
         except (TypeError, ValueError) as exc:
@@ -257,12 +206,8 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
         density_counts, geometry_counts
     ):
         raise ValueError("confidence reference identifier does not match data")
-    reference = ConfidenceReference(
-        sorted(density_counts),
-        [density_counts[value] for value in sorted(density_counts)],
-        sorted(geometry_counts),
-        [geometry_counts[value] for value in sorted(geometry_counts)],
-        metadata,
+    reference = ConfidenceReference.from_counts(
+        density_counts, geometry_counts, metadata
     )
     if reference.density_reference_size != metadata.get("density_reference_size"):
         raise ValueError("density reference size does not match metadata")
@@ -282,21 +227,24 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
     return reference
 
 
+def _format_support_score(score: float) -> str:
+    """Serialize a support score at its published precision; NaN becomes blank."""
+    return format_decimal(canonical_support_score(score))
+
+
 def _score_prepared_row(
     row: Mapping[str, Any], reference: "ConfidenceReference | None"
 ) -> tuple[dict[str, Any], float | None]:
-    rszd = _finite_float(row.get("rszd_abs", ""))
-    geometry_rms = _finite_float(row.get("geometry_rms_zbond", ""))
-    result = score_site(rszd, geometry_rms, reference)
+    rszd = finite_float(row.get("rszd_abs", ""))
+    geometry_rms = finite_float(row.get("geometry_rms_zbond", ""))
+    verdict = score_site(rszd, geometry_rms, reference)
     output = dict(row)
-    for key, value in result.items():
-        output[key] = (
-            _format_decimal(canonical_support_score(value))
-            if isinstance(value, float)
-            else value
-        )
     output.update(
         {
+            **verdict.as_row(),
+            "density_score": _format_support_score(verdict.density_score),
+            "geometry_score": _format_support_score(verdict.geometry_score),
+            "alchemy_score": _format_support_score(verdict.alchemy_score),
             "score_policy_version": CONFIDENCE_METHOD_VERSION,
             "confidence_reference_version": reference.reference_id if reference else "",
             "confidence_cohort_id": reference.cohort_id if reference else "",
@@ -309,8 +257,10 @@ def _score_prepared_row(
             ),
         }
     )
-    alchemy_score = _finite_float(output.get("alchemy_score", ""))
-    return output, alchemy_score if math.isfinite(alchemy_score) else None
+    alchemy_score = verdict.alchemy_score
+    return output, (
+        canonical_support_score(alchemy_score) if math.isfinite(alchemy_score) else None
+    )
 
 
 def score_against_reference(
@@ -332,7 +282,7 @@ def _validated_input_reader(
 ) -> tuple[tuple[str, ...], "csv.DictReader[str]"]:
     reader = csv.DictReader(handle)
     input_columns = tuple(reader.fieldnames or ())
-    _required_columns(
+    require_columns(
         input_columns,
         (
             "metal_site_id",
@@ -375,8 +325,8 @@ def finalize_database_confidence(
             if pdb_id:
                 input_entry_ids.add(pdb_id)
             input_status_counts[str(row.get("confidence_inputs_status", ""))] += 1
-            rszd = _finite_float(row.get("rszd_abs", ""))
-            geometry_rms = _finite_float(row.get("geometry_rms_zbond", ""))
+            rszd = finite_float(row.get("rszd_abs", ""))
+            geometry_rms = finite_float(row.get("geometry_rms_zbond", ""))
             if math.isfinite(rszd) and rszd >= 0:
                 density_counts[rszd] += 1
             if math.isfinite(geometry_rms) and geometry_rms >= 0:
@@ -393,16 +343,16 @@ def finalize_database_confidence(
         "input_status_counts": dict(sorted(input_status_counts.items())),
     }
     if manifest_path is not None:
-        manifest_provenance = _manifest_provenance(manifest_path)
+        manifest_summary = manifest_provenance(manifest_path)
         if (
-            manifest_provenance["analysis_config_id"]
+            manifest_summary["analysis_config_id"]
             != _scoring_metadata()["analysis_config_id"]
         ):
             raise ValueError(
                 "source manifest analysis configuration identity is "
                 "incompatible with this code"
             )
-        provenance.update(manifest_provenance)
+        provenance.update(manifest_summary)
     reference = write_reference(
         reference_dir,
         density_counts,
@@ -437,7 +387,7 @@ def score_file_against_reference(
                 output, score = _score_prepared_row(row, reference)
                 writer.writerow(
                     {
-                        column: _confidence_csv_value(column, value)
+                        column: confidence_csv_value(column, value)
                         for column, value in output.items()
                     }
                 )

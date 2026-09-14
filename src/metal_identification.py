@@ -5,10 +5,10 @@ import statistics
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
-from codes import WarningCode
-from output_rows import MetalStatsRow
+from codes import CoordinateMappingStatus, SelectedSiteStatus, WarningCode
+from output_rows import CsvValue, MetalStatsRow
 from structure_analysis import (
     NAN,
     AtomSite,
@@ -76,6 +76,18 @@ DENSITY_CONTEXT_COLUMNS = (
     ),
 )
 DENSITY_CONTEXT_STATUSES = frozenset(("available", "not_computed"))
+
+
+@dataclass(frozen=True, slots=True)
+class EdstatsExtraction:
+    """Site rows and entry-level context parsed from one EDSTATS table."""
+
+    rows: list[MetalStatsRow]
+    header: list[str]
+    #: Non-target residue aggregates, populated only once the whole table
+    #: passed validation.
+    density_context_row: dict[str, Any]
+    warning_codes: list[str]
 
 
 @dataclass
@@ -498,7 +510,9 @@ def _density_row(
         density_is_shared=shared_site_count > 1,
         coordinate_mapping_status=mapping_status,
         selected_metal_site_status=(
-            "selected" if site is not None else "no_selected_metal"
+            SelectedSiteStatus.SELECTED
+            if site is not None
+            else SelectedSiteStatus.NO_SELECTED_METAL
         ),
         site=site,
         site_key=None if site is None else site.source_key,
@@ -589,7 +603,9 @@ def _resolve_edstats_row(
         coordinate_key=coordinate_key,
         matched_residues=matched_residues,
         mapping_status=(
-            "matched" if matched_residues else "coordinate_residue_not_found"
+            CoordinateMappingStatus.MATCHED
+            if matched_residues
+            else CoordinateMappingStatus.RESIDUE_NOT_FOUND
         ),
     )
 
@@ -672,25 +688,17 @@ def extract_metal_statistics(
     metals_set: Iterable[str],
     cofactor_set: Iterable[str],
     structure: StructureContext,
-    *,
-    density_context_out: dict[str, Any] | None = None,
-    warning_codes_out: list[str] | None = None,
-) -> tuple[list[MetalStatsRow], list[str]]:
-    """Parse an EDSTATS table and return site-level rows and the header.
+) -> EdstatsExtraction:
+    """Parse an EDSTATS table into site-level rows, header, and context.
 
     Use coordinate elements to identify metals and source CCD names to classify
     cofactors. Repeat shared residue statistics per selected metal, preserving
     density_observation_id and multiplicity for deduplication. Retain unmatched
     cofactor rows with site=None and an explanatory status.
-
-    Clear density_context_out on entry and populate it with non-target residue
-    aggregates only after the complete table passes validation.
     """
     metals_upper = {element.upper() for element in metals_set}
     cofactors = frozenset(cofactor_set)
     density_context = _DensityContextAccumulator()
-    if density_context_out is not None:
-        density_context_out.clear()
 
     rows: list[MetalStatsRow] = []
     schema: tuple[list[str], dict[str, int]] | None = None
@@ -791,31 +799,30 @@ def extract_metal_statistics(
             f"{'s' if len(missing_residues) != 1 else ''}: "
             f"{preview}{suffix}"
         )
-    if density_context_out is not None:
-        density_context_out.update(density_context.as_row(pdb_id))
-    if warning_codes_out is not None:
-        if grid_point_overflow_columns:
-            warning_codes_out.append(WarningCode.EDSTATS_GRID_POINT_COUNT_OVERFLOW)
-        if catalog_fallback:
-            warning_codes_out.append(WarningCode.COFACTOR_CATALOG_FALLBACK)
-        warning_codes_out[:] = list(dict.fromkeys(warning_codes_out))
-    return rows, header
+    warning_codes: list[str] = []
+    if grid_point_overflow_columns:
+        warning_codes.append(WarningCode.EDSTATS_GRID_POINT_COUNT_OVERFLOW)
+    if catalog_fallback:
+        warning_codes.append(WarningCode.COFACTOR_CATALOG_FALLBACK)
+    return EdstatsExtraction(
+        rows, header, density_context.as_row(pdb_id), warning_codes
+    )
 
 
 # Keep density-sigma joins beside the column schema they depend on.
 def sigma_index(
-    stats_rows: Iterable[Mapping[str, Any]],
-) -> dict[str, dict[tuple[Any, ...], Sequence[str]]]:
+    stats_rows: Iterable[MetalStatsRow],
+) -> dict[str, dict[tuple[Any, ...], Sequence[CsvValue]]]:
     """Index EDSTATS fields by site, with an unambiguous author-key fallback."""
-    by_site: dict[tuple[Any, ...], Sequence[str]] = {}
-    by_author: dict[tuple[Any, ...], Sequence[str]] = {}
+    by_site: dict[tuple[Any, ...], Sequence[CsvValue]] = {}
+    by_author: dict[tuple[Any, ...], Sequence[CsvValue]] = {}
     ambiguous_authors: set[tuple[Any, ...]] = set()
     for row in stats_rows:
-        fields = row["fields"]
-        site_key = row.get("site_key")
+        fields = row.fields
+        site_key = row.site_key
         if site_key is not None:
             by_site[tuple(site_key)] = fields
-        author_key = (row["resname"], str(row["chain"]), str(row["resnum"]))
+        author_key = (row.resname, str(row.chain), str(row.resnum))
         if author_key in by_author:
             ambiguous_authors.add(author_key)
         else:
@@ -839,7 +846,7 @@ def zd_indices(header: Sequence[str] | None) -> tuple[int, ...] | None:
 
 
 def sigma_for(
-    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]],
+    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[CsvValue]]],
     resname: str,
     chain: str,
     resnum: str,
@@ -847,13 +854,16 @@ def sigma_for(
     site_key: Sequence[Any] | None = None,
 ) -> tuple[float, float, float]:
     """Return the three density Z scores for a site or author identity."""
-    fields: Sequence[str] | None = None
+    indexed: Sequence[CsvValue] | None = None
     if site_key is not None:
-        fields = sig["by_site"].get(tuple(site_key))
-    if fields is None:
-        fields = sig["by_author"].get((resname, str(chain), str(resnum)))
-    if fields is None or zd_idx is None:
+        indexed = sig["by_site"].get(tuple(site_key))
+    if indexed is None:
+        indexed = sig["by_author"].get((resname, str(chain), str(resnum)))
+    if indexed is None or zd_idx is None:
         return NAN, NAN, NAN
+    # ``zd_idx`` addresses EDSTATS header columns, which are parsed text; only
+    # the site fields appended after them can hold non-string values.
+    fields = cast(Sequence[str], indexed)
     try:
         return (
             float(fields[zd_idx[0]]),

@@ -420,13 +420,13 @@ class TestCifToPdb:
         stats_path = helpers.write_edstats_for_structure(
             tmp_path / "stats.out", context, metrics={"ZDm": 2.0}
         )
-        rows, _ = metal_identification.extract_metal_statistics(
+        rows = metal_identification.extract_metal_statistics(
             "test", stats_path, {"ZN"}, set(), structure=context
-        )
+        ).rows
         assert len(rows) == 63
-        assert {row["chain"] for row in rows} == set(source_chains)
-        assert {row["fields"][1] for row in rows} == set(source_chains)
-        assert {row["resnum"] for row in rows} == {"1"}
+        assert {row.chain for row in rows} == set(source_chains)
+        assert {row.fields[1] for row in rows} == set(source_chains)
+        assert {row.resnum for row in rows} == {"1"}
 
         # Source struct_conn partners resolve through the same provenance,
         # without reproducing the packed numbering.

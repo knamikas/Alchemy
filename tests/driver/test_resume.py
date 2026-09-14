@@ -6,8 +6,7 @@ import csv
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pytest
 from helpers import entry_result, read_csv, run_config, write_manifest
@@ -25,9 +24,6 @@ from driver.writers import (
     OutputTargets,
     manifest_row,
 )
-
-if TYPE_CHECKING:
-    from worker_contracts import EntryResult
 
 
 def _manifest_ids(path: str | Path, **kwargs: Any) -> set[str]:
@@ -426,7 +422,7 @@ class TestUnrunBondStageChain:
     ) -> None:
         """Step 1: a pre-bond failure writes blank counts, so it is retried."""
         result = entry_result(
-            "109m", status="error", retryable=True, error="density stage failed"
+            "109m", status="error", retryable=True, status_detail="density stage failed"
         )
         row = manifest_row(result, False, True, {}, {})
         manifest = tmp_path / "manifest.csv"
@@ -450,7 +446,7 @@ class TestUnrunBondStageChain:
 
         failed = manifest_row(
             entry_result(
-                "109m", status="error", retryable=True, error="edstats failed"
+                "109m", status="error", retryable=True, status_detail="edstats failed"
             ),
             resume=False,
             bonds_enabled=True,
@@ -1060,11 +1056,6 @@ def test_a_resumed_run_writes_new_entries_even_when_they_fail(
     manifest row at all, so the artifact --resume reads under-reported the set
     the run had actually scheduled.
     """
-    # A stand-in for EntryResult: should_write_entry reads only these three
-    # fields, and the real dataclass would need six unrelated ones supplied.
-    result = cast(
-        "EntryResult",
-        SimpleNamespace(pdb_id=pdb_id, status=status, retryable=retryable),
-    )
+    result = entry_result(pdb_id, status=status, retryable=retryable)
 
     assert pool.should_write_entry(resuming, result, prior) is expected, why

@@ -13,17 +13,25 @@ import shutil
 import signal
 import time
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from multiprocessing.queues import Queue, SimpleQueue
 from typing import Any
 
-from codes import EntryStatus, ReasonCode, WarningCode
+from analysis_config import MAX_ANALYZED_METAL_SITES
+from codes import (
+    CoordinateMappingStatus,
+    EntryStatus,
+    ReasonCode,
+    SelectedSiteStatus,
+    WarningCode,
+)
 from coordinate_conversion import first_model_pdb
 from coordination.analysis import (
     BondAnalysisMetadata,
     BondAnalysisResult,
     run_bond_analysis,
 )
+from coordination.dpi import DpiInputs
 from coordination.schema import (
     STATS_EXTRA_COLUMNS,
     check_row_schema,
@@ -37,6 +45,7 @@ from density_analysis import (
     run_density_analysis,
 )
 from inputs import (
+    PdbRedoMetadata,
     ensure_entry_available,
     entry_dir_for,
     first_existing,
@@ -52,7 +61,14 @@ from output_rows import MetalStatsRow, csv_value
 from run_logging import configure_worker_logging, logger_for, truncate
 from scratch import create_owned_scratch_directory
 from structure_analysis import NAN, StructureContext, load_structure
-from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult, WorkerConfig
+from worker_contracts import (
+    CoordinateProvenance,
+    DensityProvenance,
+    EntryResult,
+    PdbRedoProvenance,
+    SoftwareProvenance,
+    WorkerConfig,
+)
 from worker_memory import release_idle_memory
 
 METALS_SET = set(METAL_ELEMENTS)
@@ -161,12 +177,16 @@ def initial_result(
     """Return the per-entry result skeleton, pre-filled with run provenance."""
     return EntryResult(
         pdb_id=pdb_id,
-        alchemy_commit=cfg.alchemy_commit,
-        gemmi_version=cfg.gemmi_version,
-        ccp4_version=cfg.ccp4_version,
-        reference_data_id=cfg.reference_data_id,
-        analysis_config_id=cfg.analysis_config_id,
-        refinement_state="manual" if manual_inputs else "final",
+        software=SoftwareProvenance(
+            alchemy_commit=cfg.alchemy_commit,
+            gemmi_version=cfg.gemmi_version,
+            ccp4_version=cfg.ccp4_version,
+            reference_data_id=cfg.reference_data_id,
+            analysis_config_id=cfg.analysis_config_id,
+        ),
+        pdb_redo=PdbRedoProvenance(
+            refinement_state="manual" if manual_inputs else "final"
+        ),
     )
 
 
@@ -199,7 +219,7 @@ def worker_death_result(pdb_id: str, cfg: WorkerConfig, pid: int) -> EntryResult
     result.status = EntryStatus.ERROR
     result.reason_codes = [ReasonCode.WORKER_PROCESS_DIED]
     result.retryable = retryable_for(result.status, result.reason_codes)
-    result.error = (
+    result.status_detail = (
         f"worker process {pid} terminated without returning a result "
         f"(out-of-memory kill or crash); {pdb_id} was not analyzed"
     )
@@ -211,16 +231,14 @@ def is_worker_death_result(result: EntryResult) -> bool:
     return result.reason_codes == [ReasonCode.WORKER_PROCESS_DIED]
 
 
-def _coordinate_provenance(
-    cfg: WorkerConfig, source_path: str
-) -> tuple[str, str, bool]:
+def _source_coordinate_format(cfg: WorkerConfig, source_path: str) -> tuple[str, bool]:
+    """The deposited coordinate format and whether analysis converted it to PDB."""
     manual = cfg.manual_inputs
     if manual:
         converted = bool(manual.get("cif_file"))
-        return ("mmcif" if converted else "pdb", "pdb", converted)
-    coordinate_name = source_path.lower()
-    converted = coordinate_name.endswith((".cif", ".cif.gz"))
-    return ("mmcif" if converted else "pdb", "pdb", converted)
+    else:
+        converted = source_path.lower().endswith((".cif", ".cif.gz"))
+    return ("mmcif" if converted else "pdb", converted)
 
 
 def _source_coordinate_path(
@@ -252,9 +270,11 @@ def source_coordinate_provenance_path(
 def _resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
     if cfg.allow_download:
-        used_root = ensure_entry_available(pdb_id, cfg.mirror_root, cfg.cache_root)
+        used_root = ensure_entry_available(
+            pdb_id, cfg.pdb_redo_root, cfg.pdb_redo_cache
+        )
         return entry_dir_for(used_root, pdb_id)
-    return entry_dir_for(cfg.root, pdb_id)
+    return entry_dir_for(cfg.input_root, pdb_id)
 
 
 @dataclass(frozen=True)
@@ -280,13 +300,8 @@ class EntryInputs:
 class InputProvenance:
     """Coordinate and PDB-REDO provenance the input stage establishes."""
 
-    source_coordinate_format: str
-    analysis_coordinate_format: str
-    coordinate_conversion_performed: bool
-    pdb_redo_is_twin: bool | None
-    pdb_redo_version: str
-    pdb_redo_date: str
-    source_coordinate_path: str
+    coordinates: CoordinateProvenance
+    pdb_redo_metadata: PdbRedoMetadata
 
 
 @dataclass(slots=True)
@@ -301,14 +316,11 @@ class DensityOutcome:
     header: list[str] = field(default_factory=list)
     #: Set only when density could not be produced.
     reason_code: str = ""
-    error: str = ""
+    status_detail: str = ""
     timings: dict[str, float] = field(default_factory=dict)
     warning_codes: list[str] = field(default_factory=list)
     density_context_row: dict[str, Any] = field(default_factory=dict)
-    ccp4_timeout_log_path: str = ""
-    density_map_scope_used: str = ""
-    density_full_map_bytes: int = 0
-    density_edstats_map_bytes: int = 0
+    provenance: DensityProvenance = field(default_factory=DensityProvenance)
 
     @property
     def failed(self) -> bool:
@@ -322,13 +334,13 @@ class BondOutcome:
 
     analysis: BondAnalysisResult
     #: Set only when the geometry stage raised; the analysis is then empty.
-    error: str = ""
+    status_detail: str = ""
     timings: dict[str, float] = field(default_factory=dict)
 
     @property
     def failed(self) -> bool:
         """Whether the geometry stage raised."""
-        return bool(self.error)
+        return bool(self.status_detail)
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,7 +352,7 @@ class EarlyOutcome:
     n_bonds: int | None
     n_candidates: int | None
     reason_codes: tuple[str, ...] = ()
-    error: str = ""
+    status_detail: str = ""
     no_metals: bool = False
     metal_site_limit_exceeded: bool = False
     confidence_inputs_missing_reason: str = ""
@@ -362,52 +374,54 @@ def _run_density_stage(
     try:
         res = run_density_analysis(
             pdb_id,
-            inputs.mtz,
-            inputs.pdb,
-            inputs.work_dir,
-            inputs.map_reslo,
-            inputs.map_reshi,
+            mtz_path=inputs.mtz,
+            pdb_path=inputs.pdb,
+            out_dir=inputs.work_dir,
+            reslo=inputs.map_reslo,
+            reshi=inputs.map_reshi,
             env=cfg.env,
             map_scope=cfg.density_map_scope,
-            keep_full_maps=cfg.keep,
+            keep_full_maps=cfg.keep_intermediates,
             pdb_redo_is_twin=inputs.pdb_redo_is_twin,
-            tool_timeout_s=cfg.ccp4_timeout_s,
+            tool_timeout_s=cfg.ccp4_timeout,
         )
     except Ccp4ToolTimeoutError as exc:
         # A timeout does not establish an input defect; see ``retryable_for``.
-        outcome.ccp4_timeout_log_path = _preserve_timeout_log(
-            exc, pdb_id, cfg.output_dir
+        outcome.provenance = DensityProvenance(
+            ccp4_timeout_log_path=_preserve_timeout_log(exc, pdb_id, cfg.output_dir)
         )
         outcome.reason_code = ReasonCode.CCP4_TOOL_TIMEOUT
-        outcome.error = truncate(
+        outcome.status_detail = truncate(
             f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
         outcome.timings.update(exc.timings)
     except MtzfixValidationError as exc:
         # Coefficient validation failed; geometry can still be assessed.
         outcome.reason_code = ReasonCode.MTZFIX_VALIDATION_FAILURE
-        outcome.error = truncate(
+        outcome.status_detail = truncate(
             f"density unavailable: {exc}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
         outcome.timings.update(exc.timings)
     else:
         outcome.timings.update(res.timings)
-        outcome.density_map_scope_used = res.density_map_scope_used
-        outcome.density_full_map_bytes = res.full_map_bytes
-        outcome.density_edstats_map_bytes = res.edstats_map_bytes
+        outcome.provenance = DensityProvenance(
+            density_map_scope_used=res.density_map_scope_used,
+            density_full_map_bytes=res.full_map_bytes,
+            density_edstats_map_bytes=res.edstats_map_bytes,
+        )
         if res.twin_coefficient_normalization_applied:
             outcome.warning_codes.append(
                 WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED
             )
         statistics_started = time.monotonic()
-        outcome.rows, outcome.header = extract_metal_statistics(
-            pdb_id,
-            res.stats_out,
-            METALS_SET,
-            cfg.cofactors,
-            structure=structure,
-            density_context_out=outcome.density_context_row,
-            warning_codes_out=outcome.warning_codes,
+        extraction = extract_metal_statistics(
+            pdb_id, res.stats_out, METALS_SET, cfg.cofactors, structure=structure
+        )
+        outcome.rows = extraction.rows
+        outcome.header = extraction.header
+        outcome.density_context_row = extraction.density_context_row
+        outcome.warning_codes = list(
+            dict.fromkeys([*outcome.warning_codes, *extraction.warning_codes])
         )
         outcome.timings["statistics_extraction_s"] = round(
             time.monotonic() - statistics_started, 3
@@ -426,16 +440,13 @@ def _apply_density_outcome(result: EntryResult, outcome: DensityOutcome) -> None
         dict.fromkeys(result.warning_codes + outcome.warning_codes)
     )
     result.density_context_row = outcome.density_context_row
-    result.density_map_scope_used = outcome.density_map_scope_used
-    result.density_full_map_bytes = outcome.density_full_map_bytes
-    result.density_edstats_map_bytes = outcome.density_edstats_map_bytes
+    result.density = outcome.provenance
     if outcome.failed:
         result.reason_codes = list(
             dict.fromkeys(result.reason_codes + [outcome.reason_code])
         )
-        result.error = outcome.error
+        result.status_detail = outcome.status_detail
         result.confidence_inputs_missing_reason = outcome.reason_code
-        result.ccp4_timeout_log_path = outcome.ccp4_timeout_log_path
 
 
 def _identification_reason_codes(rows: list[MetalStatsRow]) -> list[ReasonCode]:
@@ -444,11 +455,11 @@ def _identification_reason_codes(rows: list[MetalStatsRow]) -> list[ReasonCode]:
     for row in rows:
         mapping_status = row.coordinate_mapping_status
         site_status = row.selected_metal_site_status
-        if mapping_status == "coordinate_residue_not_found":
+        if mapping_status == CoordinateMappingStatus.RESIDUE_NOT_FOUND:
             codes.append(ReasonCode.COFACTOR_COORDINATE_JOIN_FAILED)
-        elif mapping_status == "multiple_coordinate_residues":
+        elif mapping_status == CoordinateMappingStatus.MULTIPLE_RESIDUES:
             codes.append(ReasonCode.AMBIGUOUS_COORDINATE_RESIDUE_JOIN)
-        elif site_status == "no_selected_metal":
+        elif site_status == SelectedSiteStatus.NO_SELECTED_METAL:
             codes.append(ReasonCode.COFACTOR_WITHOUT_SELECTED_METAL)
     return list(dict.fromkeys(codes))
 
@@ -557,17 +568,17 @@ def run_bond_stage(
             inputs.pdb,
             rows,
             header,
-            {
-                "data_json": inputs.data_json,
-                "pdb_path": inputs.pdb,
-                "mtz_path": inputs.mtz,
-                "resolution": inputs.data_reshi,
-            },
+            DpiInputs(
+                resolution=inputs.data_reshi,
+                data_json=inputs.data_json,
+                pdb_path=inputs.pdb,
+                mtz_path=inputs.mtz,
+            ),
             structure=structure,
             connection_path=inputs.source_coordinate_path,
         )
     except Exception as e:
-        outcome.error = truncate(
+        outcome.status_detail = truncate(
             f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
     finally:
@@ -578,7 +589,7 @@ def run_bond_stage(
 def _apply_bond_outcome(result: EntryResult, outcome: BondOutcome) -> None:
     """Fold the bond stage into the entry result."""
     if outcome.failed:
-        result.error = outcome.error
+        result.status_detail = outcome.status_detail
         result.reason_codes = list(
             dict.fromkeys(result.reason_codes + [ReasonCode.BOND_STAGE_FAILURE])
         )
@@ -601,11 +612,11 @@ def _finalize_result(
     messages = [IDENTIFICATION_REASON_MESSAGES[code] for code in identification_codes]
     messages.extend(bond_meta.messages)
     if messages:
-        existing_error = result.error
-        result.error = "; ".join(
-            ([existing_error] if existing_error else []) + messages
+        existing_detail = result.status_detail
+        result.status_detail = truncate(
+            "; ".join(([existing_detail] if existing_detail else []) + messages),
+            MAX_MANIFEST_STATUS_DETAIL_CHARS,
         )
-        result.error = truncate(result.error, MAX_MANIFEST_STATUS_DETAIL_CHARS)
     result.warning_codes = list(
         dict.fromkeys(result.warning_codes + bond_meta.warning_codes)
     )
@@ -648,24 +659,11 @@ def _prepare_analysis_inputs(
     map_reslo, map_reshi = read_map_column_resolution(mtz)
     source_pdb = pdb
     source_coordinate_path = _source_coordinate_path(cfg, pdb_id, entry, source_pdb)
-    source_format, analysis_format, converted = _coordinate_provenance(
-        cfg, source_coordinate_path
-    )
+    source_format, converted = _source_coordinate_format(cfg, source_coordinate_path)
     model1_pdb = os.path.join(work_dir, f"{pdb_id}_model1.pdb")
     if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
         model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
     pdb, input_model_count = first_model_pdb(source_pdb, model1_pdb)
-    provenance = InputProvenance(
-        source_coordinate_format=source_format,
-        analysis_coordinate_format=analysis_format,
-        coordinate_conversion_performed=converted,
-        pdb_redo_is_twin=pdb_redo_metadata.is_twin,
-        pdb_redo_version=pdb_redo_metadata.version,
-        pdb_redo_date=pdb_redo_metadata.date,
-        source_coordinate_path=source_coordinate_provenance_path(
-            cfg, pdb_id, source_coordinate_path
-        ),
-    )
     inputs = EntryInputs(
         work_dir=work_dir,
         mtz=mtz,
@@ -678,18 +676,33 @@ def _prepare_analysis_inputs(
         source_coordinate_path=source_coordinate_path,
     )
     structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
+    provenance = InputProvenance(
+        coordinates=CoordinateProvenance(
+            source_coordinate_format=source_format,
+            analysis_coordinate_format=structure.analysis_coordinate_format,
+            coordinate_conversion_performed=converted,
+            source_coordinate_path=source_coordinate_provenance_path(
+                cfg, pdb_id, source_coordinate_path
+            ),
+            input_model_count=structure.input_model_count,
+            model_analyzed=structure.model_analyzed,
+            multi_model_structure=structure.multi_model_structure,
+        ),
+        pdb_redo_metadata=pdb_redo_metadata,
+    )
     return inputs, structure, provenance
 
 
 def _apply_input_provenance(result: EntryResult, provenance: InputProvenance) -> None:
     """Record where the analyzed coordinates and metadata came from."""
-    result.source_coordinate_format = provenance.source_coordinate_format
-    result.analysis_coordinate_format = provenance.analysis_coordinate_format
-    result.coordinate_conversion_performed = provenance.coordinate_conversion_performed
-    result.pdb_redo_is_twin = provenance.pdb_redo_is_twin
-    result.pdb_redo_version = provenance.pdb_redo_version
-    result.pdb_redo_date = provenance.pdb_redo_date
-    result.source_coordinate_path = provenance.source_coordinate_path
+    metadata = provenance.pdb_redo_metadata
+    result.coordinates = provenance.coordinates
+    result.pdb_redo = replace(
+        result.pdb_redo,
+        pdb_redo_is_twin=metadata.is_twin,
+        pdb_redo_version=metadata.version,
+        pdb_redo_date=metadata.date,
+    )
 
 
 def _early_outcome(structure: StructureContext) -> EarlyOutcome | None:
@@ -719,7 +732,7 @@ def _early_outcome(structure: StructureContext) -> EarlyOutcome | None:
             n_bonds=None,
             n_candidates=None,
             reason_codes=(ReasonCode.METAL_PRESENCE_INDETERMINATE,),
-            error=truncate(
+            status_detail=truncate(
                 "cannot establish metal absence: "
                 f"{unknown_count} atom(s) have missing or invalid element symbols",
                 MAX_MANIFEST_STATUS_DETAIL_CHARS,
@@ -738,7 +751,7 @@ def _apply_early_outcome(result: EntryResult, outcome: EarlyOutcome) -> None:
     result.n_bonds = outcome.n_bonds
     result.n_candidates = outcome.n_candidates
     result.reason_codes = list(outcome.reason_codes)
-    result.error = outcome.error
+    result.status_detail = outcome.status_detail
     result.no_metals = outcome.no_metals
     result.metal_site_limit_exceeded = outcome.metal_site_limit_exceeded
     result.confidence_inputs_missing_reason = outcome.confidence_inputs_missing_reason
@@ -771,30 +784,26 @@ def _process_entry(pdb_id: str) -> EntryResult:
                 cfg.output_dir,
                 prefix=f".alchemy-{pdb_id}-",
                 kind="entry",
-                preserve=cfg.keep,
+                preserve=cfg.keep_intermediates,
             )
             entry = work_dir
         else:
             entry = _resolve_entry_dir(pdb_id, cfg)
             if not os.path.isdir(entry):
                 result.status = EntryStatus.SKIP
-                result.error = "entry dir missing"
+                result.status_detail = "entry dir missing"
                 return result
             work_dir = create_owned_scratch_directory(
                 cfg.output_dir,
                 prefix=f".alchemy-{pdb_id}-",
                 kind="entry",
-                preserve=cfg.keep,
+                preserve=cfg.keep_intermediates,
             )
         inputs, structure, provenance = _prepare_analysis_inputs(
             pdb_id, cfg, entry, work_dir
         )
         result.timings["input_structure_s"] = round(time.monotonic() - t0, 3)
         _apply_input_provenance(result, provenance)
-        result.analysis_coordinate_format = structure.analysis_coordinate_format
-        result.input_model_count = structure.input_model_count
-        result.model_analyzed = structure.model_analyzed
-        result.multi_model_structure = structure.multi_model_structure
         result.warning_codes = list(structure.warning_codes)
         crystallization = extract_crystallization_context(
             pdb_id,
@@ -852,7 +861,9 @@ def _process_entry(pdb_id: str) -> EntryResult:
     except FileNotFoundError as e:
         result.status = EntryStatus.SKIP
         result.reason_codes = [ReasonCode.MISSING_INPUT]
-        result.error = truncate(f"missing input: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS)
+        result.status_detail = truncate(
+            f"missing input: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
+        )
     except Exception as e:  # one bad entry must not kill the batch
         deterministic = isinstance(e, DETERMINISTIC_PROCESSING_ERRORS)
         result.status = EntryStatus.ERROR
@@ -861,7 +872,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
             if deterministic
             else ReasonCode.UNEXPECTED_PROCESSING_ERROR
         ]
-        result.error = truncate(
+        result.status_detail = truncate(
             f"{type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
         )
         # Keep the traceback in the debug log; the manifest holds only a short summary.
@@ -873,7 +884,11 @@ def _process_entry(pdb_id: str) -> EntryResult:
             exc_info=True,
         )
     finally:
-        if not cfg.keep and work_dir is not None and os.path.isdir(work_dir):
+        if (
+            not cfg.keep_intermediates
+            and work_dir is not None
+            and os.path.isdir(work_dir)
+        ):
             cleanup_started = time.monotonic()
             shutil.rmtree(work_dir, ignore_errors=True)
             result.timings["cleanup_s"] = round(time.monotonic() - cleanup_started, 3)

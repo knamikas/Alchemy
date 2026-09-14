@@ -37,7 +37,12 @@ from metal_identification import (
     zd_indices,
 )
 from output_rows import MetalStatsRow
-from structure_analysis import ResidueSelection, StructureContext, load_structure
+from structure_analysis import (
+    AtomSite,
+    ResidueSelection,
+    StructureContext,
+    load_structure,
+)
 
 HEADER = list(helpers.EDSTATS_HEADER)
 INDICES = validated_edstats_header(HEADER)
@@ -65,6 +70,12 @@ def _append_field(row: list[str]) -> None:
     row.append("0.0")
 
 
+def _site_of(row: MetalStatsRow) -> AtomSite:
+    """The selected metal site a row resolved to; fail if it has none."""
+    assert row.site is not None
+    return row.site
+
+
 def _extract(
     stats_path: str | os.PathLike[str],
     context: StructureContext,
@@ -74,13 +85,14 @@ def _extract(
     cofactors: Iterable[str] = (),
 ) -> tuple[list[MetalStatsRow], list[str]]:
     """``extract_metal_statistics`` with the usual metal set and no cofactors."""
-    return extract_metal_statistics(
+    extraction = extract_metal_statistics(
         pdb_id,
         str(stats_path),
         set(METAL_ELEMENTS) if metals is None else set(metals),
         set(cofactors),
         structure=context,
     )
+    return extraction.rows, extraction.header
 
 
 def _write_rows(
@@ -268,20 +280,13 @@ def test_fixed_width_grid_point_overflow_keeps_the_entry(
     stats = helpers.write_edstats_for_structure(
         tmp_path / "stats.out", context, metrics={metric: "****"}
     )
-    warning_codes = ["existing_warning"]
-
-    rows, header = extract_metal_statistics(
-        "test",
-        stats,
-        METAL_ELEMENTS,
-        (),
-        structure=context,
-        warning_codes_out=warning_codes,
+    extraction = extract_metal_statistics(
+        "test", stats, METAL_ELEMENTS, (), structure=context
     )
+    rows, header = extraction.rows, extraction.header
 
     assert rows[0].fields[header.index(metric)] == "n/a"
-    assert warning_codes == [
-        "existing_warning",
+    assert extraction.warning_codes == [
         "edstats_grid_point_count_overflow",
     ]
 
@@ -366,10 +371,10 @@ def test_extract_skips_separator_rows_without_counting_them(tmp_path: Path) -> N
     plain, _ = _extract(_write_rows(tmp_path, residue_rows, name="plain.out"), context)
 
     assert header == list(helpers.EDSTATS_HEADER)
-    assert [row["density_observation_id"] for row in rows] == [
-        row["density_observation_id"] for row in plain
+    assert [row.density_observation_id for row in rows] == [
+        row.density_observation_id for row in plain
     ]
-    assert [row["resname"] for row in rows] == ["ZN"]
+    assert [row.resname for row in rows] == ["ZN"]
 
 
 def test_a_file_of_separators_alone_has_no_residue_rows(tmp_path: Path) -> None:
@@ -480,11 +485,9 @@ def test_blank_chain_entry_with_omitted_cp_parses_end_to_end(tmp_path: Path) -> 
     rows, header = _extract(stats, context)
 
     assert header == list(helpers.EDSTATS_HEADER)
-    assert [(row["resname"], row["chain"], row["resnum"]) for row in rows] == [
-        ("ZN", "", "1")
-    ]
-    assert rows[0]["fields"][INDICES["CP"]] == ""
-    assert rows[0]["density_observation_id"].count("chain=_") == 1
+    assert [(row.resname, row.chain, row.resnum) for row in rows] == [("ZN", "", "1")]
+    assert rows[0].fields[INDICES["CP"]] == ""
+    assert rows[0].density_observation_id.count("chain=_") == 1
 
 
 def test_ordered_waters_join_through_their_actual_cp_chain(tmp_path: Path) -> None:
@@ -495,16 +498,10 @@ def test_ordered_waters_join_through_their_actual_cp_chain(tmp_path: Path) -> No
     builder.add_water(2001, (0.0, -2.1, 0.0), chain="1")
     context = load_structure("test", builder.write_pdb(tmp_path / "waters.pdb"))
     stats = helpers.write_edstats_for_structure(tmp_path / "stats.out", context)
-    density_context: dict[str, Any] = {}
-
-    rows, _header = extract_metal_statistics(
-        "test",
-        stats,
-        METAL_ELEMENTS,
-        (),
-        structure=context,
-        density_context_out=density_context,
+    extraction = extract_metal_statistics(
+        "test", stats, METAL_ELEMENTS, (), structure=context
     )
+    rows, density_context = extraction.rows, extraction.density_context_row
 
     assert [row.resname for row in rows] == ["ZN"]
     assert density_context["water_residue_count"] == 2
@@ -550,10 +547,10 @@ def test_distinct_metal_residues_get_distinct_observation_ids(tmp_path: Path) ->
     stats = helpers.write_edstats_for_structure(tmp_path / "stats.out", context)
     rows, _ = _extract(stats, context)
 
-    assert [row["resname"] for row in rows] == ["ZN", "MG"]
-    assert len({row["density_observation_id"] for row in rows}) == 2
-    assert all(row["density_shared_site_count"] == 1 for row in rows)
-    assert not any(row["density_is_shared"] for row in rows)
+    assert [row.resname for row in rows] == ["ZN", "MG"]
+    assert len({row.density_observation_id for row in rows}) == 2
+    assert all(row.density_shared_site_count == 1 for row in rows)
+    assert not any(row.density_is_shared for row in rows)
 
 
 def test_shared_cofactor_repeats_one_observation_once_per_metal_site(
@@ -580,15 +577,15 @@ def test_shared_cofactor_repeats_one_observation_once_per_metal_site(
     )
     rows, header = _extract(stats, context, cofactors={"FES"})
 
-    assert [row["category"] for row in rows] == ["cofactor", "cofactor"]
-    assert [row["site"].atom_name for row in rows] == ["FE1", "FE2"]
-    assert len({row["density_observation_id"] for row in rows}) == 1
-    assert all(row["density_shared_site_count"] == 2 for row in rows)
-    assert all(row["density_is_shared"] for row in rows)
-    assert all(row["density_scope"] == "cofactor_residue" for row in rows)
-    assert {row["fields"][header.index("ZDm")] for row in rows} == {"1.75"}
-    assert len({row["site_key"] for row in rows}) == 2
-    assert len({row["residue_key"] for row in rows}) == 1
+    assert [row.category for row in rows] == ["cofactor", "cofactor"]
+    assert [_site_of(row).atom_name for row in rows] == ["FE1", "FE2"]
+    assert len({row.density_observation_id for row in rows}) == 1
+    assert all(row.density_shared_site_count == 2 for row in rows)
+    assert all(row.density_is_shared for row in rows)
+    assert all(row.density_scope == "cofactor_residue" for row in rows)
+    assert {row.fields[header.index("ZDm")] for row in rows} == {"1.75"}
+    assert len({row.site_key for row in rows}) == 2
+    assert len({row.residue_key for row in rows}) == 1
 
 
 @pytest.fixture(scope="module")
@@ -696,21 +693,14 @@ def test_uncatalogued_components_keep_every_selected_metal_density(
     stats = helpers.write_edstats_for_structure(
         tmp_path / "stats.out", context, metrics={"ZDa": 4.5}
     )
-    controls: dict[str, Any] = {}
-    warnings = ["cofactor_catalog_fallback"]
-    rows, _ = extract_metal_statistics(
-        "test",
-        str(stats),
-        METAL_ELEMENTS,
-        (),
-        context,
-        density_context_out=controls,
-        warning_codes_out=warnings,
+    extraction = extract_metal_statistics(
+        "test", str(stats), METAL_ELEMENTS, (), context
     )
+    rows, controls = extraction.rows, extraction.density_context_row
     assert {row.site_key for row in rows} == {
         atom.source_key for atom in context.metal_atoms(METAL_ELEMENTS)
     }
-    assert warnings == ["cofactor_catalog_fallback"]
+    assert extraction.warning_codes == ["cofactor_catalog_fallback"]
     cluster_rows = [row for row in rows if row.resname == "FES"]
     assert len(cluster_rows) == 2
     assert {row.category for row in cluster_rows} == {"cofactor"}
@@ -800,9 +790,9 @@ def test_usealt_density_follows_the_selected_residue_conformer(tmp_path: Path) -
     rows, header = _extract(stats, context, cofactors={"FES"})
 
     assert len(rows) == 1
-    assert rows[0]["site"].altloc == "B"
-    assert rows[0]["fields"][header.index("CI")] == "A"
-    assert rows[0]["fields"][header.index("ZDm")] == "1.6"
+    assert _site_of(rows[0]).altloc == "B"
+    assert rows[0].fields[header.index("CI")] == "A"
+    assert rows[0].fields[header.index("ZDm")] == "1.6"
 
 
 def test_usealt_ignores_pooled_summary_beside_conformer_rows(
@@ -822,8 +812,8 @@ def test_usealt_ignores_pooled_summary_beside_conformer_rows(
     rows, header = _extract(stats, context, cofactors={"FES"})
 
     assert len(rows) == 1
-    assert rows[0]["site"].altloc == "B"
-    assert rows[0]["fields"][header.index("ZDm")] == "1.6"
+    assert _site_of(rows[0]).altloc == "B"
+    assert rows[0].fields[header.index("ZDm")] == "1.6"
 
 
 def test_missing_selected_usealt_row_is_incomplete_density_output(
@@ -879,20 +869,20 @@ def test_only_metal_and_cofactor_residues_produce_rows(tmp_path: Path) -> None:
 
     assert len(rows) == 1
     row = rows[0]
-    assert (row["pdbID"], row["category"], row["resname"]) == ("test", "metal", "ZN")
-    assert (row["chain"], row["resnum"]) == ("B", "1")
-    assert row["density_scope"] == "metal_residue"
-    assert row["density_shared_site_count"] == 1
-    assert row["density_is_shared"] is False
-    assert row["coordinate_mapping_status"] == "matched"
-    assert row["selected_metal_site_status"] == "selected"
-    assert row["fields"][header.index("ZD-m")] == "-3.25"
-    assert row["fields"][header.index("RT")] == "ZN"
+    assert (row.pdb_id, row.category, row.resname) == ("test", "metal", "ZN")
+    assert (row.chain, row.resnum) == ("B", "1")
+    assert row.density_scope == "metal_residue"
+    assert row.density_shared_site_count == 1
+    assert row.density_is_shared is False
+    assert row.coordinate_mapping_status == "matched"
+    assert row.selected_metal_site_status == "selected"
+    assert row.fields[header.index("ZD-m")] == "-3.25"
+    assert row.fields[header.index("RT")] == "ZN"
 
     residue = next(r for r in context.residues if r.residue_name == "ZN")
-    assert row["residue_key"] == residue.key
-    assert row["site"].atom_name == "ZN"
-    assert row["site_key"] == residue.contact_atoms[0].source_key
+    assert row.residue_key == residue.key
+    assert _site_of(row).atom_name == "ZN"
+    assert row.site_key == residue.contact_atoms[0].source_key
 
 
 def test_discarded_residues_form_entry_and_water_rszd_controls(
@@ -912,16 +902,9 @@ def test_discarded_residues_form_entry_and_water_rszd_controls(
             ("HOH", "B", "100"): {"ZDa": -6.0},
         },
     )
-    density_context: dict[str, Any] = {}
-
-    extract_metal_statistics(
-        "test",
-        stats,
-        METAL_ELEMENTS,
-        (),
-        structure=context,
-        density_context_out=density_context,
-    )
+    density_context = extract_metal_statistics(
+        "test", stats, METAL_ELEMENTS, (), structure=context
+    ).density_context_row
 
     assert set(density_context) == set(DENSITY_CONTEXT_COLUMNS)
     assert density_context["density_context_status"] == "available"
@@ -955,7 +938,7 @@ def test_null_statistics_reach_the_emitted_row_unchanged(tmp_path: Path) -> None
 
     assert len(rows) == 1
     metrics = {
-        name: rows[0]["fields"][header.index(name)] for name in helpers.EDSTATS_METRICS
+        name: rows[0].fields[header.index(name)] for name in helpers.EDSTATS_METRICS
     }
     assert set(metrics.values()) == {"n/a"}
 
@@ -967,7 +950,7 @@ def test_the_metal_element_set_is_matched_case_insensitively(tmp_path: Path) -> 
     stats = helpers.write_edstats_for_structure(tmp_path / "stats.out", context)
 
     rows, _ = _extract(stats, context, metals={"zn"})
-    assert [row["resname"] for row in rows] == ["ZN"]
+    assert [row.resname for row in rows] == ["ZN"]
 
 
 def test_an_entry_with_no_configured_metal_yields_no_rows(tmp_path: Path) -> None:
@@ -1003,13 +986,13 @@ def test_a_cofactor_without_a_selected_metal_keeps_one_diagnostic_row(
 
     assert len(rows) == 1
     row = rows[0]
-    assert (row["category"], row["resname"]) == ("cofactor", "XCF")
-    assert row["site"] is None and row["site_key"] is None
-    assert row["selected_metal_site_status"] == "no_selected_metal"
-    assert row["coordinate_mapping_status"] == "matched"
-    assert row["density_shared_site_count"] == 0
-    assert row["density_is_shared"] is False
-    assert row["residue_key"] == context.residues[0].key
+    assert (row.category, row.resname) == ("cofactor", "XCF")
+    assert row.site is None and row.site_key is None
+    assert row.selected_metal_site_status == "no_selected_metal"
+    assert row.coordinate_mapping_status == "matched"
+    assert row.density_shared_site_count == 0
+    assert row.density_is_shared is False
+    assert row.residue_key == context.residues[0].key
 
 
 def test_a_cofactor_row_with_no_coordinate_residue_reports_a_join_failure(
@@ -1027,17 +1010,17 @@ def test_a_cofactor_row_with_no_coordinate_residue_reports_a_join_failure(
     rows, _ = _extract(stats, context, cofactors={"FES"})
 
     metal, phantom = rows
-    assert metal["resname"] == "ZN"
-    assert phantom["category"] == "cofactor"
-    assert (phantom["resname"], phantom["chain"], phantom["resnum"]) == (
+    assert metal.resname == "ZN"
+    assert phantom.category == "cofactor"
+    assert (phantom.resname, phantom.chain, phantom.resnum) == (
         "FES",
         "C",
         "77",
     )
-    assert phantom["coordinate_mapping_status"] == "coordinate_residue_not_found"
-    assert phantom["selected_metal_site_status"] == "no_selected_metal"
-    assert phantom["site"] is None and phantom["residue_key"] is None
-    assert phantom["density_shared_site_count"] == 0
+    assert phantom.coordinate_mapping_status == "coordinate_residue_not_found"
+    assert phantom.selected_metal_site_status == "no_selected_metal"
+    assert phantom.site is None and phantom.residue_key is None
+    assert phantom.density_shared_site_count == 0
 
 
 def _repeated_coordinate_identity(context: StructureContext) -> StructureContext:
@@ -1071,24 +1054,24 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
     rows, header = _extract(stats, duplicated)
 
     assert len(rows) == 2
-    assert all(row["coordinate_mapping_status"] == "matched" for row in rows)
-    assert all(row["selected_metal_site_status"] == "selected" for row in rows)
-    assert len({row["density_observation_id"] for row in rows}) == 2
-    assert all(row["density_shared_site_count"] == 1 for row in rows)
-    assert len({row["residue_key"] for row in rows}) == 2
-    assert len({row["site_key"] for row in rows}) == 2
-    assert [row["fields"][header.index("ZDm")] for row in rows] == ["2.0", "8.0"]
+    assert all(row.coordinate_mapping_status == "matched" for row in rows)
+    assert all(row.selected_metal_site_status == "selected" for row in rows)
+    assert len({row.density_observation_id for row in rows}) == 2
+    assert all(row.density_shared_site_count == 1 for row in rows)
+    assert len({row.residue_key for row in rows}) == 2
+    assert len({row.site_key for row in rows}) == 2
+    assert [row.fields[header.index("ZDm")] for row in rows] == ["2.0", "8.0"]
 
     indexed_sigma = sigma_index(rows)
     zd_column_indices = zd_indices(header)
     assert [
         sigma_for(
             indexed_sigma,
-            row["resname"],
-            row["chain"],
-            row["resnum"],
+            row.resname,
+            row.chain,
+            row.resnum,
             zd_column_indices,
-            site_key=row["site_key"],
+            site_key=row.site_key,
         )[0]
         for row in rows
     ] == [2.0, 8.0]
@@ -1175,11 +1158,11 @@ def test_nr_restarting_per_chain_is_the_normal_case_not_a_duplicate(
 
     rows, _ = _extract(stats, context)
 
-    assert [(row["resname"], row["chain"]) for row in rows] == [
+    assert [(row.resname, row.chain) for row in rows] == [
         ("ZN", "A"),
         ("MG", "B"),
     ]
-    assert len({row["density_observation_id"] for row in rows}) == 2
+    assert len({row.density_observation_id for row in rows}) == 2
 
 
 def test_nr_is_resolved_within_its_own_chain(tmp_path: Path) -> None:
@@ -1220,9 +1203,9 @@ def test_nr_is_resolved_within_its_own_chain(tmp_path: Path) -> None:
     )
     rows, _ = _extract(stats, duplicated)
 
-    assert [row["fields"][INDICES["ZDm"]] for row in rows] == ["0.0", "2.0", "8.0"]
-    assert [row["resnum"] for row in rows] == ["1", "1", "2"]
-    assert len({row["density_observation_id"] for row in rows}) == 3
+    assert [row.fields[INDICES["ZDm"]] for row in rows] == ["0.0", "2.0", "8.0"]
+    assert [row.resnum for row in rows] == ["1", "1", "2"]
+    assert len({row.density_observation_id for row in rows}) == 3
 
 
 def test_duplicate_nr_fails_instead_of_reusing_a_coordinate_residue(
@@ -1259,9 +1242,9 @@ def test_insertion_coded_residue_ids_join_after_canonicalization(
     stats = _write_rows(tmp_path, [helpers.edstats_row("ZN", "B", "10:A")])
     rows, _ = _extract(stats, context)
 
-    assert [row["resnum"] for row in rows] == ["10A"]
-    assert rows[0]["fields"][INDICES["RN"]] == "10A"
-    assert "residue=10A" in rows[0]["density_observation_id"]
+    assert [row.resnum for row in rows] == ["10A"]
+    assert rows[0].fields[INDICES["RN"]] == "10A"
+    assert "residue=10A" in rows[0].density_observation_id
 
 
 @pytest.mark.parametrize("residue_id", ["1:AB", "12345A", "10*", "-"])
@@ -1361,7 +1344,7 @@ def test_blank_lines_between_rows_are_ignored(tmp_path: Path) -> None:
     stats.write_text(padded, encoding="utf-8")
 
     rows, _ = _extract(stats, context)
-    assert [row["resname"] for row in rows] == ["ZN"]
+    assert [row.resname for row in rows] == ["ZN"]
 
 
 def test_a_structure_is_required_for_identification(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ import gemmi
 import numpy as np
 import numpy.typing as npt
 
+from codes import DensityMapScope
 from run_logging import logger_for, truncate
 
 logger = logger_for(__name__)
@@ -29,7 +30,8 @@ MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 
 # Allow roughly five times the slowest observed CCP4 step (185.7 seconds).
 CCP4_TOOL_TIMEOUT_S = 15 * 60
-DENSITY_MAP_SCOPES = ("model-envelope", "full")
+#: The scopes a run may request; the fallbacks in ``DensityMapScope`` cannot be.
+DENSITY_MAP_SCOPES = (DensityMapScope.MODEL_ENVELOPE, DensityMapScope.FULL)
 REFMAC_TWIN_COLUMNS = {
     "FP": "F",
     "SIGFP": "Q",
@@ -88,7 +90,7 @@ class DensityResult:
     twin_coefficient_normalization_applied: bool
     twin_coefficient_normalization: dict[str, Any] | None
     density_map_scope_requested: str
-    density_map_scope_used: str
+    density_map_scope_used: DensityMapScope
     full_map_bytes: int
     edstats_map_bytes: int
 
@@ -526,7 +528,7 @@ def _prepare_map_mtz(
 class _MapBuildResult:
     """Map scope and byte counts after any model-envelope fallback."""
 
-    scope_used: str
+    scope_used: DensityMapScope
     full_map_bytes: int
     edstats_map_bytes: int
 
@@ -625,13 +627,14 @@ class _DensityMapBuilder:
         )
 
     def build(self, map_scope: str, keep_full_maps: bool) -> _MapBuildResult:
-        if map_scope == "full":
+        requested = DensityMapScope(map_scope)
+        if requested is DensityMapScope.FULL:
             self._fft(self.paths.fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
             self._fft(self.paths.df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
             full_bytes = self._map_size(
                 self.paths.fo_map, "2mFo-DFc FFT"
             ) + self._map_size(self.paths.df_map, "mFo-DFc FFT")
-            return _MapBuildResult(map_scope, full_bytes, full_bytes)
+            return _MapBuildResult(requested, full_bytes, full_bytes)
 
         full_fo_map = os.path.join(self.out_dir, f"{self.pdb_id}_fo_full.map")
         self._fft(full_fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
@@ -639,12 +642,12 @@ class _DensityMapBuilder:
         full_fo_bytes = self._map_size(full_fo_map, "2mFo-DFc FFT")
         envelope_fo_bytes = self._map_size(self.paths.fo_map, "2mFo-DFc MAPMASK")
 
-        fallback_scope = ""
+        fallback_scope: DensityMapScope | None = None
         if envelope_fo_bytes >= full_fo_bytes:
-            fallback_scope = "full-size-fallback"
+            fallback_scope = DensityMapScope.FULL_SIZE_FALLBACK
         elif self._map_extent_requires_full_map(self.paths.fo_map):
-            fallback_scope = "full-extent-fallback"
-        if fallback_scope:
+            fallback_scope = DensityMapScope.FULL_EXTENT_FALLBACK
+        if fallback_scope is not None:
             os.remove(self.paths.fo_map)
             os.replace(full_fo_map, self.paths.fo_map)
             self._fft(self.paths.df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
@@ -669,7 +672,7 @@ class _DensityMapBuilder:
         if not keep_full_maps:
             os.remove(full_df_map)
         return _MapBuildResult(
-            map_scope,
+            requested,
             full_fo_bytes + full_df_bytes,
             envelope_fo_bytes + envelope_df_bytes,
         )
@@ -677,6 +680,7 @@ class _DensityMapBuilder:
 
 def run_density_analysis(
     pdb_id: str,
+    *,
     mtz_path: str,
     pdb_path: str,
     out_dir: str,

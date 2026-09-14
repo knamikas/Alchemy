@@ -262,10 +262,10 @@ def test_complete_evidence_decision_matrix(
     representative = {"PASS": 0.5, "REVIEW": 1.5, "SUSPECT": 7.0}
     density_value = {"PASS": 1.0, "REVIEW": 4.0, "SUSPECT": 7.0}[density]
     result = cs.classify_site(density_value, representative[geometry])
-    assert result["density_level"] == density
-    assert result["geometry_level"] == geometry
-    assert result["alchemy_level"] == overall
-    assert result["evidence_basis"] == "density_and_geometry"
+    assert result.density_level == density
+    assert result.geometry_level == geometry
+    assert result.alchemy_level == overall
+    assert result.evidence_basis == "density_and_geometry"
 
 
 @pytest.mark.parametrize(
@@ -284,17 +284,29 @@ def test_missing_component_uses_available_evidence_directly(
     rszd: float, rms: float, basis: str, overall: str
 ) -> None:
     result = cs.classify_site(rszd, rms)
-    assert result["evidence_basis"] == basis
-    assert result["alchemy_level"] == overall
+    assert result.evidence_basis == basis
+    assert result.alchemy_level == overall
 
 
 def test_verdict_reasons_distinguish_all_suspect_routes() -> None:
-    assert cs.classify_site(7.0, 2.5)["verdict_reason"] == (
-        "density_and_geometry_suspect"
-    )
-    assert cs.classify_site(7.0, 0.5)["verdict_reason"] == "density_suspect"
-    assert cs.classify_site(1.0, 2.5)["verdict_reason"] == "geometry_suspect"
-    assert cs.classify_site(4.0, 1.5)["verdict_reason"] == "review_plus_review"
+    assert cs.classify_site(7.0, 2.5).verdict_reason == ("density_and_geometry_suspect")
+    assert cs.classify_site(7.0, 0.5).verdict_reason == "density_suspect"
+    assert cs.classify_site(1.0, 2.5).verdict_reason == "geometry_suspect"
+    assert cs.classify_site(4.0, 1.5).verdict_reason == "review_plus_review"
+
+
+def test_classification_alone_leaves_every_ranking_score_blank() -> None:
+    verdict = cs.classify_site(4.0, 1.5)
+    assert math.isnan(verdict.density_score)
+    assert math.isnan(verdict.geometry_score)
+    assert math.isnan(verdict.alchemy_score)
+
+
+def test_verdict_row_uses_only_analysis_column_names() -> None:
+    row = cs.score_site(1.0, 0.5, _reference()).as_row()
+    assert set(row) < set(cs.ANALYSIS_COLUMNS)
+    assert row["alchemy_level"] == "PASS"
+    assert row["alchemy_score"] == approx(87.5)
 
 
 def test_empirical_support_is_reverse_average_rank_with_ties() -> None:
@@ -309,25 +321,25 @@ def test_empirical_support_is_reverse_average_rank_with_ties() -> None:
 def test_overall_ranking_score_is_minimum_available_support() -> None:
     reference = _reference()
     both = cs.score_site(1.0, 0.5, reference)
-    assert both["density_score"] == approx(87.5)
-    assert both["geometry_score"] == approx(87.5)
-    assert both["alchemy_score"] == approx(87.5)
+    assert both.density_score == approx(87.5)
+    assert both.geometry_score == approx(87.5)
+    assert both.alchemy_score == approx(87.5)
 
     density_only = cs.score_site(3.0, math.nan, reference)
-    assert density_only["alchemy_score"] == approx(50.0)
-    assert math.isnan(float(density_only["geometry_score"]))
+    assert density_only.alchemy_score == approx(50.0)
+    assert math.isnan(density_only.geometry_score)
 
 
 def test_edstats_saturation_receives_zero_density_support() -> None:
     result = cs.score_site(99.9, math.nan, _reference())
-    assert result["density_score"] == 0.0
-    assert result["alchemy_score"] == 0.0
+    assert result.density_score == 0.0
+    assert result.alchemy_score == 0.0
 
 
 def test_ranking_score_does_not_define_review_plus_review_verdict() -> None:
     result = cs.score_site(4.0, 1.5, _reference())
-    assert result["alchemy_level"] == "SUSPECT"
-    assert float(result["alchemy_score"]) > 0.0
+    assert result.alchemy_level == "SUSPECT"
+    assert result.alchemy_score > 0.0
 
 
 def test_classification_without_reference_keeps_levels_and_blanks_rankings() -> None:
@@ -384,8 +396,8 @@ def test_multiple_moderate_inferred_bonds_can_make_geometry_suspect() -> None:
     prepared = cs.prepare_confidence_inputs([_stats_row(zdm=1.0)], bonds)[0]
     assert float(prepared["geometry_max_abs_zbond"]) < 3.0
     result = cs.classify_site(1.0, float(prepared["geometry_rms_zbond"]))
-    assert result["geometry_level"] == "SUSPECT"
-    assert result["alchemy_level"] == "SUSPECT"
+    assert result.geometry_level == "SUSPECT"
+    assert result.alchemy_level == "SUSPECT"
 
 
 def test_severe_declared_contact_can_dominate_site_rms() -> None:
@@ -843,6 +855,12 @@ def test_reference_metadata_field_vocabulary_covers_emitted_metadata(
 ) -> None:
     reference = cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
     assert set(reference.metadata) <= cs.REFERENCE_METADATA_FIELDS
+    # The scoring contract is every field the loader compares, and nothing
+    # written is left out of either vocabulary.
+    assert set(cs.SCORING_METADATA_FIELDS) <= set(reference.metadata)
+    assert set(reference.metadata) - set(cs.SCORING_METADATA_FIELDS) <= set(
+        cs.REFERENCE_PROVENANCE_FIELDS
+    )
 
 
 def test_all_input_and_analysis_columns_are_unique() -> None:

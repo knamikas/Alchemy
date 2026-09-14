@@ -30,6 +30,7 @@ import analysis_config
 import cli
 import main
 import reference_data
+import run_logging
 import worker
 import worker_contracts
 from codes import EntryStatus
@@ -95,9 +96,9 @@ def _reference_cfg(
     """Build the worker config exactly as ``driver_pool.run`` assembles it."""
     env = dict(os.environ)
     return helpers.worker_config(
-        root=os.path.join(output_dir, "root"),
-        mirror_root=os.path.join(output_dir, "mirror"),
-        cache_root=os.path.join(output_dir, "cache"),
+        input_root=os.path.join(output_dir, "root"),
+        pdb_redo_root=os.path.join(output_dir, "mirror"),
+        pdb_redo_cache=os.path.join(output_dir, "cache"),
         env=env,
         output_dir=output_dir,
         cofactors=reference_data.cofactor_ids(),
@@ -324,10 +325,10 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(
     assert result.rows == []
     assert result.bond_rows == []
     assert result.candidate_rows == []
-    assert "4321" in result.error and "1abc" in result.error
-    assert result.alchemy_commit == cfg.alchemy_commit
-    assert result.gemmi_version == cfg.gemmi_version
-    assert result.ccp4_version == cfg.ccp4_version
+    assert "4321" in result.status_detail and "1abc" in result.status_detail
+    assert result.software.alchemy_commit == cfg.alchemy_commit
+    assert result.software.gemmi_version == cfg.gemmi_version
+    assert result.software.ccp4_version == cfg.ccp4_version
 
     row = writers.manifest_row(
         result,
@@ -377,7 +378,7 @@ def test_worker_death_result_reports_the_run_refinement_state(
     """Even a synthesized failure records which refinement the run targeted."""
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
     result = worker.worker_death_result("1abc", cfg, 7)
-    assert result.refinement_state == expected_state
+    assert result.pdb_redo.refinement_state == expected_state
 
 
 def test_worker_death_reason_codes_discriminate_synthesized_from_real(
@@ -1052,18 +1053,19 @@ def test_worker_config_cannot_be_edited_by_a_worker(tmp_path: Path) -> None:
     cfg = _reference_cfg(str(tmp_path))
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        cfg.keep = True  # type: ignore[misc]
+        cfg.keep_intermediates = True  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.cofactors = frozenset()  # type: ignore[misc]
 
-    assert cfg.keep is False
+    assert cfg.keep_intermediates is False
 
 
 def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> None:
     """The one hand-written mapping from CLI options to config fields.
 
     ``WorkerConfig`` makes a missing or misspelled *field* impossible, but not a
-    field wired to the wrong option -- ``keep=args.bonds`` type-checks perfectly.
+    field wired to the wrong option -- ``keep_intermediates=args.bonds``
+    type-checks perfectly.
     """
     args = cli.parse_args(
         [
@@ -1107,16 +1109,17 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         run_log.details["metal_distances_info_sha256"]
         == reference_data.reference_data_checksums()["metal_distances_info.txt"]
     )
-    assert cfg.root == str(tmp_path / "root")
-    assert cfg.cache_root == str(tmp_path / "cache")
+    assert cfg.input_root == str(tmp_path / "root")
+    assert cfg.pdb_redo_cache == str(tmp_path / "cache")
     assert cfg.pdb_metadata_cache == args.pdb_metadata_cache
     assert cfg.output_dir == str(tmp_path)
     assert cfg.env == env
     assert cfg.cofactors == frozenset({"HEM"})
-    assert cfg.keep is True
+    assert cfg.keep_intermediates is True
     assert cfg.bonds is False
     assert cfg.density_map_scope == "full"
-    assert cfg.ccp4_timeout_s == 42
+    assert cfg.ccp4_timeout == 42
+    assert cfg.log_level == run_logging.worker_level(args.log_level, args.log_file)
     assert cfg.manual_inputs is None
     # ``--id`` means an entry may be fetched; a manual run may not.
     assert cfg.allow_download is True
@@ -1135,7 +1138,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         env,
         str(tmp_path / "root"),
         # A manual run never downloads, so this test gives it no cache root, but
-        # Both this factory and ``WorkerConfig.cache_root`` declare ``str``.
+        # Both this factory and ``WorkerConfig.pdb_redo_cache`` declare ``str``.
         None,  # type: ignore[arg-type]
         frozenset(),
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},

@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from run_logging import level_for_verbosity
+
 
 @dataclass(frozen=True, slots=True)
 class RunConfig:
@@ -35,3 +37,8 @@ class RunConfig:
     resume: bool
     retry_partials: bool
     bonds: bool
+
+    @property
+    def log_level(self) -> int:
+        """The console logging level ``--verbose`` and ``--quiet`` resolve to."""
+        return level_for_verbosity(self.verbose, self.quiet)

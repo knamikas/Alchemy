@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Any, ClassVar
-
-from typing_extensions import override
+from typing import Any
 
 from structure_analysis import AtomSite
 
@@ -17,7 +15,7 @@ ResidueKey = tuple[int, int, int]
 
 
 @dataclass(frozen=True, slots=True)
-class MetalStatsRow(Mapping[str, Any]):
+class MetalStatsRow:
     """Store one metal-statistics row with its resolved structure identity."""
 
     pdb_id: str
@@ -35,40 +33,6 @@ class MetalStatsRow(Mapping[str, Any]):
     site: AtomSite | None
     site_key: AtomKey | None
     residue_key: ResidueKey | None
-
-    field_names: ClassVar[tuple[str, ...]] = (
-        "pdbID",
-        "category",
-        "resname",
-        "chain",
-        "resnum",
-        "fields",
-        "density_observation_id",
-        "density_scope",
-        "density_shared_site_count",
-        "density_is_shared",
-        "coordinate_mapping_status",
-        "selected_metal_site_status",
-        "site",
-        "site_key",
-        "residue_key",
-    )
-
-    @override
-    def __getitem__(self, key: str) -> Any:
-        if key == "pdbID":
-            return self.pdb_id
-        if key not in self.field_names:
-            raise KeyError(key)
-        return getattr(self, key)
-
-    @override
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.field_names)
-
-    @override
-    def __len__(self) -> int:
-        return len(self.field_names)
 
     def with_fields(self, fields: Sequence[CsvValue]) -> MetalStatsRow:
         """Return a copy containing the supplied output fields."""
@@ -103,6 +67,11 @@ class MetalStatsRow(Mapping[str, Any]):
         if len(values) != len(columns):
             raise ValueError("metal statistics row does not match its output schema")
         return dict(zip(columns, values, strict=True))
+
+
+def blank_if_unmeasured(value: Any) -> Any:
+    """Prevent an unmeasured value from looking measured after serialization."""
+    return "" if value is None else value
 
 
 def csv_value(value: object) -> CsvValue:

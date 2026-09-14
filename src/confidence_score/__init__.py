@@ -71,12 +71,19 @@ from confidence_score.schema import (
     REFERENCE_METADATA_FIELDS as REFERENCE_METADATA_FIELDS,
 )
 from confidence_score.schema import REFERENCE_METADATA_FILE as REFERENCE_METADATA_FILE
+from confidence_score.schema import (
+    REFERENCE_PROVENANCE_FIELDS as REFERENCE_PROVENANCE_FIELDS,
+)
 from confidence_score.schema import SCORE_DECIMAL_PLACES as SCORE_DECIMAL_PLACES
+from confidence_score.schema import (
+    SCORING_METADATA_FIELDS as SCORING_METADATA_FIELDS,
+)
 from confidence_score.schema import SITE_KEY_COLUMNS as SITE_KEY_COLUMNS
 from confidence_score.schema import VERDICT_REASONS as VERDICT_REASONS
 from confidence_score.schema import canonical_metric as canonical_metric
 from confidence_score.schema import canonical_support_score as canonical_support_score
 from confidence_score.scoring import ConfidenceReference as ConfidenceReference
+from confidence_score.scoring import SiteVerdict as SiteVerdict
 from confidence_score.scoring import classify_site as classify_site
 from confidence_score.scoring import component_level as component_level
 from confidence_score.scoring import density_level as density_level
@@ -105,8 +112,11 @@ __all__ = [
     "REFERENCE_DISTRIBUTION_FILE",
     "REFERENCE_METADATA_FIELDS",
     "REFERENCE_METADATA_FILE",
+    "REFERENCE_PROVENANCE_FIELDS",
     "SCORE_DECIMAL_PLACES",
+    "SCORING_METADATA_FIELDS",
     "SITE_KEY_COLUMNS",
+    "SiteVerdict",
     "VERDICT_REASONS",
     "canonical_metric",
     "canonical_support_score",

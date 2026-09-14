@@ -20,7 +20,7 @@ import coordination.dpi as dpi_module
 import coordination.schema as coordination_schema
 import reference_data
 import worker
-from codes import EntryStatus
+from codes import EligibilityReason, EligibilityStatus, EntryStatus, ReferenceKind
 from coordination import donor_chemistry
 from coordination.contact_record import Candidate
 from metal_elements import METAL_ELEMENTS
@@ -782,7 +782,7 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
 
     target, cutoff, kind, key = ba.first_sphere_rule(metal_site, neighbor)
 
-    assert kind == "exact"
+    assert kind is ReferenceKind.EXACT
     assert key == ":".join(expected_key)
     assert target == approx(mu)
     assert cutoff == approx(mu + 0.75)
@@ -808,7 +808,7 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
 
     target, cutoff, kind, key = ba.first_sphere_rule(metal_site, neighbor)
 
-    assert kind == "element_fallback"
+    assert kind is ReferenceKind.ELEMENT_FALLBACK
     assert key == "*:O:ZN"
     assert target == approx(widest_zn_o)
     assert cutoff == approx(widest_zn_o + 0.75)
@@ -875,12 +875,14 @@ def test_first_sphere_membership_at_the_exact_cutoff_boundary(
     assert candidate["first_sphere_cutoff"] == approx(2.78)
     assert candidate["first_sphere_eligible"] is eligible
     assert candidate["eligibility_status"] == (
-        "first_sphere_eligible" if eligible else "outside_first_sphere"
+        EligibilityStatus.FIRST_SPHERE_ELIGIBLE
+        if eligible
+        else EligibilityStatus.OUTSIDE_FIRST_SPHERE
     )
     assert candidate["eligibility_reason"] == (
-        "distance_within_target_plus_0.75"
+        EligibilityReason.DISTANCE_WITHIN_TOLERANCE
         if eligible
-        else "distance_exceeds_target_plus_0.75"
+        else EligibilityReason.DISTANCE_EXCEEDS_TOLERANCE
     )
     assert len(rows) == (1 if eligible else 0)
 

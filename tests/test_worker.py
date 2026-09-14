@@ -14,15 +14,17 @@ import helpers
 import pytest
 from helpers import entry_result, worker_config
 
+import analysis_config
 import density_analysis as density
 import scratch
 import structure_analysis
 import worker
 import worker_contracts
-from codes import EntryStatus
+from codes import DensityMapScope, EntryStatus
 from driver import confidence as driver_confidence
 from driver.writers import manifest_row
 from inputs import PdbRedoMetadata
+from metal_identification import EdstatsExtraction
 
 
 def _read_resolution_stub(
@@ -37,10 +39,8 @@ def _read_map_column_resolution_stub(mtz_path: str) -> tuple[float, float]:
     return 20.0, 2.0
 
 
-def _empty_metal_statistics(
-    *_args: Any, **_kwargs: Any
-) -> tuple[list[dict[str, Any]], list[str]]:
-    return [], []
+def _empty_metal_statistics(*_args: Any, **_kwargs: Any) -> EdstatsExtraction:
+    return EdstatsExtraction([], [], {}, [])
 
 
 def _manual_entry(
@@ -76,13 +76,13 @@ def _manual_entry(
     monkeypatch.setattr(worker, "run_density_analysis", density_stage)
 
     cfg = worker_config(
-        root=str(tmp_path),
-        mirror_root=str(tmp_path),
-        cache_root=str(tmp_path),
+        input_root=str(tmp_path),
+        pdb_redo_root=str(tmp_path),
+        pdb_redo_cache=str(tmp_path),
         output_dir=str(tmp_path),
         bonds=bonds,
         density_map_scope="full",
-        ccp4_timeout_s=900,
+        ccp4_timeout=900,
         manual_inputs={
             "pdb_file": str(pdb_path),
             "mtz_file": str(mtz_path),
@@ -134,16 +134,16 @@ def test_an_unanticipated_failure_reports_whether_it_will_recur(
     assert result.status == "error"
     assert result.reason_codes == [expected_code]
     assert result.retryable is True
-    assert type(exception).__name__ in result.error
+    assert type(exception).__name__ in result.status_detail
 
 
 def _real_stats_density_stage(
-    pdb_id: str, mtz: str, pdb: str, work_dir: str, *args: Any, **kwargs: Any
+    pdb_id: str, *, pdb_path: str, out_dir: str, **_kwargs: Any
 ) -> density.DensityResult:
     """Write a synthetic ``stats.out`` covering every residue of the model."""
-    context = structure_analysis.load_structure(pdb_id, pdb)
+    context = structure_analysis.load_structure(pdb_id, pdb_path)
     stats_out = helpers.write_edstats_for_structure(
-        os.path.join(work_dir, "stats.out"), context
+        os.path.join(out_dir, "stats.out"), context
     )
     return density.DensityResult(
         stats_out=stats_out,
@@ -157,7 +157,7 @@ def _real_stats_density_stage(
         twin_coefficient_normalization_applied=False,
         twin_coefficient_normalization=None,
         density_map_scope_requested="model-envelope",
-        density_map_scope_used="model-envelope",
+        density_map_scope_used=DensityMapScope.MODEL_ENVELOPE,
         full_map_bytes=8192,
         edstats_map_bytes=2048,
     )
@@ -182,9 +182,9 @@ def test_manifest_twin_flag_uses_the_density_routing_metadata(
 
     result = _manual_entry(tmp_path, monkeypatch, _real_stats_density_stage)
 
-    assert result.pdb_redo_is_twin is True
-    assert result.pdb_redo_version == "8.04"
-    assert result.pdb_redo_date == "2024-02-08"
+    assert result.pdb_redo.pdb_redo_is_twin is True
+    assert result.pdb_redo.pdb_redo_version == "8.04"
+    assert result.pdb_redo.pdb_redo_date == "2024-02-08"
 
 
 @pytest.mark.parametrize("bonds", [True, False], ids=["bonds", "no-bonds"])
@@ -283,7 +283,7 @@ def test_a_metal_dense_entry_finishes_before_density_processing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     builder = helpers.StructureBuilder()
-    for residue_number in range(1, worker_contracts.MAX_ANALYZED_METAL_SITES + 2):
+    for residue_number in range(1, analysis_config.MAX_ANALYZED_METAL_SITES + 2):
         builder.add_metal(
             "MG",
             residue_number,
@@ -307,7 +307,7 @@ def test_a_metal_dense_entry_finishes_before_density_processing(
     assert result.no_metals is False
     assert result.metal_site_limit_exceeded is True
     assert result.reason_codes == ["metal_site_limit_exceeded"]
-    assert result.n_metals == worker_contracts.MAX_ANALYZED_METAL_SITES + 1
+    assert result.n_metals == analysis_config.MAX_ANALYZED_METAL_SITES + 1
     assert result.n_bonds == 0
     assert result.n_candidates == 0
     assert result.rows == []
@@ -325,7 +325,7 @@ def test_the_metal_site_limit_includes_exactly_one_hundred_sites(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     builder = helpers.StructureBuilder()
-    for residue_number in range(1, worker_contracts.MAX_ANALYZED_METAL_SITES + 1):
+    for residue_number in range(1, analysis_config.MAX_ANALYZED_METAL_SITES + 1):
         builder.add_metal(
             "MG",
             residue_number,
@@ -342,8 +342,8 @@ def test_the_metal_site_limit_includes_exactly_one_hundred_sites(
     )
 
     assert result.metal_site_limit_exceeded is False
-    assert result.n_metals == worker_contracts.MAX_ANALYZED_METAL_SITES
-    assert len(result.rows) == worker_contracts.MAX_ANALYZED_METAL_SITES
+    assert result.n_metals == analysis_config.MAX_ANALYZED_METAL_SITES
+    assert len(result.rows) == analysis_config.MAX_ANALYZED_METAL_SITES
 
 
 def test_a_catalogued_cofactor_metal_raises_no_such_code(
@@ -457,7 +457,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
         [],
         {},
     )
-    assert outcome.failed and outcome.error.startswith("bond: RuntimeError")
+    assert outcome.failed and outcome.status_detail.startswith("bond: RuntimeError")
     worker._apply_bond_outcome(result, outcome)
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
@@ -531,7 +531,7 @@ class TestNoRecognizedMetalOutcome:
         assert result.status == "partial"
         assert result.retryable is False
         assert result.reason_codes == ["metal_presence_indeterminate"]
-        assert "1 atom(s)" in result.error
+        assert "1 atom(s)" in result.status_detail
         assert result.n_metals == 0
         assert result.n_bonds is None
         assert result.n_candidates is None
@@ -561,7 +561,7 @@ class TestNoRecognizedMetalOutcome:
         assert result.status == "ok"
         assert result.retryable is False
         assert result.reason_codes == []
-        assert result.error == ""
+        assert result.status_detail == ""
         assert result.n_metals == 0
         assert result.n_bonds == 0
         assert result.n_candidates == 0
@@ -612,6 +612,9 @@ class TestDensityResultReachesTheResult:
             "edstats_map_bytes": 2048,
         }
         fields.update(overrides)
+        fields["density_map_scope_used"] = DensityMapScope(
+            fields["density_map_scope_used"]
+        )
         return density.DensityResult(**fields)
 
     def _entry(
@@ -646,9 +649,9 @@ class TestDensityResultReachesTheResult:
             ),
         )
 
-        assert result.density_map_scope_used == "full-extent-fallback"
-        assert result.density_full_map_bytes == 8192
-        assert result.density_edstats_map_bytes == 2048
+        assert result.density.density_map_scope_used == "full-extent-fallback"
+        assert result.density.density_full_map_bytes == 8192
+        assert result.density.density_edstats_map_bytes == 2048
 
     def test_density_timings_reach_the_entry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -681,7 +684,9 @@ class TestDensityResultReachesTheResult:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool
     ) -> None:
         """The scratch_dir directory holds the maps, so only the flag may keep it."""
-        self._entry(tmp_path, monkeypatch, self.density_result(), keep=keep)
+        self._entry(
+            tmp_path, monkeypatch, self.density_result(), keep_intermediates=keep
+        )
 
         scratch_dir = [
             name for name in os.listdir(tmp_path) if name.startswith(".alchemy-")
@@ -714,9 +719,9 @@ def test_a_loaded_structure_fills_in_the_model_provenance(
         density_stage,
     )
 
-    assert result.input_model_count == 1
-    assert result.model_analyzed == 1
-    assert result.multi_model_structure is False
+    assert result.coordinates.input_model_count == 1
+    assert result.coordinates.model_analyzed == 1
+    assert result.coordinates.multi_model_structure is False
 
     row = manifest_row(result, False, True, {}, {})
     assert row["input_model_count"] == 1
@@ -763,7 +768,7 @@ class TestCcp4TimeoutOutcome:
             "about the entry, so it must stay eligible for retry"
         )
         assert result.status == "partial"
-        assert "edstats" in result.error
+        assert "edstats" in result.status_detail
         assert result.confidence_inputs_missing_reason == "ccp4_tool_timeout"
         # The abandoned attempt still cost time, and the run log reports it.
         assert result.timings.get("edstats_s") == 900.4
@@ -792,7 +797,7 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        kept = result.ccp4_timeout_log_path
+        kept = result.density.ccp4_timeout_log_path
         assert kept, "the timeout log path must be recorded on the result"
         assert os.path.isfile(kept), (
             f"the retained log is missing at {kept}; the path named in the "
@@ -823,7 +828,7 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        kept_dir = os.path.dirname(result.ccp4_timeout_log_path)
+        kept_dir = os.path.dirname(result.density.ccp4_timeout_log_path)
         assert os.listdir(kept_dir) == ["1abc_edstats_timeout.log"], (
             "only the log belongs in the retained directory"
         )
@@ -843,7 +848,7 @@ class TestCcp4TimeoutOutcome:
             ),
         )
 
-        assert result.ccp4_timeout_log_path == ""
+        assert result.density.ccp4_timeout_log_path == ""
         assert result.reason_codes == ["ccp4_tool_timeout"]
         assert result.retryable is True
 

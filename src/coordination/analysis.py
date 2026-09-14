@@ -23,9 +23,13 @@ import gemmi
 from codes import (
     CandidateSource,
     ContactScope,
+    EligibilityReason,
+    EligibilityStatus,
     GeometryStatus,
     MultiDonorStatus,
+    ParentType,
     ReasonCode,
+    ReferenceKind,
 )
 from coordination.contact_record import (
     Candidate,
@@ -42,7 +46,7 @@ from coordination.donor_chemistry import (
     INFERRED_DONOR_ATOMS,
     N_TERMINAL_DONOR_ATOMS,
 )
-from coordination.dpi import DpiComponents, calculate_dpi_components
+from coordination.dpi import DpiComponents, DpiInputs, calculate_dpi_components
 from coordination.schema import (
     ZSCORE_OUTLIER_CUTOFF,
     BondRow,
@@ -55,6 +59,7 @@ from coordination.schema import (
 )
 from metal_elements import METAL_ELEMENTS
 from metal_identification import sigma_for, sigma_index, zd_indices
+from output_rows import CsvValue, MetalStatsRow
 from reference_data import (
     cluster_ids,
     first_sphere_targets,
@@ -82,6 +87,16 @@ SEARCH_EPSILON = 1e-6
 # Harding, M. M. (2004), Acta Cryst. D60, 849-859.
 # https://doi.org/10.1107/S0907444904004081
 FIRST_SPHERE_TOLERANCE = 0.75
+# The published reason strings embed the tolerance; fail at import if they drift.
+if not (
+    EligibilityReason.DISTANCE_WITHIN_TOLERANCE.endswith(f"{FIRST_SPHERE_TOLERANCE:g}")
+    and EligibilityReason.DISTANCE_EXCEEDS_TOLERANCE.endswith(
+        f"{FIRST_SPHERE_TOLERANCE:g}"
+    )
+):
+    raise ValueError(
+        "EligibilityReason distance values must end in FIRST_SPHERE_TOLERANCE"
+    )
 
 # Gemmi's ContactSearch uses 0.8 A by default to distinguish near-coincident
 # symmetry images of an atom intended to occupy a special position.
@@ -298,17 +313,17 @@ def _bonding_key(
 
 def _parent_type(
     structure: StructureContext, metal: AtomSite, metal_res: str, metal_el: str
-) -> str:
+) -> ParentType:
     if metal_res in cluster_ids():
-        return "cluster"
+        return ParentType.CLUSTER
     if metal_res in heme_ids():
-        return "heme"
+        return ParentType.HEME
     if metal_el not in METAL_ELEMENTS:
-        return "other"  # unreachable while metal_atoms is pre-filtered
+        return ParentType.OTHER  # unreachable while metal_atoms is pre-filtered
     residue = structure.residue_for_atom(metal)
     if residue.chemical_atom_site_count == 1:
-        return "ion"
-    return "other"
+        return ParentType.ION
+    return ParentType.OTHER
 
 
 def zscore(dist: float, mu: float, stdev: float, dpi: float) -> float:
@@ -410,22 +425,22 @@ def deduplicate_special_position_contacts(
 
 def first_sphere_rule(
     metal: AtomSite, neighbor: AtomSite
-) -> tuple[float, float, str, str]:
+) -> tuple[float, float, ReferenceKind, str]:
     """Return target, cutoff, and provenance for proximity eligibility."""
     exact_key = _bonding_key(neighbor, neighbor.residue_name, metal.element)
     literature = literature_distances().get(exact_key)
     target: float | None
     if literature is not None:
         target = literature[0]
-        reference_kind = "exact"
+        reference_kind = ReferenceKind.EXACT
         reference_key = exact_key
     else:
         # The element fallback decides sphere membership only. An exact
         # reference stays mandatory for the z-score.
         target = first_sphere_targets().get((metal.element, neighbor.element))
         if target is None:
-            return NAN, NAN, "missing", ""
-        reference_kind = "element_fallback"
+            return NAN, NAN, ReferenceKind.MISSING, ""
+        reference_kind = ReferenceKind.ELEMENT_FALLBACK
         reference_key = ("*", neighbor.element, metal.element)
     cutoff = min(CANDIDATE_SEARCH_RADIUS, target + FIRST_SPHERE_TOLERANCE)
     return target, cutoff, reference_kind, ":".join(reference_key)
@@ -552,8 +567,8 @@ def _identify_first_sphere_candidates(
         if _candidate_has_zero_occupancy(candidate, metal):
             candidate.set_eligibility(
                 EligibilityResult(
-                    status="zero_occupancy",
-                    reason="zero_occupancy_atom_is_not_contact_evidence",
+                    status=EligibilityStatus.ZERO_OCCUPANCY,
+                    reason=EligibilityReason.ZERO_OCCUPANCY_ATOM,
                     first_sphere_eligible=False,
                     inferred_contact_eligible=False,
                     assignment_target=target,
@@ -571,14 +586,14 @@ def _identify_first_sphere_candidates(
             candidate.set_eligibility(
                 EligibilityResult(
                     status=(
-                        "missing_assignment_reference"
+                        EligibilityStatus.MISSING_ASSIGNMENT_REFERENCE
                         if donor_allowed or declared
-                        else "non_typical_donor"
+                        else EligibilityStatus.NON_TYPICAL_DONOR
                     ),
                     reason=(
-                        "no_metal_donor_assignment_reference"
+                        EligibilityReason.NO_ASSIGNMENT_REFERENCE
                         if donor_allowed or declared
-                        else "atom_not_in_typical_inferred_donor_list"
+                        else EligibilityReason.ATOM_NOT_TYPICAL_DONOR
                     ),
                     first_sphere_eligible=False,
                     inferred_contact_eligible=False,
@@ -595,19 +610,21 @@ def _identify_first_sphere_candidates(
         candidate.set_eligibility(
             EligibilityResult(
                 status=(
-                    "first_sphere_eligible"
+                    EligibilityStatus.FIRST_SPHERE_ELIGIBLE
                     if inferred_eligible
                     else (
-                        "non_typical_donor" if is_eligible else "outside_first_sphere"
+                        EligibilityStatus.NON_TYPICAL_DONOR
+                        if is_eligible
+                        else EligibilityStatus.OUTSIDE_FIRST_SPHERE
                     )
                 ),
                 reason=(
-                    "distance_within_target_plus_0.75"
+                    EligibilityReason.DISTANCE_WITHIN_TOLERANCE
                     if inferred_eligible
                     else (
-                        "atom_not_in_typical_inferred_donor_list"
+                        EligibilityReason.ATOM_NOT_TYPICAL_DONOR
                         if is_eligible
-                        else "distance_exceeds_target_plus_0.75"
+                        else EligibilityReason.DISTANCE_EXCEEDS_TOLERANCE
                     )
                 ),
                 first_sphere_eligible=is_eligible,
@@ -1131,7 +1148,7 @@ class _EntryContext:
     dpi_components: DpiComponents
     ni: float
     deposited_ni: float
-    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[str]]]
+    sig: Mapping[str, Mapping[tuple[Any, ...], Sequence[CsvValue]]]
     zd_idx: Sequence[int] | None
     entry_nonwater_median_b_iso: float
 
@@ -1282,9 +1299,9 @@ def _declared_candidates_by_metal(
 def _entry_context(
     pdb_id: str,
     structure: StructureContext,
-    stats_rows: Sequence[Mapping[str, Any]],
+    stats_rows: Sequence[MetalStatsRow],
     header: Sequence[str] | None,
-    dpi_inputs: Mapping[str, Any],
+    dpi_inputs: DpiInputs,
     metadata: BondAnalysisMetadata,
 ) -> _EntryContext:
     """Compute what every site shares, recording entry-level limitations."""
@@ -1357,9 +1374,9 @@ def _note_unsupported_pairs(
 def run_bond_analysis(
     pdb_id: str,
     pdb_path: str,
-    stats_rows: Sequence[Mapping[str, Any]],
+    stats_rows: Sequence[MetalStatsRow],
     header: Sequence[str] | None,
-    dpi_inputs: Mapping[str, Any],
+    dpi_inputs: DpiInputs,
     structure: StructureContext | None = None,
     connection_path: str | None = None,
 ) -> BondAnalysisResult:

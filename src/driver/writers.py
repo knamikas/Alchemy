@@ -10,8 +10,10 @@ import csv
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, replace
+from operator import attrgetter
 from typing import Any, ClassVar, TextIO
 
+from analysis_config import ALTLOC_POLICY, MODEL_POLICY, SYMMETRY_POLICY
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from coordination.schema import (
     BOND_COLUMNS,
@@ -26,8 +28,8 @@ from crystallization_conditions import (
     unavailable_summary,
 )
 from metal_identification import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
-from output_rows import MetalStatsRow, scientific_csv_value
-from worker_contracts import EntryResult, blank_if_unmeasured
+from output_rows import MetalStatsRow, blank_if_unmeasured, scientific_csv_value
+from worker_contracts import EntryResult
 
 # Keep the published pdbID spelling for downstream readers and joins.
 MANIFEST_COLUMNS = [
@@ -74,10 +76,44 @@ STATS_COLUMNS = (
 )
 
 
-# Use status_detail for expected partial outcomes; retain exception for internal logs.
-MANIFEST_FIELDS = {column: column for column in MANIFEST_COLUMNS} | {
+#: Manifest columns that describe the run's analysis policy, not the entry.
+RUN_POLICY_COLUMNS: Mapping[str, str] = {
+    "model_policy": MODEL_POLICY,
+    "altloc_policy": ALTLOC_POLICY,
+    "symmetry_contact_policy": SYMMETRY_POLICY,
+}
+
+#: Per-entry manifest column -> attribute path on ``EntryResult``.
+MANIFEST_FIELDS: Mapping[str, str] = {
     "pdbID": "pdb_id",
-    "status_detail": "error",
+    "status": "status",
+    "retryable": "retryable",
+    "no_metals": "no_metals",
+    "metal_site_limit_exceeded": "metal_site_limit_exceeded",
+    "n_metals": "n_metals",
+    "n_bonds": "n_bonds",
+    "n_candidates": "n_candidates",
+    "runtime_s": "runtime_s",
+    "reason_codes": "reason_codes",
+    "warning_codes": "warning_codes",
+    "status_detail": "status_detail",
+    "alchemy_version": "software.alchemy_version",
+    "alchemy_commit": "software.alchemy_commit",
+    "gemmi_version": "software.gemmi_version",
+    "ccp4_version": "software.ccp4_version",
+    "reference_data_id": "software.reference_data_id",
+    "analysis_config_id": "software.analysis_config_id",
+    "refinement_state": "pdb_redo.refinement_state",
+    "pdb_redo_is_twin": "pdb_redo.pdb_redo_is_twin",
+    "pdb_redo_version": "pdb_redo.pdb_redo_version",
+    "pdb_redo_date": "pdb_redo.pdb_redo_date",
+    "source_coordinate_format": "coordinates.source_coordinate_format",
+    "analysis_coordinate_format": "coordinates.analysis_coordinate_format",
+    "coordinate_conversion_performed": "coordinates.coordinate_conversion_performed",
+    "source_coordinate_path": "coordinates.source_coordinate_path",
+    "input_model_count": "coordinates.input_model_count",
+    "model_analyzed": "coordinates.model_analyzed",
+    "multi_model_structure": "coordinates.multi_model_structure",
 }
 
 
@@ -97,9 +133,9 @@ def manifest_row(
 ) -> dict[str, Any]:
     """Project one worker result onto the manifest schema."""
     row = {
-        column: _manifest_value(getattr(result, field))
-        for column, field in MANIFEST_FIELDS.items()
-    }
+        column: _manifest_value(attrgetter(path)(result))
+        for column, path in MANIFEST_FIELDS.items()
+    } | dict(RUN_POLICY_COLUMNS)
     n_bonds = blank_if_unmeasured(result.n_bonds)
     n_candidates = blank_if_unmeasured(result.n_candidates)
     if not bonds_enabled:

@@ -10,6 +10,7 @@ import os
 from collections.abc import Mapping
 from functools import cache
 from types import MappingProxyType
+from typing import NamedTuple
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
@@ -76,10 +77,19 @@ def _verify_checksum(path: str) -> None:
         )
 
 
-def _parse_cofactor_catalog(
-    path: str,
-) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
-    """Return ``(component_ids, cluster_ids, heme_ids)`` from one pass.
+class CofactorCatalog(NamedTuple):
+    """The bundled metallocofactor catalog, split by structural class."""
+
+    #: Every component id Alchemy treats as a metal-containing cofactor.
+    ids: frozenset[str]
+    #: Components whose metals sit in an iron-sulfur-style cluster.
+    cluster: frozenset[str]
+    #: Components whose metals sit in a heme-style macrocycle.
+    heme: frozenset[str]
+
+
+def _parse_cofactor_catalog(path: str) -> CofactorCatalog:
+    """Return the catalog's id, cluster, and heme sets from one pass.
 
     Tab-separated ``id<TAB>formula<TAB>structural_class``, written by
     ``tools/build_metallocofactor_catalog.py``. The classes tag each metal's
@@ -110,7 +120,7 @@ def _parse_cofactor_catalog(
             f"{os.path.basename(path)} carries no structural classes; rebuild "
             "it with tools/build_metallocofactor_catalog.py"
         )
-    return frozenset(ids), frozenset(cluster), frozenset(heme)
+    return CofactorCatalog(frozenset(ids), frozenset(cluster), frozenset(heme))
 
 
 @cache
@@ -138,9 +148,7 @@ def _verified_sha256(path: str) -> str:
 
 
 @cache
-def catalog(
-    path: str = COFACTOR_CATALOG_PATH,
-) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+def catalog(path: str = COFACTOR_CATALOG_PATH) -> CofactorCatalog:
     """Load and cache the verified metallocofactor catalog."""
     _verify_checksum(path)
     return _parse_cofactor_catalog(path)
@@ -148,17 +156,17 @@ def catalog(
 
 def cofactor_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Every component id Alchemy treats as a metal-containing cofactor."""
-    return catalog(path)[0]
+    return catalog(path).ids
 
 
 def cluster_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Components whose metals sit in an iron-sulfur-style cluster."""
-    return catalog(path)[1]
+    return catalog(path).cluster
 
 
 def heme_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
     """Components whose metals sit in a heme-style macrocycle."""
-    return catalog(path)[2]
+    return catalog(path).heme
 
 
 # Skipped by name rather than by failing to parse, which is what lets every

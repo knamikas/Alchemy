@@ -3,8 +3,10 @@
 import bisect
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Self
 
+from codes import ConfidenceLevel, EvidenceBasis, VerdictReason
 from confidence_score.schema import (
     DENSITY_REVIEW_THRESHOLD,
     DENSITY_SUSPECT_THRESHOLD,
@@ -14,78 +16,113 @@ from confidence_score.schema import (
 )
 
 
-def component_level(value: float, review: float, suspect: float) -> str:
+def component_level(value: float, review: float, suspect: float) -> ConfidenceLevel:
     """Classify one non-negative measurement at the final raw thresholds."""
     if not math.isfinite(value) or value < 0:
-        return "INCOMPLETE"
+        return ConfidenceLevel.INCOMPLETE
     if value < review:
-        return "PASS"
+        return ConfidenceLevel.PASS
     if value < suspect:
-        return "REVIEW"
-    return "SUSPECT"
+        return ConfidenceLevel.REVIEW
+    return ConfidenceLevel.SUSPECT
 
 
-def density_level(rszd_abs: float) -> str:
+def density_level(rszd_abs: float) -> ConfidenceLevel:
     """Classify an absolute RSZD value at the density thresholds."""
     return component_level(
         rszd_abs, DENSITY_REVIEW_THRESHOLD, DENSITY_SUSPECT_THRESHOLD
     )
 
 
-def geometry_level(geometry_rms_zbond: float) -> str:
+def geometry_level(geometry_rms_zbond: float) -> ConfidenceLevel:
     """Classify an RMS bond Z score at the geometry thresholds."""
     return component_level(
         geometry_rms_zbond, GEOMETRY_REVIEW_THRESHOLD, GEOMETRY_SUSPECT_THRESHOLD
     )
 
 
-def classify_site(rszd_abs: float, geometry_rms_zbond: float) -> dict[str, str]:
+@dataclass(frozen=True, slots=True)
+class SiteVerdict:
+    """One site's authoritative levels and, when ranked, its support scores.
+
+    The levels and the decision route always come from the raw thresholds.
+    The three scores are reverse average-rank percentages against a frozen
+    reference cohort; they are NaN when no reference was applied or the
+    component is not assessable.
+    """
+
+    density_level: ConfidenceLevel
+    geometry_level: ConfidenceLevel
+    alchemy_level: ConfidenceLevel
+    evidence_basis: EvidenceBasis
+    verdict_reason: VerdictReason
+    density_score: float = math.nan
+    geometry_score: float = math.nan
+    alchemy_score: float = math.nan
+
+    def as_row(self) -> dict[str, str | float]:
+        """Return the verdict keyed by the ``ANALYSIS_COLUMNS`` names it owns."""
+        return {
+            "density_level": self.density_level,
+            "density_score": self.density_score,
+            "geometry_level": self.geometry_level,
+            "geometry_score": self.geometry_score,
+            "alchemy_level": self.alchemy_level,
+            "alchemy_score": self.alchemy_score,
+            "evidence_basis": self.evidence_basis,
+            "verdict_reason": self.verdict_reason,
+        }
+
+
+def classify_site(rszd_abs: float, geometry_rms_zbond: float) -> SiteVerdict:
     """Apply the non-compensatory final decision matrix to one site."""
     density = density_level(rszd_abs)
     geometry = geometry_level(geometry_rms_zbond)
-    available = [level for level in (density, geometry) if level != "INCOMPLETE"]
+    available = [
+        level for level in (density, geometry) if level != ConfidenceLevel.INCOMPLETE
+    ]
     evidence_basis = (
-        "density_and_geometry"
+        EvidenceBasis.DENSITY_AND_GEOMETRY
         if len(available) == 2
-        else "density_only"
-        if density != "INCOMPLETE"
-        else "geometry_only"
-        if geometry != "INCOMPLETE"
-        else "no_assessable_evidence"
+        else EvidenceBasis.DENSITY_ONLY
+        if density != ConfidenceLevel.INCOMPLETE
+        else EvidenceBasis.GEOMETRY_ONLY
+        if geometry != ConfidenceLevel.INCOMPLETE
+        else EvidenceBasis.NO_ASSESSABLE_EVIDENCE
     )
 
     if not available:
-        overall = "INCOMPLETE"
-        reason = "no_assessable_evidence"
-    elif density == "SUSPECT" and geometry == "SUSPECT":
-        overall = "SUSPECT"
-        reason = "density_and_geometry_suspect"
-    elif density == "SUSPECT":
-        overall = "SUSPECT"
-        reason = "density_suspect"
-    elif geometry == "SUSPECT":
-        overall = "SUSPECT"
-        reason = "geometry_suspect"
-    elif density == "REVIEW" and geometry == "REVIEW":
-        overall = "SUSPECT"
-        reason = "review_plus_review"
-    elif density == "REVIEW":
-        overall = "REVIEW"
-        reason = "density_review"
-    elif geometry == "REVIEW":
-        overall = "REVIEW"
-        reason = "geometry_review"
+        overall = ConfidenceLevel.INCOMPLETE
+        reason = VerdictReason.NO_ASSESSABLE_EVIDENCE
+    elif density == ConfidenceLevel.SUSPECT and geometry == ConfidenceLevel.SUSPECT:
+        overall = ConfidenceLevel.SUSPECT
+        reason = VerdictReason.DENSITY_AND_GEOMETRY_SUSPECT
+    elif density == ConfidenceLevel.SUSPECT:
+        overall = ConfidenceLevel.SUSPECT
+        reason = VerdictReason.DENSITY_SUSPECT
+    elif geometry == ConfidenceLevel.SUSPECT:
+        overall = ConfidenceLevel.SUSPECT
+        reason = VerdictReason.GEOMETRY_SUSPECT
+    elif density == ConfidenceLevel.REVIEW and geometry == ConfidenceLevel.REVIEW:
+        overall = ConfidenceLevel.SUSPECT
+        reason = VerdictReason.REVIEW_PLUS_REVIEW
+    elif density == ConfidenceLevel.REVIEW:
+        overall = ConfidenceLevel.REVIEW
+        reason = VerdictReason.DENSITY_REVIEW
+    elif geometry == ConfidenceLevel.REVIEW:
+        overall = ConfidenceLevel.REVIEW
+        reason = VerdictReason.GEOMETRY_REVIEW
     else:
-        overall = "PASS"
-        reason = "all_available_components_pass"
+        overall = ConfidenceLevel.PASS
+        reason = VerdictReason.ALL_AVAILABLE_COMPONENTS_PASS
 
-    return {
-        "density_level": density,
-        "geometry_level": geometry,
-        "alchemy_level": overall,
-        "evidence_basis": evidence_basis,
-        "verdict_reason": reason,
-    }
+    return SiteVerdict(
+        density_level=density,
+        geometry_level=geometry,
+        alchemy_level=overall,
+        evidence_basis=evidence_basis,
+        verdict_reason=reason,
+    )
 
 
 class _EmpiricalDistribution:
@@ -147,6 +184,22 @@ class ConfidenceReference:
         self.cohort_id: str = self.metadata.get("cohort_id", "")
         self.cohort_size = int(self.metadata.get("input_row_count", 0))
 
+    @classmethod
+    def from_counts(
+        cls,
+        density_counts: Mapping[float, int],
+        geometry_counts: Mapping[float, int],
+        metadata: Mapping[str, Any],
+    ) -> Self:
+        """Build a reference from per-value count mappings, sorted by value."""
+        return cls(
+            sorted(density_counts),
+            [density_counts[value] for value in sorted(density_counts)],
+            sorted(geometry_counts),
+            [geometry_counts[value] for value in sorted(geometry_counts)],
+            metadata,
+        )
+
     @property
     def density_reference_size(self) -> int:
         """Return the number of density observations in the reference."""
@@ -162,11 +215,9 @@ def score_site(
     rszd_abs: float,
     geometry_rms_zbond: float,
     reference: ConfidenceReference | None = None,
-) -> dict[str, str | float]:
+) -> SiteVerdict:
     """Return authoritative levels plus secondary empirical ranking scores."""
-    result: dict[str, str | float] = dict(
-        classify_site(rszd_abs, geometry_rms_zbond).items()
-    )
+    verdict = classify_site(rszd_abs, geometry_rms_zbond)
     density_score = (
         0.0
         if reference and rszd_abs >= EDSTATS_SATURATION_MAGNITUDE
@@ -180,11 +231,9 @@ def score_site(
     available_scores = [
         score for score in (density_score, geometry_score) if math.isfinite(score)
     ]
-    result.update(
-        {
-            "density_score": density_score,
-            "geometry_score": geometry_score,
-            "alchemy_score": min(available_scores) if available_scores else math.nan,
-        }
+    return replace(
+        verdict,
+        density_score=density_score,
+        geometry_score=geometry_score,
+        alchemy_score=min(available_scores) if available_scores else math.nan,
     )
-    return result

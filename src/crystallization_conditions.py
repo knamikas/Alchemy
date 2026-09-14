@@ -23,6 +23,7 @@ from typing import Any, Protocol, cast
 
 import gemmi
 
+from codes import ConfidenceLevel
 from output_rows import CsvValue, scientific_csv_value
 
 CONDITION_COLUMNS = (
@@ -890,7 +891,10 @@ def write_review_queue(
                     "confidence score schema is incompatible with review queue"
                 )
             for row in reader:
-                if row.get("alchemy_level") not in {"REVIEW", "SUSPECT"}:
+                if row.get("alchemy_level") not in {
+                    ConfidenceLevel.REVIEW,
+                    ConfidenceLevel.SUSPECT,
+                }:
                     continue
                 summary = summaries.get(row["pdbID"].strip().lower())
                 context = {

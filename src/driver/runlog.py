@@ -17,17 +17,17 @@ from dataclasses import fields
 from datetime import UTC, datetime
 from typing import Any, TextIO, cast
 
-from codes import ReasonCode
-from driver.resources import available_cpu_count, available_memory_bytes
-from run_config import RunConfig
-from worker_contracts import (
+from analysis_config import (
     ALTLOC_POLICY,
     MAX_ANALYZED_METAL_SITES,
     MODEL_POLICY,
     SYMMETRY_POLICY,
-    EntryResult,
-    blank_if_unmeasured,
 )
+from codes import ReasonCode
+from driver.resources import available_cpu_count, available_memory_bytes
+from output_rows import blank_if_unmeasured
+from run_config import RunConfig
+from worker_contracts import EntryResult
 
 # Keep per-run logs separate from result CSVs and startup cleanup.
 DEFAULT_LOG_DIRNAME = "logs"
@@ -200,10 +200,10 @@ class RunLog:
                 "timings": dict(result.timings),
                 "reason_codes": list(result.reason_codes),
                 "warning_codes": list(result.warning_codes),
-                "error": str(result.error),
-                "density_map_scope_used": result.density_map_scope_used,
-                "density_full_map_bytes": result.density_full_map_bytes,
-                "density_edstats_map_bytes": result.density_edstats_map_bytes,
+                "status_detail": str(result.status_detail),
+                "density_map_scope_used": result.density.density_map_scope_used,
+                "density_full_map_bytes": result.density.density_full_map_bytes,
+                "density_edstats_map_bytes": result.density.density_edstats_map_bytes,
                 "memory_estimate_bytes": memory_estimate_bytes,
             }
         )
@@ -278,7 +278,7 @@ class RunLog:
                 ),
                 "reason_codes": "|".join(entry["reason_codes"]),
                 "warning_codes": "|".join(entry["warning_codes"]),
-                "status_detail": self._clean(entry["error"]),
+                "status_detail": self._clean(entry["status_detail"]),
             }
             row.update(
                 {
@@ -614,7 +614,7 @@ class RunLog:
                     f"{entry['pdbID']} | {entry['status']} | "
                     f"{self._clean(entry['retryable'])} | "
                     f"{'|'.join(entry['reason_codes']) or '-'} | "
-                    f"{self._clean(entry['error']) or '-'}"
+                    f"{self._clean(entry['status_detail']) or '-'}"
                 )
         return lines
 

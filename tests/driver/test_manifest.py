@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
+from operator import attrgetter
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from helpers import entry_result, run_config, worker_config
 
+import analysis_config
 import worker
-import worker_contracts
 from driver import confidence as driver_confidence
 from driver import environment, pool, resume
 from driver.writers import (
     MANIFEST_COLUMNS,
     MANIFEST_FIELDS,
+    RUN_POLICY_COLUMNS,
     OutputWriters,
     manifest_row,
 )
@@ -53,9 +56,11 @@ class TestInitialResult:
         """A failure at any stage still projects onto a complete row."""
         result = worker.initial_result("109m", CFG, None)
         required = set(MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
-        supplied = {
-            column for column, name in MANIFEST_FIELDS.items() if hasattr(result, name)
-        }
+        supplied = set(RUN_POLICY_COLUMNS)
+        for column, path in MANIFEST_FIELDS.items():
+            with contextlib.suppress(AttributeError):
+                attrgetter(path)(result)
+                supplied.add(column)
         assert required.issubset(supplied)
 
     def test_supplies_the_fields_manifest_row_reads_directly(self) -> None:
@@ -78,25 +83,31 @@ class TestInitialResult:
         result = worker.initial_result("109m", CFG, None)
         row = manifest_row(result, False, True, {}, {})
 
-        assert result.reference_data_id == CFG.reference_data_id
+        assert result.software.reference_data_id == CFG.reference_data_id
         assert row["reference_data_id"] == CFG.reference_data_id
 
     def test_carries_the_analysis_configuration_identity(self) -> None:
         result = worker.initial_result("109m", CFG, None)
         row = manifest_row(result, False, True, {}, {})
 
-        assert result.analysis_config_id == CFG.analysis_config_id
+        assert result.software.analysis_config_id == CFG.analysis_config_id
         assert row["analysis_config_id"] == CFG.analysis_config_id
 
     def test_carries_run_provenance_from_the_config(self) -> None:
         result = worker.initial_result("109m", CFG, None)
-        assert result.alchemy_version == environment.ALCHEMY_VERSION
-        assert result.alchemy_commit == CFG.alchemy_commit
-        assert result.gemmi_version == CFG.gemmi_version
-        assert result.ccp4_version == CFG.ccp4_version
-        assert result.model_policy == worker_contracts.MODEL_POLICY
-        assert result.altloc_policy == worker_contracts.ALTLOC_POLICY
-        assert result.symmetry_contact_policy == worker_contracts.SYMMETRY_POLICY
+        assert result.software.alchemy_version == environment.ALCHEMY_VERSION
+        assert result.software.alchemy_commit == CFG.alchemy_commit
+        assert result.software.gemmi_version == CFG.gemmi_version
+        assert result.software.ccp4_version == CFG.ccp4_version
+
+    def test_the_manifest_stamps_the_run_wide_analysis_policy(self) -> None:
+        """The policy is a property of the checkout, so no result carries it."""
+        row = manifest_row(
+            worker.initial_result("109m", CFG, None), False, True, {}, {}
+        )
+        assert row["model_policy"] == analysis_config.MODEL_POLICY
+        assert row["altloc_policy"] == analysis_config.ALTLOC_POLICY
+        assert row["symmetry_contact_policy"] == analysis_config.SYMMETRY_POLICY
 
     @pytest.mark.parametrize(
         "manual_inputs,expected",
@@ -111,7 +122,7 @@ class TestInitialResult:
     ) -> None:
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
         result = worker.initial_result("109m", CFG, manual_inputs)
-        assert result.refinement_state == expected
+        assert result.pdb_redo.refinement_state == expected
 
     def test_mirror_source_paths_are_portable_but_manual_paths_are_preserved(
         self,
@@ -201,7 +212,7 @@ class TestManifestRow:
             no_metals=True,
             metal_site_limit_exceeded=False,
             pdb_redo_is_twin=True,
-            error="analysis was incomplete",
+            status_detail="analysis was incomplete",
         )
 
         row = manifest_row(result, False, True, {}, {})

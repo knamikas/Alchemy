@@ -71,7 +71,7 @@ from reference_data import (
     reference_data_id,
 )
 from run_config import RunConfig
-from run_logging import level_for_verbosity, logger_for, worker_level
+from run_logging import logger_for, worker_level
 from scratch import sweep_owned_scratch_directories
 from worker_contracts import EntryResult, WorkerConfig
 
@@ -102,7 +102,8 @@ def plan_entry_memory(
     if not ids:
         raise ValueError("memory planning needs at least one entry")
     estimates = tuple(
-        estimate_entry_memory(pdb_id, cfg.root, cfg.manual_inputs) for pdb_id in ids
+        estimate_entry_memory(pdb_id, cfg.input_root, cfg.manual_inputs)
+        for pdb_id in ids
     )
     available = available_memory_bytes()
     budget, reserve = scheduling_memory_budget(
@@ -350,8 +351,8 @@ class AnalysisIdentity(NamedTuple):
 def worker_config_from_args(
     args: RunConfig,
     env: dict[str, str],
-    root: str,
-    cache_root: str,
+    input_root: str,
+    pdb_redo_cache: str,
     cofactors: Collection[str],
     manual_inputs: dict[str, str | None] | None,
     plan: ConfidencePlan,
@@ -361,19 +362,17 @@ def worker_config_from_args(
 ) -> WorkerConfig:
     """Build the config every worker is initialized with, once per run."""
     cfg = WorkerConfig(
-        root=root,
-        mirror_root=args.pdb_redo_root,
-        cache_root=cache_root,
+        input_root=input_root,
+        pdb_redo_root=args.pdb_redo_root,
+        pdb_redo_cache=pdb_redo_cache,
         env=env,
         output_dir=args.output_dir,
         cofactors=cofactors,
-        keep=args.keep_intermediates,
+        keep_intermediates=args.keep_intermediates,
         bonds=args.bonds,
         density_map_scope=args.density_map_scope,
-        ccp4_timeout_s=args.ccp4_timeout,
-        log_level=worker_level(
-            level_for_verbosity(args.verbose, args.quiet), args.log_file
-        ),
+        ccp4_timeout=args.ccp4_timeout,
+        log_level=worker_level(args.log_level, args.log_file),
         allow_download=bool(args.id or args.id_file),
         manual_inputs=manual_inputs,
         alchemy_commit=environment.alchemy_commit(),
@@ -684,7 +683,7 @@ def _execute_with_output_lock(
     run_log.details["analysis_config_id"] = identity.analysis_config_id
     _check_resume_is_compatible(args, layout, plan, identity.analysis_config_id)
 
-    ids, root, manual_inputs = schedule_entries(
+    ids, input_root, manual_inputs = schedule_entries(
         args, layout, args.pdb_redo_cache, run_log
     )
     if not ids:
@@ -699,7 +698,7 @@ def _execute_with_output_lock(
     cfg = worker_config_from_args(
         args,
         env,
-        root,
+        input_root,
         args.pdb_redo_cache,
         cofactors,
         manual_inputs,

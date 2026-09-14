@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import helpers
 import pytest
@@ -14,6 +15,16 @@ from helpers import (
     approx,
     simple_metal_site,
 )
+
+if TYPE_CHECKING:
+    from output_rows import MetalStatsRow
+    from structure_analysis import AtomSite
+
+
+def _site_of(row: MetalStatsRow) -> AtomSite:
+    """The selected metal site a row resolved to; fail if it has none."""
+    assert row.site is not None
+    return row.site
 
 
 @pytest.mark.parametrize("suffix", [".pdb", ".cif"])
@@ -298,12 +309,12 @@ def test_synthetic_edstats_satisfies_extract_metal_statistics(tmp_path: Path) ->
     )
 
     assert header == list(EDSTATS_HEADER)
-    assert [(row["category"], row["resname"]) for row in rows] == [("metal", "ZN")]
+    assert [(row.category, row.resname) for row in rows] == [("metal", "ZN")]
     row = rows[0]
-    assert row["chain"] == "B" and row["resnum"] == "1"
-    assert row["selected_metal_site_status"] == "selected"
-    assert row["coordinate_mapping_status"] == "matched"
-    assert row["fields"][header.index("ZDm")] == "2.5"
+    assert row.chain == "B" and row.resnum == "1"
+    assert row.selected_metal_site_status == "selected"
+    assert row.coordinate_mapping_status == "matched"
+    assert row.fields[header.index("ZDm")] == "2.5"
     assert stats_path.endswith("stats.out")
 
 
@@ -358,11 +369,11 @@ def test_blank_chain_rows_round_trip_through_the_parser(tmp_path: Path) -> None:
     text = open(stats_path, encoding="utf-8").read().splitlines()
     assert [len(line.split()) for line in text[1:]] == [41, 41]
 
-    rows, _ = extract_metal_statistics(
+    rows = extract_metal_statistics(
         "test", stats_path, set(METAL_ELEMENTS), set(), structure=context
-    )
-    assert [row["resname"] for row in rows] == ["ZN"]
-    assert rows[0]["chain"] == ""
+    ).rows
+    assert [row.resname for row in rows] == ["ZN"]
+    assert rows[0].chain == ""
 
 
 def test_cofactor_rows_repeat_once_per_metal_site(tmp_path: Path) -> None:
@@ -392,15 +403,15 @@ def test_cofactor_rows_repeat_once_per_metal_site(tmp_path: Path) -> None:
 
     context = load_structure("test", path)
     stats_path = helpers.write_edstats_for_structure(tmp_path / "stats.out", context)
-    rows, _ = extract_metal_statistics(
+    rows = extract_metal_statistics(
         "test", stats_path, set(METAL_ELEMENTS), {"FES"}, structure=context
-    )
+    ).rows
 
-    assert [row["category"] for row in rows] == ["cofactor", "cofactor"]
-    assert [row["site"].atom_name for row in rows] == ["FE1", "FE2"]
-    assert len({row["density_observation_id"] for row in rows}) == 1
-    assert all(row["density_shared_site_count"] == 2 for row in rows)
-    assert all(row["density_is_shared"] for row in rows)
+    assert [row.category for row in rows] == ["cofactor", "cofactor"]
+    assert [_site_of(row).atom_name for row in rows] == ["FE1", "FE2"]
+    assert len({row.density_observation_id for row in rows}) == 1
+    assert all(row.density_shared_site_count == 2 for row in rows)
+    assert all(row.density_is_shared for row in rows)
 
 
 def test_insertion_codes_survive_into_the_edstats_join(tmp_path: Path) -> None:
@@ -422,7 +433,7 @@ def test_insertion_codes_survive_into_the_edstats_join(tmp_path: Path) -> None:
     resnums = {r.residue_name: r.resnum for r in context.residues}
     assert resnums == {"ZN": "1", "HIS": "10A"}
     rows, _, _ = helpers.stats_rows_for_structure(context, tmp_path / "stats.out")
-    assert [row["resnum"] for row in rows] == ["1"]
+    assert [row.resnum for row in rows] == ["1"]
 
 
 def test_symmetry_image_contacts_are_reachable(tmp_path: Path) -> None:

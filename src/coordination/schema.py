@@ -11,6 +11,7 @@ from typing import Any, ClassVar
 import gemmi
 from typing_extensions import override
 
+from codes import CoordinationStatus, NeighborClass
 from coordination.contact_record import Candidate, MultiDonorResult
 from output_rows import CsvValue
 from structure_analysis import NAN, AtomSite, StructureContext
@@ -418,7 +419,13 @@ def _connection_output_values(candidate: Candidate) -> dict[str, str | bool]:
 
     return {
         "coordination_status": (
-            "declared" if records else ("inferred" if inferred else "unassigned")
+            CoordinationStatus.DECLARED
+            if records
+            else (
+                CoordinationStatus.INFERRED
+                if inferred
+                else CoordinationStatus.UNASSIGNED
+            )
         ),
         "coordination_source": (
             joined(record["source"] for record in records)
@@ -447,15 +454,15 @@ def _donor_output_values(candidate: Candidate) -> dict[str, bool | str | None]:
     }
 
 
-def _neighbor_class(neighbor: AtomSite) -> str:
+def _neighbor_class(neighbor: AtomSite) -> NeighborClass:
     if neighbor.is_water:
-        return "water"
+        return NeighborClass.WATER
     residue_info = gemmi.find_tabulated_residue(neighbor.residue_name)
     if residue_info.is_nucleic_acid():
-        return "nucleotide"
+        return NeighborClass.NUCLEOTIDE
     if residue_info.is_amino_acid():
-        return "amino_acid"
-    return "other"
+        return NeighborClass.AMINO_ACID
+    return NeighborClass.OTHER
 
 
 def context_warning_values(

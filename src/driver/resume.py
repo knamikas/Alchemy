@@ -13,11 +13,12 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 
+from analysis_config import MAX_ANALYZED_METAL_SITES
 from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS, OutputTargets
 from scratch import create_owned_scratch_directory
-from worker_contracts import MAX_ANALYZED_METAL_SITES, EntryResult
+from worker_contracts import EntryResult
 
 # DictReader uses None for missing cells and stores surplus cells under a None key.
 _CsvRow = dict[str | None, str | list[str] | None]
