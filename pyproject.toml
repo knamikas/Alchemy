@@ -19,6 +19,14 @@ dependencies = [
 test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    # The wheel-metadata test builds a wheel without build isolation.
+    "setuptools>=61",
+    "wheel",
+]
+# Pinned so local lint and type checks agree with CI; bump both deliberately.
+dev = [
+    "ruff==0.16.1",
+    "mypy==1.19.1",
 ]
 
 # Install dependencies and distribution metadata only. Disable module discovery
@@ -48,7 +56,7 @@ filterwarnings = [
     "error::pytest.PytestUnknownMarkWarning",
 ]
 
-# Use the Ruff version pinned in CI to keep formatting consistent.
+# Use the Ruff version pinned in the dev extra to keep formatting consistent.
 [tool.ruff]
 line-length = 88
 target-version = "py311"

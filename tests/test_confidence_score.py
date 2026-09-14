@@ -10,10 +10,10 @@ import os
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, cast
 
 import helpers
 import pytest
+from helpers import approx
 
 import analysis_config
 import confidence_score as cs
@@ -30,23 +30,6 @@ def test_bundled_reference_matches_the_archived_manuscript_bytes() -> None:
     }
     for filename, digest in expected.items():
         assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == digest
-
-
-class _ApproxFactory(Protocol):
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
 
 
 STATS_ID_COLUMNS = ["pdbID", "category"]

@@ -76,6 +76,11 @@ def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
     )
 
 
+def _normalized_distribution_name(name: str) -> str:
+    """The PEP 503 form of a distribution name, as wheel metadata spells it."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def _declared_dependencies() -> set[str]:
     """Distribution names in ``[project.dependencies]``, lowercased."""
     with open(PYPROJECT_PATH, "rb") as handle:
@@ -309,11 +314,11 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path: Path) -> None
         capture_output=True,
         text=True,
     )
-    if completed.returncode != 0:
-        pytest.skip(
-            "no usable wheel-build toolchain in this environment: "
-            + (completed.stderr or completed.stdout).strip()[:200]
-        )
+    assert completed.returncode == 0, (
+        "the wheel build failed, so nothing verified what `pip install .` ships; "
+        "the [test] extra installs setuptools and wheel for this check:\n"
+        + (completed.stderr or completed.stdout).strip()[-2000:]
+    )
 
     wheels = sorted(outdir.glob("*.whl"))
     assert len(wheels) == 1, f"expected exactly one wheel, got {wheels}"
@@ -337,12 +342,15 @@ def test_built_wheel_contains_only_distribution_metadata(tmp_path: Path) -> None
         .decode()
     )
     required = {
-        re.split(r"[<>=!~; \[]", spec, maxsplit=1)[0].strip().lower()
+        _normalized_distribution_name(
+            re.split(r"[<>=!~; \[]", spec, maxsplit=1)[0].strip()
+        )
         for spec in re.findall(r"^Requires-Dist: (.+)$", metadata, re.M)
     }
-    assert _declared_dependencies() <= required, (
+    declared = {_normalized_distribution_name(n) for n in _declared_dependencies()}
+    assert declared <= required, (
         "wheel metadata dropped declared runtime dependencies: "
-        f"declared {sorted(_declared_dependencies())}, wheel has {sorted(required)}"
+        f"declared {sorted(declared)}, wheel has {sorted(required)}"
     )
 
 

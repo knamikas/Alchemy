@@ -23,13 +23,12 @@ from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
-    Protocol,
     TypeVar,
-    cast,
 )
 
 import helpers
 import pytest
+from helpers import approx
 
 import confidence_score
 import crystallization_conditions
@@ -39,26 +38,6 @@ from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver import runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from metal_identification import DENSITY_CONTEXT_COLUMNS
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
-
 
 _StrPath = str | os.PathLike[str]
 

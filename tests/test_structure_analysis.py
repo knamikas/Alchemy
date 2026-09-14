@@ -11,34 +11,13 @@ import math
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol, cast
 
 import gemmi
 import helpers
 import pytest
-from helpers import AtomSpec, StructureBuilder, simple_metal_site
+from helpers import AtomSpec, StructureBuilder, approx, simple_metal_site
 
 import structure_analysis as sa
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
-
 
 _OCC_COLUMN = 54  # PDB occupancy, columns 55-60 (0-based 54:60)
 _ELEMENT_COLUMN = 76  # PDB element, columns 77-78

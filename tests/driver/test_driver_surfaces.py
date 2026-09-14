@@ -15,9 +15,10 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO, TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
+from typing import IO, TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 import pytest
+from helpers import approx
 
 import ccp4_setup
 import cli
@@ -37,24 +38,6 @@ if TYPE_CHECKING:
 
     from worker_contracts import EntryResult
 
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
 
 # This module deliberately exercises these implementation-level policy seams.
 _BatchTally = dispatch.BatchTally

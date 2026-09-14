@@ -23,11 +23,13 @@ from typing import (
 )
 
 import gemmi
+import pytest
 
 if TYPE_CHECKING:
     # Keep source imports lazy; these imports are for annotations only.
     from output_rows import MetalStatsRow
     from structure_analysis import StructureContext
+    from worker_contracts import EntryResult
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +39,64 @@ SRC_DIR = os.path.join(REPO_ROOT, "src")
 Vec3 = tuple[float, float, float]
 
 _StrPath = str | os.PathLike[str]
+
+
+class _ApproxFactory(Protocol):
+    """The concrete numeric subset of pytest's broadly typed approx helper."""
+
+    def __call__(
+        self,
+        expected: object,
+        rel: float | None = None,
+        abs: float | None = None,
+        nan_ok: bool = False,
+    ) -> object: ...
+
+
+class _PytestApi(Protocol):
+    approx: _ApproxFactory
+
+
+#: ``pytest.approx`` with a concrete signature, shared by every numeric test.
+approx = cast(_PytestApi, pytest).approx
+
+# Placeholder provenance every synthetic worker result carries.
+PLACEHOLDER_PROVENANCE: Mapping[str, str] = {
+    "alchemy_commit": "abc123def456",
+    "gemmi_version": "0.7.5",
+    "ccp4_version": "9.0",
+    "reference_data_id": "0123456789ab",
+    "analysis_config_id": "alchemy-analysis-config-test",
+}
+
+
+def entry_result(pdb_id: str = "109m", **overrides: Any) -> EntryResult:
+    """A worker result skeleton plus overrides, as the driver would see it."""
+    from codes import EntryStatus
+    from worker_contracts import EntryResult
+
+    result = EntryResult(
+        pdb_id=pdb_id,
+        alchemy_commit=PLACEHOLDER_PROVENANCE["alchemy_commit"],
+        gemmi_version=PLACEHOLDER_PROVENANCE["gemmi_version"],
+        ccp4_version=PLACEHOLDER_PROVENANCE["ccp4_version"],
+        reference_data_id=PLACEHOLDER_PROVENANCE["reference_data_id"],
+        analysis_config_id=PLACEHOLDER_PROVENANCE["analysis_config_id"],
+        refinement_state="final",
+    )
+    for name, value in overrides.items():
+        if name == "status":
+            value = EntryStatus(value)
+        setattr(result, name, value)
+    return result
+
+
+def read_csv(path: _StrPath) -> list[list[str]]:
+    """Every row of a CSV file, header first."""
+    import csv
+
+    with open(path, newline="", encoding="utf-8") as handle:
+        return list(csv.reader(handle))
 
 
 class _PdbWritable(Protocol):

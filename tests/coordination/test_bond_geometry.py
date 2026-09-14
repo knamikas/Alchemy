@@ -7,12 +7,12 @@ import os
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any
 
 import gemmi
 import helpers
 import pytest
-from helpers import EDSTATS_HEADER, AtomSpec, StructureBuilder
+from helpers import EDSTATS_HEADER, AtomSpec, StructureBuilder, approx
 
 import codes
 import coordinate_conversion
@@ -27,26 +27,6 @@ from coordination.contact_record import Candidate
 from coordination.schema import BondRow, CandidateRow
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import AtomSite, StructureContext, count_ni, load_structure
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
-
 
 _AnalysisResult = tuple[
     list[BondRow],

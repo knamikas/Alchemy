@@ -3,11 +3,20 @@
 The unit tests use small structures built in `tests/helpers.py`. The integration
 tests run the full pipeline with CCP4 and three PDB-REDO entries.
 
-Install the test dependency and run the suite with:
+Install the test dependencies and run the suite with:
 
 ```bash
 python3 -m pip install '.[test]'
 python3 -m pytest
+```
+
+The `dev` extra pins the Ruff and mypy versions CI uses, so local lint and type
+checks agree with it:
+
+```bash
+python3 -m pip install '.[test,dev]'
+ruff check src tests tools && ruff format --check src tests tools
+mypy src tests tools
 ```
 
 Alchemy supports Python 3.11 or later and requires `gemmi` 0.7 or later.

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 import gemmi
 import helpers
@@ -18,27 +18,9 @@ from helpers import (
     EDSTATS_HEADER,
     AtomSpec,
     StructureBuilder,
+    approx,
     simple_metal_site,
 )
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
 
 
 def test_src_modules_import() -> None:

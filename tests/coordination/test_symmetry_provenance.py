@@ -11,12 +11,12 @@ import math
 import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any
 
 import gemmi
 import helpers
 import pytest
-from helpers import StructureBuilder, simple_metal_site
+from helpers import StructureBuilder, approx, simple_metal_site
 
 import codes
 import coordination.analysis as ba
@@ -24,26 +24,6 @@ import structure_analysis as sa
 from coordination.contact_record import Candidate
 from coordination.schema import BondRow, CandidateRow
 from metal_elements import METAL_ELEMENTS
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
-
 
 # Use short cell edges so donors across a boundary have first-sphere images.
 SMALL_CELL: tuple[float, ...] = (20.0, 20.0, 20.0, 90.0, 90.0, 90.0)

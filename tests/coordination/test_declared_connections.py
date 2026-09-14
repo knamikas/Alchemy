@@ -15,14 +15,13 @@ from typing import (
     Any,
     NamedTuple,
     NoReturn,
-    Protocol,
     cast,
 )
 
 import gemmi
 import helpers
 import pytest
-from helpers import AtomRef, AtomSpec, ResidueSpec, StructureBuilder
+from helpers import AtomRef, AtomSpec, ResidueSpec, StructureBuilder, approx
 
 import coordinate_conversion as conversion
 import reference_data
@@ -31,26 +30,6 @@ from coordination import analysis as coordination_analysis
 from coordination import declared_connections
 from coordination import schema as coordination_schema
 from structure_analysis import ResidueSelection, StructureContext, load_structure
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
-
 
 #: Identity of one selected metal site, as ``run_bond_analysis`` keys summaries.
 SummaryKey = tuple[int, int, int, int]

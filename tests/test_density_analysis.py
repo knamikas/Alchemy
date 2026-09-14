@@ -8,35 +8,17 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO, Any, NoReturn, Protocol, cast
+from typing import IO, Any, NoReturn
 
 import gemmi
 import numpy as np
 import pytest
+from helpers import approx
 
 import density_analysis as density
 import inputs
 
 _Ccp4Runner = density._Ccp4Runner  # pyright: ignore[reportPrivateUsage]
-
-
-class _ApproxFactory(Protocol):
-    """The concrete numeric subset of pytest's broadly typed approx helper."""
-
-    def __call__(
-        self,
-        expected: object,
-        rel: float | None = None,
-        abs: float | None = None,
-        nan_ok: bool = False,
-    ) -> object: ...
-
-
-class _PytestApi(Protocol):
-    approx: _ApproxFactory
-
-
-approx = cast(_PytestApi, pytest).approx
 
 
 def _found_command(command: str, path: str | None = None) -> str:
