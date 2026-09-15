@@ -80,5 +80,16 @@ class TestLeakedWorkDirectorySweep:
         assert link.is_symlink()
         assert os.path.isdir(target)
 
+    def test_marker_of_the_wrong_shape_is_refused_not_fatal(
+        self, tmp_path: Path
+    ) -> None:
+        """The sweep runs before any output is read, so it must never raise."""
+        stray = tmp_path / ".alchemy-109m-stray"
+        stray.mkdir()
+        (stray / scratch.SCRATCH_MARKER_FILENAME).write_text("[1]\n", encoding="utf-8")
+
+        assert scratch.sweep_owned_scratch_directories(str(tmp_path)) == 0
+        assert stray.is_dir()
+
     def test_missing_directory_is_not_an_error(self, tmp_path: Path) -> None:
         assert scratch.sweep_owned_scratch_directories(str(tmp_path / "absent")) == 0

@@ -18,7 +18,7 @@ from codes import EntryStatus, ReasonCode
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.layout import OutputLayout
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS, OutputTargets
-from scratch import create_owned_scratch_directory
+from scratch import RESUME_SCRATCH, create_owned_scratch_directory
 from worker_contracts import EntryResult
 
 # DictReader uses None for missing cells and stores surplus cells under a None key.
@@ -436,7 +436,11 @@ def validate_resume_schemas(
         return
 
     pending_bonds_only = all(row.awaits_bond_stage for row in terminal_rows.values())
-    bond_stage_paths = {layout.bonds, layout.candidates, confidence_path}
+    bond_stage_paths: set[str | None] = {
+        layout.bonds,
+        layout.candidates,
+        confidence_path,
+    }
     for path, _expected in checks:
         if pending_bonds_only and path in bond_stage_paths:
             continue
@@ -548,7 +552,7 @@ class ResumeStaging:
         self.dir = create_owned_scratch_directory(
             output_dir,
             prefix=".alchemy-resume-",
-            kind="resume",
+            kind=RESUME_SCRATCH,
             # Staging may hold the only completed copy after merge failure; delete it
             # only after success.
             preserve=True,

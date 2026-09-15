@@ -625,7 +625,13 @@ def _execute_with_output_lock(
     env: dict[str, str],
 ) -> int:
     """Run every output-reading and output-writing phase under one lease."""
-    sweep_owned_scratch_directories(args.output_dir)
+    swept = sweep_owned_scratch_directories(args.output_dir)
+    if swept:
+        logger.info(
+            "removed %d scratch director%s an earlier run left behind",
+            swept,
+            "y" if swept == 1 else "ies",
+        )
     layout = OutputLayout(args.output_dir)
     run_mode = confidence.classify_run(args)
     run_log.details["run_mode"] = run_mode

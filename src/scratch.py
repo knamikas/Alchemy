@@ -13,9 +13,15 @@ import shutil
 import stat
 import tempfile
 from datetime import UTC, datetime
+from typing import cast
 
 SCRATCH_MARKER_FILENAME = ".alchemy-scratch.json"
 SCRATCH_MARKER_SCHEMA = 1
+
+# The kinds of scratch a marker may declare; the sweep removes no other kind.
+ENTRY_SCRATCH = "entry"
+RESUME_SCRATCH = "resume"
+DISPOSABLE_SCRATCH_KINDS = frozenset({ENTRY_SCRATCH, RESUME_SCRATCH})
 
 
 def create_owned_scratch_directory(
@@ -31,8 +37,8 @@ def create_owned_scratch_directory(
     metadata: dict[str, object] = {
         "schema": SCRATCH_MARKER_SCHEMA,
         "owner": "alchemy",
-        "kind": str(kind),
-        "preserve": bool(preserve),
+        "kind": kind,
+        "preserve": preserve,
         "created_utc": datetime.now(UTC).isoformat(),
         "pid": os.getpid(),
     }
@@ -54,13 +60,16 @@ def _scratch_cleanup_allowed(path: str) -> bool:
         if not stat.S_ISREG(marker_stat.st_mode):
             return False
         with open(marker, encoding="utf-8") as handle:
-            metadata = json.load(handle)
+            loaded: object = json.load(handle)
     except (OSError, ValueError, TypeError):
         return False
+    if not isinstance(loaded, dict):
+        return False
+    metadata = cast("dict[str, object]", loaded)
     return (
         metadata.get("schema") == SCRATCH_MARKER_SCHEMA
         and metadata.get("owner") == "alchemy"
-        and metadata.get("kind") in ("entry", "resume")
+        and metadata.get("kind") in DISPOSABLE_SCRATCH_KINDS
         and metadata.get("preserve") is False
     )
 
@@ -79,10 +88,12 @@ def sweep_owned_scratch_directories(output_dir: str) -> int:
         path = os.path.join(output_dir, name)
         if os.path.islink(path) or not os.path.isdir(path):
             continue
+        # A Windows junction is not a link to ``islink`` but resolves elsewhere.
         if os.path.dirname(os.path.realpath(path)) != root:
             continue
         if not _scratch_cleanup_allowed(path):
             continue
         shutil.rmtree(path, ignore_errors=True)
-        removed += not os.path.exists(path)
+        if not os.path.exists(path):
+            removed += 1
     return removed

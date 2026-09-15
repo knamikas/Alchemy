@@ -25,7 +25,7 @@ from crystallization_conditions import extract_crystallization_context
 from density_analysis import Ccp4EntryLimitationError, elapsed_s
 from inputs import MissingInputError
 from run_logging import configure_worker_logging, logger_for, truncate
-from scratch import create_owned_scratch_directory
+from scratch import ENTRY_SCRATCH, create_owned_scratch_directory
 from structure_analysis import AtomSite
 from worker_contracts import (
     EntryResult,
@@ -292,7 +292,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
         work_dir = create_owned_scratch_directory(
             cfg.output_dir,
             prefix=f".alchemy-{pdb_id}-",
-            kind="entry",
+            kind=ENTRY_SCRATCH,
             preserve=cfg.keep_intermediates,
         )
         inputs, structure, provenance = prepare_analysis_inputs(
