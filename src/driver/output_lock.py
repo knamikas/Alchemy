@@ -1,4 +1,4 @@
-"""Exclusive output-directory ownership and conservative scratch cleanup."""
+"""Exclusive ownership of one output directory through an advisory file lease."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ _platform_lock: Any = importlib.import_module("msvcrt" if _IS_WINDOWS else "fcnt
 
 
 LOCK_FILENAME = ".alchemy.lock"
+# The locked byte on Windows; far beyond any metadata so readers can still parse it.
+WINDOWS_LOCK_OFFSET = 0x7FFFFFFF
 
 
 class OutputDirectoryBusyError(RuntimeError):
@@ -30,7 +32,6 @@ class OutputDirectoryLockError(RuntimeError):
 
 _active_lock_handle: IO[str] | None = None
 _active_lock_pid: int | None = None
-WINDOWS_LOCK_OFFSET = 0x7FFFFFFF
 
 
 def _open_lock_handle(path: str) -> IO[str]:
@@ -48,6 +49,7 @@ def _open_lock_handle(path: str) -> IO[str]:
             )
         flags |= nofollow
     flags |= getattr(os, "O_CLOEXEC", 0)
+    # A FIFO planted at the lock path must fail the checks below, not hang here.
     flags |= getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags, 0o600)
@@ -140,6 +142,12 @@ if _register_at_fork is not None:
 
 
 def _owner_description(handle: IO[str]) -> str:
+    """Describe the run holding the lease, read from the metadata it recorded.
+
+    The reader holds no lease itself. That is safe because the metadata is
+    plain JSON at the start of the file and the Windows locked byte lies
+    beyond it.
+    """
     try:
         handle.seek(0)
         loaded: object = json.load(handle)
@@ -167,12 +175,10 @@ class OutputDirectoryLock:
         self._handle: IO[str] | None = None
 
     def __enter__(self) -> OutputDirectoryLock:
-        """Acquire the lock and record this process as its owner."""
+        """Open the lock file, take the lease, then record this process as owner."""
         global _active_lock_handle, _active_lock_pid
         try:
             handle = _open_lock_handle(self.path)
-        except OutputDirectoryLockError:
-            raise
         except OSError as exc:
             raise OutputDirectoryLockError(
                 f"Cannot lock output directory {self.output_dir}: {exc.strerror or exc}"
@@ -193,19 +199,7 @@ class OutputDirectoryLock:
                 f"Cannot lock output directory {self.output_dir}: {exc.strerror or exc}"
             ) from None
         try:
-            metadata: dict[str, object] = {
-                "schema": 1,
-                "pid": os.getpid(),
-                "hostname": socket.gethostname(),
-                "started_utc": datetime.now(UTC).isoformat(),
-                "command": self.command,
-            }
-            handle.seek(0)
-            handle.truncate()
-            json.dump(metadata, handle, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+            self._record_owner(handle)
         except BaseException as exc:
             release_file_lock(handle)
             handle.close()
@@ -219,6 +213,22 @@ class OutputDirectoryLock:
         _active_lock_handle = handle
         _active_lock_pid = os.getpid()
         return self
+
+    def _record_owner(self, handle: IO[str]) -> None:
+        """Replace the lock file's contents with this process's metadata."""
+        metadata: dict[str, object] = {
+            "schema": 1,
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "started_utc": datetime.now(UTC).isoformat(),
+            "command": self.command,
+        }
+        handle.seek(0)
+        handle.truncate()
+        json.dump(metadata, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
     def __exit__(
         self,
