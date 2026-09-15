@@ -250,19 +250,16 @@ def choose_worker_count(
     """
     cpu_limit, memory_limit = worker_limits_for_budget(memory_budget_bytes)
     requested = cpu_limit if args.workers is None else args.workers
-    workers = min(requested, entry_count)
-    if memory_limit is not None:
-        workers = min(workers, memory_limit)
-    memory_limit_detail = memory_limit if memory_limit is not None else "unavailable"
-    run_log.details["memory_worker_limit"] = memory_limit_detail
+    workers = min(requested, entry_count, memory_limit)
+    run_log.details["memory_worker_limit"] = memory_limit
     run_log.details["selected_workers"] = workers
     if args.workers is None:
         run_log.details["worker_selection"] = "automatic"
         run_log.details["cpu_worker_limit"] = cpu_limit
         logger.info(
-            "automatic worker selection: CPU limit %s, memory limit %s, selected %d",
+            "automatic worker selection: CPU limit %d, memory limit %d, selected %d",
             cpu_limit,
-            memory_limit_detail,
+            memory_limit,
             workers,
         )
     else:

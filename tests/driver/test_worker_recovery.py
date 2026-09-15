@@ -553,7 +553,7 @@ def _driver_child(
         # CI container's memory cap can serialize them and test a different case.
         driver_pool.worker_limits_for_budget = lambda _budget: (  # type: ignore[assignment, attr-defined]
             max(1, len(script)),
-            None,
+            max(1, len(script)),
         )
         # Both the memory planner and the dispatcher probe available memory.
         driver_pool.available_memory_bytes = lambda: None  # type: ignore[attr-defined]

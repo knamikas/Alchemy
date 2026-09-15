@@ -1,6 +1,12 @@
 """Plan worker CPU and memory resources.
 
-Use conservative estimates when input metadata is incomplete.
+Each entry's peak memory is estimated from the best evidence available: the
+cell and resolution in PDB-REDO's ``data.json`` give the density-map grid and
+so the map bytes; failing that, the MTZ file size scaled by a fixed factor;
+failing that, a fixed conservative default. The memory the run may spend is
+the tighter of what the host and this process's cgroup report, less a
+protected reserve, and the worker count is bounded by physical cores, any CPU
+quota, and the overhead of keeping each worker resident.
 """
 
 from __future__ import annotations
@@ -132,6 +138,7 @@ def available_cpu_count() -> int:
 
 
 def _read_linux_available_memory() -> int | None:
+    """``MemAvailable`` from ``/proc/meminfo`` in bytes, or ``None`` if unreadable."""
     try:
         with open(PROC_MEMINFO_PATH, encoding="ascii") as handle:
             for line in handle:
@@ -143,6 +150,7 @@ def _read_linux_available_memory() -> int | None:
 
 
 def _read_int(path: str) -> int | None:
+    """A non-negative integer from a one-value file; ``max`` and errors read as None."""
     try:
         with open(path, encoding="ascii") as handle:
             value = handle.read().strip()
@@ -225,6 +233,11 @@ def available_cpu_quota() -> int | None:
 
 
 def _safe_cgroup_dir(relative_path: str) -> str | None:
+    """Resolve a cgroup membership path under the cgroup root, or refuse it.
+
+    The path comes from ``/proc/self/cgroup``; one that would escape the root
+    through ``..`` is not followed.
+    """
     relative = os.path.normpath(relative_path.lstrip("/"))
     if relative == ".":
         relative = ""
@@ -244,7 +257,13 @@ def _cgroup_tree_available(
     usage_name: str,
     *,
     unlimited_threshold: int | None = None,
+    discount_file_cache: bool = False,
 ) -> int | None:
+    """The tightest ``limit - usage`` allowance from ``directory`` up to its root.
+
+    A limit at or above ``unlimited_threshold`` is treated as no limit. With
+    ``discount_file_cache``, clean inactive page cache is not charged as usage.
+    """
     current = os.path.abspath(directory)
     root = os.path.abspath(controller_root)
     allowances: list[int] = []
@@ -260,9 +279,7 @@ def _cgroup_tree_available(
             # Charging all mirror-enumeration cache as working memory can
             # collapse worker selection before analysis even starts.
             reclaimable = (
-                reclaimable_file_bytes(current, usage)
-                if limit_name == "memory.max"
-                else 0
+                reclaimable_file_bytes(current, usage) if discount_file_cache else 0
             )
             allowances.append(max(0, limit - max(0, usage - reclaimable)))
         if current == root:
@@ -301,6 +318,7 @@ def reclaimable_file_bytes(directory: str, usage: int) -> int:
 
 
 def _read_cgroup_available_memory() -> int | None:
+    """This process's cgroup memory allowance: the unified hierarchy, else v1."""
     memberships = _cgroup_memberships()
     v2_path = _cgroup_v2_path(memberships)
     if v2_path is not None:
@@ -308,7 +326,11 @@ def _read_cgroup_available_memory() -> int | None:
         if directory is None:
             return None
         return _cgroup_tree_available(
-            directory, CGROUP_ROOT, "memory.max", "memory.current"
+            directory,
+            CGROUP_ROOT,
+            "memory.max",
+            "memory.current",
+            discount_file_cache=True,
         )
 
     for _hierarchy, controllers, path in memberships:
@@ -390,12 +412,13 @@ def scheduling_memory_budget(
     return max(1, capacity - reserve), reserve
 
 
-def worker_limits_for_budget(budget: int | None) -> tuple[int, int | None]:
+def worker_limits_for_budget(budget: int | None) -> tuple[int, int]:
     """Size the pool from the CPU limits and an already measured memory budget.
 
     Reserve at most half the entry budget for resident worker overhead, so
     starting a pool leaves space for calculations. Weighted admission charges
     each active entry and the overhead of idle workers against that budget.
+    Without a budget the memory limit is one worker.
     """
     logical = available_cpu_count()
     physical = available_physical_cpu_count()
@@ -416,6 +439,7 @@ def worker_limits_for_budget(budget: int | None) -> tuple[int, int | None]:
 
 
 def _open_text(path: str) -> TextIO:
+    """Open a text file, transparently decompressing a ``.gz`` one."""
     if path.endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8")
     return open(path, encoding="utf-8")
@@ -450,6 +474,7 @@ def _read_properties_prefix(path: str) -> dict[str, object] | None:
 
 
 def _positive_float(properties: Mapping[str, object], name: str) -> float | None:
+    """A finite, positive number under ``name``, or ``None`` for anything else."""
     try:
         value = float(cast(Any, properties[name]))
     except (KeyError, TypeError, ValueError):
@@ -461,19 +486,17 @@ def estimate_from_properties(
     pdb_id: str, properties: Mapping[str, object]
 ) -> EntryMemoryEstimate | None:
     """Estimate peak worker memory from PDB-REDO cell properties."""
-    axes = tuple(
+    maybe_axes = [
         _positive_float(properties, name) for name in ("AAXIS", "BAXIS", "CAXIS")
-    )
+    ]
     resolution = _positive_float(properties, "RESOLUTION")
-    if any(axis is None for axis in axes) or resolution is None:
+    if resolution is None:
+        return None
+    axes = [axis for axis in maybe_axes if axis is not None]
+    if len(axes) != len(maybe_axes):
         return None
     grid = tuple(
-        max(
-            1,
-            math.ceil(
-                cast(float, axis) * FFT_GRID_SAMPLING / resolution * FFT_GRID_MARGIN
-            ),
-        )
+        max(1, math.ceil(axis * FFT_GRID_SAMPLING / resolution * FFT_GRID_MARGIN))
         for axis in axes
     )
     one_map = CCP4_MAP_HEADER_BYTES + math.prod(grid) * MAP_VALUE_BYTES
@@ -491,6 +514,7 @@ def estimate_from_properties(
 
 
 def _first_existing(paths: tuple[str | None, ...]) -> str | None:
+    """The first path that names an existing file, or ``None``."""
     return next((path for path in paths if path and os.path.isfile(path)), None)
 
 

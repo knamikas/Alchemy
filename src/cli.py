@@ -25,6 +25,11 @@ from density_analysis import (
     MODEL_ENVELOPE_BORDER_ANGSTROM,
 )
 from driver.pool import run
+from driver.resources import (
+    DEFAULT_MEMORY_UTILIZATION,
+    GIB,
+    MEMORY_RESERVE_MIN_BYTES,
+)
 from driver.runlog import RunLog
 from inputs import PDB_ID_PATTERN
 from paths import REPO_DIR
@@ -183,10 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--memory-utilization",
         type=utilization_fraction,
-        default=0.80,
+        default=DEFAULT_MEMORY_UTILIZATION,
         help=(
-            "maximum fraction of detected or configured memory used for "
-            "worker estimates; the protected 4 GiB reserve still applies"
+            "maximum fraction of detected or configured memory used for worker "
+            f"estimates; the protected {MEMORY_RESERVE_MIN_BYTES // GIB} GiB "
+            "reserve still applies"
         ),
     )
     ap.add_argument(
