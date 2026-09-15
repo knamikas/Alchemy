@@ -53,6 +53,22 @@ def test_help_does_not_claim_that_no_bonds_defaults_to_true() -> None:
     assert "bonds=True" in paragraph, paragraph
 
 
+def test_help_does_not_claim_that_no_crystallization_download_defaults_to_true() -> (
+    None
+):
+    """The same guard as for ``--no-bonds``, for the other ``store_false`` flag."""
+    paragraph = _option_help("--no-crystallization-download")
+    assert "do not fetch missing original-PDB crystallization" in paragraph
+    assert "(default: True)" not in paragraph, paragraph
+    assert "crystallization_download=True" in paragraph, paragraph
+
+
+def test_help_omits_the_default_of_unset_options() -> None:
+    """A ``None`` default is "unset", so the formatter must not print it."""
+    assert "(default: None)" not in _option_help("--memory-limit")
+    assert "(default: None)" not in _option_help("--log-dir")
+
+
 def test_crystallization_metadata_download_can_be_disabled() -> None:
     default = cli.parse_args([])
     offline = cli.parse_args(
@@ -566,13 +582,13 @@ class TestPositiveInt:
 @pytest.mark.parametrize("value", ["9myr", "9MYR", "1abc", "0000"])
 def test_pdb_ids_are_accepted_case_insensitively_and_normalized(value: str) -> None:
     """IDs are lowercased so cache paths and manifest keys cannot diverge."""
-    assert cli.parse_pdb_id(value) == value.lower()
+    assert cli.pdb_id(value) == value.lower()
 
 
 @pytest.mark.parametrize("value", ["abc", "abcde", "ab-c", "ab c", "", "9my_"])
 def test_malformed_pdb_ids_are_rejected(value: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError, match="four alphanumeric"):
-        cli.parse_pdb_id(value)
+        cli.pdb_id(value)
 
 
 def test_intermediates_are_discarded_unless_asked_for() -> None:

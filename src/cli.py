@@ -17,6 +17,8 @@ import sys
 from collections.abc import Generator, Sequence
 from types import FrameType, TracebackType
 
+from typing_extensions import override
+
 from ccp4_setup import REPO_DIR
 from density_analysis import (
     CCP4_TOOL_TIMEOUT_S,
@@ -31,8 +33,8 @@ from run_logging import configure_driver_logging, logger_for
 logger = logger_for(__name__)
 
 
-def parse_pdb_id(value: str) -> str:
-    """Parse and normalize a four-character PDB identifier."""
+def pdb_id(value: str) -> str:
+    """Argparse type for a four-character PDB identifier, normalized to lowercase."""
     if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
         raise argparse.ArgumentTypeError(
             "PDB ID must contain exactly four alphanumeric characters"
@@ -53,13 +55,13 @@ def positive_int(value: str) -> int:
 
 def memory_size_bytes(value: str) -> int:
     """Argparse type for byte sizes such as ``8G`` or ``16GiB``."""
-    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?I?B?)?", value.upper())
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT](?:I?B)?|B)?", value.upper())
     if match is None:
         raise argparse.ArgumentTypeError(
             "must be a positive byte size such as 8G or 16GiB"
         )
     number, suffix = match.groups()
-    normalized = (suffix or "B").removesuffix("B").removesuffix("I")
+    normalized = (suffix or "").removesuffix("B").removesuffix("I")
     multiplier = {
         "": 1,
         "K": 1024,
@@ -92,14 +94,27 @@ def utilization_fraction(value: str) -> float:
     return parsed
 
 
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Append each option's default to its help, except ``None``, which is unset."""
+
+    @override
+    def _get_help_string(self, action: argparse.Action) -> str | None:
+        if action.default is None:
+            return action.help
+        return super()._get_help_string(action)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    """Declare every command-line option; validation lives in ``parse_args``."""
+    """Declare every command-line option, with per-value checks as argparse types.
+
+    Rules that span several options live in ``_validate_arguments``.
+    """
     ap = argparse.ArgumentParser(
         description="Batch Alchemy core pipeline over PDB-REDO.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=_HelpFormatter,
     )
     ap.add_argument(
-        "--id", type=parse_pdb_id, help="process a single PDB id (else batch the root)"
+        "--id", type=pdb_id, help="process a single PDB ID instead of a whole mirror"
     )
     ap.add_argument(
         "--id-file",
@@ -136,20 +151,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help=(
             "do not fetch missing original-PDB crystallization metadata; use "
-            "only the metadata cache and coordinate-file records"
+            "only the metadata cache and coordinate-file records "
+            "(crystallization_download=%(default)s)"
         ),
     )
-    ap.set_defaults(crystallization_download=True)
     ap.add_argument(
         "--max-pdbs",
         type=positive_int,
-        default=None,
         help="process only the first N entries (minimum: 1)",
     )
     ap.add_argument(
         "--workers",
         type=positive_int,
-        default=None,
         help=(
             "worker-process ceiling (minimum: 1); memory-aware admission "
             "still limits simultaneously active entries"
@@ -158,7 +171,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--memory-limit",
         type=memory_size_bytes,
-        default=None,
         help=(
             "memory available to Alchemy (for example 8G or 16GiB); "
             "default: auto-detect the host, container, or scheduler limit"
@@ -173,7 +185,11 @@ def build_parser() -> argparse.ArgumentParser:
             "worker estimates; the protected 4 GiB reserve still applies"
         ),
     )
-    ap.add_argument("--output-dir", default=os.path.join(REPO_DIR, "output"))
+    ap.add_argument(
+        "--output-dir",
+        default=os.path.join(REPO_DIR, "output"),
+        help="directory for the result CSVs, the manifest, and run logs",
+    )
     ap.add_argument(
         "--density-map-scope",
         choices=DENSITY_MAP_SCOPES,
@@ -202,7 +218,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--log-dir",
-        default=None,
         help=(
             "directory for run reports (default: <output-dir>/logs/). Each "
             "invocation writes an immutable log and entry-diagnostics CSV there"
@@ -210,7 +225,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--log-file",
-        default=None,
         help=(
             "also write full debug-level diagnostics to this file, whatever "
             "the console verbosity"
@@ -228,7 +242,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--confidence-reference-dir",
-        default=None,
         help=(
             "explicit frozen full-database confidence reference for single, "
             "ID-file, manual, and capped runs; otherwise Alchemy searches "
@@ -237,12 +250,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--ccp4-setup",
-        default=None,
         help="optional CCP4 setup script override (e.g. .../bin/ccp4.setup-sh)",
     )
     ap.add_argument(
         "--configure-ccp4",
-        default=None,
         help="save a CCP4 setup script path for future runs",
     )
     ap.add_argument(
@@ -272,17 +283,17 @@ def build_parser() -> argparse.ArgumentParser:
         "stats only); bond analysis is enabled by default "
         "(bonds=%(default)s)",
     )
-    ap.set_defaults(bonds=True)
     return ap
 
 
 def _validate_arguments(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Reject option combinations that argparse alone cannot express."""
+    manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
     if args.id and args.id_file:
         ap.error("use either --id or --id-file, not both")
     if args.retry_partials and not args.resume:
         ap.error("--retry-partials requires --resume")
-    if args.retry_partials and (args.pdb_file or args.mtz_file or args.cif_file):
+    if args.retry_partials and manual_requested:
         ap.error("--retry-partials cannot be used with manual structure inputs")
     if (args.pdb_file or args.cif_file) and not args.mtz_file:
         ap.error("manual structure input requires --mtz-file")
@@ -290,7 +301,6 @@ def _validate_arguments(ap: argparse.ArgumentParser, args: argparse.Namespace) -
         ap.error("--mtz-file requires --pdb-file or --cif-file")
     if args.pdb_file and args.cif_file:
         ap.error("use either --pdb-file or --cif-file, not both")
-    manual_requested = bool(args.pdb_file or args.mtz_file or args.cif_file)
     if manual_requested and args.id_file:
         ap.error(
             "--id-file cannot be combined with manual structure inputs; "
@@ -351,7 +361,7 @@ def _sigterm_as_keyboard_interrupt() -> Generator[None]:
 
     The previous handler is restored on exit. Where signal handling is
     unavailable (off the main thread, or on a platform that rejects the call)
-    the body runs without a handler, exactly as before.
+    the body runs without a handler.
     """
 
     def _raise_interrupt(signum: int, frame: FrameType | None) -> None:
@@ -371,12 +381,19 @@ def _sigterm_as_keyboard_interrupt() -> Generator[None]:
 
 
 class _Reporting:
-    """Write the run report when the run ends, however it ends.
+    """Context manager that writes the run report on exit, however the run ends.
 
-    ``exit_code`` starts at 1 so that a run which dies of an unexpected
-    exception is still reported as a failure; the body stores the run's own
-    code. An interruption is converted here: it is recorded in the report,
-    announced on stderr, swallowed, and reported as exit code 130.
+    The caller runs the pipeline inside the ``with`` block and stores its exit
+    code in ``exit_code``. It starts at 1 so that a run which raises before
+    that assignment is still reported as a failure.
+
+    On exit:
+
+    - ``KeyboardInterrupt`` (also raised for SIGTERM) is recorded in the
+      report, announced on stderr, suppressed, and mapped to exit code 130.
+    - Any other exception is recorded in the report and re-raised.
+    - The report is written in every case; a failure to write it is logged
+      rather than raised.
     """
 
     def __init__(self, run_log: RunLog) -> None:
@@ -431,7 +448,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     command_parts = list(sys.argv) if raw_args is None else [sys.argv[0], *raw_args]
     run_log = RunLog(args, shlex.join(command_parts))
     # The signal handler is the inner context so that it is restored before
-    # the report is written, as the original try/finally did.
+    # the report is written.
     with _Reporting(run_log) as report, _sigterm_as_keyboard_interrupt():
         report.exit_code = run(args, run_log)
     return report.exit_code
