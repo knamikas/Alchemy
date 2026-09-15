@@ -1337,7 +1337,7 @@ _NETWORK_CACHE: dict[tuple[str, int], bool] = {}
 
 def ccp4_env() -> dict[str, str] | None:
     """An environment with the CCP4 tools on PATH, or ``None``."""
-    from ccp4_setup import ccp4_tools_available, find_ccp4_setup, resolve_env
+    from driver.ccp4_setup import ccp4_tools_available, find_ccp4_setup, resolve_env
 
     if os.environ.get("ALCHEMY_TESTS_NO_CCP4"):
         return None

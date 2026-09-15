@@ -18,7 +18,6 @@ from helpers import simple_metal_site
 
 def test_src_modules_import() -> None:
     """Verify source modules import and expose their entry points."""
-    import ccp4_setup
     import codes
     import confidence_score
     import density_analysis
@@ -34,7 +33,7 @@ def test_src_modules_import() -> None:
         policy,
         schema,
     )
-    from driver import pool, progress, resources, runlog, writers
+    from driver import ccp4_setup, pool, progress, resources, runlog, writers
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert policy.CANDIDATE_SEARCH_RADIUS == 4.0

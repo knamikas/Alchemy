@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-import ccp4_setup
+from driver import ccp4_setup
 
 
 def test_missing_ccp4_tools_are_named_with_a_remedy(
@@ -16,7 +16,7 @@ def test_missing_ccp4_tools_are_named_with_a_remedy(
         del path
         return None if tool == "edstats" else "/x"
 
-    monkeypatch.setattr("ccp4_setup.shutil.which", missing_edstats)
+    monkeypatch.setattr("driver.ccp4_setup.shutil.which", missing_edstats)
 
     with pytest.raises(ccp4_setup.Ccp4SetupError) as excinfo:
         ccp4_setup.verify_ccp4({"PATH": "/x"})
@@ -31,7 +31,7 @@ def test_a_complete_ccp4_installation_passes(monkeypatch: pytest.MonkeyPatch) ->
         del path
         return f"/opt/{tool}"
 
-    monkeypatch.setattr("ccp4_setup.shutil.which", installed_tool)
+    monkeypatch.setattr("driver.ccp4_setup.shutil.which", installed_tool)
     ccp4_setup.verify_ccp4({"PATH": "/opt"})
 
 
@@ -48,7 +48,7 @@ def test_tool_availability_agrees_with_verification(
         del path
         return None if tool == "fft" else "/x"
 
-    monkeypatch.setattr("ccp4_setup.shutil.which", missing_fft)
+    monkeypatch.setattr("driver.ccp4_setup.shutil.which", missing_fft)
 
     assert not ccp4_setup.ccp4_tools_available({"PATH": "/x"})
     with pytest.raises(ccp4_setup.Ccp4SetupError):
@@ -69,7 +69,7 @@ def test_a_library_caller_never_has_to_catch_systemexit(
         del path
         return None
 
-    monkeypatch.setattr("ccp4_setup.shutil.which", no_tools)
+    monkeypatch.setattr("driver.ccp4_setup.shutil.which", no_tools)
 
     with pytest.raises(Exception) as excinfo:
         ccp4_setup.verify_ccp4({"PATH": "/x"})

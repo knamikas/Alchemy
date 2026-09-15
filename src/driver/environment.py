@@ -7,8 +7,8 @@ import subprocess
 from collections.abc import Mapping
 
 from _version import __version__
-from ccp4_setup import (
-    REPO_DIR,
+from driver.ccp4_setup import (
+    CCP4_SETUP_HINT,
     REQUIRED_CCP4_TOOLS,
     Ccp4SetupError,
     ccp4_tools_available,
@@ -19,6 +19,7 @@ from ccp4_setup import (
     verify_ccp4,
 )
 from driver.errors import DriverError
+from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import logger_for
 
@@ -90,10 +91,7 @@ def _resolve_ccp4_environment(args: RunConfig) -> dict[str, str]:
     if detected is None:
         raise Ccp4SetupError(
             f"Required CCP4 tools ({', '.join(REQUIRED_CCP4_TOOLS)}) were not "
-            "found on PATH and no setup file could be auto-detected. "
-            "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in "
-            "your shell before running."
+            "found on PATH and no setup file could be auto-detected. " + CCP4_SETUP_HINT
         )
     env = resolve_env(detected)
     _verify_resolved_ccp4(env, detected)

@@ -47,7 +47,7 @@ applicable.
    resolves the CCP4 environment through
    [driver/environment.py](../src/driver/environment.py), which also records the
    Alchemy, Gemmi, and CCP4 versions for provenance.
-   [ccp4_setup.py](../src/ccp4_setup.py) locates the setup script for it: the
+   [driver/ccp4_setup.py](../src/driver/ccp4_setup.py) locates the setup script for it: the
    `--ccp4-setup` option, the `CCP4_SETUP` environment variable, the path saved
    by `--configure-ccp4`, then common install locations. `--configure-ccp4`
    saves the setup path and exits before analysis. A `DriverError` from
@@ -206,11 +206,12 @@ Recovery spans several layers:
 | Module | Shared role |
 | --- | --- |
 | [run_config.py](../src/run_config.py) | Validated command-line configuration. |
+| [paths.py](../src/paths.py) | The checkout root that default output, cache, and reference paths are anchored to. |
 | [worker_contracts.py](../src/worker_contracts.py) | Worker configuration, entry results, and input provenance records. |
 | [output_rows.py](../src/output_rows.py) | Typed site rows and CSV value formatting. |
 | [codes.py](../src/codes.py) | Status, reason, warning, and contact vocabulary. |
 | [analysis_config.py](../src/analysis_config.py) | Analysis-policy identity and compatibility, including the 100-site entry limit. |
-| [ccp4_setup.py](../src/ccp4_setup.py) | Locate the CCP4 setup script and prepare the process environment. |
+| [driver/ccp4_setup.py](../src/driver/ccp4_setup.py) | Locate the CCP4 setup script and prepare the process environment. |
 | [driver/errors.py](../src/driver/errors.py) | The driver's fatal-error type; raising it ends the run with exit code 1. |
 | [driver/resources.py](../src/driver/resources.py) | Per-entry memory estimates and the worker ceiling for a memory budget. |
 | [driver/memory_admission.py](../src/driver/memory_admission.py) | Admission of entries under memory pressure, with backoff and delayed recovery. |

@@ -17,21 +17,28 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from paths import REPO_DIR
+
 
 class Ccp4SetupError(Exception):
     """CCP4 could not be located, sourced, or verified."""
 
 
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 REQUIRED_CCP4_TOOLS = ("mtzfix", "fft", "mapmask", "edstats")
 
 # Search in precedence order; save updates to the first file.
-DEFAULT_CONFIG_FILES = [
+DEFAULT_CONFIG_FILES = (
     os.path.expanduser("~/.config/alchemy/ccp4.json"),
     os.path.expanduser("~/.alchemy/ccp4.json"),
     os.path.join(REPO_DIR, ".alchemy", "ccp4.json"),
-]
+)
+
+# How to make CCP4 available, appended to every "tools not found" message.
+CCP4_SETUP_HINT = (
+    "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
+    "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in your shell "
+    "before running."
+)
 
 WINDOWS_CCP4_SETUP_NAMES = ("ccp4.setup.bat", "ccp4.setup.cmd")
 
@@ -118,9 +125,11 @@ def save_ccp4_setup(setup_path: str, config_files: Sequence[str] | None = None) 
     if path.exists():
         try:
             with path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh) or {}
+                loaded: object = json.load(fh)
         except (OSError, json.JSONDecodeError):
-            data = {}
+            loaded = None
+        if isinstance(loaded, dict):
+            data = cast("dict[str, Any]", loaded)
     data["ccp4_setup"] = setup_path
     with path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, sort_keys=True)
@@ -180,9 +189,7 @@ def verify_ccp4(env: Mapping[str, str]) -> None:
     if missing:
         raise Ccp4SetupError(
             f"Required CCP4 tools were not found on PATH: {', '.join(missing)}. "
-            "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in\n"
-            "your shell before running."
+            + CCP4_SETUP_HINT
         )
 
 
@@ -261,24 +268,25 @@ def _resolve_env_windows(ccp4_setup: str) -> dict[str, str]:
             f"CCP4 setup {ccp4_setup} did not report its environment; "
             f"expected `set` output after the marker.\n{out.stderr}"
         )
-    # Use the setup environment as returned, including variables it removed.
     return _normalize_path_key(env)
 
 
-def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
-    """Return the environment after sourcing CCP4 setup.
+def resolve_env(ccp4_setup: str) -> dict[str, str]:
+    """Return the environment a CCP4 setup script establishes.
 
-    Without a setup script, use the current environment.
+    The script runs in a throwaway shell and the environment it leaves behind
+    is returned as is, not merged into the current one, so a variable the
+    script unsets stays unset.
     """
-    if not ccp4_setup:
-        return os.environ.copy()
     if not os.path.exists(ccp4_setup):
         raise Ccp4SetupError(f"CCP4 setup file not found: {ccp4_setup}")
 
     if os.path.splitext(ccp4_setup)[1].lower() in (".bat", ".cmd"):
         return _resolve_env_windows(ccp4_setup)
 
-    cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null 2>&1 && env -0"
+    # Only stdout is silenced: ``env -0`` must own it, and a failing script
+    # explains itself on stderr.
+    cmd = f"source {shlex.quote(ccp4_setup)} >/dev/null && env -0"
     try:
         out = subprocess.run(
             ["bash", "-c", cmd],
@@ -288,6 +296,10 @@ def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
         )
     except subprocess.TimeoutExpired:
         raise _timeout_error(ccp4_setup, "shell") from None
+    except OSError as exc:
+        raise Ccp4SetupError(
+            f"Could not start bash to source CCP4 setup {ccp4_setup}: {exc}"
+        ) from None
     if out.returncode != 0:
         raise Ccp4SetupError(f"Failed to source CCP4 setup {ccp4_setup}:\n{out.stderr}")
     env: dict[str, str] = {}
@@ -295,5 +307,4 @@ def resolve_env(ccp4_setup: str | None) -> dict[str, str]:
         if "=" in chunk:
             k, v = chunk.split("=", 1)
             env[k] = v
-    # Preserve deliberate variable removals from the setup script.
     return _normalize_path_key(env)

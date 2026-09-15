@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import json
 import os
 import shutil
 import signal
@@ -17,13 +18,12 @@ from typing import Any, NoReturn
 import pytest
 from helpers import resolved_ccp4_environment
 
-import ccp4_setup
 import cli
 import confidence_score
 import density_analysis as density
 import scratch
+from driver import ccp4_setup, environment, errors
 from driver import confidence as driver_confidence
-from driver import environment, errors
 from driver.runlog import RunLog
 
 
@@ -418,6 +418,32 @@ def test_explicit_ccp4_setup_overrides_the_installation_already_on_path(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
+def test_a_failing_posix_ccp4_setup_reports_its_own_error_output(
+    tmp_path: Path,
+) -> None:
+    """The script's stderr is the only clue to why sourcing failed."""
+    setup = tmp_path / "ccp4.setup-sh"
+    setup.write_text('echo "libccp4 missing" >&2\nexit 1\n', encoding="utf-8")
+
+    with pytest.raises(ccp4_setup.Ccp4SetupError, match="libccp4 missing"):
+        ccp4_setup.resolve_env(str(setup))
+
+
+def test_saving_the_ccp4_setup_replaces_a_config_file_of_the_wrong_shape(
+    tmp_path: Path,
+) -> None:
+    """The loader tolerates a non-object file, so the saver must as well."""
+    config = tmp_path / "ccp4.json"
+    config.write_text("[1, 2, 3]\n", encoding="utf-8")
+
+    ccp4_setup.save_ccp4_setup("/opt/ccp4/bin/ccp4.setup-sh", [str(config)])
+
+    assert json.loads(config.read_text(encoding="utf-8")) == {
+        "ccp4_setup": "/opt/ccp4/bin/ccp4.setup-sh"
+    }
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="writes a POSIX sh setup script")
 def test_posix_ccp4_setup_can_remove_an_inherited_variable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -447,7 +473,7 @@ def test_windows_ccp4_setup_output_is_authoritative(
     def run_stub(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         return completed
 
-    monkeypatch.setattr("ccp4_setup.subprocess.run", run_stub)
+    monkeypatch.setattr("driver.ccp4_setup.subprocess.run", run_stub)
 
     env = ccp4_setup.resolve_env(str(setup))
 
@@ -481,7 +507,7 @@ def test_a_hanging_setup_script_aborts_the_run(
         assert timeout == ccp4_setup.SETUP_SHELL_TIMEOUT_S
         raise subprocess.TimeoutExpired(cmd, float(timeout))
 
-    monkeypatch.setattr("ccp4_setup.subprocess.run", fake_run)
+    monkeypatch.setattr("driver.ccp4_setup.subprocess.run", fake_run)
 
     with pytest.raises(ccp4_setup.Ccp4SetupError) as excinfo:
         ccp4_setup.resolve_env(str(setup))

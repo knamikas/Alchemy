@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 
 from typing_extensions import override
 
-from ccp4_setup import REPO_DIR
 from codes import RunMode
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
@@ -34,6 +33,7 @@ from driver.layout import (
 from driver.review_queue import write_review_queue
 from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS
+from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import logger_for
 from worker_contracts import EntryResult

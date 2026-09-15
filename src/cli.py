@@ -19,7 +19,6 @@ from types import FrameType, TracebackType
 
 from typing_extensions import override
 
-from ccp4_setup import REPO_DIR
 from density_analysis import (
     CCP4_TOOL_TIMEOUT_S,
     DENSITY_MAP_SCOPES,
@@ -27,6 +26,7 @@ from density_analysis import (
 )
 from driver.pool import run
 from driver.runlog import RunLog
+from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import configure_driver_logging, logger_for
 

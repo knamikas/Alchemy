@@ -210,11 +210,11 @@ def test_launcher_docstring_points_to_project_documentation() -> None:
 
 def test_default_paths_resolve_from_the_checkout_root() -> None:
     """Verify modules resolve REPO_DIR to the project root."""
-    import ccp4_setup
+    import paths
 
-    assert ccp4_setup.REPO_DIR == REPO_ROOT
+    assert paths.REPO_DIR == REPO_ROOT
     # Read out of the module namespace: what is under test is the value
-    # ``driver.confidence`` itself binds, so importing the name from ``ccp4_setup``
+    # ``driver.confidence`` itself binds, so importing the name from ``paths``
     # to satisfy no-implicit-reexport would assert the line above twice.
     assert vars(driver_confidence)["REPO_DIR"] == REPO_ROOT, (
         "driver.confidence must import REPO_DIR rather than recompute it: two "
