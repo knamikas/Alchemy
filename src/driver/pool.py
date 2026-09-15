@@ -55,7 +55,7 @@ from reference_data import (
 from run_config import RunConfig
 from run_logging import logger_for, worker_level
 from scratch import sweep_owned_scratch_directories
-from worker_contracts import EntryResult, WorkerConfig
+from worker_contracts import EntryResult, ManualInputs, WorkerConfig
 
 logger = logger_for(__name__)
 
@@ -305,7 +305,7 @@ def worker_config_from_args(
     env: dict[str, str],
     input_root: str,
     cofactors: Collection[str],
-    manual_inputs: dict[str, str | None] | None,
+    manual_inputs: ManualInputs | None,
     *,
     identity: AnalysisIdentity,
 ) -> WorkerConfig:

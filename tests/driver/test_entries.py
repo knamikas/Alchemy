@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -67,7 +68,10 @@ def test_mirror_batch_requires_an_explicit_root(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("cached", [False, True])
 def test_single_id_uses_cache_without_a_mirror(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    cached: bool,
 ) -> None:
     cache = str(tmp_path / "cache")
     downloads: list[str] = []
@@ -86,8 +90,12 @@ def test_single_id_uses_cache_without_a_mirror(
         populate("9myr", cache)
     monkeypatch.setattr(inputs, "download_entry_to_cache", download)
     args = cli.parse_args(["--id", "9myr"])
-    assert driver_entries.select_entry_ids(args, cache) == (["9myr"], cache, None)
+    with caplog.at_level(logging.INFO, logger="alchemy"):
+        assert driver_entries.select_entry_ids(args, cache) == (["9myr"], cache, None)
     assert downloads == ([] if cached else ["9myr"])
+    # The log must say what actually happened, not "downloaded" on a cache hit.
+    assert ("downloaded 9myr" in caplog.text) is not cached
+    assert ("cached copy of 9myr" in caplog.text) is cached
 
 
 def test_id_list_uses_cache_as_root_without_a_mirror(tmp_path: Path) -> None:

@@ -77,7 +77,7 @@ reports an input error. It doesn't fall back to the no-metadata behavior.
 | Option | Purpose |
 | --- | --- |
 | `--id PDB_ID` | Process one PDB ID. |
-| `--id-file ID_FILE` | Process IDs from a comma-, whitespace-, or newline-separated file. |
+| `--id-file ID_FILE` | Process IDs from a comma-, whitespace-, or newline-separated file; `#` starts a comment. |
 | `--pdb-file PDB_FILE`, `--cif-file CIF_FILE`, `--mtz-file MTZ_FILE` | Process manually supplied structure data. |
 | `--data-json DATA_JSON` | Supply optional PDB-REDO metadata for a manual run. |
 | `--pdb-redo-root ROOT` | Set the local mirror root. |

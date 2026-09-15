@@ -89,10 +89,10 @@ def source_coordinate_provenance_path(
 def resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
     """Locate an entry's PDB-REDO directory, downloading it when permitted."""
     if cfg.allow_download:
-        used_root = ensure_entry_available(
+        available = ensure_entry_available(
             pdb_id, cfg.pdb_redo_root, cfg.pdb_redo_cache
         )
-        return entry_dir_for(used_root, pdb_id)
+        return entry_dir_for(available.root, pdb_id)
     return entry_dir_for(cfg.input_root, pdb_id)
 
 

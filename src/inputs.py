@@ -8,7 +8,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from http.client import HTTPException
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, NamedTuple, Protocol, cast
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -24,6 +24,9 @@ from run_logging import logger_for
 MAP_COEFFICIENT_COLUMNS = ("FWT", "PHWT", "DELFWT", "PHDELWT")
 
 logger = logger_for(__name__)
+
+#: A PDB identifier: four alphanumeric characters, compared case-insensitively.
+PDB_ID_PATTERN = r"[A-Za-z0-9]{4}"
 
 
 @dataclass(frozen=True)
@@ -403,9 +406,16 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
         raise MissingInputError(f"PDB-REDO entry {pdb_id} is missing final model files")
 
 
+class AvailableEntry(NamedTuple):
+    """Where an entry's final files were found, and whether they had to be fetched."""
+
+    root: str
+    downloaded: bool
+
+
 def ensure_entry_available(
     pdb_id: str, mirror_root: str | None, cache_root: str
-) -> str:
+) -> AvailableEntry:
     """Return the root containing the final model files: mirror, then cache.
 
     A cache miss triggers a download into ``cache_root``.
@@ -413,13 +423,13 @@ def ensure_entry_available(
     if mirror_root:
         mirror_entry = entry_dir_for(mirror_root, pdb_id)
         if os.path.isdir(mirror_entry) and has_final_files(mirror_entry, pdb_id):
-            return mirror_root
+            return AvailableEntry(mirror_root, downloaded=False)
     cache_entry = entry_dir_for(cache_root, pdb_id)
     if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
-        return cache_root
+        return AvailableEntry(cache_root, downloaded=False)
     download_entry_to_cache(pdb_id, cache_root)
     if os.path.isdir(cache_entry) and has_final_files(cache_entry, pdb_id):
-        return cache_root
+        return AvailableEntry(cache_root, downloaded=True)
     raise MissingInputError(pdb_id)
 
 
@@ -455,7 +465,7 @@ def infer_pdb_id_from_path(path: str | None) -> str | None:
     if not path:
         return None
     stem = os.path.splitext(os.path.basename(path))[0]
-    m = re.match(r"([A-Za-z0-9]{4})(?:_.*)?$", stem)
+    m = re.match(rf"({PDB_ID_PATTERN})(?:_.*)?$", stem)
     return m.group(1).lower() if m else None
 
 

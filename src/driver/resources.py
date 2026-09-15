@@ -17,6 +17,7 @@ from multiprocessing import cpu_count
 from typing import Any, TextIO, cast
 
 from inputs import entry_dir_for, final_file_candidates
+from worker_contracts import ManualInputs
 
 GIB = 1024**3
 
@@ -496,7 +497,7 @@ def _first_existing(paths: tuple[str | None, ...]) -> str | None:
 def estimate_entry_memory(
     pdb_id: str,
     root: str,
-    manual_inputs: Mapping[str, str | None] | None = None,
+    manual_inputs: ManualInputs | None = None,
 ) -> EntryMemoryEstimate:
     """Estimate one entry's peak memory from metadata or MTZ size."""
     entry_dir = entry_dir_for(root, pdb_id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, TypedDict
 
 from _version import __version__
 from codes import EntryStatus
@@ -22,6 +22,15 @@ class InflightEvent(NamedTuple):
     state: Literal["start", "end"]
     pid: int
     pdb_id: str
+
+
+class ManualInputs(TypedDict, total=False):
+    """The local files of a manual run, keyed by their command-line option."""
+
+    pdb_file: str | None
+    mtz_file: str | None
+    cif_file: str | None
+    data_json: str | None
 
 
 @dataclass(frozen=True)
@@ -44,7 +53,7 @@ class WorkerConfig:
     ccp4_timeout: int
     log_level: int
     allow_download: bool
-    manual_inputs: dict[str, str | None] | None
+    manual_inputs: ManualInputs | None
     alchemy_commit: str
     gemmi_version: str
     ccp4_version: str

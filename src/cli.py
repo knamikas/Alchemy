@@ -26,6 +26,7 @@ from density_analysis import (
 )
 from driver.pool import run
 from driver.runlog import RunLog
+from inputs import PDB_ID_PATTERN
 from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import configure_driver_logging, logger_for
@@ -35,7 +36,7 @@ logger = logger_for(__name__)
 
 def pdb_id(value: str) -> str:
     """Argparse type for a four-character PDB identifier, normalized to lowercase."""
-    if not re.fullmatch(r"[A-Za-z0-9]{4}", value):
+    if not re.fullmatch(PDB_ID_PATTERN, value):
         raise argparse.ArgumentTypeError(
             "PDB ID must contain exactly four alphanumeric characters"
         )
@@ -118,7 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--id-file",
-        help="path to a file of PDB ids (comma-, whitespace-, or newline-separated)",
+        help=(
+            "path to a file of PDB IDs separated by commas, whitespace, or "
+            "newlines; # starts a comment"
+        ),
     )
     ap.add_argument("--pdb-file", help="path to a local PDB file for manual input mode")
     ap.add_argument("--mtz-file", help="path to a local MTZ file for manual input mode")

@@ -24,6 +24,7 @@ from driver.writers import (
 )
 from output_rows import MetalStatsRow
 from run_config import RunConfig
+from worker_contracts import ManualInputs
 
 CFG = worker_config()
 
@@ -118,7 +119,7 @@ class TestInitialResult:
         ],
     )
     def test_refinement_state_reflects_manual_inputs(
-        self, manual_inputs: dict[str, str | None] | None, expected: str
+        self, manual_inputs: ManualInputs | None, expected: str
     ) -> None:
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
         result = worker.initial_result("109m", CFG, manual_inputs)

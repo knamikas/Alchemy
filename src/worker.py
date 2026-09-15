@@ -30,6 +30,7 @@ from structure_analysis import AtomSite
 from worker_contracts import (
     EntryResult,
     InflightEvent,
+    ManualInputs,
     PdbRedoProvenance,
     SoftwareProvenance,
     WorkerConfig,
@@ -127,7 +128,7 @@ def announce_inflight(state: Literal["start", "end"], pdb_id: str) -> None:
 def initial_result(
     pdb_id: str,
     cfg: WorkerConfig,
-    manual_inputs: dict[str, str | None] | None,
+    manual_inputs: ManualInputs | None,
 ) -> EntryResult:
     """Return the per-entry result skeleton, pre-filled with run provenance."""
     return EntryResult(
