@@ -61,7 +61,7 @@ def report_batch(
     for line in plan.finalize(
         layout, tally, run_log, confidence_rows_written=writers.n_confidence
     ):
-        print(line, flush=True)
+        print(f"      {line}", flush=True)
     if plan.enabled and os.path.isfile(layout.confidence_scores):
         review_rows = confidence.finalize_review_queue(layout, run_log)
         print(

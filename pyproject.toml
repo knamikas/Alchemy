@@ -75,6 +75,10 @@ ignore = [
     "UP042",
 ]
 
+[tool.ruff.lint.isort]
+# Keep aliased names in the same import statement as the rest of their module.
+combine-as-imports = true
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

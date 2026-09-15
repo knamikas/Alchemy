@@ -19,9 +19,13 @@ import cli
 import worker
 import worker_memory
 from codes import EntryStatus
-from driver import confidence as driver_confidence
-from driver import dispatch, pool, resources
-from driver import layout as driver_layout
+from driver import (
+    confidence as driver_confidence,
+    dispatch,
+    layout as driver_layout,
+    pool,
+    resources,
+)
 from driver.memory_admission import MemoryAdmission
 from driver.runlog import RunLog
 from worker_contracts import EntryResult, WorkerConfig
@@ -37,9 +41,9 @@ _NO_TASK = cast("AsyncResult[EntryResult]", None)
 
 def _ledger(
     *active: resources.EntryMemoryEstimate, workers: int | None = None
-) -> dispatch._AdmissionLedger:
+) -> dispatch._AdmissionLedger:  # pyright: ignore[reportPrivateUsage]
     """A ledger running ``active``, sized so the candidate's slot is the only idle one."""
-    ledger = dispatch._AdmissionLedger(len(active) + 1 if workers is None else workers)
+    ledger = dispatch._AdmissionLedger(len(active) + 1 if workers is None else workers)  # pyright: ignore[reportPrivateUsage]
     for estimate in active:
         ledger.admit(_NO_TASK, estimate)
     return ledger

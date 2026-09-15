@@ -11,9 +11,7 @@ import pytest
 import cli
 import confidence_score
 from codes import RunMode
-from driver import confidence as driver_confidence
-from driver import layout as driver_layout
-from driver import runlog
+from driver import confidence as driver_confidence, layout as driver_layout, runlog
 
 
 def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> None:

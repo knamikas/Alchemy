@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -11,10 +12,13 @@ from helpers import entry_result, tally_of
 
 import cli
 from codes import EntryStatus
-from driver import confidence as driver_confidence
-from driver import layout as driver_layout
-from driver import report as driver_report
-from driver import runlog, writers
+from driver import (
+    confidence as driver_confidence,
+    layout as driver_layout,
+    report as driver_report,
+    runlog,
+    writers,
+)
 
 
 def _empty_writer_counts() -> writers.OutputWriters:
@@ -47,11 +51,14 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
     run_log = runlog.RunLog(args, "pytest")
     finalized: list[str] = []
 
-    def finalize(_layout: driver_layout.OutputLayout) -> tuple[int, int, str]:
-        finalized.append(_layout.output_dir)
+    def finalize(
+        inputs_path: str, scores_path: str, reference_dir: str, *, manifest_path: str
+    ) -> tuple[int, int, str]:
+        del scores_path, reference_dir, manifest_path
+        finalized.append(os.path.dirname(inputs_path))
         return 0, 0, "test-cohort"
 
-    monkeypatch.setattr(driver_confidence, "finalize_confidence_reference", finalize)
+    monkeypatch.setattr(driver_confidence, "finalize_database_confidence", finalize)
 
     exit_code = driver_report.report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
@@ -78,11 +85,11 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
     )
     run_log = runlog.RunLog(args, "pytest")
 
-    def must_not_finalize(_layout: driver_layout.OutputLayout) -> tuple[int, int, str]:
+    def must_not_finalize(*args: object, **kwargs: object) -> tuple[int, int, str]:
         raise AssertionError("a recoverable error must defer finalization")
 
     monkeypatch.setattr(
-        driver_confidence, "finalize_confidence_reference", must_not_finalize
+        driver_confidence, "finalize_database_confidence", must_not_finalize
     )
 
     exit_code = driver_report.report_batch(

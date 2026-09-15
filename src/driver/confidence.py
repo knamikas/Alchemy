@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 
@@ -11,25 +10,19 @@ from typing_extensions import override
 from codes import RunMode
 from confidence_score import (
     ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
-)
-from confidence_score import (
     CONFIDENCE_INPUT_COLUMNS,
     REFERENCE_METADATA_FILE,
     ConfidenceReference,
     classify_without_reference,
     complete_confidence_site_count,
     finalize_database_confidence,
+    load_reference as load_confidence_reference,
     prepare_result_confidence_inputs,
     score_against_reference,
     validate_scored_reference,
 )
-from confidence_score import (
-    load_reference as load_confidence_reference,
-)
 from driver.errors import DriverError
-from driver.layout import (
-    OutputLayout,
-)
+from driver.layout import OutputLayout
 from driver.review_queue import write_review_queue
 from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS
@@ -157,7 +150,8 @@ class ConfidencePlan:
     ) -> list[str]:
         """Complete the confidence outputs after the batch.
 
-        Returns the lines the operator is shown; the caller prints them.
+        Returns the lines the operator is shown; the caller prints and
+        indents them.
         """
         del layout, tally, run_log, confidence_rows_written
         return []
@@ -220,7 +214,7 @@ class DatabasePlan(ConfidencePlan):
             run_log.summary.confidence_status = "not_finalized_incomplete_run"
             run_log.summary.confidence_recoverable_entries = unfinished
             return [
-                f"      confidence inputs were retained, but the database "
+                f"confidence inputs were retained, but the database "
                 f"reference was not finalized: {unfinished} entr"
                 f"{'y' if unfinished == 1 else 'ies'} could still be added by "
                 f"--resume (missing inputs, lost workers, or retryable "
@@ -237,10 +231,10 @@ class DatabasePlan(ConfidencePlan):
             )
         finalized = finalize_database_reference(layout, run_log)
         return [
-            f"      {finalized.rows} confidence rows ({finalized.scored_rows} "
+            f"{finalized.rows} confidence rows ({finalized.scored_rows} "
             f"scored; reference cohort {finalized.cohort}) -> "
             f"{layout.confidence_scores}",
-            f"      confidence reference -> {layout.reference_dir}",
+            f"confidence reference -> {layout.reference_dir}",
         ]
 
     @override
@@ -318,7 +312,7 @@ class ReferencePlan(ConfidencePlan):
         run_log.summary.confidence_reference_cohort = cohort_size
         run_log.summary.confidence_scores_path = layout.confidence_scores
         return [
-            f"      {confidence_rows_written} confidence rows compared with "
+            f"{confidence_rows_written} confidence rows compared with "
             f"database cohort {cohort_size} -> "
             f"{layout.confidence_scores}"
         ]
@@ -360,7 +354,7 @@ class ClassificationPlan(ConfidencePlan):
         run_log.summary.confidence_status = "classified_without_reference"
         run_log.summary.confidence_scores_path = layout.confidence_scores
         return [
-            f"      {confidence_rows_written} confidence classifications "
+            f"{confidence_rows_written} confidence classifications "
             f"(empirical ranking unavailable) -> {layout.confidence_scores}"
         ]
 
@@ -418,39 +412,35 @@ def plan_confidence(
 
     try:
         reference = load_confidence_reference(reference_dir)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
         raise DriverError(f"Invalid confidence reference: {exc}") from None
     run_log.details["confidence_reference_dir"] = reference_dir
     return ReferencePlan(
         layout,
         reference,
-        synchronize_inputs=bool(args.resume)
-        and os.path.isfile(layout.confidence_inputs),
+        synchronize_inputs=args.resume and os.path.isfile(layout.confidence_inputs),
     )
-
-
-def finalize_confidence_reference(layout: OutputLayout) -> tuple[int, int, int]:
-    """Score the streamed inputs and freeze the database reference."""
-    try:
-        return finalize_database_confidence(
-            layout.confidence_inputs,
-            layout.confidence_scores,
-            layout.reference_dir,
-            manifest_path=layout.manifest,
-        )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise DriverError(f"Confidence finalization failed: {exc}") from None
 
 
 def finalize_database_reference(
     layout: OutputLayout, run_log: RunLog
 ) -> FinalizedReference:
-    """Freeze the database reference and record the outcome in the run report.
+    """Score the streamed inputs, freeze the reference, and record the outcome.
 
     The one finalization path, whether the batch just completed or a resumed
     run found nothing left to retry.
     """
-    finalized = FinalizedReference(*finalize_confidence_reference(layout))
+    try:
+        finalized = FinalizedReference(
+            *finalize_database_confidence(
+                layout.confidence_inputs,
+                layout.confidence_scores,
+                layout.reference_dir,
+                manifest_path=layout.manifest,
+            )
+        )
+    except (OSError, ValueError) as exc:
+        raise DriverError(f"Confidence finalization failed: {exc}") from None
     summary = run_log.summary
     summary.confidence_status = "finalized"
     summary.confidence_rows = finalized.rows

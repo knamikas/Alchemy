@@ -33,9 +33,14 @@ import run_logging
 import worker
 import worker_contracts
 from codes import EntryStatus
-from driver import confidence as driver_confidence
-from driver import dispatch, environment, runlog, writers
-from driver import pool as driver_pool
+from driver import (
+    confidence as driver_confidence,
+    dispatch,
+    environment,
+    pool as driver_pool,
+    runlog,
+    writers,
+)
 from driver.writers import MANIFEST_COLUMNS
 from worker_contracts import InflightEvent
 

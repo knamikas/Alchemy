@@ -18,8 +18,11 @@ from typing import cast
 import gemmi
 
 from codes import ReasonCode
-from coordination.candidates import AtomKey as AtomKey
-from coordination.candidates import collect_proximal_candidates, merge_candidates
+from coordination.candidates import (
+    AtomKey as AtomKey,
+    collect_proximal_candidates,
+    merge_candidates,
+)
 from coordination.contact_record import Candidate
 from coordination.declared_connections import collect_declared_candidates
 from coordination.density_zscores import DensityZScoreIndex

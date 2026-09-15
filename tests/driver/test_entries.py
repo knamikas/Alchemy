@@ -11,9 +11,7 @@ from helpers import run_config, write_manifest
 
 import cli
 import inputs
-from driver import entries as driver_entries
-from driver import errors
-from driver import layout as driver_layout
+from driver import entries as driver_entries, errors, layout as driver_layout
 from driver.runlog import RunLog
 from run_config import RunConfig
 

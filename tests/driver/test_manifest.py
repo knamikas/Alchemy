@@ -14,8 +14,7 @@ from helpers import entry_result, run_config, worker_config
 import analysis_config
 import worker
 import worker_inputs
-from driver import confidence as driver_confidence
-from driver import environment, pool, resume
+from driver import confidence as driver_confidence, environment, pool, resume
 from driver.writers import (
     MANIFEST_COLUMNS,
     MANIFEST_FIELDS,

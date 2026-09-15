@@ -45,8 +45,7 @@ from worker_contracts import EntryResult, InflightEvent, WorkerConfig
 if TYPE_CHECKING:
     # Import the actual Pool and Queue classes for type annotations.
     from logging.handlers import QueueListener
-    from multiprocessing.pool import AsyncResult
-    from multiprocessing.pool import Pool as WorkerPool
+    from multiprocessing.pool import AsyncResult, Pool as WorkerPool
     from multiprocessing.queues import Queue as WorkerLogQueue
 
 # If a worker dies and its entry is unknown, wait this many seconds

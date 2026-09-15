@@ -22,8 +22,7 @@ import cli
 import confidence_score
 import density_analysis as density
 import scratch
-from driver import ccp4_setup, environment, errors
-from driver import confidence as driver_confidence
+from driver import ccp4_setup, confidence as driver_confidence, environment, errors
 from driver.runlog import RunLog
 
 

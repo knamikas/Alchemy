@@ -16,8 +16,7 @@ import pytest
 from helpers import REPO_ROOT, SRC_DIR
 
 from codes import ReasonCode, WarningCode
-from driver import confidence as driver_confidence
-from driver import environment
+from driver import confidence as driver_confidence, environment
 from driver.runlog import (
     ENTRY_DIAGNOSTIC_BASE_COLUMNS,
     ENTRY_DIAGNOSTIC_TRAILING_COLUMNS,
