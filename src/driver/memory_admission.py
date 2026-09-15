@@ -6,22 +6,34 @@ from __future__ import annotations
 PRESSURE_MARGIN_FLOOR_BYTES = 512 * 1024**2
 #: Share of the budget kept after each pressure episode.
 BACKOFF_FACTOR = 0.80
-#: Each recovery step raises the budget by this fraction of its original maximum.
+#: Each recovery step raises the budget by this fraction of its original
+#: maximum, but never by less than the floor, which dominates below 10 GiB.
 RECOVERY_STEP_DIVISOR = 20
 
 
 class MemoryAdmission:
     """Reduce admission during memory pressure and recover after sustained headroom.
 
-    Back off once per pressure episode. After 30 seconds above the reserve plus
-    a margin, recover in steps bounded by the original budget and live headroom.
-    An oversized single entry pauses admission without reducing the ordinary budget.
+    Back off once per pressure episode. An episode ends only after available
+    memory has stayed above the reserve plus a margin for the healthy window,
+    so repeated dips within that window cost a single back-off. Once the
+    window closes, recover in steps bounded by the original budget and by the
+    headroom actually observed. An oversized single entry pauses admission
+    without reducing the ordinary budget.
     """
 
     HEALTHY_SECONDS = 30.0
 
     def __init__(self, maximum: int | None, floor: int, reserve: int | None) -> None:
-        """Start with the plan's budget and retain its original upper bound."""
+        """Start with the plan's budget and retain its original upper bound.
+
+        ``maximum`` is the plan's byte budget for active entries and the most a
+        recovery can restore; ``None`` means memory could not be measured and
+        the controller never pauses. ``floor`` is the lowest budget a back-off
+        may reach and the smallest recovery step; the dispatcher passes one
+        worker's resident overhead. ``reserve`` is the protected headroom the
+        plan set aside; available memory at or below it is pressure.
+        """
         self.maximum = maximum
         self.budget = maximum
         self.floor = floor
