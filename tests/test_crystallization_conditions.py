@@ -165,8 +165,9 @@ def test_remark_temperatures_are_recorded_in_kelvin(
     assert summary["crystallization_temperature_max_K"] == expected_summary
 
 
-def _graphql_response(*entries: dict[str, Any]) -> dict[str, object]:
-    return {"data": {"entries": list(entries)}}
+def _graphql_response(*entries: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ``data.entries`` list a fetched batch yields."""
+    return list(entries)
 
 
 def test_source_precedence_distinguishes_database_and_manual_runs(
@@ -178,7 +179,7 @@ def test_source_precedence_distinguishes_database_and_manual_runs(
     )
     cache = tmp_path / "metadata"
 
-    def deposited_response(_ids: Sequence[str]) -> dict[str, object]:
+    def deposited_response(_ids: Sequence[str]) -> list[dict[str, Any]]:
         return _graphql_response(
             {
                 "rcsb_id": "1ABC",
@@ -222,7 +223,7 @@ def test_coordinate_file_fills_a_deposited_record_without_conditions(
     )
     cache = tmp_path / "metadata"
 
-    def empty_response(_ids: Sequence[str]) -> dict[str, object]:
+    def empty_response(_ids: Sequence[str]) -> list[dict[str, Any]]:
         return _graphql_response(
             {
                 "rcsb_id": "1ABC",

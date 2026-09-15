@@ -50,7 +50,11 @@ query CrystallizationConditions($ids: [String!]!) {
 
 @dataclass(frozen=True, slots=True)
 class CrystallizationPrefetchStats:
-    """Count outcomes from prefetching original-PDB condition metadata."""
+    """Count outcomes from prefetching original-PDB condition metadata.
+
+    ``entry_unavailable`` counts entries RCSB reported it does not have;
+    ``not_fetched`` counts entries never asked for because downloads were off.
+    """
 
     requested: int
     cache_hits: int
@@ -58,6 +62,7 @@ class CrystallizationPrefetchStats:
     available: int
     not_reported: int
     entry_unavailable: int
+    not_fetched: int
 
 
 class CrystallizationMetadataError(RuntimeError):
@@ -74,7 +79,7 @@ def _validated_cache_payload(pdb_id: str, value: object) -> dict[str, Any] | Non
     """Accept a loaded payload only when it has this schema and names this entry."""
     if not isinstance(value, dict):
         return None
-    payload = cast(dict[str, Any], value)
+    payload = cast("dict[str, Any]", value)
     if payload.get("schema_version") != RCSB_CACHE_SCHEMA_VERSION:
         return None
     if str(payload.get("pdb_id", "")).lower() != pdb_id:
@@ -127,12 +132,29 @@ def _write_cache_payload(cache_root: str, payload: Mapping[str, Any]) -> None:
         raise
 
 
-def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> dict[str, object]:
-    """Query RCSB for one batch of entries, retrying with exponential back-off.
+def _entries_from_response(loaded: object) -> list[object]:
+    """Extract ``data.entries`` from a GraphQL response, or refuse it."""
+    if not isinstance(loaded, dict):
+        raise CrystallizationMetadataError("RCSB response is not a JSON object")
+    result = cast("dict[str, object]", loaded)
+    if result.get("errors"):
+        raise CrystallizationMetadataError(f"GraphQL errors: {result['errors']!r}")
+    data_value = result.get("data")
+    if not isinstance(data_value, dict):
+        raise CrystallizationMetadataError("RCSB response has no data object")
+    entries_value = cast("dict[str, object]", data_value).get("entries")
+    if not isinstance(entries_value, list):
+        raise CrystallizationMetadataError("RCSB response has no data.entries list")
+    return cast("list[object]", entries_value)
 
-    Returns the parsed response once it carries a ``data.entries`` list and no
-    GraphQL errors; raises ``CrystallizationMetadataError`` after the last
-    attempt fails.
+
+def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> list[object]:
+    """Query RCSB for one batch of entries and return its ``data.entries`` list.
+
+    Network failures, server errors, and undecodable bodies are retried with
+    exponential back-off. A rejected request or a malformed reply would fail
+    the same way again, so those raise ``CrystallizationMetadataError`` at
+    once.
     """
     body = json.dumps(
         {
@@ -157,28 +179,19 @@ def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> dict[str, object]:
                 request, timeout=RCSB_REQUEST_TIMEOUT_S
             ) as response:
                 loaded: object = json.load(response)
-            if not isinstance(loaded, dict):
-                raise ValueError("response is not a JSON object")
-            result = cast(dict[str, object], loaded)
-            if result.get("errors"):
-                raise ValueError(f"GraphQL errors: {result['errors']!r}")
-            data_value = result.get("data")
-            if not isinstance(data_value, dict):
-                raise ValueError("response has no data object")
-            data = cast(dict[str, object], data_value)
-            if not isinstance(data.get("entries"), list):
-                raise ValueError("response has no data.entries list")
-            return result
-        except (
-            OSError,
-            ValueError,
-            json.JSONDecodeError,
-            urllib.error.HTTPError,
-            urllib.error.URLError,
-        ) as exc:
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                raise CrystallizationMetadataError(
+                    f"RCSB Data API rejected the request: HTTP {exc.code} {exc.reason}"
+                ) from None
             last_error = exc
-            if attempt < RCSB_REQUEST_ATTEMPTS - 1:
-                time.sleep(RCSB_RETRY_BACKOFF_BASE_S**attempt)
+        except (OSError, ValueError) as exc:
+            # A network error, or a body cut short before it could be decoded.
+            last_error = exc
+        else:
+            return _entries_from_response(loaded)
+        if attempt < RCSB_REQUEST_ATTEMPTS - 1:
+            time.sleep(RCSB_RETRY_BACKOFF_BASE_S**attempt)
     raise CrystallizationMetadataError(
         f"RCSB Data API request failed after {RCSB_REQUEST_ATTEMPTS} attempts: "
         f"{last_error}"
@@ -186,28 +199,18 @@ def _fetch_graphql_batch(pdb_ids: Sequence[str]) -> dict[str, object]:
 
 
 def _payloads_from_graphql(
-    pdb_ids: Sequence[str], response: Mapping[str, object], retrieved_at_utc: str
+    pdb_ids: Sequence[str], entries: Sequence[object], retrieved_at_utc: str
 ) -> list[dict[str, object]]:
-    """Build one cache payload per requested entry from a batch response.
+    """Build one cache payload per requested entry from a batch's entries.
 
     An entry RCSB did not return is recorded as unavailable, so that a later
     run does not ask for it again.
     """
-    data_value = response["data"]
-    if not isinstance(data_value, dict):
-        raise CrystallizationMetadataError("RCSB Data API returned invalid data")
-    data = cast(dict[str, object], data_value)
-    entries_value = data.get("entries")
-    if not isinstance(entries_value, list):
-        raise CrystallizationMetadataError(
-            "RCSB Data API returned an invalid entries list"
-        )
-    entries = cast(list[object], entries_value)
     by_id: dict[str, Mapping[str, object]] = {}
     for value in entries:
         if not isinstance(value, dict):
             continue
-        entry = cast(Mapping[str, object], value)
+        entry = cast("Mapping[str, object]", value)
         pdb_id = str(entry.get("rcsb_id", "")).strip().lower()
         if pdb_id:
             by_id[pdb_id] = entry
@@ -218,7 +221,7 @@ def _payloads_from_graphql(
             matching_entry.get("rcsb_accession_info") if matching_entry else None
         )
         accession = (
-            cast(dict[str, object], accession_value)
+            cast("dict[str, object]", accession_value)
             if isinstance(accession_value, dict)
             else {}
         )
@@ -230,7 +233,7 @@ def _payloads_from_graphql(
         if conditions_value is None:
             condition_values: list[object] = []
         elif isinstance(conditions_value, list):
-            condition_values = cast(list[object], conditions_value)
+            condition_values = cast("list[object]", conditions_value)
         else:
             raise CrystallizationMetadataError(
                 f"RCSB Data API returned invalid conditions for {pdb_id}"
@@ -240,7 +243,7 @@ def _payloads_from_graphql(
                 f"RCSB Data API returned invalid conditions for {pdb_id}"
             )
         conditions = [
-            cast(dict[str, object], condition) for condition in condition_values
+            cast("dict[str, object]", condition) for condition in condition_values
         ]
         payloads.append(
             {
@@ -266,31 +269,32 @@ def prefetch_rcsb_crystallization_metadata(
     statistics.
     """
     ids = tuple(dict.fromkeys(pdb_id.strip().lower() for pdb_id in pdb_ids))
-    missing = [
-        pdb_id for pdb_id in ids if read_cache_payload(cache_root, pdb_id) is None
-    ]
+    payloads: dict[str, Mapping[str, Any] | None] = {
+        pdb_id: read_cache_payload(cache_root, pdb_id) for pdb_id in ids
+    }
+    missing = [pdb_id for pdb_id, payload in payloads.items() if payload is None]
     fetched = 0
     if allow_download:
         for start in range(0, len(missing), RCSB_BATCH_SIZE):
             batch = missing[start : start + RCSB_BATCH_SIZE]
-            response = _fetch_graphql_batch(batch)
+            entries = _fetch_graphql_batch(batch)
             retrieved_at = datetime.now(UTC).isoformat(timespec="seconds")
-            for payload in _payloads_from_graphql(batch, response, retrieved_at):
+            for payload in _payloads_from_graphql(batch, entries, retrieved_at):
                 try:
                     _write_cache_payload(cache_root, payload)
                 except OSError as exc:
                     raise CrystallizationMetadataError(
                         f"could not write crystallization metadata cache: {exc}"
                     ) from None
+                payloads[str(payload["pdb_id"])] = payload
                 fetched += 1
-    available = 0
-    not_reported = 0
-    unavailable = 0
-    for pdb_id in ids:
-        cached_payload = read_cache_payload(cache_root, pdb_id)
-        if cached_payload is None or not cached_payload["entry_available"]:
+    available = not_reported = unavailable = not_fetched = 0
+    for cached in payloads.values():
+        if cached is None:
+            not_fetched += 1
+        elif not cached["entry_available"]:
             unavailable += 1
-        elif cached_payload["conditions"]:
+        elif cached["conditions"]:
             available += 1
         else:
             not_reported += 1
@@ -301,4 +305,5 @@ def prefetch_rcsb_crystallization_metadata(
         available=available,
         not_reported=not_reported,
         entry_unavailable=unavailable,
+        not_fetched=not_fetched,
     )

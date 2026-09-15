@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 from collections.abc import Sequence
+from email.message import Message
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+import rcsb_metadata_cache
 from crystallization_conditions import cached_rcsb_crystallization_conditions
 from rcsb_metadata_cache import (
+    CrystallizationMetadataError,
     prefetch_rcsb_crystallization_metadata,
     read_cache_payload,
 )
 
 
-def _graphql_response(*entries: dict[str, Any]) -> dict[str, object]:
-    return {"data": {"entries": list(entries)}}
+def _graphql_response(*entries: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ``data.entries`` list a fetched batch yields."""
+    return list(entries)
 
 
 def test_rcsb_prefetch_caches_conditions_and_provenance(
@@ -24,7 +32,7 @@ def test_rcsb_prefetch_caches_conditions_and_provenance(
     cache = tmp_path / "metadata"
     calls: list[tuple[str, ...]] = []
 
-    def fetch(ids: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    def fetch(ids: tuple[str, ...] | list[str]) -> list[dict[str, Any]]:
         calls.append(tuple(ids))
         return _graphql_response(
             {
@@ -79,7 +87,7 @@ def test_cache_files_are_sharded_compact_key_sorted_json(
     """The cache is a stable on-disk format other runs and tools read back."""
     cache = tmp_path / "metadata"
 
-    def fetch(_ids: Sequence[str]) -> dict[str, object]:
+    def fetch(_ids: Sequence[str]) -> list[dict[str, Any]]:
         return _graphql_response(
             {
                 "rcsb_id": "2DEF",
@@ -127,4 +135,129 @@ def test_invalid_cache_is_a_safe_offline_miss(tmp_path: Path) -> None:
         ["1abc"], str(cache_file.parents[1]), allow_download=False
     )
     assert stats.cache_hits == 0
-    assert stats.entry_unavailable == 1
+    assert stats.entry_unavailable == 0
+    assert stats.not_fetched == 1
+
+
+def test_offline_prefetch_counts_misses_as_not_fetched_not_unavailable(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Never asking RCSB is not the same as RCSB having no such entry."""
+    cache = tmp_path / "metadata"
+
+    def fetch(_ids: Sequence[str]) -> list[dict[str, Any]]:
+        return _graphql_response(
+            {"rcsb_id": "1ABC", "rcsb_accession_info": None, "exptl_crystal_grow": None}
+        )
+
+    monkeypatch.setattr("rcsb_metadata_cache._fetch_graphql_batch", fetch)
+    prefetch_rcsb_crystallization_metadata(["1abc"], str(cache), allow_download=True)
+
+    stats = prefetch_rcsb_crystallization_metadata(
+        ["1abc", "2def"], str(cache), allow_download=False
+    )
+
+    assert stats.cache_hits == 1
+    assert stats.not_reported == 1
+    assert stats.entry_unavailable == 0
+    assert stats.not_fetched == 1
+
+
+def test_an_entry_rcsb_omits_is_cached_as_unavailable_and_not_asked_again(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    cache = tmp_path / "metadata"
+    calls: list[tuple[str, ...]] = []
+
+    def fetch(ids: Sequence[str]) -> list[dict[str, Any]]:
+        calls.append(tuple(ids))
+        return _graphql_response(
+            {"rcsb_id": "1ABC", "rcsb_accession_info": None, "exptl_crystal_grow": None}
+        )
+
+    monkeypatch.setattr("rcsb_metadata_cache._fetch_graphql_batch", fetch)
+    first = prefetch_rcsb_crystallization_metadata(
+        ["1abc", "9zzz"], str(cache), allow_download=True
+    )
+    second = prefetch_rcsb_crystallization_metadata(
+        ["1abc", "9zzz"], str(cache), allow_download=True
+    )
+
+    assert calls == [("1abc", "9zzz")]
+    assert first.fetched == 2
+    assert first.entry_unavailable == 1
+    assert second.cache_hits == 2
+    assert second.entry_unavailable == 1
+    payload = read_cache_payload(str(cache), "9zzz")
+    assert payload is not None
+    assert payload["entry_available"] is False
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        rcsb_metadata_cache.RCSB_GRAPHQL_URL, code, "status", Message(), None
+    )
+
+
+def test_transient_failures_are_retried_with_backoff(monkeypatch: Any) -> None:
+    outcomes: list[BaseException | bytes] = [
+        urllib.error.URLError("connection reset"),
+        _http_error(503),
+        json.dumps({"data": {"entries": []}}).encode("utf-8"),
+    ]
+    sleeps: list[float] = []
+
+    def urlopen(_request: Any, timeout: float) -> io.BytesIO:
+        del timeout
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return io.BytesIO(outcome)
+
+    monkeypatch.setattr("rcsb_metadata_cache.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("rcsb_metadata_cache.time.sleep", sleeps.append)
+
+    assert rcsb_metadata_cache._fetch_graphql_batch(["1abc"]) == []  # pyright: ignore[reportPrivateUsage]
+    assert sleeps == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "body, match",
+    [
+        (b'{"errors": [{"message": "bad query"}]}', "GraphQL errors"),
+        (b'{"data": {}}', "data.entries"),
+    ],
+)
+def test_a_malformed_reply_is_not_retried(
+    monkeypatch: Any, body: bytes, match: str
+) -> None:
+    calls = 0
+
+    def urlopen(_request: Any, timeout: float) -> io.BytesIO:
+        nonlocal calls
+        del timeout
+        calls += 1
+        return io.BytesIO(body)
+
+    monkeypatch.setattr("rcsb_metadata_cache.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("rcsb_metadata_cache.time.sleep", _never_sleep)
+
+    with pytest.raises(CrystallizationMetadataError, match=match):
+        rcsb_metadata_cache._fetch_graphql_batch(["1abc"])  # pyright: ignore[reportPrivateUsage]
+    assert calls == 1
+
+
+def test_a_rejected_request_is_not_retried(monkeypatch: Any) -> None:
+    def urlopen(_request: Any, timeout: float) -> io.BytesIO:
+        del timeout
+        raise _http_error(400)
+
+    monkeypatch.setattr("rcsb_metadata_cache.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr("rcsb_metadata_cache.time.sleep", _never_sleep)
+
+    with pytest.raises(CrystallizationMetadataError, match="HTTP 400"):
+        rcsb_metadata_cache._fetch_graphql_batch(["1abc"])  # pyright: ignore[reportPrivateUsage]
+
+
+def _never_sleep(seconds: float) -> None:
+    raise AssertionError(f"unexpected back-off of {seconds}s")

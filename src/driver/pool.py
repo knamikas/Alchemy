@@ -379,15 +379,17 @@ def prepare_crystallization_metadata(
         crystallization_metadata_available=stats.available,
         crystallization_metadata_not_reported=stats.not_reported,
         crystallization_metadata_entry_unavailable=stats.entry_unavailable,
+        crystallization_metadata_not_fetched=stats.not_fetched,
     )
     logger.info(
         "crystallization metadata: %d cached, %d fetched, %d with conditions, "
-        "%d without reported conditions, %d unavailable",
+        "%d without reported conditions, %d unknown to RCSB, %d not fetched",
         stats.cache_hits,
         stats.fetched,
         stats.available,
         stats.not_reported,
         stats.entry_unavailable,
+        stats.not_fetched,
     )
 
 
