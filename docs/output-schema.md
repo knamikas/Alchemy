@@ -1,7 +1,7 @@
 # Output schema
 
-This document defines the row grain, identifiers, serialization, and columns
-of Alchemy's CSV outputs. The ordered machine-enforced schemas live in
+This document defines the row grain, identifiers, serialization, and columns of
+Alchemy's CSV outputs. The ordered machine-enforced schemas live in
 `src/driver/writers.py`, `src/coordination/schema.py`,
 `src/edstats_statistics.py`, `src/confidence_score/`,
 `src/crystallization_conditions.py`, and `src/driver/review_queue.py`.
@@ -23,8 +23,8 @@ of Alchemy's CSV outputs. The ordered machine-enforced schemas live in
 - `nan` and infinities are never written for derived values. The raw EDSTATS
   block preserves EDSTATS' own `n/a` marker.
 - Distances and coordinate values are in ångströms. Occupancies and coverage
-  values are unitless. `resolution` and `dpi` are in ångströms, and
-  `asu_volume` is in cubic ångströms. B-factor values are in square ångströms.
+  values are unitless. `resolution` and `dpi` are in ångströms, and `asu_volume`
+  is in cubic ångströms. B-factor values are in square ångströms.
 - `*_model_index`, `*_chain_index`, `*_residue_index`, and `*_atom_index` are
   zero-based coordinate-model indices. Author-facing chain, residue, insertion,
   atom, and alternate-location labels are retained separately.
@@ -42,8 +42,8 @@ negative result:
    Alchemy found no selected positive-occupancy metal sites. If
    `metal_site_limit_exceeded=true`, the entry was excluded from the standard
    cohort and has no site, bond, candidate, or confidence rows.
-3. Read one row per selected site in `metal_sites_all.csv`. Use
-   `metal_site_id` for site-level joins. For a multi-metal cofactor, use
+3. Read one row per selected site in `metal_sites_all.csv`. Use `metal_site_id`
+   for site-level joins. For a multi-metal cofactor, use
    `density_observation_id` to avoid counting one residue-level EDSTATS
    observation more than once in density analyses.
 4. Join assigned contacts from `metal_bonds_all.csv` by `metal_site_id`. Use
@@ -98,8 +98,8 @@ PASS/REVIEW/SUSPECT verdict.
 `density_context_status` is `available` when EDSTATS completed and
 `not_computed` otherwise. `edstats_residue_count` counts coherent residue
 observations retained after alternate-conformer selection;
-`target_residue_count` counts the selected-metal and catalog-cofactor observations
-excluded from the control distribution.
+`target_residue_count` counts the selected-metal and catalog-cofactor
+observations excluded from the control distribution.
 
 The prefixes ordinary_, ordinary_nonwater_, and water_ identify the full
 non-target control, its non-water subset, and its water subset. Each prefix has
@@ -119,22 +119,22 @@ examples; modeled-water selection and chemistry differ from metal sites.
 
 ## `metal_sites_all.csv`
 
-Grain: one row per selected metal site with an EDSTATS density observation,
-plus diagnostic rows for catalog cofactor residues that matched no coordinate
-residue or hold no selected metal. Those rows carry
+Grain: one row per selected metal site with an EDSTATS density observation, plus
+diagnostic rows for catalog cofactor residues that matched no coordinate residue
+or hold no selected metal. Those rows carry
 `selected_metal_site_status=no_selected_metal`, a blank `metal_site_id`, and
-`coordinate_mapping_status=coordinate_residue_not_found` where the join
-failed; filter on `selected_metal_site_status=selected` for site analyses.
-A multi-metal cofactor can repeat the same residue-level observation once for
-each site. Density analyses must deduplicate `density_observation_id`; site
-analyses must use `metal_site_id`.
+`coordinate_mapping_status=coordinate_residue_not_found` where the join failed;
+filter on `selected_metal_site_status=selected` for site analyses. A multi-metal
+cofactor can repeat the same residue-level observation once for each site.
+Density analyses must deduplicate `density_observation_id`; site analyses must
+use `metal_site_id`.
 
 ### Raw EDSTATS block
 
 `RT`, `CI`, `RN`, `MN`, `CP`, and `NR` are EDSTATS' residue type, output-group
 chain identifier, residue number, model number, deposited chain part, and
-one-based residue ordinal within that chain part. They are retained verbatim
-so the Alchemy row remains auditable against `stats.out`.
+one-based residue ordinal within that chain part. They are retained verbatim so
+the Alchemy row remains auditable against `stats.out`.
 
 The 36 metric columns are the Cartesian product of these metric stems and atom
 groups:
@@ -147,21 +147,21 @@ groups:
 
 The suffixes are `m` for main-chain, `s` for side-chain, and `a` for all atoms.
 For example, `ZD-m` is the main-chain negative difference-density Z metric and
-`CCPa` is the all-atom population correlation. If an `NP` count exceeds
-EDSTATS' fixed-width output field, Alchemy writes `n/a` for that count and adds
+`CCPa` is the all-atom population correlation. If an `NP` count exceeds EDSTATS'
+fixed-width output field, Alchemy writes `n/a` for that count and adds
 `edstats_grid_point_count_overflow` to the entry's `warning_codes`; the other
-density metrics remain usable. `aa_geometry_coverage` is an
-Alchemy compatibility field containing image-inclusive geometry coverage when
-available and explicit-only coverage otherwise.
+density metrics remain usable. `aa_geometry_coverage` is an Alchemy
+compatibility field containing image-inclusive geometry coverage when available
+and explicit-only coverage otherwise.
 
 The concrete metric columns are:
 
-- Main-chain: `BAm`, `NPm`, `Rm`, `RGm`, `SRGm`, `CCSm`, `CCPm`, `ZCCPm`,
-  `ZOm`, `ZDm`, `ZD-m`, and `ZD+m`.
-- Side-chain: `BAs`, `NPs`, `Rs`, `RGs`, `SRGs`, `CCSs`, `CCPs`, `ZCCPs`,
-  `ZOs`, `ZDs`, `ZD-s`, and `ZD+s`.
-- All atoms: `BAa`, `NPa`, `Ra`, `RGa`, `SRGa`, `CCSa`, `CCPa`, `ZCCPa`,
-  `ZOa`, `ZDa`, `ZD-a`, and `ZD+a`.
+- Main-chain: `BAm`, `NPm`, `Rm`, `RGm`, `SRGm`, `CCSm`, `CCPm`, `ZCCPm`, `ZOm`,
+  `ZDm`, `ZD-m`, and `ZD+m`.
+- Side-chain: `BAs`, `NPs`, `Rs`, `RGs`, `SRGs`, `CCSs`, `CCPs`, `ZCCPs`, `ZOs`,
+  `ZDs`, `ZD-s`, and `ZD+s`.
+- All atoms: `BAa`, `NPa`, `Ra`, `RGa`, `SRGa`, `CCSa`, `CCPa`, `ZCCPa`, `ZOa`,
+  `ZDa`, `ZD-a`, and `ZD+a`.
 
 ### Site identity and density mapping
 
@@ -316,8 +316,8 @@ Grain: exactly one contextual row per processed manifest entry. A status of
 contained no condition record, `unparseable` means extraction failed, and
 `input_unavailable` means no source could be consulted: entry preparation
 supplied no coordinate file, the cached RCSB record reports that the entry does
-not exist, or the entry failed before extraction ran, in which case this
-default row keeps the file at one row per manifest entry.
+not exist, or the entry failed before extraction ran, in which case this default
+row keeps the file at one row per manifest entry.
 
 | Columns | Meaning |
 | --- | --- |
@@ -329,17 +329,17 @@ default row keeps the file at one row per manifest entry.
 | `crystallization_promiscuous_transition_metal`, `crystallization_ni_co_like_metal`, `crystallization_buffer_light_metal`, `crystallization_heavy_additive_phasing_metal` | Positive-evidence chemical-class flags used for contextual analysis. |
 | `crystallization_sulfate`, `crystallization_cacodylate`, `crystallization_acetate` | Positive-evidence ingredient flags discussed in the manuscript. |
 
-When `crystallization_data_status` is not `available`, detection flags are
-blank rather than `false`. A missing deposited record must not be interpreted
-as proof that a reagent was experimentally absent.
+When `crystallization_data_status` is not `available`, detection flags are blank
+rather than `false`. A missing deposited record must not be interpreted as proof
+that a reagent was experimentally absent.
 
 ## `confidence_inputs_all.csv`
 
 Grain: one compact evidence row per manifest-counted selected metal site during
-an uncapped database run. The file is retained so the score and frozen
-reference can be reproduced without rerunning CCP4. Later targeted runs do not
-create a database cohort; when a reference is installed, their prepared inputs
-are embedded directly in `confidence_scores_all.csv`.
+an uncapped database run. The file is retained so the score and frozen reference
+can be reproduced without rerunning CCP4. Later targeted runs do not create a
+database cohort; when a reference is installed, their prepared inputs are
+embedded directly in `confidence_scores_all.csv`.
 
 | Columns | Meaning |
 | --- | --- |
@@ -386,9 +386,8 @@ preserved as the leading block, followed by these analysis columns:
 | `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution. |
 
 Support scores are published with up to six decimal places; trailing zeros are
-dropped. Raw component values define
-the levels; neither a score nor a population percentile can move a site across
-a PASS/REVIEW/SUSPECT boundary.
+dropped. Raw component values define the levels; neither a score nor a
+population percentile can move a site across a PASS/REVIEW/SUSPECT boundary.
 
 Each component cohort is weighted per assessable metal site, not per structure.
 This is the appropriate interpretation for a site-level empirical rank, but it
@@ -406,9 +405,9 @@ the crystallization-summary columns except the repeated `pdbID`, plus:
 | `crystallization_contains_different_promiscuous_transition_metal` | Whether another Mn, Fe, Co, Ni, Cu, Zn, or Cd was detected. Blank when condition data are unavailable. |
 | `crystallization_context_flags` | Pipe-separated positive findings for rapid review. |
 
-The queue is a derived convenience view. Its membership is determined before
-the crystallization join, and none of its condition columns changes a
-confidence component, score, level, evidence basis, or verdict reason.
+The queue is a derived convenience view. Its membership is determined before the
+crystallization join, and none of its condition columns changes a confidence
+component, score, level, evidence basis, or verdict reason.
 
 ## `confidence_reference/`
 
@@ -428,14 +427,13 @@ failed finalization cannot leave an older reference looking current.
 
 The scoring contract is recorded by `confidence_method_version`,
 `confidence_schema_version`, `score_decimal_places`, `metric_decimal_places`,
-`density_thresholds`, `density_saturation_value`,
-`density_saturation_policy`, `geometry_thresholds`, `geometry_statistic`,
-`overall_rule`, `support_score_method`, `coverage_policy`,
-`input_status_policy`, `cohort_weighting`, `maximum_entry_metal_sites`, and
-`reference_data_id`. `analysis_config_id` additionally binds the model,
-alternate-conformer, symmetry, cohort-limit, and bundled-reference policies.
-Alchemy refuses to load a reference whose contract differs from the running
-code.
+`density_thresholds`, `density_saturation_value`, `density_saturation_policy`,
+`geometry_thresholds`, `geometry_statistic`, `overall_rule`,
+`support_score_method`, `coverage_policy`, `input_status_policy`,
+`cohort_weighting`, `maximum_entry_metal_sites`, and `reference_data_id`.
+`analysis_config_id` additionally binds the model, alternate-conformer,
+symmetry, cohort-limit, and bundled-reference policies. Alchemy refuses to load
+a reference whose contract differs from the running code.
 
 The distributions are described by `reference_id`, `distribution_file`,
 `density_distinct_value_count`, `geometry_distinct_value_count`,
@@ -459,8 +457,8 @@ and cohort ID deliberately answer different questions.
 
 Grain: one row per entry the run completed, sorted by `pdbID`. This is the run
 report's per-entry diagnostics table, written beside `alchemy_run_*.log` under
-`--log-dir`; it repeats the manifest outcome for convenience and adds timing
-and resource measurements that the manifest does not carry.
+`--log-dir`; it repeats the manifest outcome for convenience and adds timing and
+resource measurements that the manifest does not carry.
 
 | Columns | Meaning |
 | --- | --- |

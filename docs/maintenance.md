@@ -32,9 +32,9 @@ The isolated builder downloads the wwPDB Chemical Component Dictionary and
 replaces the bundled catalog and its metadata only after a successful build,
 using atomic replacement for each file. A local CCD snapshot can be supplied
 with `--ccd`. Use `--status` to report the generation time, entry count,
-checksum, and integrity of the currently bundled catalog
-without downloading anything. Catalog changes should be reviewed and committed
-as part of a software release before an analysis run.
+checksum, and integrity of the currently bundled catalog without downloading
+anything. Catalog changes should be reviewed and committed as part of a software
+release before an analysis run.
 
 Cluster and heme classes are derived from CCD atom connectivity, not formula
 stoichiometry. Clusters require a bridging sulfur or selenium, while hemes
@@ -51,10 +51,10 @@ list or classification rules change.
   committed cofactor list.
 - `src/data/metal_distances_info.txt` — reference metal-ligand distances and
   standard deviations, keyed by donor residue, donor element, and metal. Values
-  are from Harding (2006), [Acta Cryst. D62,
-  678-682](https://doi.org/10.1107/S0907444906014594), except NI, which is from
-  Zheng et al. (2008), and SER/THR/TYR, which are approximated from statements
-  in Harding (2006) rather than tabulated. See
+  are from Harding (2006),
+  [Acta Cryst. D62, 678-682](https://doi.org/10.1107/S0907444906014594), except
+  NI, which is from Zheng et al. (2008), and SER/THR/TYR, which are approximated
+  from statements in Harding (2006) rather than tabulated. See
   [Reference coverage of the donor table](method.md#reference-coverage-of-the-donor-table)
   for the donors that this file does and doesn't cover. The format has one
   important distinction: column 1 `CA` is the backbone-carbonyl pseudo residue,
@@ -62,12 +62,12 @@ list or classification rules change.
 - `src/data/metal_distances_info.meta.json` — checksum, row count, and citations
   for the distance table, written by `tools/stamp_distance_table.py`.
 
-Both bundled files are verified against their sidecars when they are first
-read, and a run stops rather than analyze against data that has drifted from
-what the tools recorded. The distance-table loader and stamping tool reject
-duplicate `(residue, atom, metal)` keys and require both the mean distance and
-standard deviation to be finite and positive. Invalid rows cannot be hidden by
-a new checksum.
+Both bundled files are verified against their sidecars when they are first read,
+and a run stops rather than analyze against data that has drifted from what the
+tools recorded. The distance-table loader and stamping tool reject duplicate
+`(residue, atom, metal)` keys and require both the mean distance and standard
+deviation to be finite and positive. Invalid rows cannot be hidden by a new
+checksum.
 
 After editing the distance table by hand, re-stamp it:
 

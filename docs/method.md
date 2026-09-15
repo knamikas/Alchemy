@@ -28,15 +28,16 @@ restored after EDSTATS so cofactor catalog matching and output retain the mmCIF
 identity.
 
 If a model has more chains than the one-character PDB namespace can represent,
-or distinct mmCIF residues share one legacy `(chain, sequence number, insertion
-code)` identity, Alchemy packs its residues into synthetic one-character chains
-with unique four-column sequence numbers. ``REMARK 950 ALCHEMY RESIDUE`` records
-preserve the original component, chain, sequence number, insertion code, source
-traversal indices, and polymer-terminal position. EDSTATS and Gemmi analyze the
-same packed coordinates, then statistics, contacts, declarations, and CSV
-identifiers are mapped back to the source mmCIF identities. Conversion validates
-the atom and residue membership before analysis, so an oversized or
-legacy-incompatible structure cannot silently lose sites at the PDB boundary.
+or distinct mmCIF residues share one legacy
+`(chain, sequence number, insertion code)` identity, Alchemy packs its residues
+into synthetic one-character chains with unique four-column sequence numbers.
+``REMARK 950 ALCHEMY RESIDUE`` records preserve the original component, chain,
+sequence number, insertion code, source traversal indices, and polymer-terminal
+position. EDSTATS and Gemmi analyze the same packed coordinates, then
+statistics, contacts, declarations, and CSV identifiers are mapped back to the
+source mmCIF identities. Conversion validates the atom and residue membership
+before analysis, so an oversized or legacy-incompatible structure cannot
+silently lose sites at the PDB boundary.
 
 The overall diffraction resolution comes from PDB-REDO `data.json` when
 available, with an MTZ fallback through gemmi. EDSTATS instead receives the
@@ -52,16 +53,16 @@ are the columns used to calculate its two maps.
    passes, MTZFIX intentionally writes no replacement and the original MTZ is
    used. If its consistency re-test fails for an entry whose PDB-REDO
    `data.json` explicitly has `properties.ISTWIN=true`, Alchemy can instead
-   normalize recognizable Refmac composite coefficients on a temporary MTZ.
-   This guarded path requires Refmac provenance, the complete expected column
-   schema, and reflection-by-reflection agreement with Refmac's raw coefficient
-   identity; its output is independently checked against the convention
-   EDSTATS consumes. The source MTZ is never modified. Successful use is
-   recorded as the `twin_refmac_coefficients_normalized` warning.
+   normalize recognizable Refmac composite coefficients on a temporary MTZ. This
+   guarded path requires Refmac provenance, the complete expected column schema,
+   and reflection-by-reflection agreement with Refmac's raw coefficient
+   identity; its output is independently checked against the convention EDSTATS
+   consumes. The source MTZ is never modified. Successful use is recorded as the
+   `twin_refmac_coefficients_normalized` warning.
 2. CCP4 `fft` with `FWT/PHWT` from that validated MTZ to produce a 2mFo-DFc map.
 3. By default, CCP4 `mapmask` limits that full FFT map to the envelope of the
-   analyzed first-model coordinates plus a 10 Angstrom border. The same crop is then
-   applied to the mFo-DFc difference map calculated from `DELFWT/PHDELWT`.
+   analyzed first-model coordinates plus a 10 Angstrom border. The same crop is
+   then applied to the mFo-DFc difference map calculated from `DELFWT/PHDELWT`.
    This retains every modeled atom while avoiding EDSTATS work over distant
    empty unit-cell volume. If the envelope would not be smaller, Alchemy uses
    the original full maps automatically. It also uses full maps when a
@@ -83,30 +84,30 @@ rather than inferred from atom names. During mmCIF conversion, the explicit
 `_atom_site.type_symbol` is written into that PDB field. Metal-containing
 cofactors are matched against the Chemical Component Dictionary list maintained
 by `tools/build_metallocofactor_catalog.py`. A selected metal in an uncatalogued
-multi-atom component also receives its residue-level density observation and
-the entry warning `cofactor_catalog_fallback`. The catalog supplies known
+multi-atom component also receives its residue-level density observation and the
+entry warning `cofactor_catalog_fallback`. The catalog supplies known
 heme/cluster annotations; absence from it cannot suppress selected metal
-evidence, and the fallback does not infer those structural classes. A structure with unknown elements
-does not receive a DPI because its non-hydrogen atom count is indeterminate.
-EDSTATS' missing-chain markers are normalized before coordinate matching. When
-EDSTATS omits its empty trailing chain field for a blank-chain residue, Alchemy
-restores that field before validating the standard 42-column schema. Other row
-width mismatches still fail. Coordinate joins use EDSTATS' `CP` field, which
-retains the actual PDB chain, rather than its `CI` statistical-group field;
-EDSTATS rewrites `CI` to `0` for every ordered water regardless of the water's
-real chain. Decimal and hybrid-36 PDB residue numbers are
-decoded to the same canonical integer representation used by Gemmi before raw
-PDB atoms and EDSTATS rows are joined. If coordinate residues repeat the same
-author identity, the one-based EDSTATS `NR` residue ordinal resolves them
+evidence, and the fallback does not infer those structural classes. A structure
+with unknown elements does not receive a DPI because its non-hydrogen atom count
+is indeterminate. EDSTATS' missing-chain markers are normalized before
+coordinate matching. When EDSTATS omits its empty trailing chain field for a
+blank-chain residue, Alchemy restores that field before validating the standard
+42-column schema. Other row width mismatches still fail. Coordinate joins use
+EDSTATS' `CP` field, which retains the actual PDB chain, rather than its `CI`
+statistical-group field; EDSTATS rewrites `CI` to `0` for every ordered water
+regardless of the water's real chain. Decimal and hybrid-36 PDB residue numbers
+are decoded to the same canonical integer representation used by Gemmi before
+raw PDB atoms and EDSTATS rows are joined. If coordinate residues repeat the
+same author identity, the one-based EDSTATS `NR` residue ordinal resolves them
 one-to-one. `NR` is numbered within a chain rather than across the model —
 EDSTATS restarts it at 1 for each chain part `CP` — so it is read against the
 residues of its own chain, and uniqueness is required per chain rather than per
 model. A `NR` that repeats within one chain, or is out of range or inconsistent,
-fails the entry rather than expanding an ambiguous row across multiple sites. Completeness is
-checked with residue multiplicity intact. The table must contain finite numeric
-statistics or the documented `n/a` marker and a row for every selected metal or
-cofactor residue. Empty, malformed, incomplete, or wrong-model output fails the
-entry instead of being written to the aggregate CSV.
+fails the entry rather than expanding an ambiguous row across multiple sites.
+Completeness is checked with residue multiplicity intact. The table must contain
+finite numeric statistics or the documented `n/a` marker and a row for every
+selected metal or cofactor residue. Empty, malformed, incomplete, or wrong-model
+output fails the entry instead of being written to the aggregate CSV.
 
 ### 4. Bond-distance analysis — `src/coordination/`
 
@@ -138,15 +139,14 @@ positive-occupancy N/O/S candidates around a configured metal, outside the
 metal's own residue, in a recognized amino acid or water. Discovery does not
 assign a candidate as a bond. A separate eligibility stage identifies likely
 first-coordination-sphere candidates for the current bond output, and an
-atom-level chemical rule determines which candidates Alchemy may infer as
-bonds. Following [Harding's
-coordination-group
-definition](https://doi.org/10.1107/S0907444904004081), the upper limit is the
-target metal-donor distance plus 0.75 Å, never more than the 4.0 Å candidate
-search radius. If the exact residue-specific reference
-is absent, the largest target for the same metal and donor element is used only
-for sphere membership. A pair with no such target is retained as candidate
-evidence but is not inferred as a contact; the entry reports
+atom-level chemical rule determines which candidates Alchemy may infer as bonds.
+Following
+[Harding's coordination-group definition](https://doi.org/10.1107/S0907444904004081),
+the upper limit is the target metal-donor distance plus 0.75 Å, never more than
+the 4.0 Å candidate search radius. If the exact residue-specific reference is
+absent, the largest target for the same metal and donor element is used only for
+sphere membership. A pair with no such target is retained as candidate evidence
+but is not inferred as a contact; the entry reports
 `missing_first_sphere_reference`. DPI never expands the chemical cutoff. Atoms
 belonging to the metal's own cofactor residue remain excluded, so these rows
 describe external coordination rather than a complete cofactor coordination
@@ -154,66 +154,65 @@ number.
 
 The geometry-inference donor table covers all 20 standard amino acids. Backbone
 carbonyl `O` is allowed for every residue. Typical side-chain donors are ASN
-OD1; ASP OD1/OD2; CYS SG; GLN OE1; GLU OE1/OE2; HIS ND1/NE2; LYS NZ; MET SD;
-SER OG; THR OG1; and TYR OH. Water oxygen is allowed. Polymer N-terminal `N`
-and C-terminal `OXT`/`OT1`/`OT2` are allowed only when deposited sequence
-provenance identifies the residue at the corresponding polymer boundary.
-For converted mmCIF this uses `label_seq_id` and the complete entity sequence;
-for direct PDB input it requires a complete `SEQRES` sequence matching the
-modeled polymer. A first or last modeled residue is not by itself treated as a
-terminus, so missing or disordered endpoint residues cannot create terminal
-donors. Other proximal N/O/S atoms are
-retained in `metal_contact_candidates_all.csv`, marked
-`inferred_donor_allowed=false`, and cannot become geometry-inferred bonds.
-This includes internal peptide N, ASN/GLN amide N, TRP pyrrole N, and ARG
-guanidinium N. A declaration can still establish such an atom as a declared
-bond; `donor_rule_override=declared_connection` makes that exception explicit.
+OD1; ASP OD1/OD2; CYS SG; GLN OE1; GLU OE1/OE2; HIS ND1/NE2; LYS NZ; MET SD; SER
+OG; THR OG1; and TYR OH. Water oxygen is allowed. Polymer N-terminal `N` and
+C-terminal `OXT`/`OT1`/`OT2` are allowed only when deposited sequence provenance
+identifies the residue at the corresponding polymer boundary. For converted
+mmCIF this uses `label_seq_id` and the complete entity sequence; for direct PDB
+input it requires a complete `SEQRES` sequence matching the modeled polymer. A
+first or last modeled residue is not by itself treated as a terminus, so missing
+or disordered endpoint residues cannot create terminal donors. Other proximal
+N/O/S atoms are retained in `metal_contact_candidates_all.csv`, marked
+`inferred_donor_allowed=false`, and cannot become geometry-inferred bonds. This
+includes internal peptide N, ASN/GLN amide N, TRP pyrrole N, and ARG guanidinium
+N. A declaration can still establish such an atom as a declared bond;
+`donor_rule_override=declared_connection` makes that exception explicit.
 
 #### Reference coverage of the donor table
 
 Inferring a contact and scoring one are separate questions. The
-geometry-inference donor table governs inference; scoring additionally requires a
-literature reference distance in `src/data/metal_distances_info.txt`, and that
+geometry-inference donor table governs inference; scoring additionally requires
+a literature reference distance in `src/data/metal_distances_info.txt`, and that
 reference does not cover every donor Alchemy will infer:
 
-- **Only ten metals have reference rows.** The table covers NA, MG, K, CA,
-  MN, FE, CO, NI, CU, and ZN. Alchemy recognizes 84 metal element symbols
+- **Only ten metals have reference rows.** The table covers NA, MG, K, CA, MN,
+  FE, CO, NI, CU, and ZN. Alchemy recognizes 84 metal element symbols
   (`src/metal_elements.py`), so a site of any other metal, such as CD, HG, or
-  PT, still receives density statistics and measured contact distances, but
-  no contact can be inferred into its first sphere or z-scored; the entry
-  records `missing_first_sphere_reference`. NA, MG, K, and CA have oxygen
-  rows only, so their HIS `N` and CYS `S` contacts are treated the same way.
+  PT, still receives density statistics and measured contact distances, but no
+  contact can be inferred into its first sphere or z-scored; the entry records
+  `missing_first_sphere_reference`. NA, MG, K, and CA have oxygen rows only, so
+  their HIS `N` and CYS `S` contacts are treated the same way.
 - **ASN, GLN, LYS, and MET have no reference entry.** Harding (2006) and, for
   nickel, Zheng et al. (2008) tabulate water `O`, ASP/GLU carboxylate `O`,
-  backbone carbonyl `O`, HIS `N`, and CYS `S` only. Contacts to these four
-  side chains are therefore discovered, reported and measured, but never
-  receive a Zbond. When the metal has a row for the same donor element, the
-  same-element fallback supplies the longest such distance for first-sphere
-  eligibility only; for the oxygen-only metals above, a LYS `N` or MET `S`
-  contact has no reference at all and is assigned only when declared. Derived
-  values are NaN either way. This is a limitation of the bundled reference
-  data, not of the geometry.
+  backbone carbonyl `O`, HIS `N`, and CYS `S` only. Contacts to these four side
+  chains are therefore discovered, reported and measured, but never receive a
+  Zbond. When the metal has a row for the same donor element, the same-element
+  fallback supplies the longest such distance for first-sphere eligibility only;
+  for the oxygen-only metals above, a LYS `N` or MET `S` contact has no
+  reference at all and is assigned only when declared. Derived values are NaN
+  either way. This is a limitation of the bundled reference data, not of the
+  geometry.
 - **Terminal donors have no reference entry.** N-terminal backbone `N` and
   C-terminal `OXT`/`OT1`/`OT2` contacts are likewise reported through the
-  same-element fallback without a Zbond; they do not borrow chemically
-  different side-chain or backbone-carbonyl distributions.
-- **SER, THR, and TYR values are approximations.** These values are derived
-  from statements in Harding (2006) rather than from its tables, so their
-  `sigma_lit` is not an empirical spread. Treat z-scores for these three donors
-  as indicative.
+  same-element fallback without a Zbond; they do not borrow chemically different
+  side-chain or backbone-carbonyl distributions.
+- **SER, THR, and TYR values are approximations.** These values are derived from
+  statements in Harding (2006) rather than from its tables, so their `sigma_lit`
+  is not an empirical spread. Treat z-scores for these three donors as
+  indicative.
 - **Nucleic acids, modified residues, and other ligands have no reference at
   all.** A metal coordinated by, say, a DNA phosphate oxygen is real
   coordination, but no bundled distance can assess it.
 
 A declared contact to a donor class with no reference is retained in
-`metal_contact_candidates_all.csv` with its measured distance and full connection
-provenance, and the entry records
-`declared_donor_outside_supported_classes`. It is deliberately _not_ promoted
-to a bond row: doing so would raise the site's coordination count and apparent
+`metal_contact_candidates_all.csv` with its measured distance and full
+connection provenance, and the entry records
+`declared_donor_outside_supported_classes`. It is deliberately _not_ promoted to
+a bond row: doing so would raise the site's coordination count and apparent
 geometry coverage on the strength of a contact that nothing in the reference
-data can evaluate. The distinction that
-matters for a consumer is that "no reference for this donor class" and "this
-metal has no coordination" are now different, visibly, in the output.
+data can evaluate. The distinction that matters for a consumer is that "no
+reference for this donor class" and "this metal has no coordination" are now
+different, visibly, in the output.
 
 Alchemy separately parses `_struct_conn` records from the authoritative source
 mmCIF and `LINK` records from a source PDB, in
@@ -227,16 +226,16 @@ geometric proof of coordination. A declared partner whose element is not `N`,
 `O`, or `S` is never a candidate at all; the entry records the
 `declared_donor_element_unsupported` warning instead.
 
-Alchemy reports assigned contacts to atoms explicitly present in the
-analyzed model and contacts generated by crystallographic symmetry, strict NCS,
-or a combination of the two. Image-inclusive geometry is the primary result,
-while explicit-only counts and geometry are retained separately. Generated
-rows independently record whether an NCS transform and a crystallographic
-operation contributed. They also record the strict-NCS operation identifier,
-Gemmi image index, symmetry code, and unit-cell translation. Near-coincident
-images of the same deposited atom within Gemmi's 0.8 Å special-position cutoff
-are collapsed, while the stricter 0.001 Å tolerance remains reserved for
-conflicting duplicate coordinate records.
+Alchemy reports assigned contacts to atoms explicitly present in the analyzed
+model and contacts generated by crystallographic symmetry, strict NCS, or a
+combination of the two. Image-inclusive geometry is the primary result, while
+explicit-only counts and geometry are retained separately. Generated rows
+independently record whether an NCS transform and a crystallographic operation
+contributed. They also record the strict-NCS operation identifier, Gemmi image
+index, symmetry code, and unit-cell translation. Near-coincident images of the
+same deposited atom within Gemmi's 0.8 Å special-position cutoff are collapsed,
+while the stricter 0.001 Å tolerance remains reserved for conflicting duplicate
+coordinate records.
 
 Where a literature reference is available, Alchemy calculates:
 
@@ -255,12 +254,11 @@ outliers.
 Reference-covered contacts with `|Zbond| >= 6` are geometry outliers. This
 classification uses the unrounded coordinate distance and Zbond; the distance
 and Zbond written to CSV are rounded to three and four decimal places only for
-presentation.
-First-sphere contacts admitted by a same-element fallback, or without complete
-DPI inputs, are still emitted with their measured geometry and NaN derived
-values. The `geometry_outlier` and `geometry_consistent` columns are nullable
-booleans: a blank value means that geometry was not assessed, not that the
-contact passed or failed the cutoff.
+presentation. First-sphere contacts admitted by a same-element fallback, or
+without complete DPI inputs, are still emitted with their measured geometry and
+NaN derived values. The `geometry_outlier` and `geometry_consistent` columns are
+nullable booleans: a blank value means that geometry was not assessed, not that
+the contact passed or failed the cutoff.
 
 Assigned contacts are also grouped by metal and donor-residue image, with no
 upper limit on the number of contacts in a group. Because backbone atoms carry
@@ -273,20 +271,20 @@ normally. If any member is an outlier, every member of the group records
 `multi_donor_geometry_status=suspect` and
 `multi_donor_contains_suspect_bond=true`; the particular unusual bonds retain
 `geometry_outlier=true`. This makes possible multidentate context conspicuous
-without weakening or excluding the result. A group with unavailable Zbond
-values and no detected outlier is labeled `indeterminate`; only the individual
+without weakening or excluding the result. A group with unavailable Zbond values
+and no detected outlier is labeled `indeterminate`; only the individual
 unassessable bonds are omitted from scoring.
 
 `context_warning` is a binary interpretive flag and does not alter the numerical
 confidence calculation. Machine-readable `context_warning_reasons` explain the
-trigger. Bond rows are flagged for declared non-typical donors and for membership
-in a multi-donor group containing a suspect bond. Candidate rows also flag
-zero-occupancy neighbors and additionally
-flag every proximal atom outside the typical donor table. At site level, the
-flag summarizes coordination-relevant cases: a non-typical atom satisfying the
-first-sphere distance rule, a declared donor-rule override, or a suspect
-multi-donor group. A distant non-typical atom found only by the broad 4 Å search
-does not by itself place the complete metal site under warning.
+trigger. Bond rows are flagged for declared non-typical donors and for
+membership in a multi-donor group containing a suspect bond. Candidate rows also
+flag zero-occupancy neighbors and additionally flag every proximal atom outside
+the typical donor table. At site level, the flag summarizes
+coordination-relevant cases: a non-typical atom satisfying the first-sphere
+distance rule, a declared donor-rule override, or a suspect multi-donor group. A
+distant non-typical atom found only by the broad 4 Å search does not by itself
+place the complete metal site under warning.
 
 ## Confidence scoring
 
@@ -299,41 +297,40 @@ and assigned-bond evidence and streams one compact row per selected metal site
 to `confidence_inputs_all.csv`. It never rereads the complete statistics and
 bond tables to reconstruct those inputs.
 
-The compact row records metal-site `ZDm` as `rszd`, its magnitude as
-`rszd_abs`, its signed negative and positive density diagnostics, and whether
-EDSTATS reported its 99.9 saturation value. For geometry, every finite
-`score_eligible` Zbond
-contributes with equal weight to `geometry_rms_zbond`; declared and inferred
-contacts are not numerically reweighted. The row also retains maximum, mean
-absolute, and mean signed Zbond diagnostics, scored-contact counts, and the
+The compact row records metal-site `ZDm` as `rszd`, its magnitude as `rszd_abs`,
+its signed negative and positive density diagnostics, and whether EDSTATS
+reported its 99.9 saturation value. For geometry, every finite `score_eligible`
+Zbond contributes with equal weight to `geometry_rms_zbond`; declared and
+inferred contacts are not numerically reweighted. The row also retains maximum,
+mean absolute, and mean signed Zbond diagnostics, scored-contact counts, and the
 responsible `worst_bond`. `metal_site_id` joins the row directly to the site,
-bond, and candidate tables. Geometry coverage is the number of assigned
-contacts with an exact reference distance divided by the total number of
-assigned contacts. It is an annotation only: it never multiplies or otherwise
-modifies the geometry statistic or verdict. Rejected broad-search candidates
-do not enter the denominator.
-Missing density, absent bonds, partial coverage, diagnostic EDSTATS rows, and
-shared-cofactor density provenance remain explicit. The streamed file retains
-exactly one row per manifest-counted selected metal; a site with no recoverable
-density or bond identity is represented by an unresolved, unscorable placeholder
-rather than silently disappearing from the cohort denominator.
+bond, and candidate tables. Geometry coverage is the number of assigned contacts
+with an exact reference distance divided by the total number of assigned
+contacts. It is an annotation only: it never multiplies or otherwise modifies
+the geometry statistic or verdict. Rejected broad-search candidates do not enter
+the denominator. Missing density, absent bonds, partial coverage, diagnostic
+EDSTATS rows, and shared-cofactor density provenance remain explicit. The
+streamed file retains exactly one row per manifest-counted selected metal; a
+site with no recoverable density or bond identity is represented by an
+unresolved, unscorable placeholder rather than silently disappearing from the
+cohort denominator.
 
 Only after the database run completes without recoverable operational gaps does
 Alchemy finalize confidence. Explicitly deterministic entry errors remain
 documented terminal exclusions in the manifest; missing inputs, worker deaths,
 timeouts, and unexpected failures defer finalization until `--resume`. Alchemy
 scans the compact input—not the raw analysis outputs—to write
-`confidence_scores_all.csv` and a reusable
-`confidence_reference/` directory containing policy metadata and the empirical
-score distribution. An interrupted run retains its compact inputs for
-`--resume` but does not publish a completed reference.
+`confidence_scores_all.csv` and a reusable `confidence_reference/` directory
+containing policy metadata and the empirical score distribution. An interrupted
+run retains its compact inputs for `--resume` but does not publish a completed
+reference.
 
-The standard database cohort excludes an entry when coordinate inspection
-finds more than 100 selected canonical metal sites. These exceptionally
-metal-dense assemblies contain strongly correlated sites and would otherwise
-have disproportionate influence on the empirical distribution. They are
-recorded in the manifest with their detected site count but do not contribute
-confidence inputs.
+The standard database cohort excludes an entry when coordinate inspection finds
+more than 100 selected canonical metal sites. These exceptionally metal-dense
+assemblies contain strongly correlated sites and would otherwise have
+disproportionate influence on the empirical distribution. They are recorded in
+the manifest with their detected site count but do not contribute confidence
+inputs.
 
 The final density level uses absolute RSZD directly:
 
@@ -354,51 +351,53 @@ RMS >= 2      -> SUSPECT
 ```
 
 The overall decision is non-compensatory. Any SUSPECT component makes the site
-SUSPECT; REVIEW plus REVIEW also becomes SUSPECT; one REVIEW becomes REVIEW;
-all available PASS components produce PASS; and no assessable evidence produces
+SUSPECT; REVIEW plus REVIEW also becomes SUSPECT; one REVIEW becomes REVIEW; all
+available PASS components produce PASS; and no assessable evidence produces
 INCOMPLETE. When one component is unavailable, the other is used directly and
 `evidence_basis` records the limitation.
 
 A frozen database reference adds separate `density_score` and `geometry_score`
 values. Each is a reverse average-rank empirical score from 0 to 100, so higher
-means more ordinary behavior in that component's assessable cohort. One value
-is fixed rather than ranked: a site whose `rszd_abs` is at or above the
-EDSTATS saturation magnitude of 99.9 (`density_saturated=true`) receives
+means more ordinary behavior in that component's assessable cohort. One value is
+fixed rather than ranked: a site whose `rszd_abs` is at or above the EDSTATS
+saturation magnitude of 99.9 (`density_saturated=true`) receives
 `density_score=0`, because saturated difference density is the strongest
-evidence the statistic can express and must not be ranked among ordinary
-values. The reference metadata records this as its density saturation policy.
+evidence the statistic can express and must not be ranked among ordinary values.
+The reference metadata records this as its density saturation policy.
 `alchemy_score` is their minimum using whichever scores are available. These
 numbers rank sites only: the raw measurements and decision matrix always define
 `alchemy_level`, including the REVIEW-plus-REVIEW escalation that no single
 ranking cutoff can represent. A deterministic `confidence_reference_version`
 identifies the compatible pair of component distributions. A separate
 `confidence_cohort_id` identifies the exact compact-input artifact, and resume
-validation prevents either identity from being mixed. Reference metadata
-records per-metal-site weighting, component cohort counts, input and manifest
-hashes, input statuses, and software provenance. `context_warning` is carried
-into the result as an interpretive annotation and does not change a level or
-score.
+validation prevents either identity from being mixed. Reference metadata records
+per-metal-site weighting, component cohort counts, input and manifest hashes,
+input statuses, and software provenance. `context_warning` is carried into the
+result as an interpretive annotation and does not change a level or score.
 
-Alchemy includes the frozen [manuscript confidence reference](../src/data/confidence_reference/README.md)
-from the August 17, 2026 dataset: 330,978 sites, with 330,887 density observations
-and 275,870 geometry observations. A fresh clone uses this reference to provide
-empirical rankings for available evidence alongside the authoritative
-classifications. Completing an uncapped full-database run writes a reference
-of your own under the output directory; it does not replace the bundled files.
+Alchemy includes the frozen
+[manuscript confidence reference](../src/data/confidence_reference/README.md)
+from the August 17, 2026 dataset: 330,978 sites, with 330,887 density
+observations and 275,870 geometry observations. A fresh clone uses this
+reference to provide empirical rankings for available evidence alongside the
+authoritative classifications. Completing an uncapped full-database run writes a
+reference of your own under the output directory; it does not replace the
+bundled files.
 
 For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
 the reference produced under the current output directory's
-`confidence_reference/`, then in the repository's `src/data/confidence_reference/`.
-`--confidence-reference-dir` selects an explicit copy instead. Alchemy loads
-that reference once, derives each new site's compact inputs while its normal
-result is still in memory, and writes `confidence_scores_all.csv` directly. These runs
-are compared with the frozen database and never generate rankings from their
-own small cohort. If no reference is found, classifications are still produced
-from the raw thresholds and numerical rankings remain blank. An incompatible
-reference is rejected rather than silently substituted.
+`confidence_reference/`, then in the repository's
+`src/data/confidence_reference/`. `--confidence-reference-dir` selects an
+explicit copy instead. Alchemy loads that reference once, derives each new
+site's compact inputs while its normal result is still in memory, and writes
+`confidence_scores_all.csv` directly. These runs are compared with the frozen
+database and never generate rankings from their own small cohort. If no
+reference is found, classifications are still produced from the raw thresholds
+and numerical rankings remain blank. An incompatible reference is rejected
+rather than silently substituted.
 
-The `confidence_score` package retains `finalize` and `score` subcommands,
-run as `PYTHONPATH=src python3 -m confidence_score`, for recovery and
+The `confidence_score` package retains `finalize` and `score` subcommands, run
+as `PYTHONPATH=src python3 -m confidence_score`, for recovery and
 reproducibility using already compact confidence-input CSVs; neither command
 reconstructs inputs by rescanning `metal_sites_all.csv` or
 `metal_bonds_all.csv`. Recovery finalization should pass `--manifest` when the
@@ -408,8 +407,8 @@ artifact hashes, and software provenance.
 ## DPI and occupancy validation
 
 The DPI is calculated from PDB-REDO reflection and R-free metadata, the
-asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen and
-non-deuterium atoms in the complete first-model asymmetric unit. Alternate
+asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen
+and non-deuterium atoms in the complete first-model asymmetric unit. Alternate
 positions contribute separately to this global sum. If non-given strict-NCS
 operations generate copies that are not explicitly deposited, each copy is
 included in `Ni`; NCS operations marked as already given are not counted again.
@@ -445,44 +444,44 @@ is answered empirically by its real-space density statistics, which is a
 stronger instrument than occupancy bookkeeping. Overfull occupancy does not
 change which conformer is measured — selection takes the highest mean valid
 occupancy either way — so this field is reported rather than acted on, and an
-overfull donor is never discarded as contact evidence. Zero occupancy is valid for `Ni` but is not
-accepted as evidence for a metal site or assigned contact. A source-declared
-contact to a zero-occupancy donor remains in `metal_contact_candidates_all.csv` for
-audit, with `eligibility_status=zero_occupancy`, but cannot become a bond. A
-metal record excluded the same way leaves no site to annotate, so the entry
-instead carries the `zero_occupancy_metal_excluded` warning: without it a
-structure whose only metal is modeled absent would report `no_metals`, which
-reads as an authoritative negative about a file that contains a metal record.
-For PDB input, raw occupancy records are matched to Gemmi atoms by chain,
-residue number and insertion code, residue and atom names, alternate location,
-and atom serial rather than parser traversal order.
+overfull donor is never discarded as contact evidence. Zero occupancy is valid
+for `Ni` but is not accepted as evidence for a metal site or assigned contact. A
+source-declared contact to a zero-occupancy donor remains in
+`metal_contact_candidates_all.csv` for audit, with
+`eligibility_status=zero_occupancy`, but cannot become a bond. A metal record
+excluded the same way leaves no site to annotate, so the entry instead carries
+the `zero_occupancy_metal_excluded` warning: without it a structure whose only
+metal is modeled absent would report `no_metals`, which reads as an
+authoritative negative about a file that contains a metal record. For PDB input,
+raw occupancy records are matched to Gemmi atoms by chain, residue number and
+insertion code, residue and atom names, alternate location, and atom serial
+rather than parser traversal order.
 
 ## Crystallization conditions as non-scoring context
 
-Alchemy extracts deposited crystallization metadata once per entry. For a
-normal PDB-REDO run, it prefers the original PDB entry's
-`exptl_crystal_grow` records, retrieves them in batches from the RCSB Data API,
-and stores them in a persistent per-entry cache. It falls back to the PDB-REDO
-coordinate file's mmCIF `_exptl_crystal_grow` category or legacy PDB
-`REMARK 280` when the deposited API record has no condition. Manual-input runs
-reverse that precedence so an explicitly supplied coordinate file remains the
-authority.
+Alchemy extracts deposited crystallization metadata once per entry. For a normal
+PDB-REDO run, it prefers the original PDB entry's `exptl_crystal_grow` records,
+retrieves them in batches from the RCSB Data API, and stores them in a
+persistent per-entry cache. It falls back to the PDB-REDO coordinate file's
+mmCIF `_exptl_crystal_grow` category or legacy PDB `REMARK 280` when the
+deposited API record has no condition. Manual-input runs reverse that precedence
+so an explicitly supplied coordinate file remains the authority.
 
 Alchemy retains the original condition description in
 `crystallization_conditions_all.csv`. A separate one-row-per-entry summary
-reports availability, pH and temperature ranges, explicitly detected metals,
-the manuscript's metal-class flags, and sulfate, cacodylate, and acetate. Both
+reports availability, pH and temperature ranges, explicitly detected metals, the
+manuscript's metal-class flags, and sulfate, cacodylate, and acetate. Both
 outputs identify the selected metadata source. API-derived rows also record
 retrieval time and the deposited entry revision date.
 
-These annotations provide positive evidence only. `not_reported`,
-`unparseable`, and `input_unavailable` produce blank detection flags instead of
-negative claims because deposited condition records are heterogeneous and
-incomplete. The conditions don't enter a raw confidence threshold, empirical
-support distribution, the overall verdict matrix, or `alchemy_score`.
+These annotations provide positive evidence only. `not_reported`, `unparseable`,
+and `input_unavailable` produce blank detection flags instead of negative claims
+because deposited condition records are heterogeneous and incomplete. The
+conditions don't enter a raw confidence threshold, empirical support
+distribution, the overall verdict matrix, or `alchemy_score`.
 
 After confidence finalization, Alchemy joins the entry summary to only `REVIEW`
 and `SUSPECT` sites in `review_queue_all.csv`. This puts experimental context
 beside the sites most likely to need inspection while retaining canonical
-conditions for every processed entry and avoiding repeated condition text in
-the primary site and confidence outputs.
+conditions for every processed entry and avoiding repeated condition text in the
+primary site and confidence outputs.

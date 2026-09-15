@@ -11,22 +11,20 @@ reference data, see [Reference-data maintenance](maintenance.md).
   record of what was produced. Diagnostics go to `stderr` as log records,
   controlled by `-v`/`--quiet`/`--log-file`. The concise per-run report in
   `LOG_DIR/alchemy_run_*.log` and its complete
-  `LOG_DIR/alchemy_run_*_entries.csv` diagnostics table—under
-  `OUTPUT_DIR/logs/` unless `--log-dir` says otherwise—are written
-  separately and are unaffected by verbosity. They are structured artifacts,
-  not transcripts. Worker processes emit records through a queue that the
-  driver re-emits, so per-entry diagnostics from parallel workers never
-  interleave mid-line.
+  `LOG_DIR/alchemy_run_*_entries.csv` diagnostics table—under `OUTPUT_DIR/logs/`
+  unless `--log-dir` says otherwise—are written separately and are unaffected by
+  verbosity. They are structured artifacts, not transcripts. Worker processes
+  emit records through a queue that the driver re-emits, so per-entry
+  diagnostics from parallel workers never interleave mid-line.
 - Interactive runs redraw a single progress line after every completed
   structure. While waiting on a slow structure, the elapsed time refreshes
   approximately once per second. Redirected output is limited to one progress
   line every 30 seconds to avoid producing oversized logs.
 - Per-entry maps and logs are written to uniquely created working directories
   and removed after their rows are extracted unless `--keep-intermediates` is
-  supplied. Cleanup never targets a pre-existing `OUTPUT_DIR/PDB_ID`
-  directory.
-- Model-envelope mode still calculates each complete FFT map before cropping,
-  so map values come from the same Fourier calculation as legacy full-map mode.
+  supplied. Cleanup never targets a pre-existing `OUTPUT_DIR/PDB_ID` directory.
+- Model-envelope mode still calculates each complete FFT map before cropping, so
+  map values come from the same Fourier calculation as legacy full-map mode.
   Full temporary maps are deleted as soon as they are no longer needed unless
   `--keep-intermediates` is supplied.
 
@@ -36,44 +34,42 @@ reference data, see [Reference-data maintenance](maintenance.md).
   On Linux, readable CPU topology selects one worker per physical core present
   in the process affinity set, bounded by the available logical CPUs and any
   detected cgroup-v2 CPU quota (including ancestor quotas). Without physical
-  topology, the fallback leaves two logical CPUs free, with at least one
-  worker. Memory can reduce this count further: at most half the analysis
-  budget is normally reserved for pool overhead, estimated at 512 MiB per
-  worker (at least one worker is allowed on smaller allocations). The
-  remaining capacity supports calculations. Explicit `--workers` values remain
-  capped by this memory allowance. The pool ceiling is fixed at startup;
-  active concurrency adjusts throughout the run. If neither available memory
-  nor an explicit `--memory-limit` is known, Alchemy uses one worker.
+  topology, the fallback leaves two logical CPUs free, with at least one worker.
+  Memory can reduce this count further: at most half the analysis budget is
+  normally reserved for pool overhead, estimated at 512 MiB per worker (at least
+  one worker is allowed on smaller allocations). The remaining capacity supports
+  calculations. Explicit `--workers` values remain capped by this memory
+  allowance. The pool ceiling is fixed at startup; active concurrency adjusts
+  throughout the run. If neither available memory nor an explicit
+  `--memory-limit` is known, Alchemy uses one worker.
 - Before starting workers, Alchemy estimates each entry's density-stage peak
   from the `GRID SAMP=5` map dimensions implied by its unit-cell axes and
   resolution. The estimate includes both maps, overlapping CCP4 copies, fixed
-  worker overhead, FFT-grid rounding, and a safety margin. If usable metadata
-  is absent, MTZ size supplies a conservative fallback with a 2 GiB minimum;
+  worker overhead, FFT-grid rounding, and a safety margin. If usable metadata is
+  absent, MTZ size supplies a conservative fallback with a 2 GiB minimum;
   missing inputs receive a 2 GiB estimate. Valid map estimates can be smaller
-  than 2 GiB, but still include 512 MiB overhead plus the safety margin.
-  By default, Alchemy uses up to 80% of currently available memory while
-  protecting at least 4 GiB for the OS and driver; on a host with less than
-  6 GiB the reserve shrinks so that one 2 GiB worker can still run. All
-  detected host and cgroup limits remain in force. On cgroup v2, clean inactive
-  file cache is treated as reclaimable; anonymous, dirty, mapped and shared
-  memory remains charged. All entries and idle workers share one estimated-byte
-  budget; active estimates already include their worker overhead, so it is
-  counted only once. The
-  high-memory label is diagnostic and does not impose a separate count or
-  percentage ceiling. The dispatcher
-  skips a blocked large entry to keep fitting smaller entries active, then
-  starts an oversized entry alone after active work drains. It pauses new
-  admission whenever measured headroom reaches the protected reserve. After a
-  pressure event or unexplained worker death, it lowers the admission budget
-  until sustained headroom permits gradual recovery. Reserve fluctuations
-  count as one pressure episode until availability stays above the reserve
-  plus a margin for 30 seconds. Recovery is bounded by the original budget
-  and current headroom; an explicitly oversized entry running alone does not
-  reduce the ordinary-entry budget. Workers collect unreachable objects after
-  each entry and, where glibc supports it, return unused allocator pages to the
-  OS. `--memory-limit` can supply an allocation that cannot be detected, and
-  `--memory-utilization` can tune the usable fraction.
-  The run report records the initial and final budgets, estimate sources, peak
+  than 2 GiB, but still include 512 MiB overhead plus the safety margin. By
+  default, Alchemy uses up to 80% of currently available memory while protecting
+  at least 4 GiB for the OS and driver; on a host with less than 6 GiB the
+  reserve shrinks so that one 2 GiB worker can still run. All detected host and
+  cgroup limits remain in force. On cgroup v2, clean inactive file cache is
+  treated as reclaimable; anonymous, dirty, mapped and shared memory remains
+  charged. All entries and idle workers share one estimated-byte budget; active
+  estimates already include their worker overhead, so it is counted only once.
+  The high-memory label is diagnostic and does not impose a separate count or
+  percentage ceiling. The dispatcher skips a blocked large entry to keep fitting
+  smaller entries active, then starts an oversized entry alone after active work
+  drains. It pauses new admission whenever measured headroom reaches the
+  protected reserve. After a pressure event or unexplained worker death, it
+  lowers the admission budget until sustained headroom permits gradual recovery.
+  Reserve fluctuations count as one pressure episode until availability stays
+  above the reserve plus a margin for 30 seconds. Recovery is bounded by the
+  original budget and current headroom; an explicitly oversized entry running
+  alone does not reduce the ordinary-entry budget. Workers collect unreachable
+  objects after each entry and, where glibc supports it, return unused allocator
+  pages to the OS. `--memory-limit` can supply an allocation that cannot be
+  detected, and `--memory-utilization` can tune the usable fraction. The run
+  report records the initial and final budgets, estimate sources, peak
   reservation (including idle workers), pool overhead allowance, pressure
   pauses, budget backoffs and recoveries; its companion entry table records
   every entry's estimate.
@@ -83,16 +79,15 @@ reference data, see [Reference-data maintenance](maintenance.md).
 - Output CSV handles are flushed after each processed entry so interrupted batch
   runs retain completed results.
 - Resume staging is deleted only after a successful merge (or when it contains
-  no completed entries). If a merge fails, the log records the recovery path;
-  a later startup preserves that directory. Merges replace individual files
+  no completed entries). If a merge fails, the log records the recovery path; a
+  later startup preserves that directory. Merges replace individual files
   atomically, but a failed multi-file merge may require recovery from staging.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis
   was disabled or the entry failed before reaching it; `0` means it ran and
   found no rows of that type, or that the entry ended early with nothing to
-  analyze (`no_metals` or `metal_site_limit_exceeded`).
-  Resume uses this distinction to add bond-stage results after an earlier
-  `--no-bonds` run. Missing bond or candidate CSVs make bond-enabled results
-  incomplete.
+  analyze (`no_metals` or `metal_site_limit_exceeded`). Resume uses this
+  distinction to add bond-stage results after an earlier `--no-bonds` run.
+  Missing bond or candidate CSVs make bond-enabled results incomplete.
 - Statistics, bond, and candidate CSV files retain their column headers when a
   completed run finds no metals, contacts, or proximal candidates.
 - Before appending on resume, Alchemy verifies that every terminal manifest
@@ -113,18 +108,18 @@ reference data, see [Reference-data maintenance](maintenance.md).
   preserves existing bond and candidate rows and their manifest counts. Entries
   originating from a bond-disabled run retain blank `n_bonds` and
   `n_candidates`, so a later bond-enabled resume will process them.
-- `--resume --retry-partials` also reprocesses non-retryable `partial`
-  entries from the manifest after a processing improvement while continuing to
-  protect `ok` entries. Optional `--id` or `--id-file` selectors restrict that
-  set. Skips, errors, and retryable partials already follow ordinary resume
-  behavior. The same staged replacement rules apply, so an interrupted
-  or retryably failed attempt does not discard the previous terminal result.
-  When a frozen reference scores a targeted resume inside an existing database
-  output, `confidence_scores_all.csv` and `confidence_inputs_all.csv` are
-  replaced together so their per-entry evidence cannot diverge. Crystallization
-  condition and summary rows use the same staged per-entry replacement. The
-  derived review queue is regenerated from the completed confidence and
-  summary files rather than merged independently.
+- `--resume --retry-partials` also reprocesses non-retryable `partial` entries
+  from the manifest after a processing improvement while continuing to protect
+  `ok` entries. Optional `--id` or `--id-file` selectors restrict that set.
+  Skips, errors, and retryable partials already follow ordinary resume behavior.
+  The same staged replacement rules apply, so an interrupted or retryably failed
+  attempt does not discard the previous terminal result. When a frozen reference
+  scores a targeted resume inside an existing database output,
+  `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
+  together so their per-entry evidence cannot diverge. Crystallization condition
+  and summary rows use the same staged per-entry replacement. The derived review
+  queue is regenerated from the completed confidence and summary files rather
+  than merged independently.
 - A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
   `metal_contact_candidates_all.csv` files before replacing the manifest and
   statistics, so old bond-stage rows cannot be mistaken for current output.
@@ -152,33 +147,33 @@ reference data, see [Reference-data maintenance](maintenance.md).
   metal records are not counted as sites; they remain visible through the
   `zero_occupancy_atoms` warning, and the entry adds
   `zero_occupancy_metal_excluded` so that a metal modeled as absent is not
-  mistaken for an entry containing no metal record at all. `no_metals` is an informational subset of `ok`,
-  whereas `skip` remains reserved for entries that could not be processed
-  operationally. If any atom has a missing or invalid deposited element, metal
-  absence cannot be established under the no-inference policy; the entry
-  instead finishes as terminal `partial` with
+  mistaken for an entry containing no metal record at all. `no_metals` is an
+  informational subset of `ok`, whereas `skip` remains reserved for entries that
+  could not be processed operationally. If any atom has a missing or invalid
+  deposited element, metal absence cannot be established under the no-inference
+  policy; the entry instead finishes as terminal `partial` with
   `metal_presence_indeterminate` and is not counted as `no_metals`.
 - Structures with more than 100 selected canonical metal sites finish
-  immediately after the same coordinate inspection, before `mtzfix`, either
-  FFT, or `edstats`. Their manifest rows retain the detected `n_metals`, set
+  immediately after the same coordinate inspection, before `mtzfix`, either FFT,
+  or `edstats`. Their manifest rows retain the detected `n_metals`, set
   `metal_site_limit_exceeded=true`, carry the matching reason code, and
   contribute no site, bond, candidate, or confidence rows. This is a successful
   policy exclusion: metal-dense assemblies contain highly correlated sites that
   would otherwise dominate the standard database cohort and its runtime.
   Progress and completion summaries report the excluded-entry count separately.
-- Targeted and capped runs, and any run with `--no-bonds`, exit nonzero when
-  any entry ends as `error`, `skip`, or a retryable `partial`. An uncapped
-  database run that builds a confidence reference treats explicitly
-  deterministic processing errors as documented terminal exclusions: when no
-  missing, interrupted, or otherwise retryable work remains, it finalizes the
-  confidence reference and exits successfully. Unknown and unexpected errors,
-  worker deaths, skips, and retryable partials remain nonzero.
-- The exit code is `0` for a complete batch, `1` when entries remain
-  incomplete under the rule above or when the driver stops on a fatal error
-  before or during the batch (a busy output lock, a CCP4 setup that cannot be
-  resolved, incompatible existing outputs under `--resume`, a crystallization
-  metadata fetch failure, or an unwritable `--log-file`), and `130` after an
-  interrupt. The run report records the driver error in every case.
+- Targeted and capped runs, and any run with `--no-bonds`, exit nonzero when any
+  entry ends as `error`, `skip`, or a retryable `partial`. An uncapped database
+  run that builds a confidence reference treats explicitly deterministic
+  processing errors as documented terminal exclusions: when no missing,
+  interrupted, or otherwise retryable work remains, it finalizes the confidence
+  reference and exits successfully. Unknown and unexpected errors, worker
+  deaths, skips, and retryable partials remain nonzero.
+- The exit code is `0` for a complete batch, `1` when entries remain incomplete
+  under the rule above or when the driver stops on a fatal error before or
+  during the batch (a busy output lock, a CCP4 setup that cannot be resolved,
+  incompatible existing outputs under `--resume`, a crystallization metadata
+  fetch failure, or an unwritable `--log-file`), and `130` after an interrupt.
+  The run report records the driver error in every case.
 
 ## Protect the output directory and scratch data
 
@@ -186,17 +181,16 @@ reference data, see [Reference-data maintenance](maintenance.md).
   lease uses `flock` on POSIX and a non-blocking byte-range lock on Windows.
   Across a network filesystem it is only as reliable as that filesystem's lock
   support, so two cluster nodes pointed at one `--output-dir` may both believe
-  they own it and both truncate the result CSVs. Give
-  concurrent runs separate output directories rather than relying on the lease
-  to arbitrate between hosts. A run takes a
-  non-blocking advisory lease on `OUTPUT_DIR/.alchemy.lock` before it reads,
-  replaces, or resumes any result file. A second run fails immediately and
-  reports the current owner's process, host, start time, and command instead of
-  touching those results. The lock file intentionally remains after exit; the
-  operating-system lease, not the file's presence, determines whether the
-  directory is busy, and the lease is released automatically if the process
-  exits or crashes. Alchemy refuses a lock path that is a symbolic link or
-  Windows reparse point, a non-regular file, or an inode with multiple hard
+  they own it and both truncate the result CSVs. Give concurrent runs separate
+  output directories rather than relying on the lease to arbitrate between
+  hosts. A run takes a non-blocking advisory lease on `OUTPUT_DIR/.alchemy.lock`
+  before it reads, replaces, or resumes any result file. A second run fails
+  immediately and reports the current owner's process, host, start time, and
+  command instead of touching those results. The lock file intentionally remains
+  after exit; the operating-system lease, not the file's presence, determines
+  whether the directory is busy, and the lease is released automatically if the
+  process exits or crashes. Alchemy refuses a lock path that is a symbolic link
+  or Windows reparse point, a non-regular file, or an inode with multiple hard
   links; POSIX additionally requires current-user ownership. Recording lease
   metadata therefore cannot overwrite another file through that path.
 - Startup cleanup removes only Alchemy scratch directories carrying a valid
@@ -224,13 +218,13 @@ reference data, see [Reference-data maintenance](maintenance.md).
   else—an `OSError`, a `MemoryError`, or most `RuntimeError` failures from a
   CCP4 program—may describe the machine rather than the entry and is reported as
   `unexpected_processing_error`. Known CCP4 diagnostics that identify fixed
-  entry or compiled-tool limitations, such as MAPMASK's `maxsec` bound and
-  FFT's absence of acceptable reflections, are deterministic. The distinction
-  is advisory for resume and does not change what `--resume` does: every
-  `error` entry is retried either way because a
-  resumed run may have been given a repaired input file or a re-downloaded
-  mirror entry, and Alchemy does not checksum its inputs to tell. Skipping an
-  entry the operator had just fixed would be worse than repeating one.
+  entry or compiled-tool limitations, such as MAPMASK's `maxsec` bound and FFT's
+  absence of acceptable reflections, are deterministic. The distinction is
+  advisory for resume and does not change what `--resume` does: every `error`
+  entry is retried either way because a resumed run may have been given a
+  repaired input file or a re-downloaded mirror entry, and Alchemy does not
+  checksum its inputs to tell. Skipping an entry the operator had just fixed
+  would be worse than repeating one.
 - The manifest's `status_detail` column gives a bounded human-readable
   explanation of the machine-readable reason codes. It covers expected partial
   limitations as well as failures; `warning_codes` remains reserved for
@@ -245,16 +239,16 @@ reference data, see [Reference-data maintenance](maintenance.md).
 ## Handle schema and metadata changes
 
 - Output-schema migrations are not appended onto older artifacts. `--resume`
-  refuses to mix rows with incompatible headers or with missing
-  crystallization outputs; use a new `--output-dir` for the first run after
-  this migration. Headers are compared in full, including the EDSTATS block of
+  refuses to mix rows with incompatible headers or with missing crystallization
+  outputs; use a new `--output-dir` for the first run after this migration.
+  Headers are compared in full, including the EDSTATS block of
   `metal_sites_all.csv`, so appended rows cannot be silently misaligned by
   output from a different build.
 - Original-PDB crystallization metadata for normal PDB-REDO runs are fetched
   before worker processes start and retained under `--pdb-metadata-cache`.
   Manual-input runs use the supplied coordinate file and any existing cache
-  entry without adding a network prerequisite. A network or cache-write
-  failure stops the run before stale outputs are cleared, avoiding a silently
+  entry without adding a network prerequisite. A network or cache-write failure
+  stops the run before stale outputs are cleared, avoiding a silently
   low-coverage condition report. For a deliberately offline run,
   `--no-crystallization-download` uses valid cached records and coordinate-file
   fallbacks only. Delete selected cache JSON files (or use a fresh cache path)

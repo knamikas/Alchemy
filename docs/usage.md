@@ -1,8 +1,8 @@
 # Usage
 
-Choose an input mode, then configure the options that apply to your run. For
-the calculations that Alchemy performs, see the [method reference](method.md).
-For batch execution and recovery, see the [operations guide](operations.md).
+Choose an input mode, then configure the options that apply to your run. For the
+calculations that Alchemy performs, see the [method reference](method.md). For
+batch execution and recovery, see the [operations guide](operations.md).
 
 ## Input modes
 
@@ -32,8 +32,8 @@ the absolute path to the CCP4 setup script.
 
 Use `--id` for one entry or `--id-file` for a list. A local mirror is optional.
 Alchemy checks the mirror if `--pdb-redo-root` is supplied, then checks
-`--pdb-redo-cache` and downloads any missing PDB-REDO files into that cache.
-The cache defaults to `pdb-redo-cache/` in the checkout.
+`--pdb-redo-cache` and downloads any missing PDB-REDO files into that cache. The
+cache defaults to `pdb-redo-cache/` in the checkout.
 
 ```bash
 ./alchemy --id 9myr --ccp4-setup SETUP_SCRIPT
@@ -45,8 +45,8 @@ The ID file can contain comma-, whitespace-, or newline-separated PDB IDs.
 ### Process manual files
 
 Use `--mtz-file` with either `--pdb-file` or `--cif-file`, never both; the
-command rejects the pair. Manual mode processes one structure, so don't
-combine it with `--id-file`.
+command rejects the pair. Manual mode processes one structure, so don't combine
+it with `--id-file`.
 
 For an mmCIF input, replace `PDB_ID` with the four-character entry ID and run:
 
@@ -59,8 +59,8 @@ For an mmCIF input, replace `PDB_ID` with the four-character entry ID and run:
     --ccp4-setup SETUP_SCRIPT
 ```
 
-Omit `--id` if Alchemy can infer a four-character PDB ID from the filenames.
-The optional `--data-json` file must contain a top-level `properties` object.
+Omit `--id` if Alchemy can infer a four-character PDB ID from the filenames. The
+optional `--data-json` file must contain a top-level `properties` object.
 Alchemy uses its PDB-REDO metadata to calculate the diffraction precision index
 (DPI). If you omit the file, Alchemy still measures and emits contact distances,
 but DPI and derived z-scores remain unavailable. The manifest reports

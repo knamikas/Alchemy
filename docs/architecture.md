@@ -9,8 +9,8 @@ outputs.
 This page maps execution and ownership; [architecture.png](architecture.png)
 renders the same lanes as one picture. For scientific rules, see the
 [method reference](method.md); for CSV fields, see the
-[output schema](output-schema.md); for retries and resource controls, see
-the [operations guide](operations.md).
+[output schema](output-schema.md); for retries and resource controls, see the
+[operations guide](operations.md).
 
 ## Execution and data flow
 
@@ -27,55 +27,55 @@ Inputs come from the mirror, downloaded cache, or manual files.
 [rcsb_metadata_cache.py](../src/rcsb_metadata_cache.py) warms the original-PDB
 metadata cache before workers start, and
 [crystallization_conditions.py](../src/crystallization_conditions.py) reads it
-for crystallization context. `reference_data.py` and
-`src/data/` provide the cofactor catalog and distance table used in batch
-preparation, metal identification, and coordination analysis. Identification
-and coordination share the loaded structure context; confidence scoring uses a
-frozen reference when applicable.
+for crystallization context. `reference_data.py` and `src/data/` provide the
+cofactor catalog and distance table used in batch preparation, metal
+identification, and coordination analysis. Identification and coordination share
+the loaded structure context; confidence scoring uses a frozen reference when
+applicable.
 
 ### Startup and scheduling
 
 1. [The launcher](../alchemy) adds `src/` to the import path and calls
-   [main.py](../src/main.py), which delegates to
-   [cli.py](../src/cli.py). The CLI validates arguments into an immutable
-   `RunConfig`, configures diagnostics, and creates the run report object.
+   [main.py](../src/main.py), which delegates to [cli.py](../src/cli.py). The
+   CLI validates arguments into an immutable `RunConfig`, configures
+   diagnostics, and creates the run report object.
 2. [driver/pool.py](../src/driver/pool.py) orchestrates the batch. Its
    collaborators are [driver/layout.py](../src/driver/layout.py) for output
    paths, [driver/entries.py](../src/driver/entries.py) for entry selection,
-   [driver/confidence.py](../src/driver/confidence.py) for the confidence
-   plan, and [driver/report.py](../src/driver/report.py) for the batch
-   summary and confidence finalization. The pool loads the bundled cofactor
-   catalog and resolves the CCP4 environment through
-   [driver/environment.py](../src/driver/environment.py), which also records
-   the Alchemy, Gemmi, and CCP4 versions for provenance.
-   [ccp4_setup.py](../src/ccp4_setup.py) locates the setup script for it:
-   the `--ccp4-setup` option, the `CCP4_SETUP` environment variable, the path
-   saved by `--configure-ccp4`, then common install locations.
-   `--configure-ccp4` saves the setup path and exits before analysis. A
-   `DriverError` from [driver/errors.py](../src/driver/errors.py) at any
-   startup step ends the run with exit code 1.
+   [driver/confidence.py](../src/driver/confidence.py) for the confidence plan,
+   and [driver/report.py](../src/driver/report.py) for the batch summary and
+   confidence finalization. The pool loads the bundled cofactor catalog and
+   resolves the CCP4 environment through
+   [driver/environment.py](../src/driver/environment.py), which also records the
+   Alchemy, Gemmi, and CCP4 versions for provenance.
+   [ccp4_setup.py](../src/ccp4_setup.py) locates the setup script for it: the
+   `--ccp4-setup` option, the `CCP4_SETUP` environment variable, the path saved
+   by `--configure-ccp4`, then common install locations. `--configure-ccp4`
+   saves the setup path and exits before analysis. A `DriverError` from
+   [driver/errors.py](../src/driver/errors.py) at any startup step ends the run
+   with exit code 1.
 3. The driver creates the output directory if needed, then acquires the
-   output-directory lock before reading or writing any run output. It determines the confidence mode, checks resume compatibility,
-   and selects entries from the requested input mode. Completed entries may
-   be excluded by resume policy.
+   output-directory lock before reading or writing any run output. It determines
+   the confidence mode, checks resume compatibility, and selects entries from
+   the requested input mode. Completed entries may be excluded by resume policy.
 4. Crystallization metadata is prefetched before expensive analysis. Manual
    input mode uses coordinate records and existing cache entries without
    downloading original-PDB metadata.
-5. [driver/resources.py](../src/driver/resources.py) estimates entry memory
-   from each entry's metadata and chooses a worker-process ceiling within the
-   memory budget. [driver/memory_admission.py](../src/driver/memory_admission.py)
-   then controls how many entries are active at once, backing off under memory
-   pressure and recovering afterwards; the worker count alone does not
-   determine concurrency.
+5. [driver/resources.py](../src/driver/resources.py) estimates entry memory from
+   each entry's metadata and chooses a worker-process ceiling within the memory
+   budget. [driver/memory_admission.py](../src/driver/memory_admission.py) then
+   controls how many entries are active at once, backing off under memory
+   pressure and recovering afterwards; the worker count alone does not determine
+   concurrency.
 
 ### One entry
 
 [worker.py](../src/worker.py) owns the entry lifecycle and its temporary
-directory. The pool initializer installs `WorkerConfig` and logging once in
-each process; subsequent tasks call `process()` with a PDB ID. Input
-resolution lives in [worker_inputs.py](../src/worker_inputs.py) and the
-analysis stages in [worker_stages.py](../src/worker_stages.py); `worker.py`
-folds their outcomes into the `EntryResult`.
+directory. The pool initializer installs `WorkerConfig` and logging once in each
+process; subsequent tasks call `process()` with a PDB ID. Input resolution lives
+in [worker_inputs.py](../src/worker_inputs.py) and the analysis stages in
+[worker_stages.py](../src/worker_stages.py); `worker.py` folds their outcomes
+into the `EntryResult`.
 
 [worker_inputs.py](../src/worker_inputs.py) uses [inputs.py](../src/inputs.py)
 to locate or retrieve files and read reflection limits and PDB-REDO metadata.
@@ -85,12 +85,12 @@ conversion and first-model extraction, recording source-residue provenance in
 writer and parser alike. Both EDSTATS and
 [structure_analysis.py](../src/structure_analysis.py) use that prepared model.
 `structure_analysis.py` is the facade for structure loading: the analyzed-model
-types live in [structure_model.py](../src/structure_model.py), the loading
-steps in [structure_loading.py](../src/structure_loading.py), raw PDB record
-fields in [pdb_records.py](../src/pdb_records.py), and conformer choice in
-[conformer_selection.py](../src/conformer_selection.py).
-The original coordinate path is retained for deposited connection records,
-crystallization context, and provenance.
+types live in [structure_model.py](../src/structure_model.py), the loading steps
+in [structure_loading.py](../src/structure_loading.py), raw PDB record fields in
+[pdb_records.py](../src/pdb_records.py), and conformer choice in
+[conformer_selection.py](../src/conformer_selection.py). The original coordinate
+path is retained for deposited connection records, crystallization context, and
+provenance.
 
 After loading the structure and extracting crystallization context, the worker
 checks whether analysis can proceed (the early-exit, density, and bond stages
@@ -100,11 +100,11 @@ above `MAX_ANALYZED_METAL_SITES` also return early with an explicit reason.
 These paths avoid map generation and contact analysis.
 
 For analyzable entries, the worker runs density analysis, extracts metal
-statistics, then evaluates contacts. It passes the same `StructureContext`
-to identification and coordination analysis so their atom selection and
-coordinate provenance agree. Finally, it merges site summaries into the
-statistics rows and returns an `EntryResult` containing rows, status, counts,
-timings, warnings, and provenance.
+statistics, then evaluates contacts. It passes the same `StructureContext` to
+identification and coordination analysis so their atom selection and coordinate
+provenance agree. Finally, it merges site summaries into the statistics rows and
+returns an `EntryResult` containing rows, status, counts, timings, warnings, and
+provenance.
 
 ## External CCP4 execution
 
@@ -123,8 +123,8 @@ Map generation and density extraction proceed as follows:
 4. `edstats_statistics.py` extracts metal-site rows and density context from
    those statistics.
 
-Twin normalization is a guarded recovery path after MTZFIX validation fails
-for an entry explicitly marked twinned in PDB-REDO metadata. Each CCP4 invocation
+Twin normalization is a guarded recovery path after MTZFIX validation fails for
+an entry explicitly marked twinned in PDB-REDO metadata. Each CCP4 invocation
 has its own timeout. Maps and intermediate files belong to the worker's scratch
 directory and are normally deleted after extraction; `--keep-intermediates`
 preserves them.
@@ -154,8 +154,8 @@ metadata. Its collaborators have distinct responsibilities:
 | [schema.py](../src/coordination/schema.py) | Define contact/site output columns and serialize their values. |
 
 Proximity candidates and declared connections are merged before assessment.
-Candidate evidence is broader than assigned bonds. Geometry summaries feed
-both the metal-site output and downstream confidence preparation.
+Candidate evidence is broader than assigned bonds. Geometry summaries feed both
+the metal-site output and downstream confidence preparation.
 
 ## Outputs, confidence, and recovery
 
@@ -165,8 +165,8 @@ crystallization, density-context, and optional confidence rows. The manifest row
 is written last as the entry's completion marker. Entries are collected as they
 finish, so output order is not guaranteed to match input order.
 
-[confidence_score/](../src/confidence_score/) runs in the driver and uses
-the returned site and bond evidence:
+[confidence_score/](../src/confidence_score/) runs in the driver and uses the
+returned site and bond evidence:
 
 | Run mode | Confidence behavior |
 | --- | --- |
@@ -185,18 +185,18 @@ Recovery spans several layers:
   timeouts or MTZFIX validation failures. A bond-stage failure preserves density
   rows already produced. Other entry exceptions become entry outcomes rather
   than stopping the whole batch.
-- [driver/dispatch.py](../src/driver/dispatch.py) runs the worker pool,
-  admits entries as memory permits, monitors worker deaths, and records
-  retryable failures for tasks that cannot return a result. It manages worker
-  and CCP4 process shutdown.
+- [driver/dispatch.py](../src/driver/dispatch.py) runs the worker pool, admits
+  entries as memory permits, monitors worker deaths, and records retryable
+  failures for tasks that cannot return a result. It manages worker and CCP4
+  process shutdown.
 - [driver/resume.py](../src/driver/resume.py) validates existing outputs and
   stages replacements; an unsuccessful retry does not overwrite a protected
   previous result.
 - [driver/output_lock.py](../src/driver/output_lock.py) provides exclusive
   output ownership. [scratch.py](../src/scratch.py) creates the marked scratch
-  directories workers and resume staging use, and sweeps the ones an earlier
-  run left behind; it lives outside the driver so the worker does not import
-  driver code.
+  directories workers and resume staging use, and sweeps the ones an earlier run
+  left behind; it lives outside the driver so the worker does not import driver
+  code.
 - [run_logging.py](../src/run_logging.py) carries worker diagnostics to driver
   logging. [driver/runlog.py](../src/driver/runlog.py) writes the run report
   file and its per-entry diagnostics CSV through the CLI's cleanup path,
@@ -225,11 +225,13 @@ Recovery spans several layers:
 | [_version.py](../src/_version.py) | Software version used in provenance. |
 
 The maintenance tools are separate entry points, never automatic pipeline
-stages. [build_metallocofactor_catalog.py](../tools/build_metallocofactor_catalog.py)
-rebuilds the bundled cofactor catalog; [stamp_distance_table.py](../tools/stamp_distance_table.py)
-updates or checks distance-table metadata. Normal runs verify and read their
-committed artifacts through `reference_data.py`. See
-[reference-data maintenance](maintenance.md) before changing those artifacts.
+stages.
+[build_metallocofactor_catalog.py](../tools/build_metallocofactor_catalog.py)
+rebuilds the bundled cofactor catalog;
+[stamp_distance_table.py](../tools/stamp_distance_table.py) updates or checks
+distance-table metadata. Normal runs verify and read their committed artifacts
+through `reference_data.py`. See [reference-data maintenance](maintenance.md)
+before changing those artifacts.
 
 The `confidence_score` package also exposes standalone `finalize` and `score`
 subcommands for prepared confidence-input files, run as
