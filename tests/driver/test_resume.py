@@ -1031,7 +1031,12 @@ def test_stale_bond_outputs_are_removed_only_by_a_fresh_disabled_run(
 
 def test_removing_absent_bond_outputs_is_not_an_error(tmp_path: Path) -> None:
     paths = [str(tmp_path / "absent.csv")]
-    assert resume.remove_stale_disabled_bond_outputs(paths, False, False) == []
+    assert (
+        resume.remove_stale_disabled_bond_outputs(
+            paths, resume=False, bonds_enabled=False
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,16 @@
-"""Validate previous output and replace completed entries during resume.
+"""Check a previous run's outputs and merge retried entries into them on resume.
 
-A manifest row marks entry completion. Blank stage counts mean unrun stages;
-zero means measured absence. Stage retries separately and merge only entries
-whose manifest rows were written.
+Three rules govern resume:
+
+- A manifest row is an entry's completion marker. An entry without one, or
+  with an incomplete one, is retried, and rows it left in other outputs are
+  discarded by the merge.
+- In the manifest's stage counts, blank means the stage never ran and zero
+  means it ran and found nothing. A blank bond count is why a density-only
+  entry is revisited when bonds are enabled.
+- Retries write to a staging directory, and only entries whose manifest row
+  was written there are merged back, data files first and the manifest last,
+  so an interruption at any point leaves the entry retryable.
 """
 
 import contextlib
@@ -49,12 +57,17 @@ def _csv_text(row: _CsvRow, column: str) -> str:
 
 
 class _ManifestRow:
-    """One complete manifest row, read through the fields resume decides by.
+    """One complete manifest row, exposing the fields resume decides by.
 
-    The text accessors never fail, because an older manifest may lack a column
-    and a row that is not protected is never inspected further. The typed
-    accessors raise ``ValueError`` naming the entry: they run only on terminal
-    rows, whose fields must be trustworthy before resume can append.
+    There are two tiers of accessor. ``text`` and the properties built on it
+    return a cell's text and never raise; a missing column reads as blank. They
+    are safe on any row, including one from an older manifest, and they are all
+    that is needed to decide whether a row is terminal.
+
+    ``count``, ``flag``, and ``metal_site_limit_exceeded`` parse that text and
+    raise ``ValueError`` naming the entry when it is malformed. They are called
+    only on terminal rows, because those are the rows resume will keep, so
+    their fields must be trustworthy.
     """
 
     def __init__(self, row: _CsvRow) -> None:
@@ -106,11 +119,8 @@ class _ManifestRow:
             return 0
         try:
             count = int(value)
-        except ValueError as exc:
-            raise ValueError(
-                f"Existing manifest has invalid {column}={value!r} for {self.pdb_id}; "
-                "resume requires a non-negative integer."
-            ) from exc
+        except ValueError:
+            count = -1
         if count < 0:
             raise ValueError(
                 f"Existing manifest has invalid {column}={value!r} for {self.pdb_id}; "
@@ -162,6 +172,7 @@ def _manifest_rows(path: str) -> Iterator[_ManifestRow]:
 
 def load_done(
     manifest_path: str,
+    *,
     bonds_required: bool = False,
     bond_output_present: bool = True,
     candidate_output_present: bool = True,
@@ -176,9 +187,9 @@ def load_done(
     because inputs or software may have been repaired.
     """
     retry_partial_ids = {
-        str(pdb_id).strip().lower()
+        normalized
         for pdb_id in retry_partial_ids
-        if str(pdb_id).strip()
+        if (normalized := pdb_id.strip().lower())
     }
     bond_outputs_present = bond_output_present and candidate_output_present
     done: set[str] = set()
@@ -209,6 +220,11 @@ def manifest_values_by_id(path: str, column: str) -> dict[str, str]:
 
 
 def _csv_header(path: str) -> list[str] | None:
+    """The header row of a CSV; ``None`` when the file is absent or empty.
+
+    Callers treat no header as "the stage has not written yet" and a wrong
+    header as an incompatible schema, so the two must stay distinguishable.
+    """
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
     with open(path, newline="", encoding="utf-8") as handle:
@@ -413,17 +429,12 @@ def validate_resume_schemas(
             continue
         missing = [column for column in expected if column not in header]
         unexpected = [column for column in header if column not in expected]
-        difference = (
-            "; ".join(
-                part
-                for part in (
-                    "missing " + ", ".join(missing) if missing else "",
-                    "unexpected " + ", ".join(unexpected) if unexpected else "",
-                )
-                if part
-            )
-            or "the same columns in a different order"
-        )
+        parts: list[str] = []
+        if missing:
+            parts.append("missing " + ", ".join(missing))
+        if unexpected:
+            parts.append("unexpected " + ", ".join(unexpected))
+        difference = "; ".join(parts) or "the same columns in a different order"
         raise ValueError(
             f"Existing {os.path.basename(path)} uses an incompatible schema "
             f"({difference}). Its rows were written by a different Alchemy "
@@ -460,7 +471,7 @@ def validate_resume_schemas(
 
 
 def remove_stale_disabled_bond_outputs(
-    paths: Iterable[str], resume: bool, bonds_enabled: bool
+    paths: Iterable[str], *, resume: bool, bonds_enabled: bool
 ) -> list[str]:
     """Remove previous bond-stage CSVs before a fresh run with bonds disabled.
 
@@ -477,12 +488,22 @@ def remove_stale_disabled_bond_outputs(
     return removed
 
 
+def _require_id_column(header: Sequence[str], path: str) -> None:
+    """Refuse to merge a CSV whose first column is not the entry ID."""
+    if not header or header[0] != "pdbID":
+        raise ValueError(
+            f"{os.path.basename(path)} does not lead with pdbID, so its rows "
+            "cannot be matched to entries for replacement"
+        )
+
+
 def _merge_csv_replacements(
     path: str, staged_path: str, pdb_ids: Iterable[str]
 ) -> None:
     """Atomically replace selected IDs with rows from a completed staging file.
 
-    Rows for IDs absent from ``pdb_ids`` are copied verbatim.
+    Rows for IDs absent from ``pdb_ids`` are copied verbatim. Rows are matched
+    on their first cell, so every merged output must lead with ``pdbID``.
     """
     replacement_ids = {pdb_id.lower() for pdb_id in pdb_ids}
     if not replacement_ids:
@@ -510,6 +531,7 @@ def _merge_csv_replacements(
                     reader = csv.reader(src)
                     destination_header = next(reader, None)
                     if destination_header is not None:
+                        _require_id_column(destination_header, path)
                         writer.writerow(destination_header)
                     for row in reader:
                         if row and row[0].strip().lower() in replacement_ids:
@@ -521,6 +543,7 @@ def _merge_csv_replacements(
                     reader = csv.reader(staged)
                     staged_header = next(reader, None)
                     if destination_header is None and staged_header is not None:
+                        _require_id_column(staged_header, staged_path)
                         destination_header = staged_header
                         writer.writerow(staged_header)
                     elif (
@@ -537,7 +560,9 @@ def _merge_csv_replacements(
         if original_mode is not None:
             os.chmod(tmp_path, original_mode)
         os.replace(tmp_path, path)
-    except Exception:
+    except BaseException:
+        # Also on an interrupt: the temp file is not scratch, so nothing else
+        # would ever remove it.
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
