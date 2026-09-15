@@ -73,29 +73,30 @@ def configure_ccp4(args: RunConfig) -> bool:
 
 def _resolve_ccp4_environment(args: RunConfig) -> dict[str, str]:
     """Resolve the CCP4 environment, raising ``Ccp4SetupError`` on any failure."""
-    environment = os.environ.copy()
+    inherited = os.environ.copy()
 
-    # Validate explicit setup before PATH so a bad override cannot select another install.
+    # Validate an explicit setup script before looking at PATH, so that a bad
+    # override cannot silently select another install.
     if args.ccp4_setup:
         setup_path = _existing_setup_path(args.ccp4_setup)
         env = resolve_env(setup_path)
         _verify_resolved_ccp4(env, setup_path)
         return env
 
-    if ccp4_tools_available(environment):
-        return environment
+    if ccp4_tools_available(inherited):
+        return inherited
 
-    ccp4_setup = find_ccp4_setup(env=environment, config=load_ccp4_setup_config())
-    if ccp4_setup is None:
+    detected = find_ccp4_setup(env=inherited, config=load_ccp4_setup_config())
+    if detected is None:
         raise Ccp4SetupError(
             f"Required CCP4 tools ({', '.join(REQUIRED_CCP4_TOOLS)}) were not "
             "found on PATH and no setup file could be auto-detected. "
             "Set them up once with --configure-ccp4 /path/to/ccp4.setup-sh, "
-            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in\n"
+            "export CCP4_SETUP=/path/to/ccp4.setup-sh, or source CCP4 in "
             "your shell before running."
         )
-    env = resolve_env(ccp4_setup)
-    verify_ccp4(env)
+    env = resolve_env(detected)
+    _verify_resolved_ccp4(env, detected)
     return env
 
 
@@ -107,29 +108,35 @@ def resolve_ccp4_environment(args: RunConfig) -> dict[str, str]:
         raise DriverError(str(exc)) from None
 
 
-def alchemy_commit() -> str:
-    """Return the abbreviated source commit with a dirty-worktree marker."""
+def _git_output(*arguments: str) -> str | None:
+    """Return a git command's stdout, or None when it fails or times out."""
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "--short=12", "HEAD"],
+            ["git", *arguments],
             cwd=REPO_DIR,
             capture_output=True,
             text=True,
             check=True,
             timeout=PROVENANCE_COMMAND_TIMEOUT_S,
         )
-        commit = completed.stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=PROVENANCE_COMMAND_TIMEOUT_S,
-        )
-        return commit + ("+dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip()
+
+
+def alchemy_commit() -> str:
+    """Return the abbreviated source commit with a worktree-state marker.
+
+    ``+dirty`` marks tracked changes. A commit whose worktree state could not
+    be determined in time keeps its hash and is marked ``+unknown-state``.
+    """
+    commit = _git_output("rev-parse", "--short=12", "HEAD")
+    if not commit:
         return "unknown"
+    status = _git_output("status", "--porcelain", "--untracked-files=no")
+    if status is None:
+        return commit + "+unknown-state"
+    return commit + ("+dirty" if status else "")
 
 
 def gemmi_version() -> str:
