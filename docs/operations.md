@@ -62,6 +62,11 @@ reference data, see [Reference-data maintenance](maintenance.md).
   drains. It pauses new admission whenever measured headroom reaches the
   protected reserve. After a pressure event or unexplained worker death, it
   lowers the admission budget until sustained headroom permits gradual recovery.
+  A worker that dies while holding an entry is noticed within a poll and the
+  entry is recorded as `worker_process_died`. If the dying worker never said
+  which entry it held, the driver waits until no result has arrived for ten
+  minutes before writing off the outstanding entries, so a slow but healthy
+  entry is not blamed on an unrelated death.
   Reserve fluctuations count as one pressure episode until availability stays
   above the reserve plus a margin for 30 seconds. Recovery is bounded by the
   original budget and current headroom; an explicitly oversized entry running

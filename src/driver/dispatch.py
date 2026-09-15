@@ -95,7 +95,11 @@ def _pool_children(pool: WorkerPool) -> list[Any]:
 
 
 def dead_worker_pids(pool: WorkerPool, known_pids: set[int]) -> set[int]:
-    """Return worker pids that have disappeared since the last check."""
+    """Return worker pids that have disappeared since the last check.
+
+    ``known_pids`` is the caller's memory of the previous roster and is
+    replaced in place with the current one, so each death is reported once.
+    """
     current = {child.pid for child in _pool_children(pool)}
     if not current:
         return set()
@@ -226,9 +230,7 @@ class BatchTally:
         incomplete = (
             self.recoverable_incompleteness()
             if database_run
-            else self.counts.get("error", 0)
-            + self.counts.get("skip", 0)
-            + self.retryable_partials
+            else self.counts["error"] + self.counts["skip"] + self.retryable_partials
         )
         return batch_exit_code(incomplete)
 
@@ -237,11 +239,7 @@ class BatchTally:
 
         Only explicitly deterministic failures are terminal for database completion.
         """
-        return (
-            self.counts.get("skip", 0)
-            + self.retryable_partials
-            + self.recoverable_errors
-        )
+        return self.counts["skip"] + self.retryable_partials + self.recoverable_errors
 
 
 class _WorkerDeathWatch:
@@ -272,6 +270,7 @@ class _WorkerDeathWatch:
         dead_worker_pids(self._pool, self._worker_pids)
 
     def track_submitted_entry(self, pdb_id: str) -> None:
+        """Make an entry eligible to be blamed on a death, once it is really submitted."""
         if pdb_id not in self._submitted_ids:
             self._submitted_ids.add(pdb_id)
             self._ids.append(pdb_id)
@@ -335,6 +334,7 @@ class _WorkerDeathWatch:
         return result.pdb_id in self._lost_ids and not is_worker_death_result(result)
 
     def _lose(self, pdb_id: str, pid: int) -> EntryResult:
+        """Mark an entry lost and synthesize the death result written on its behalf."""
         self._lost_ids.add(pdb_id)
         return worker_death_result(pdb_id, self._cfg, pid)
 
@@ -398,6 +398,7 @@ class _AdmissionLedger:
         )
 
     def has_idle_worker(self) -> bool:
+        """Whether a worker process is free to take an entry."""
         return len(self.active) < self.workers
 
     def runs_oversized_alone(self, budget_bytes: int | None) -> bool:
@@ -570,23 +571,35 @@ class _Dispatcher:
             WORKER_FIXED_OVERHEAD_BYTES,
             memory_plan.reserve_bytes,
         )
+        self.cfg = cfg
+        self.workers = workers
+        self.log_queue = create_worker_log_queue()
+        # Set by ``start``, so that every spawned process lives under the
+        # caller's try/finally and ``release`` can always reach it.
+        self.pool: WorkerPool | None = None
+        self.log_listener: QueueListener | None = None
+        self.deaths: _WorkerDeathWatch | None = None
+
+    def start(self) -> None:
+        """Spawn the pool, begin forwarding worker logs, and show the heartbeat."""
         # Use Python's default start method for platform compatibility.
         # Avoid Pool's context manager: its unbounded terminate can hang after a
         # worker dies with a queue lock held. ``release`` bounds shutdown.
-        # Start the log listener after the pool to avoid forking with active threads.
-        self.log_queue = create_worker_log_queue()
         self.pool = Pool(
-            workers,
+            self.workers,
             initializer=initialize_worker,
-            initargs=(cfg, self.inflight, self.log_queue),
+            initargs=(self.cfg, self.inflight, self.log_queue),
         )
-        self.log_listener: QueueListener | None = None
-        self.deaths = _WorkerDeathWatch(self.pool, self.inflight, cfg)
-
-    def start(self) -> None:
-        """Begin forwarding worker logs and show the heartbeat before any result."""
+        self.deaths = _WorkerDeathWatch(self.pool, self.inflight, self.cfg)
+        # Start the log listener after the pool to avoid forking with active threads.
         self.log_listener = start_worker_log_listener(self.log_queue)
         self.progress.render(self.completed, self.tally, force=True)
+
+    def _running(self) -> tuple[WorkerPool, _WorkerDeathWatch]:
+        """The pool and death watch, which exist once ``start`` has run."""
+        if self.pool is None or self.deaths is None:
+            raise RuntimeError("the dispatcher has not been started")
+        return self.pool, self.deaths
 
     def observe_memory(self) -> tuple[bool, int | None]:
         """Measure headroom and let the admission controller react to it.
@@ -621,7 +634,11 @@ class _Dispatcher:
         ``current_available`` is the dispatcher's latest reading; memory is
         measured again only after an admission, since only then has it changed.
         """
+        pool, deaths = self._running()
         while self.pending and self.ledger.has_idle_worker():
+            # The controller applied this same rule once for this poll in
+            # ``observe_memory``; re-applying it here catches the headroom each
+            # admission consumes before the next poll. It records no pause.
             if (
                 self.ledger.active
                 and self.memory_plan.reserve_bytes is not None
@@ -645,10 +662,8 @@ class _Dispatcher:
                     required_bytes / GIB,
                     self.admission.budget / GIB,
                 )
-            self.deaths.track_submitted_entry(estimate.pdb_id)
-            self.ledger.admit(
-                self.pool.apply_async(process, (estimate.pdb_id,)), estimate
-            )
+            deaths.track_submitted_entry(estimate.pdb_id)
+            self.ledger.admit(pool.apply_async(process, (estimate.pdb_id,)), estimate)
             current_available = guarded_available_memory(
                 self.memory_plan, available_memory_bytes()
             )
@@ -658,11 +673,12 @@ class _Dispatcher:
 
         Empty when nothing has landed and the run may still be making progress.
         """
+        _pool, deaths = self._running()
         batch = self.ledger.collect_ready()
-        batch.extend(self.deaths.poll())
+        batch.extend(deaths.poll())
         if batch:
             return batch
-        stalled = self.deaths.stalled_losses(
+        stalled = deaths.stalled_losses(
             self.completed_ids,
             time.monotonic() - self.last_progress,
             len(self.ledger.active),
@@ -681,8 +697,9 @@ class _Dispatcher:
                 old_budget, self.admission.budget, after_worker_death=True
             )
         self.last_progress = time.monotonic()
+        _pool, deaths = self._running()
         for result in batch:
-            if self.deaths.superseded(result, self.completed_ids):
+            if deaths.superseded(result, self.completed_ids):
                 continue
             self.completed += 1
             self.completed_ids.add(result.pdb_id)
@@ -727,7 +744,8 @@ class _Dispatcher:
 
     def release(self) -> None:
         """Stop the pool and log listener, then finish the progress line."""
-        _release_workers(self.pool, self.log_listener, self.log_queue, self.run_log)
+        if self.pool is not None:
+            _release_workers(self.pool, self.log_listener, self.log_queue, self.run_log)
         self.progress.close()
 
 
@@ -756,7 +774,9 @@ def dispatch_entries(
                 dispatcher.deliver(batch)
             else:
                 dispatcher.idle()
-        dispatcher.record_scheduler_summary()
     finally:
+        # Recorded however the batch ended: an interrupted run's peaks and
+        # pauses are the ones most worth reading.
+        dispatcher.record_scheduler_summary()
         dispatcher.release()
     return dispatcher.tally
