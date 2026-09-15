@@ -4,17 +4,13 @@
 See README.md and docs/ for setup, usage, methods, and output formats.
 """
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
-
 
 REPO_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_DIR / "src"))
 
-from main import main  # noqa: E402 - src is resolved relative to this launcher
-
+from cli import main  # noqa: E402 - src is resolved relative to this launcher
 
 if __name__ == "__main__":
     raise SystemExit(main())

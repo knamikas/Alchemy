@@ -21,7 +21,6 @@ import ccp4_setup
 import cli
 import confidence_score
 import density_analysis as density
-import main
 import scratch
 from driver import confidence as driver_confidence
 from driver import environment, errors
@@ -659,7 +658,7 @@ def test_unwritable_output_dir_exits_cleanly_naming_the_path(
     id_file.write_text("109m\n", encoding="utf-8")
 
     try:
-        exit_code = main.main(
+        exit_code = cli.main(
             [
                 "--id-file",
                 str(id_file),
@@ -687,7 +686,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
 ) -> None:
     """The sweep is wired into the driver, not merely available to it.
 
-    Driven through ``main.main`` so that deleting the call site fails the test.
+    Driven through ``cli.main`` so that deleting the call site fails the test.
     The run itself fails for want of a mirror: sweeping happens at startup, so
     even a failing run must leave the directory clean.
     """
@@ -704,7 +703,7 @@ def test_a_run_sweeps_leaked_scratch_before_processing(
     id_file = tmp_path / "ids.txt"
     id_file.write_text("109m\n", encoding="utf-8")
 
-    main.main(
+    cli.main(
         [
             "--id-file",
             str(id_file),

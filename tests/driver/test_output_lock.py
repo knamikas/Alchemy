@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from helpers import resolved_ccp4_environment
 
-import main
+import cli
 import scratch
 from driver import environment, output_lock
 
@@ -153,7 +153,7 @@ class TestOutputDirectoryLock:
         id_file.write_text("109m\n", encoding="utf-8")
 
         with output_lock.OutputDirectoryLock(str(output_dir), "active batch"):
-            exit_code = main.main(
+            exit_code = cli.main(
                 [
                     "--id-file",
                     str(id_file),

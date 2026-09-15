@@ -37,9 +37,9 @@ def logger_for(module_name: str) -> logging.Logger:
     configuration governs all of them, including the ones running in workers.
     """
     leaf = module_name.rsplit(".", 1)[-1]
-    # Use the same logger name whether main.py is run or imported.
+    # A module run as a script is named __main__; log it under its real name.
     if leaf == "__main__":
-        leaf = "main"
+        leaf = "cli"
     return logging.getLogger(f"{LOGGER_NAME}.{leaf}")
 
 

@@ -36,9 +36,8 @@ applicable.
 ### Startup and scheduling
 
 1. [The launcher](../alchemy) adds `src/` to the import path and calls
-   [main.py](../src/main.py), which delegates to [cli.py](../src/cli.py). The
-   CLI validates arguments into an immutable `RunConfig`, configures
-   diagnostics, and creates the run report object.
+   [cli.py](../src/cli.py). The CLI validates arguments into an immutable
+   `RunConfig`, configures diagnostics, and creates the run report object.
 2. [driver/pool.py](../src/driver/pool.py) orchestrates the batch. Its
    collaborators are [driver/layout.py](../src/driver/layout.py) for output
    paths, [driver/entries.py](../src/driver/entries.py) for entry selection,

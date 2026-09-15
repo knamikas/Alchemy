@@ -31,10 +31,10 @@ import helpers
 import pytest
 from helpers import approx
 
+import cli
 import confidence_score
 import crystallization_conditions
 import inputs
-import main
 import reference_data
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver import review_queue, runlog
@@ -223,7 +223,7 @@ def entry_cache(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 @dataclass
 class RunResult:
-    """One completed ``main.main`` invocation."""
+    """One completed ``cli.main`` invocation."""
 
     exit_code: int
     stdout: str
@@ -285,7 +285,7 @@ def run_alchemy(
     with _environment(ccp4_environ):
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = main.main(argv)
+                code = cli.main(argv)
         except SystemExit as exc:
             code = exc.code if isinstance(exc.code, int) else 1
     return RunResult(int(code or 0), out.getvalue(), err.getvalue(), output_dir)

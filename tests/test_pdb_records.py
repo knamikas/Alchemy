@@ -146,7 +146,7 @@ def test_blank_if_missing_blanks_every_missing_token(token: str) -> None:
 
 
 def test_blank_if_missing_covers_the_documented_token_set() -> None:
-    """The missing-value vocabulary is shared with main.py's mmCIF conversion."""
+    """The missing-value vocabulary is shared with the structure loader's mmCIF conversion."""
     assert set(pdb_records.MISSING_VALUE_TOKENS) == {"", " ", "\x00", ".", "?"}
 
 

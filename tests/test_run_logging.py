@@ -38,16 +38,16 @@ def test_module_loggers_share_one_configurable_root() -> None:
     governs all of them, including worker-only modules.
     """
     assert run_logging.logger_for("bond_analysis").name == "alchemy.bond_analysis"
-    assert run_logging.logger_for("alchemy.main").name == "alchemy.main"
+    assert run_logging.logger_for("alchemy.cli").name == "alchemy.cli"
 
 
 def test_the_script_entry_point_is_not_named_dunder_main() -> None:
     """Verify the script entry point receives the stable logger name.
 
-    Because ``main.py`` runs as ``__main__``, its raw module name would label
-    every driver record ``alchemy.__main__``.
+    A module run as a script is named ``__main__``, which would label every
+    driver record ``alchemy.__main__``.
     """
-    assert run_logging.logger_for("__main__").name == "alchemy.main"
+    assert run_logging.logger_for("__main__").name == "alchemy.cli"
 
 
 def test_records_are_bounded_regardless_of_level() -> None:

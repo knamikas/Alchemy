@@ -19,12 +19,10 @@ from helpers import simple_metal_site
 def test_src_modules_import() -> None:
     """Verify source modules import and expose their entry points."""
     import ccp4_setup
-    import cli
     import codes
     import confidence_score
     import density_analysis
     import edstats_statistics
-    import main
     import metal_elements
     import structure_analysis
     import worker
@@ -41,8 +39,6 @@ def test_src_modules_import() -> None:
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert policy.CANDIDATE_SEARCH_RADIUS == 4.0
     assert callable(structure_analysis.load_structure)
-    assert callable(main.main), "src/main.py must keep delegating to the CLI"
-    assert main.main is cli.main, "the entry point must delegate, not reimplement"
     assert callable(pool.run)
     assert callable(worker.process)
     assert writers.MANIFEST_COLUMNS[0] == "pdbID"

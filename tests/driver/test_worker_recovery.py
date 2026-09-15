@@ -28,7 +28,6 @@ import pytest
 
 import analysis_config
 import cli
-import main
 import reference_data
 import run_logging
 import worker
@@ -1179,7 +1178,7 @@ def _sigterm_driver_child(
     ready: MultiprocessingEvent,
     channel: multiprocessing.Queue[tuple[str, Any]],
 ) -> None:
-    """Run the real ``main.main`` with a slow stub so SIGTERM lands mid-run."""
+    """Run the real ``cli.main`` with a slow stub so SIGTERM lands mid-run."""
     if hasattr(os, "setsid"):
         os.setsid()
 
@@ -1188,7 +1187,7 @@ def _sigterm_driver_child(
     dispatch.process = _never_finishing_process  # type: ignore[attr-defined]
     ready.set()
     try:
-        channel.put(("exit_code", main.main(list(argv))))
+        channel.put(("exit_code", cli.main(list(argv))))
     except BaseException as exc:  # noqa: BLE001 - reported to the parent
         channel.put(("crash", f"{type(exc).__name__}: {exc}"))
 

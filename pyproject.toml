@@ -59,6 +59,8 @@ filterwarnings = [
 # Use the Ruff version pinned in the dev extra to keep formatting consistent.
 [tool.ruff]
 line-length = 88
+# The launcher has no .py extension, so name it explicitly.
+extend-include = ["alchemy"]
 target-version = "py311"
 
 [tool.ruff.lint]
