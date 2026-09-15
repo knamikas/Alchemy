@@ -730,7 +730,7 @@ class TestResumeStaging:
             else driver_confidence.ConfidencePlan()
         )
         run_log = RunLog(args, "pytest")
-        pool.commit_staged_entries(staging, args, plan, run_log, interrupted=True)
+        pool.commit_staged_entries(staging, args, plan, run_log, run_aborted=True)
         return run_log.summary
 
     def test_an_interrupted_resume_keeps_the_entries_it_completed(

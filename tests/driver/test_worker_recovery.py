@@ -1094,7 +1094,6 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         args,
         env,
         str(tmp_path / "root"),
-        str(tmp_path / "cache"),
         frozenset({"HEM"}),
         None,
         identity=driver_pool.AnalysisIdentity.current(),
@@ -1116,7 +1115,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         == reference_data.reference_data_checksums()["metal_distances_info.txt"]
     )
     assert cfg.input_root == str(tmp_path / "root")
-    assert cfg.pdb_redo_cache == str(tmp_path / "cache")
+    assert cfg.pdb_redo_cache == args.pdb_redo_cache
     assert cfg.pdb_metadata_cache == args.pdb_metadata_cache
     assert cfg.output_dir == str(tmp_path)
     assert cfg.env == env
@@ -1143,9 +1142,6 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         manual,
         env,
         str(tmp_path / "root"),
-        # A manual run never downloads, so this test gives it no cache root, but
-        # Both this factory and ``WorkerConfig.pdb_redo_cache`` declare ``str``.
-        None,  # type: ignore[arg-type]
         frozenset(),
         {"pdb_file": "a.pdb", "mtz_file": "a.mtz", "cif_file": None, "data_json": None},
         identity=driver_pool.AnalysisIdentity.current(),

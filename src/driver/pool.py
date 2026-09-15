@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from collections import Counter
 from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
@@ -75,9 +76,7 @@ def plan_entry_memory(
         memory_limit_bytes=args.memory_limit,
         utilization=args.memory_utilization,
     )
-    source_counts: dict[str, int] = {}
-    for estimate in estimates:
-        source_counts[estimate.source] = source_counts.get(estimate.source, 0) + 1
+    source_counts = Counter(estimate.source for estimate in estimates)
     largest = max(estimates, key=lambda estimate: estimate.bytes)
     high_memory_entries = sum(estimate.is_high_memory for estimate in estimates)
 
@@ -94,7 +93,7 @@ def plan_entry_memory(
         memory_scheduler_reserve_bytes=(
             reserve if reserve is not None else "unavailable"
         ),
-        memory_estimate_sources=source_counts,
+        memory_estimate_sources=dict(source_counts),
         memory_estimate_max_bytes=largest.bytes,
         memory_estimate_max_entry=largest.pdb_id,
         memory_high_memory_entries=high_memory_entries,
@@ -184,7 +183,11 @@ def _finish_without_entries(
     plan: confidence.ConfidencePlan,
     run_log: RunLog,
 ) -> int:
-    """Exit code for a run whose work list came back empty."""
+    """Finish a run with nothing to process: settle what a resume left behind.
+
+    Confidence inputs from an earlier run are finalized and the review queue is
+    rebuilt so that the outputs are complete. Such a run always succeeds.
+    """
     finalized = plan.finalize_resumed_inputs(layout, run_log, resume=args.resume)
     if finalized is not None:
         logger.info(
@@ -251,20 +254,20 @@ def choose_worker_count(
     if memory_limit is not None:
         workers = min(workers, memory_limit)
     memory_limit_detail = memory_limit if memory_limit is not None else "unavailable"
+    run_log.details["memory_worker_limit"] = memory_limit_detail
+    run_log.details["selected_workers"] = workers
     if args.workers is None:
         run_log.details["worker_selection"] = "automatic"
         run_log.details["cpu_worker_limit"] = cpu_limit
-        run_log.details["memory_worker_limit"] = memory_limit_detail
-        run_log.details["selected_workers"] = workers
-        logger.info("automatic worker selection:")
-        logger.info("  CPU worker limit: %s", cpu_limit)
-        logger.info("  memory worker limit: %s", memory_limit_detail)
-        logger.info("  selected workers: %s", workers)
+        logger.info(
+            "automatic worker selection: CPU limit %s, memory limit %s, selected %d",
+            cpu_limit,
+            memory_limit_detail,
+            workers,
+        )
     else:
         run_log.details["worker_selection"] = "explicit"
         run_log.details["requested_workers"] = args.workers
-        run_log.details["memory_worker_limit"] = memory_limit_detail
-        run_log.details["selected_workers"] = workers
         if workers < min(args.workers, entry_count):
             logger.info(
                 "capped the requested %d workers at %d to protect process "
@@ -301,7 +304,6 @@ def worker_config_from_args(
     args: RunConfig,
     env: dict[str, str],
     input_root: str,
-    pdb_redo_cache: str,
     cofactors: Collection[str],
     manual_inputs: dict[str, str | None] | None,
     *,
@@ -311,7 +313,7 @@ def worker_config_from_args(
     return WorkerConfig(
         input_root=input_root,
         pdb_redo_root=args.pdb_redo_root,
-        pdb_redo_cache=pdb_redo_cache,
+        pdb_redo_cache=args.pdb_redo_cache,
         env=env,
         output_dir=args.output_dir,
         cofactors=cofactors,
@@ -420,7 +422,7 @@ def should_write_entry(
     """
     if not resuming:
         return True
-    if str(result.pdb_id).strip().lower() not in prior_ids:
+    if result.pdb_id.lower() not in prior_ids:
         return True
     return resume_replacement_succeeded(result)
 
@@ -461,46 +463,50 @@ def commit_staged_entries(
     plan: confidence.ConfidencePlan,
     run_log: RunLog,
     *,
-    interrupted: bool,
+    run_aborted: bool,
 ) -> None:
     """Merge the staged rows of a resumed batch into the outputs.
 
     Only IDs with a written manifest row enter replacement_ids, so an entry
-    interrupted mid-write is left for the next resume. A failed merge keeps
-    the staging directory, which may hold the only copy of completed work,
-    and records where it is. After an interrupt the failure is logged and
-    swallowed so the interrupt stays the run's outcome; otherwise it is the
-    outcome, and propagates.
+    stopped mid-write is left for the next resume. A failed merge keeps the
+    staging directory, which may hold the only copy of completed work, and
+    records where it is.
+
+    ``run_aborted`` says the batch stopped early, whether by an interrupt or
+    by an error. Then a merge failure is logged and swallowed so that the
+    original cause stays the run's outcome; a second interrupt during the
+    merge itself still propagates. After a completed batch a merge failure is
+    the outcome, and propagates.
     """
     kept = len(staging.replacement_ids)
-    if interrupted and not kept:
+    if run_aborted and not kept:
         staging.discard()
         return
     try:
         staging.commit(args.bonds, confidence_enabled=plan.enabled)
     except BaseException as exc:
-        if interrupted and not isinstance(exc, Exception):
+        if run_aborted and not isinstance(exc, Exception):
             raise  # a second interrupt, during the merge itself
         run_log.summary.resume_staging_recovery_dir = staging.dir
         run_log.summary.resume_staging_commit_error = f"{type(exc).__name__}: {exc}"
-        if not interrupted:
+        if not run_aborted:
             logger.error(
                 "resume merge failed; completed rows retained in %s", staging.dir
             )
             raise
         logger.error(
-            "could not merge %d completed entries into the output after an "
-            "interrupted resume; their rows are left in %s",
+            "could not merge %d completed entries into the output after the run "
+            "stopped early; their rows are left in %s",
             kept,
             staging.dir,
         )
         return
     staging.discard()
-    if interrupted:
+    if run_aborted:
         run_log.summary.resume_entries_committed_after_interrupt = kept
         logger.warning(
-            "interrupted after %d completed entries; their rows were merged and "
-            "--resume will skip them",
+            "the run stopped early after %d completed entries; their rows were "
+            "merged and --resume will skip them",
             kept,
         )
 
@@ -594,11 +600,11 @@ def process_entries(
             processing_completed = True
     finally:
         if staging is not None and not processing_completed:
-            commit_staged_entries(staging, args, plan, run_log, interrupted=True)
+            commit_staged_entries(staging, args, plan, run_log, run_aborted=True)
 
     _record_written_outputs(run_log, layout, writers, bonds=args.bonds)
     if staging is not None:
-        commit_staged_entries(staging, args, plan, run_log, interrupted=False)
+        commit_staged_entries(staging, args, plan, run_log, run_aborted=False)
     return tally, writers
 
 
@@ -648,7 +654,6 @@ def _execute_with_output_lock(
         args,
         env,
         input_root,
-        args.pdb_redo_cache,
         cofactors,
         manual_inputs,
         identity=identity,
