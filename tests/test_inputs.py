@@ -63,6 +63,10 @@ def _data_json(entry_dir: str) -> str:
     return os.path.join(entry_dir, "data.json")
 
 
+def _resolution(mtz: str, data_json: str | None) -> float:
+    return inputs.read_entry_metadata(mtz, data_json).data_reshi
+
+
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
 def test_an_entry_is_final_only_with_both_inputs(
     tmp_path: Path, compressed: bool
@@ -155,6 +159,55 @@ def test_an_unreadable_hashdir_is_skipped_rather_than_fatal(
 
     monkeypatch.setattr("inputs.os.listdir", failing_listdir)
     assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
+
+
+def test_enumeration_trusts_only_the_mirror_layout(tmp_path: Path) -> None:
+    """A directory outside ``<id[1:3]>/<id>`` is not an entry, whatever it holds."""
+    _make_entry(tmp_path, "9myr")
+    stray = tmp_path / "my" / "scratch"
+    stray.mkdir()
+    (stray / "scratch_final.mtz").write_bytes(b"x")
+    (stray / "scratch_final.cif").write_bytes(b"x")
+    misfiled = tmp_path / "zz" / "6nlr"
+    misfiled.mkdir(parents=True)
+    (misfiled / "6nlr_final.mtz").write_bytes(b"x")
+    (misfiled / "6nlr_final.cif").write_bytes(b"x")
+
+    assert inputs.enumerate_entries(str(tmp_path)) == ["9myr"]
+
+
+def test_an_unusable_plain_file_does_not_hide_its_gzipped_sibling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A served page cached under the plain name must not shadow the real data."""
+    entry_dir = _make_entry(tmp_path, "9myr", mtz=False)
+    with open(os.path.join(entry_dir, "9myr_final.mtz"), "wb") as handle:
+        handle.write(b"<html>sign in</html>")
+    with open(os.path.join(entry_dir, "9myr_final.mtz.gz"), "wb") as handle:
+        handle.write(gzip.compress(b"MTZ real"))
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    monkeypatch.setattr(inputs, "cif_to_pdb", lambda _cif, dst: dst)
+
+    assert inputs.has_final_files(entry_dir, "9myr")
+    mtz = inputs.prepare_inputs("9myr", entry_dir, str(work_dir)).mtz
+    with open(mtz, "rb") as handle:
+        assert handle.read() == b"MTZ real"
+
+
+def test_a_corrupt_archive_is_a_missing_input_and_leaves_nothing_behind(
+    tmp_path: Path,
+) -> None:
+    """A truncated gzip raises ``EOFError``, which is not an ``OSError``."""
+    entry_dir = _make_entry(tmp_path, "9myr", mtz=False)
+    with open(os.path.join(entry_dir, "9myr_final.mtz.gz"), "wb") as handle:
+        handle.write(b"\x1f\x8b\x08\x00truncated")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    with pytest.raises(inputs.MissingInputError, match="EOFError"):
+        inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    assert list(work_dir.iterdir()) == []
 
 
 def test_missing_map_coefficients_are_reported_by_path(tmp_path: Path) -> None:
@@ -464,6 +517,9 @@ def test_a_missing_manual_file_is_reported_as_missing_input(tmp_path: Path) -> N
         inputs.resolve_manual_inputs(
             "9myr", mtz_file=str(mtz), cif_file=str(tmp_path / "absent.cif")
         )
+    # A directory is not an input file either.
+    with pytest.raises(inputs.MissingInputError, match="pdb file not found"):
+        inputs.resolve_manual_inputs("9myr", mtz_file=str(mtz), pdb_file=str(tmp_path))
 
 
 def test_a_body_matching_content_length_is_promoted(
@@ -587,7 +643,7 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path: Path) -> None
     )
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
-    assert inputs.read_resolution(mtz, _data_json(entry_dir)) == approx(1.72)
+    assert _resolution(mtz, _data_json(entry_dir)) == approx(1.72)
 
 
 @pytest.mark.parametrize(
@@ -611,8 +667,8 @@ def test_incomplete_metadata_falls_back_to_the_mtz(
     entry_dir = _make_entry(tmp_path, "9myr", data_json=payload)
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
-    resolution = inputs.read_resolution(mtz, _data_json(entry_dir))
-    assert resolution == approx(inputs.read_resolution(mtz)), (
+    resolution = _resolution(mtz, _data_json(entry_dir))
+    assert resolution == approx(_resolution(mtz, None)), (
         f"{reason} should have fallen back to the MTZ"
     )
 
@@ -623,7 +679,7 @@ def test_absent_metadata_falls_back_to_the_mtz(tmp_path: Path) -> None:
     mtz = _minimal_mtz(tmp_path / "only.mtz")
 
     assert inputs.prepare_data_json(entry_dir, str(tmp_path)) is None
-    assert inputs.read_resolution(mtz, None) > 0.0
+    assert _resolution(mtz, None) > 0.0
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
@@ -647,10 +703,43 @@ def test_a_mirror_data_json_is_located_and_readable(
     assert data_json is not None
     expected_dir = str(work_dir) if compressed else entry_dir
     assert os.path.dirname(data_json) == expected_dir
-    assert inputs.read_resolution(mtz, data_json) == approx(1.72)
+    assert _resolution(mtz, data_json) == approx(1.72)
     assert sorted(os.listdir(entry_dir)) == sorted(
         ["9myr_final.mtz", "9myr_final.cif", name]
     )
+
+
+@pytest.mark.parametrize("limit", [-1.72, 0.0, "nan", "inf"])
+def test_an_unphysical_resolution_limit_is_not_trusted(
+    tmp_path: Path, limit: object
+) -> None:
+    """A record that parses but cannot be a resolution falls back to the MTZ."""
+    entry_dir = _make_entry(
+        tmp_path,
+        "9myr",
+        data_json=json.dumps({"properties": {"DATARESL": 47.1, "DATARESH": limit}}),
+    )
+    mtz = _minimal_mtz(tmp_path / "fallback.mtz")
+
+    assert _resolution(mtz, _data_json(entry_dir)) == approx(_resolution(mtz, None))
+
+
+def test_one_read_supplies_both_the_limit_and_the_provenance(
+    tmp_path: Path,
+) -> None:
+    entry_dir = _make_entry(
+        tmp_path,
+        "9myr",
+        data_json=json.dumps(
+            {"properties": {"DATARESL": 47.1, "DATARESH": 1.72, "ISTWIN": True}}
+        ),
+    )
+    mtz = _minimal_mtz(tmp_path / "unused.mtz")
+
+    metadata = inputs.read_entry_metadata(mtz, _data_json(entry_dir))
+
+    assert metadata.data_reshi == approx(1.72)
+    assert metadata.pdb_redo.is_twin is True
 
 
 def test_a_required_data_json_must_be_named(tmp_path: Path) -> None:
@@ -658,7 +747,7 @@ def test_a_required_data_json_must_be_named(tmp_path: Path) -> None:
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
     with pytest.raises(ValueError, match="explicit data.json path is required"):
-        inputs.read_resolution(mtz, None, required=True)
+        inputs.read_entry_metadata(mtz, None, required=True)
 
 
 @pytest.mark.parametrize(
@@ -680,4 +769,4 @@ def test_explicit_invalid_data_json_does_not_fall_back_to_mtz(
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
     with pytest.raises(ValueError, match=message):
-        inputs.read_resolution(mtz, str(data_json), required=True)
+        inputs.read_entry_metadata(mtz, str(data_json), required=True)

@@ -17,9 +17,8 @@ from inputs import (
     entry_dir_for,
     prepare_data_json,
     prepare_inputs,
+    read_entry_metadata,
     read_map_column_resolution,
-    read_pdb_redo_metadata,
-    read_resolution,
     resolve_manual_inputs,
 )
 from structure_analysis import StructureContext, load_structure
@@ -111,9 +110,8 @@ def prepare_analysis_inputs(
         source_coordinate_path = prepared.coordinates
         converted = source_coordinate_path.endswith((".cif", ".cif.gz"))
 
-    data_reshi = read_resolution(mtz, data_json, required=metadata_required)
     # Feeds PDB-REDO provenance and the DPI stage; density never reads it.
-    pdb_redo_metadata = read_pdb_redo_metadata(data_json, required=metadata_required)
+    metadata = read_entry_metadata(mtz, data_json, required=metadata_required)
     map_reslo, map_reshi = read_map_column_resolution(mtz)
     analysis_pdb, input_model_count = first_model_pdb(
         pdb, os.path.join(work_dir, f"{pdb_id}_model1.pdb")
@@ -123,10 +121,10 @@ def prepare_analysis_inputs(
         mtz=mtz,
         pdb=analysis_pdb,
         data_json=data_json,
-        data_reshi=data_reshi,
+        data_reshi=metadata.data_reshi,
         map_reslo=map_reslo,
         map_reshi=map_reshi,
-        pdb_redo_is_twin=pdb_redo_metadata.is_twin,
+        pdb_redo_is_twin=metadata.pdb_redo.is_twin,
         source_coordinate_path=source_coordinate_path,
     )
     structure = load_structure(
@@ -144,6 +142,6 @@ def prepare_analysis_inputs(
             model_analyzed=structure.model_analyzed,
             multi_model_structure=structure.multi_model_structure,
         ),
-        pdb_redo_metadata=pdb_redo_metadata,
+        pdb_redo_metadata=metadata.pdb_redo,
     )
     return inputs, structure, provenance

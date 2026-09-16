@@ -113,7 +113,8 @@ def test_twin_routing_requires_explicit_boolean_metadata(
 ) -> None:
     path = tmp_path / "data.json"
     path.write_text(json.dumps({"properties": {"ISTWIN": value}}), encoding="utf-8")
-    assert inputs.read_pdb_redo_metadata(str(path)).is_twin is expected
+    properties = inputs.read_data_json_properties(str(path))
+    assert inputs.pdb_redo_metadata_from(properties).is_twin is expected
 
 
 def test_pdb_redo_metadata_includes_the_source_revision(tmp_path: Path) -> None:
@@ -131,7 +132,9 @@ def test_pdb_redo_metadata_includes_the_source_revision(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    metadata = inputs.read_pdb_redo_metadata(str(path))
+    metadata = inputs.pdb_redo_metadata_from(
+        inputs.read_data_json_properties(str(path))
+    )
 
     assert metadata.is_twin is True
     assert metadata.version == "8.04"
@@ -148,7 +151,9 @@ def test_explicit_twin_metadata_read_failures_are_not_non_twin(
         path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError):
-        inputs.read_pdb_redo_metadata(str(path), required=True)
+        inputs.read_entry_metadata(
+            str(tmp_path / "unused.mtz"), str(path), required=True
+        )
 
 
 def _fake_ccp4_run_factory(mtzfix_log_text: str) -> Callable[..., SimpleNamespace]:

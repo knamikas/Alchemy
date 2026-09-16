@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,15 +22,15 @@ from codes import DensityMapScope, EntryStatus
 from driver import confidence as driver_confidence
 from driver.writers import manifest_row
 from edstats_statistics import EdstatsExtraction
-from inputs import PdbRedoMetadata
+from inputs import EntryMetadata, PdbRedoMetadata
 from worker import contracts, lifecycle, resolve, stages
 
 
-def _read_resolution_stub(
+def _entry_metadata_stub(
     mtz_path: str, data_json_path: str | None = None, *, required: bool = False
-) -> float:
+) -> EntryMetadata:
     del mtz_path, data_json_path, required
-    return 2.0
+    return EntryMetadata(2.0, PdbRedoMetadata())
 
 
 def _read_map_column_resolution_stub(mtz_path: str) -> tuple[float, float]:
@@ -51,11 +50,12 @@ def _manual_entry(
     structure_builder: helpers.StructureBuilder | None = None,
     pdb_transform: Callable[[Path], None] | None = None,
     bonds: bool = False,
+    read_entry_metadata: Callable[..., EntryMetadata] = _entry_metadata_stub,
     **cfg_overrides: Any,
 ) -> contracts.EntryResult:
     """Run one manual-input entry through ``lifecycle.process``.
 
-    Only the three MTZ-dependent readers are stubbed; structure loading, result
+    Only the MTZ-dependent readers are stubbed; structure loading, result
     assembly and status computation all run for real.
     """
     builder = structure_builder or helpers.StructureBuilder()
@@ -69,7 +69,7 @@ def _manual_entry(
     mtz_path = tmp_path / "entry.mtz"
     mtz_path.write_bytes(b"unused: the readers below are stubbed")
 
-    monkeypatch.setattr(resolve, "read_resolution", _read_resolution_stub)
+    monkeypatch.setattr(resolve, "read_entry_metadata", read_entry_metadata)
     monkeypatch.setattr(
         resolve, "read_map_column_resolution", _read_map_column_resolution_stub
     )
@@ -215,15 +215,17 @@ def test_manual_inputs_ignore_metadata_beside_the_coordinates(
 
     def recording_stub(
         mtz_path: str, data_json_path: str | None = None, *, required: bool = False
-    ) -> float:
+    ) -> EntryMetadata:
         del mtz_path, required
         metadata_paths.append(data_json_path)
-        return 2.0
+        return EntryMetadata(2.0, PdbRedoMetadata())
 
-    # ``_manual_entry`` installs the stub by its module-level name.
-    monkeypatch.setattr(sys.modules[__name__], "_read_resolution_stub", recording_stub)
-
-    result = _manual_entry(tmp_path, monkeypatch, _real_stats_density_stage)
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        read_entry_metadata=recording_stub,
+    )
 
     assert metadata_paths == [None]
     assert result.pdb_redo.pdb_redo_is_twin is False
@@ -235,18 +237,19 @@ def test_manifest_twin_flag_uses_the_density_routing_metadata(
     """The manifest and map route consume one authoritative ISTWIN value."""
 
     def twin_metadata(
-        data_json_path: str | None, *, required: bool = False
-    ) -> PdbRedoMetadata:
-        del data_json_path, required
-        return PdbRedoMetadata(is_twin=True, version="8.04", date="2024-02-08")
+        mtz_path: str, data_json_path: str | None = None, *, required: bool = False
+    ) -> EntryMetadata:
+        del mtz_path, data_json_path, required
+        return EntryMetadata(
+            2.0, PdbRedoMetadata(is_twin=True, version="8.04", date="2024-02-08")
+        )
 
-    monkeypatch.setattr(
-        resolve,
-        "read_pdb_redo_metadata",
-        twin_metadata,
+    result = _manual_entry(
+        tmp_path,
+        monkeypatch,
+        _real_stats_density_stage,
+        read_entry_metadata=twin_metadata,
     )
-
-    result = _manual_entry(tmp_path, monkeypatch, _real_stats_density_stage)
 
     assert result.pdb_redo.pdb_redo_is_twin is True
     assert result.pdb_redo.pdb_redo_version == "8.04"

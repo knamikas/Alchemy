@@ -3,6 +3,7 @@
 import contextlib
 import gzip
 import json
+import math
 import os
 import re
 import shutil
@@ -83,10 +84,18 @@ def entry_dir_for(root: str, pdb_id: str) -> str:
 
 
 def _gunzip_to(src_gz: str, dst: str) -> str:
-    if not os.path.exists(src_gz):
-        raise MissingInputError(src_gz)
-    with gzip.GzipFile(src_gz, "rb") as fi, open(dst, "wb") as fo:
-        shutil.copyfileobj(fi, fo)
+    """Decompress ``src_gz`` to ``dst``; an unreadable archive is a missing input.
+
+    A truncated archive raises ``EOFError`` rather than an ``OSError``, and
+    either must not leave a partial ``dst`` for a later reader to trust.
+    """
+    try:
+        with gzip.open(src_gz, "rb") as fi, open(dst, "wb") as fo:
+            shutil.copyfileobj(fi, fo)
+    except (OSError, EOFError) as exc:
+        with contextlib.suppress(OSError):
+            os.remove(dst)
+        raise MissingInputError(f"{src_gz}: {type(exc).__name__}: {exc}") from exc
     return dst
 
 
@@ -102,7 +111,7 @@ def final_file_candidates(
 
     Plain files win over their gzipped mirrors, and for coordinates the
     authoritative mmCIF wins over the PDB compatibility export. The first
-    existing candidate is the one an analysis uses, so the order matters.
+    usable candidate is the one an analysis uses, so the order matters.
     """
     extensions = ("mtz",) if kind == "mtz" else ("cif", "pdb")
     return tuple(
@@ -155,6 +164,15 @@ def _is_usable_entry_file(path: str | None) -> bool:
     return not _looks_like_a_web_page(path, size=size)
 
 
+def first_usable(*paths: str) -> str | None:
+    """Return the first candidate holding entry data, or ``None`` when none does.
+
+    A served page or empty file cached under an earlier candidate must not
+    hide a usable later one, so every candidate is checked in turn.
+    """
+    return next((path for path in paths if _is_usable_entry_file(path)), None)
+
+
 class PreparedInputs(NamedTuple):
     """The analysis inputs of a mirror entry and the coordinates they came from."""
 
@@ -172,15 +190,13 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> PreparedInputs
     mirrors are accepted for either format.
     """
     mtz_candidates = final_file_candidates(entry_dir, pdb_id, "mtz")
-    mtz = first_existing(*mtz_candidates)
+    mtz = first_usable(*mtz_candidates)
     if mtz is None:
         raise MissingInputError(mtz_candidates[0])
     if mtz.endswith(".gz"):
         mtz = _gunzip_to(mtz, os.path.join(work_dir, f"{pdb_id}_final.mtz"))
 
-    coordinates = first_existing(
-        *final_file_candidates(entry_dir, pdb_id, "coordinates")
-    )
+    coordinates = first_usable(*final_file_candidates(entry_dir, pdb_id, "coordinates"))
     if coordinates is None:
         raise MissingInputError(f"{pdb_id}_final.cif or {pdb_id}_final.pdb")
     if coordinates.endswith((".cif", ".cif.gz")):
@@ -209,52 +225,65 @@ def prepare_data_json(entry_dir: str, work_dir: str) -> str | None:
     return None
 
 
-def read_resolution(
-    mtz_path: str, data_json_path: str | None = None, *, required: bool = False
+class EntryMetadata(NamedTuple):
+    """What one ``data.json`` read supplies: the resolution limit and provenance."""
+
+    # The diffraction data's own high-resolution limit.
+    data_reshi: float
+    pdb_redo: PdbRedoMetadata
+
+
+def _data_json_properties(
+    data_json_path: str | None, *, required: bool
+) -> dict[str, Any] | None:
+    """Read a data.json's properties once, or ``None`` when there is nothing to trust.
+
+    When ``required`` is true, the path came from ``--data-json`` and a
+    missing path or read or structural error is fatal instead.
+    """
+    if not data_json_path:
+        if required:
+            raise ValueError("an explicit data.json path is required")
+        return None
+    try:
+        return read_data_json_properties(data_json_path)
+    except ValueError:
+        if required:
+            raise
+        return None
+
+
+def _high_resolution_limit(
+    properties: dict[str, Any] | None, mtz_path: str, *, required: bool
 ) -> float:
     """Return the overall diffraction-data high-resolution limit.
 
     Only the high-resolution limit is reported, because that is what the DPI
     metadata records; EDSTATS is given the map columns' own range by
-    ``read_map_column_resolution`` instead. Without a data.json, or with one
-    that is incomplete, the MTZ is read. When ``required`` is true, the path
-    came from ``--data-json`` and read or structural errors are fatal instead.
+    ``read_map_column_resolution`` instead. Without trusted metadata the MTZ
+    is read.
     """
-    if not data_json_path:
-        if required:
-            raise ValueError("an explicit data.json path is required")
-    else:
+    if properties is not None:
         try:
-            props = read_data_json_properties(data_json_path)
-            lo, hi = props.get("DATARESL"), props.get("DATARESH")
-            # A half-populated record is not trusted; fall back to the MTZ.
+            lo, hi = properties.get("DATARESL"), properties.get("DATARESH")
+            # A half-populated or unphysical record is not trusted.
             if lo and hi:
-                return float(hi)
+                limit = float(hi)
+                if math.isfinite(limit) and limit > 0.0:
+                    return limit
         except (TypeError, ValueError):
             if required:
                 raise
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
 
-def read_pdb_redo_metadata(
-    data_json_path: str | None, *, required: bool = False
-) -> PdbRedoMetadata:
-    """Read the PDB-REDO fields that affect analysis or source provenance.
+def pdb_redo_metadata_from(properties: dict[str, Any] | None) -> PdbRedoMetadata:
+    """Extract the PDB-REDO fields that affect analysis or source provenance.
 
-    Automatically discovered missing or malformed metadata, and string-valued
-    flags, are false: the twin coefficient fallback must not be inferred from
-    a filename or from an MTZFIX failure. When ``required`` is true, the path
-    came from ``--data-json`` and read or structural errors are fatal instead.
+    Missing metadata and string-valued flags are false: the twin coefficient
+    fallback must not be inferred from a filename or from an MTZFIX failure.
     """
-    if not data_json_path:
-        if required:
-            raise ValueError("an explicit data.json path is required")
-        return PdbRedoMetadata()
-    try:
-        properties = read_data_json_properties(data_json_path)
-    except ValueError:
-        if required:
-            raise
+    if properties is None:
         return PdbRedoMetadata()
 
     def text(name: str) -> str:
@@ -267,6 +296,22 @@ def read_pdb_redo_metadata(
         is_twin=properties.get("ISTWIN") is True,
         version=text("VERSION"),
         date=text("TIME"),
+    )
+
+
+def read_entry_metadata(
+    mtz_path: str, data_json_path: str | None = None, *, required: bool = False
+) -> EntryMetadata:
+    """Read an entry's resolution limit and PDB-REDO provenance in one pass.
+
+    Automatically discovered missing or malformed metadata falls back to the
+    MTZ and to no provenance. When ``required`` is true, the path came from
+    ``--data-json`` and read or structural errors are fatal instead.
+    """
+    properties = _data_json_properties(data_json_path, required=required)
+    return EntryMetadata(
+        data_reshi=_high_resolution_limit(properties, mtz_path, required=required),
+        pdb_redo=pdb_redo_metadata_from(properties),
     )
 
 
@@ -315,11 +360,11 @@ def read_map_column_resolution(mtz_path: str) -> tuple[float, float]:
 
 def has_final_files(entry_dir: str, pdb_id: str) -> bool:
     """Whether an entry has final map coefficients and usable coordinates."""
-    mtz = first_existing(*final_file_candidates(entry_dir, pdb_id, "mtz"))
-    coordinates = first_existing(
-        *final_file_candidates(entry_dir, pdb_id, "coordinates")
+    return (
+        first_usable(*final_file_candidates(entry_dir, pdb_id, "mtz")) is not None
+        and first_usable(*final_file_candidates(entry_dir, pdb_id, "coordinates"))
+        is not None
     )
-    return _is_usable_entry_file(mtz) and _is_usable_entry_file(coordinates)
 
 
 def _remove_partial_download(tmp: str) -> None:
@@ -383,14 +428,12 @@ def download_stream(url: str, dst: str, timeout: float = DOWNLOAD_TIMEOUT_S) -> 
                 )
         os.replace(tmp, dst)
     except MissingInputError:
-        _remove_partial_download(tmp)
         raise
     except (OSError, HTTPException) as e:
-        _remove_partial_download(tmp)
         raise MissingInputError(f"{url}: {type(e).__name__}: {e}") from e
-    except Exception:
+    finally:
+        # Once promoted the temporary name is gone; otherwise nothing may trust it.
         _remove_partial_download(tmp)
-        raise
     return dst
 
 
@@ -411,10 +454,7 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
 
     def fetch_variant(name: str) -> bool:
         # Reject empty or served-document cache entries so downloads can be retried.
-        cached = first_existing(
-            os.path.join(entry, name), os.path.join(entry, name + ".gz")
-        )
-        if _is_usable_entry_file(cached):
+        if first_usable(os.path.join(entry, name), os.path.join(entry, name + ".gz")):
             return True
         return try_fetch(name) or try_fetch(name + ".gz")
 
@@ -470,17 +510,17 @@ def resolve_manual_inputs(
     """Return (mtz_path, pdb_path) for a manually supplied local input set."""
     if not mtz_file:
         raise ValueError("manual mode requires --mtz-file")
-    if not os.path.exists(mtz_file):
+    if not os.path.isfile(mtz_file):
         raise MissingInputError(f"mtz file not found: {mtz_file}")
 
     if cif_file:
-        if not os.path.exists(cif_file):
+        if not os.path.isfile(cif_file):
             raise MissingInputError(f"cif file not found: {cif_file}")
         target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdb_id}.pdb")
         return mtz_file, cif_to_pdb(cif_file, target_pdb)
 
     if pdb_file:
-        if not os.path.exists(pdb_file):
+        if not os.path.isfile(pdb_file):
             raise MissingInputError(f"pdb file not found: {pdb_file}")
         return mtz_file, pdb_file
 
@@ -506,13 +546,16 @@ def enumerate_entries(root: str, limit: int | None = None) -> list[str]:
             continue
         try:
             entries = sorted(os.listdir(hp))
-        except (PermissionError, OSError) as e:
+        except OSError as e:
             # Common on a partially-synced mirror; one unreadable hashdir must
             # not abort the whole enumeration.
             skipped += 1
             logger.warning("skipping unreadable directory %s: %s", hp, e)
             continue
         for pid in entries:
+            # Only the mirror layout is an entry: <root>/<id[1:3]>/<id>/.
+            if not re.fullmatch(PDB_ID_PATTERN, pid) or pid[1:3] != hashdir:
+                continue
             ep = os.path.join(hp, pid)
             if os.path.isdir(ep) and has_final_files(ep, pid):
                 ids.append(pid)
