@@ -43,7 +43,7 @@ DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
 
 
 def resolve_confidence_reference_dir(
-    output_dir: str, configured_dir: str | None = None
+    layout: OutputLayout, configured_dir: str | None = None
 ) -> tuple[str | None, tuple[str, ...]]:
     """Find a frozen confidence reference, honoring an explicit override."""
     candidates: tuple[str, ...]
@@ -51,7 +51,7 @@ def resolve_confidence_reference_dir(
         candidates = (configured_dir,)
     else:
         candidates = (
-            os.path.join(output_dir, "confidence_reference"),
+            layout.reference_dir,
             DEFAULT_CONFIDENCE_REFERENCE_DIR,
         )
     for candidate in candidates:
@@ -398,7 +398,7 @@ def plan_confidence(
         return DatabasePlan(layout)
 
     reference_dir, searched_dirs = resolve_confidence_reference_dir(
-        args.output_dir, args.confidence_reference_dir
+        layout, args.confidence_reference_dir
     )
     if reference_dir is None:
         logger.info(

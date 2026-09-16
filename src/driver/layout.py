@@ -1,4 +1,8 @@
-"""Paths of the artifacts one run writes under its output directory."""
+"""Paths of the CSV and confidence-reference artifacts one run writes.
+
+Other files under ``--output-dir`` (the lock file, ``logs/``, scratch
+directories) are named by the modules that own them.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,6 @@ class OutputLayout:
 
     def __init__(self, output_dir: str) -> None:
         """Derive every run artifact path from an output directory."""
-        self.output_dir = output_dir
         self.manifest = os.path.join(output_dir, "manifest.csv")
         self.stats = os.path.join(output_dir, "metal_sites_all.csv")
         self.density_context = os.path.join(output_dir, "density_context_all.csv")

@@ -23,6 +23,7 @@ import confidence_score
 import density_analysis as density
 import scratch
 from driver import ccp4_setup, confidence as driver_confidence, environment, errors
+from driver.layout import OutputLayout
 from driver.runlog import RunLog
 
 
@@ -253,7 +254,7 @@ def test_confidence_reference_is_discovered_in_output_before_repo_default(
     )
 
     selected, searched = driver_confidence.resolve_confidence_reference_dir(
-        str(output_dir)
+        OutputLayout(str(output_dir))
     )
 
     assert selected == str(output_reference)
@@ -268,7 +269,7 @@ def test_explicit_confidence_reference_is_authoritative(tmp_path: Path) -> None:
     explicit_reference = tmp_path / "explicit-reference"
 
     selected, searched = driver_confidence.resolve_confidence_reference_dir(
-        str(output_dir), str(explicit_reference)
+        OutputLayout(str(output_dir)), str(explicit_reference)
     )
 
     assert selected is None

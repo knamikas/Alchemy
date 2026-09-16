@@ -232,7 +232,7 @@ def _clear_stale_outputs(
             if os.path.isfile(path):
                 os.unlink(path)
     except OSError as exc:
-        raise DriverError(f"Could not clear stale confidence output: {exc}") from None
+        raise DriverError(f"Could not clear stale run output: {exc}") from None
 
 
 def choose_worker_count(
