@@ -46,7 +46,7 @@ from output_rows import MetalStatsRow, csv_value
 from run_logging import truncate
 from structure_analysis import NAN, AtomSite, StructureContext
 from worker.contracts import DensityProvenance, WorkerConfig
-from worker.inputs import EntryInputs
+from worker.resolve import EntryInputs
 
 METALS_SET = set(METAL_ELEMENTS)
 

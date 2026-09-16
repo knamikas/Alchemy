@@ -33,14 +33,14 @@ def test_src_modules_import() -> None:
         schema,
     )
     from driver import ccp4_setup, pool, progress, resources, runlog, writers
-    from worker import contracts, inputs as worker_inputs, lifecycle, memory, stages
+    from worker import contracts, lifecycle, memory, resolve, stages
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert policy.CANDIDATE_SEARCH_RADIUS == 4.0
     assert callable(structure_analysis.load_structure)
     assert callable(pool.run)
     assert callable(lifecycle.process)
-    assert callable(worker_inputs.prepare_analysis_inputs)
+    assert callable(resolve.prepare_analysis_inputs)
     assert callable(stages.run_density_stage)
     assert callable(memory.release_idle_memory)
     assert callable(contracts.EntryResult)

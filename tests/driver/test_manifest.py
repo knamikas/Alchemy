@@ -22,7 +22,7 @@ from driver.writers import (
 )
 from output_rows import MetalStatsRow
 from run_config import RunConfig
-from worker import inputs as worker_inputs, lifecycle
+from worker import lifecycle, resolve
 from worker.contracts import ManualInputs
 
 CFG = worker_config()
@@ -131,11 +131,11 @@ class TestInitialResult:
         manual_path = "/research/inputs/custom.cif"
 
         assert (
-            worker_inputs.source_coordinate_provenance_path(CFG, "109m", mirror_path)
+            resolve.source_coordinate_provenance_path(CFG, "109m", mirror_path)
             == "09/109m/109m_final.cif"
         )
         assert (
-            worker_inputs.source_coordinate_provenance_path(
+            resolve.source_coordinate_provenance_path(
                 worker_config(manual_inputs={"cif_file": manual_path}),
                 "109m",
                 manual_path,

@@ -1,7 +1,7 @@
 """Process one PDB entry and record its results and failures.
 
 Configuration is initialized once per worker to avoid serializing it per entry.
-Input resolution lives in ``worker.inputs`` and the analysis stages in
+Input resolution lives in ``worker.resolve`` and the analysis stages in
 ``worker.stages``; this module owns the process lifecycle, the entry's scratch
 directory, and the folds that combine stage outcomes into an ``EntryResult``.
 """
@@ -34,12 +34,12 @@ from worker.contracts import (
     SoftwareProvenance,
     WorkerConfig,
 )
-from worker.inputs import (
+from worker.memory import release_idle_memory
+from worker.resolve import (
     InputProvenance,
     prepare_analysis_inputs,
     resolve_entry_dir,
 )
-from worker.memory import release_idle_memory
 from worker.stages import (
     IDENTIFICATION_REASON_MESSAGES,
     MAX_MANIFEST_STATUS_DETAIL_CHARS,

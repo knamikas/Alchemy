@@ -23,7 +23,7 @@ from driver import confidence as driver_confidence
 from driver.writers import manifest_row
 from edstats_statistics import EdstatsExtraction
 from inputs import PdbRedoMetadata
-from worker import contracts, inputs as worker_inputs, lifecycle, stages
+from worker import contracts, lifecycle, resolve, stages
 
 
 def _read_resolution_stub(
@@ -68,9 +68,9 @@ def _manual_entry(
     mtz_path = tmp_path / "entry.mtz"
     mtz_path.write_bytes(b"unused: the readers below are stubbed")
 
-    monkeypatch.setattr(worker_inputs, "read_resolution", _read_resolution_stub)
+    monkeypatch.setattr(resolve, "read_resolution", _read_resolution_stub)
     monkeypatch.setattr(
-        worker_inputs, "read_map_column_resolution", _read_map_column_resolution_stub
+        resolve, "read_map_column_resolution", _read_map_column_resolution_stub
     )
     monkeypatch.setattr(stages, "run_density_analysis", density_stage)
 
@@ -208,7 +208,7 @@ def test_manifest_twin_flag_uses_the_density_routing_metadata(
         return PdbRedoMetadata(is_twin=True, version="8.04", date="2024-02-08")
 
     monkeypatch.setattr(
-        worker_inputs,
+        resolve,
         "read_pdb_redo_metadata",
         twin_metadata,
     )
@@ -459,7 +459,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
 ) -> None:
     """A crashed geometry stage is not legitimate density-only evidence."""
     result = entry_result()
-    inputs = worker_inputs.EntryInputs(
+    inputs = resolve.EntryInputs(
         work_dir="/nonexistent",
         mtz="/nonexistent/entry.mtz",
         pdb="/nonexistent/entry.pdb",
