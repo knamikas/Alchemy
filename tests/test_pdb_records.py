@@ -221,3 +221,70 @@ def test_analysis_format_for_path_follows_the_extension(
     path: str, expected: str
 ) -> None:
     assert pdb_records.analysis_format_for_path(path) == expected
+
+
+def test_raw_pdb_occupancies_reads_two_character_chain_ids(tmp_path: Path) -> None:
+    """Gemmi takes the chain id from columns 21-22; the raw join must too.
+
+    A one-column read yields ``"B"`` for chain ``"AB"``, so no atom matches and
+    the whole entry loses its deposited occupancy and element.
+    """
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="AB")
+    builder.add_amino_acid("HIS", 10, chain="AB")
+    path = builder.write_pdb(tmp_path / "wide.pdb")
+
+    (records,), error = pdb_records.raw_pdb_occupancies(path)
+    assert error == ""
+    assert {record.chain_id for record in records} == {"AB"}
+
+    context = load_structure("test", path)
+    assert context.occupancy.raw_mapping_failed is False
+    assert all(atom.occupancy_status == "valid" for atom in context.source_atoms)
+    assert all(atom.element_known for atom in context.source_atoms)
+
+
+def test_raw_pdb_occupancies_reports_an_undecodable_resseq(tmp_path: Path) -> None:
+    """A malformed resSeq is returned as the error text, not raised."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1)
+    builder.add_amino_acid("HIS", 10)
+    path = Path(builder.write_pdb(tmp_path / "bad.pdb"))
+    lines = path.read_text().splitlines(keepends=True)
+    index = next(i for i, line in enumerate(lines) if line.startswith("HETATM"))
+    lines[index] = lines[index][:22] + " 1.5" + lines[index][26:]
+    path.write_text("".join(lines))
+
+    records, error = pdb_records.raw_pdb_occupancies(str(path))
+    assert records == []
+    assert "residue sequence" in error
+
+    context = load_structure("test", str(path))
+    assert context.occupancy.raw_mapping_failed is True
+    assert context.occupancy.raw_mapping_failure_reason == error
+    assert all(
+        atom.occupancy_status == "raw_mapping_failed" for atom in context.source_atoms
+    )
+
+
+def test_match_raw_occupancies_counts_unmatched_atoms_on_both_sides(
+    tmp_path: Path,
+) -> None:
+    """A record whose identity matches no Gemmi atom is counted, not guessed."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1)
+    builder.add_amino_acid("HIS", 10)
+    path = Path(builder.write_pdb(tmp_path / "mismatch.pdb"))
+    lines = path.read_text().splitlines(keepends=True)
+    index = next(i for i, line in enumerate(lines) if line.startswith("HETATM"))
+    # Blank the chain id in the raw text only after Gemmi has its own copy.
+    structure = gemmi.read_structure(str(path))
+    lines[index] = lines[index][:20] + "  " + lines[index][22:]
+    path.write_text("".join(lines))
+    records, _error = pdb_records.raw_pdb_occupancies(str(path))
+    matches, unmatched_gemmi, unmatched_raw = pdb_records.match_raw_occupancies(
+        structure[0], records[0]
+    )
+
+    assert (unmatched_gemmi, unmatched_raw) == (1, 1)
+    assert matches.count(None) == 1

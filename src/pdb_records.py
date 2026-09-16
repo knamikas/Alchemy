@@ -32,7 +32,8 @@ SERIAL_COLUMNS = slice(6, 11)
 ATOM_NAME_COLUMNS = slice(12, 16)
 ALTLOC_COLUMN = slice(16, 17)
 RESIDUE_NAME_COLUMNS = slice(17, 20)
-CHAIN_ID_COLUMN = slice(21, 22)
+#: Both chain-id columns; Gemmi reads column 21 too when it is not blank.
+CHAIN_ID_COLUMNS = slice(20, 22)
 RESSEQ_COLUMNS = slice(22, 26)
 INSERTION_CODE_COLUMN = slice(26, 27)
 OCCUPANCY_COLUMNS = slice(54, 60)
@@ -211,7 +212,7 @@ def raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
     """Read PDB occupancy and element fields without losing provenance.
 
     Returns one record list per MODEL block, in file order, and the error text
-    if the file could not be read.
+    if the file could not be read or a record's resSeq could not be decoded.
     """
     records: list[list[RawOccupancy]] = [[]]
     model_index = 0
@@ -229,8 +230,6 @@ def raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
                     continue
                 if record not in COORDINATE_RECORD_NAMES:
                     continue
-                while model_index >= len(records):
-                    records.append([])
                 element, element_status = parse_pdb_element(line[ELEMENT_COLUMNS])
                 value, status = _occupancy_field(line[OCCUPANCY_COLUMNS])
                 records[model_index].append(
@@ -241,7 +240,7 @@ def raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
                         element_status=element_status,
                         atom_name=line[ATOM_NAME_COLUMNS].strip(),
                         altloc=blank_if_missing(line[ALTLOC_COLUMN]),
-                        chain_id=line[CHAIN_ID_COLUMN].strip(),
+                        chain_id=line[CHAIN_ID_COLUMNS].strip(),
                         residue_name=line[RESIDUE_NAME_COLUMNS].strip(),
                         residue_number=str(decode_pdb_resseq(line[RESSEQ_COLUMNS])),
                         insertion_code=blank_if_missing(line[INSERTION_CODE_COLUMN]),
@@ -249,7 +248,7 @@ def raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
                         source_order=len(records[model_index]),
                     )
                 )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return [], str(exc)
     return records, ""
 
