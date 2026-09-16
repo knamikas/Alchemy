@@ -59,6 +59,10 @@ def _make_entry(
     return entry_dir
 
 
+def _data_json(entry_dir: str) -> str:
+    return os.path.join(entry_dir, "data.json")
+
+
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
 def test_an_entry_is_final_only_with_both_inputs(
     tmp_path: Path, compressed: bool
@@ -174,8 +178,10 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
-    _, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    prepared = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    pdb = prepared.pdb
 
+    assert prepared.coordinates.startswith(entry_dir)
     assert pdb.endswith(".pdb"), "a gzipped export must be decompressed first"
     assert os.path.isfile(pdb)
     with open(pdb, encoding="ascii") as handle:
@@ -206,9 +212,11 @@ def test_the_authoritative_mmcif_wins_over_the_legacy_export(
         return destination
 
     monkeypatch.setattr(inputs, "cif_to_pdb", fake_cif_to_pdb)
-    _mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    prepared = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    pdb = prepared.pdb
 
     assert converted and converted[0].endswith("_final.cif")
+    assert prepared.coordinates == converted[0]
     with open(pdb, encoding="ascii") as handle:
         assert handle.read() == "FROM CIF\n", "the legacy export was used instead"
 
@@ -240,8 +248,9 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
         return destination
 
     monkeypatch.setattr(inputs, "cif_to_pdb", fake_cif_to_pdb)
-    mtz, pdb = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    mtz, pdb, coordinates = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
 
+    assert coordinates.endswith("_final.cif.gz")
     assert os.path.dirname(mtz) == str(work_dir), "the mirror must not be written to"
     assert not mtz.endswith(".gz")
     assert os.path.isfile(pdb)
@@ -578,7 +587,7 @@ def test_resolution_is_read_from_data_json_when_complete(tmp_path: Path) -> None
     )
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
-    assert inputs.read_resolution(entry_dir, mtz) == approx(1.72)
+    assert inputs.read_resolution(mtz, _data_json(entry_dir)) == approx(1.72)
 
 
 @pytest.mark.parametrize(
@@ -602,10 +611,10 @@ def test_incomplete_metadata_falls_back_to_the_mtz(
     entry_dir = _make_entry(tmp_path, "9myr", data_json=payload)
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
-    resolution = inputs.read_resolution(entry_dir, mtz)
-    assert resolution == approx(
-        inputs.read_resolution(str(tmp_path / "absent"), mtz)
-    ), f"{reason} should have fallen back to the MTZ"
+    resolution = inputs.read_resolution(mtz, _data_json(entry_dir))
+    assert resolution == approx(inputs.read_resolution(mtz)), (
+        f"{reason} should have fallen back to the MTZ"
+    )
 
 
 def test_absent_metadata_falls_back_to_the_mtz(tmp_path: Path) -> None:
@@ -613,32 +622,43 @@ def test_absent_metadata_falls_back_to_the_mtz(tmp_path: Path) -> None:
     entry_dir = _make_entry(tmp_path, "9myr")
     mtz = _minimal_mtz(tmp_path / "only.mtz")
 
-    assert inputs.read_resolution(entry_dir, mtz) > 0.0
+    assert inputs.prepare_data_json(entry_dir, str(tmp_path)) is None
+    assert inputs.read_resolution(mtz, None) > 0.0
 
 
-def test_an_explicit_data_json_path_overrides_the_entry_directory(
-    tmp_path: Path,
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
+def test_a_mirror_data_json_is_located_and_readable(
+    tmp_path: Path, compressed: bool
 ) -> None:
-    """``--data-json`` supplies metadata for manual inputs with no entry dir.
-
-    It must win over any file sitting beside the coordinates, or a manual run
-    inside a populated mirror reads the wrong entry's metadata.
-    """
-    entry_dir = _make_entry(
-        tmp_path,
-        "9myr",
-        data_json=json.dumps({"properties": {"DATARESL": 40.0, "DATARESH": 9.99}}),
-    )
-    explicit = tmp_path / "explicit.json"
-    explicit.write_text(
-        json.dumps({"properties": {"DATARESL": 47.1, "DATARESH": 1.72}}),
-        encoding="utf-8",
-    )
+    """A gzipped mirror copy is decompressed into the work directory, never in place."""
+    payload = json.dumps({"properties": {"DATARESL": 47.1, "DATARESH": 1.72}})
+    entry_dir = _make_entry(tmp_path, "9myr")
+    name = "data.json.gz" if compressed else "data.json"
+    with open(os.path.join(entry_dir, name), "wb") as handle:
+        handle.write(
+            gzip.compress(payload.encode()) if compressed else payload.encode()
+        )
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
     mtz = _minimal_mtz(tmp_path / "unused.mtz")
 
-    assert inputs.read_resolution(
-        entry_dir, mtz, data_json_path=str(explicit)
-    ) == approx(1.72)
+    data_json = inputs.prepare_data_json(entry_dir, str(work_dir))
+
+    assert data_json is not None
+    expected_dir = str(work_dir) if compressed else entry_dir
+    assert os.path.dirname(data_json) == expected_dir
+    assert inputs.read_resolution(mtz, data_json) == approx(1.72)
+    assert sorted(os.listdir(entry_dir)) == sorted(
+        ["9myr_final.mtz", "9myr_final.cif", name]
+    )
+
+
+def test_a_required_data_json_must_be_named(tmp_path: Path) -> None:
+    """``--data-json`` semantics never apply to a path that was not given."""
+    mtz = _minimal_mtz(tmp_path / "unused.mtz")
+
+    with pytest.raises(ValueError, match="explicit data.json path is required"):
+        inputs.read_resolution(mtz, None, required=True)
 
 
 @pytest.mark.parametrize(
@@ -660,8 +680,4 @@ def test_explicit_invalid_data_json_does_not_fall_back_to_mtz(
     mtz = _minimal_mtz(tmp_path / "fallback.mtz")
 
     with pytest.raises(ValueError, match=message):
-        inputs.read_resolution(
-            str(tmp_path),
-            mtz,
-            data_json_path=str(data_json),
-        )
+        inputs.read_resolution(mtz, str(data_json), required=True)

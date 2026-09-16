@@ -317,7 +317,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
     result = initial_result(pdb_id, cfg, manual_inputs)
     announce_inflight("start", pdb_id)
     try:
-        # Manual inputs have no entry directory; the scratch directory stands in.
+        # Manual inputs have no entry directory.
         entry_dir = None if manual_inputs else resolve_entry_dir(pdb_id, cfg)
         if entry_dir is not None and not os.path.isdir(entry_dir):
             result.status = EntryStatus.SKIP
@@ -330,7 +330,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
             preserve=cfg.keep_intermediates,
         )
         inputs, structure, provenance = prepare_analysis_inputs(
-            pdb_id, cfg, work_dir if entry_dir is None else entry_dir, work_dir
+            pdb_id, cfg, entry_dir, work_dir
         )
         result.timings["input_structure_s"] = elapsed_s(t0)
         _apply_input_provenance(result, provenance)

@@ -15,8 +15,7 @@ from inputs import (
     PdbRedoMetadata,
     ensure_entry_available,
     entry_dir_for,
-    final_file_candidates,
-    first_existing,
+    prepare_data_json,
     prepare_inputs,
     read_map_column_resolution,
     read_pdb_redo_metadata,
@@ -35,7 +34,8 @@ class EntryInputs:
     mtz: str
     # First-model analysis coordinates; source_coordinate_path retains the input.
     pdb: str
-    # PDB-REDO metadata or manual --data-json; None if none was supplied.
+    # The entry's PDB-REDO data.json or the manual --data-json; None when
+    # the entry has none, so the DPI stage reports a missing metadata source.
     data_json: str | None
     # The diffraction data's own high-resolution limit, as distinct from the
     # map columns' range below.
@@ -52,29 +52,6 @@ class InputProvenance:
 
     coordinates: CoordinateProvenance
     pdb_redo_metadata: PdbRedoMetadata
-
-
-def _source_coordinate_format(cfg: WorkerConfig, source_path: str) -> tuple[str, bool]:
-    """The deposited coordinate format and whether analysis converted it to PDB."""
-    manual = cfg.manual_inputs
-    if manual:
-        converted = bool(manual.get("cif_file"))
-    else:
-        converted = source_path.lower().endswith((".cif", ".cif.gz"))
-    return ("mmcif" if converted else "pdb", converted)
-
-
-def _source_coordinate_path(
-    cfg: WorkerConfig, pdb_id: str, entry: str, analysis_path: str
-) -> str:
-    """The deposited coordinate file, falling back to the analysis coordinates."""
-    manual = cfg.manual_inputs
-    if manual:
-        return manual.get("cif_file") or manual.get("pdb_file") or ""
-    return (
-        first_existing(*final_file_candidates(entry, pdb_id, "coordinates"))
-        or analysis_path
-    )
 
 
 def source_coordinate_provenance_path(
@@ -99,12 +76,16 @@ def resolve_entry_dir(pdb_id: str, cfg: WorkerConfig) -> str:
 def prepare_analysis_inputs(
     pdb_id: str,
     cfg: WorkerConfig,
-    entry: str,
+    entry_dir: str | None,
     work_dir: str,
 ) -> tuple[EntryInputs, StructureContext, InputProvenance]:
-    """Prepare the same first-model PDB for EDSTATS and Gemmi."""
+    """Prepare the same first-model PDB for EDSTATS and Gemmi.
+
+    ``entry_dir`` is the PDB-REDO entry of a mirror run; manual inputs have
+    none and read only the files named on the command line, never a
+    ``data.json`` that happens to sit beside them.
+    """
     manual_inputs = cfg.manual_inputs
-    data_json: str | None = None
     if manual_inputs:
         mtz, pdb = resolve_manual_inputs(
             pdb_id,
@@ -113,42 +94,47 @@ def prepare_analysis_inputs(
             cif_file=manual_inputs.get("cif_file"),
             work_dir=work_dir,
         )
-        entry = os.path.dirname(pdb) or work_dir
         data_json = manual_inputs.get("data_json")
-        data_reshi = read_resolution(entry, mtz, data_json_path=data_json)
+        # An explicitly named metadata file is an input contract, not a probe.
+        metadata_required = data_json is not None
+        source_coordinate_path = (
+            manual_inputs.get("cif_file") or manual_inputs.get("pdb_file") or ""
+        )
+        converted = bool(manual_inputs.get("cif_file"))
     else:
-        mtz, pdb = prepare_inputs(pdb_id, entry, work_dir)
-        data_reshi = read_resolution(entry, mtz)
+        if entry_dir is None:
+            raise ValueError("a PDB-REDO entry directory is required")
+        prepared = prepare_inputs(pdb_id, entry_dir, work_dir)
+        mtz, pdb = prepared.mtz, prepared.pdb
+        data_json = prepare_data_json(entry_dir, work_dir)
+        metadata_required = False
+        source_coordinate_path = prepared.coordinates
+        converted = source_coordinate_path.endswith((".cif", ".cif.gz"))
 
+    data_reshi = read_resolution(mtz, data_json, required=metadata_required)
     # Feeds PDB-REDO provenance and the DPI stage; density never reads it.
-    metadata_json = data_json if manual_inputs else os.path.join(entry, "data.json")
-    pdb_redo_metadata = read_pdb_redo_metadata(
-        metadata_json,
-        required=bool(manual_inputs and data_json),
-    )
+    pdb_redo_metadata = read_pdb_redo_metadata(data_json, required=metadata_required)
     map_reslo, map_reshi = read_map_column_resolution(mtz)
-    source_pdb = pdb
-    source_coordinate_path = _source_coordinate_path(cfg, pdb_id, entry, source_pdb)
-    source_format, converted = _source_coordinate_format(cfg, source_coordinate_path)
-    model1_pdb = os.path.join(work_dir, f"{pdb_id}_model1.pdb")
-    if os.path.realpath(model1_pdb) == os.path.realpath(source_pdb):
-        model1_pdb = os.path.join(work_dir, f"{pdb_id}_analysis_model1.pdb")
-    pdb, input_model_count = first_model_pdb(source_pdb, model1_pdb)
+    analysis_pdb, input_model_count = first_model_pdb(
+        pdb, os.path.join(work_dir, f"{pdb_id}_model1.pdb")
+    )
     inputs = EntryInputs(
         work_dir=work_dir,
         mtz=mtz,
-        pdb=pdb,
-        data_json=metadata_json,
+        pdb=analysis_pdb,
+        data_json=data_json,
         data_reshi=data_reshi,
         map_reslo=map_reslo,
         map_reshi=map_reshi,
         pdb_redo_is_twin=pdb_redo_metadata.is_twin,
         source_coordinate_path=source_coordinate_path,
     )
-    structure = load_structure(pdb_id, pdb, source_model_count=input_model_count)
+    structure = load_structure(
+        pdb_id, analysis_pdb, source_model_count=input_model_count
+    )
     provenance = InputProvenance(
         coordinates=CoordinateProvenance(
-            source_coordinate_format=source_format,
+            source_coordinate_format="mmcif" if converted else "pdb",
             analysis_coordinate_format=structure.analysis_coordinate_format,
             coordinate_conversion_performed=converted,
             source_coordinate_path=source_coordinate_provenance_path(

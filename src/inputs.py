@@ -155,8 +155,17 @@ def _is_usable_entry_file(path: str | None) -> bool:
     return not _looks_like_a_web_page(path, size=size)
 
 
-def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str]:
-    """Return the final PDB-REDO ``(mtz_path, pdb_path)`` analysis inputs.
+class PreparedInputs(NamedTuple):
+    """The analysis inputs of a mirror entry and the coordinates they came from."""
+
+    mtz: str
+    pdb: str
+    # The deposited coordinate file the analysis PDB was derived from.
+    coordinates: str
+
+
+def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> PreparedInputs:
+    """Return the final PDB-REDO analysis inputs.
 
     The authoritative final mmCIF is preferred and converted for EDSTATS; the
     PDB compatibility export is used only when no mmCIF exists. Compressed
@@ -178,38 +187,51 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> tuple[str, str
         pdb = cif_to_pdb(
             coordinates, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb")
         )
-        return mtz, pdb
-    if coordinates.endswith(".gz"):
-        coordinates = _gunzip_to(
-            coordinates, os.path.join(work_dir, f"{pdb_id}_final.pdb")
-        )
-    return mtz, coordinates
+    elif coordinates.endswith(".gz"):
+        pdb = _gunzip_to(coordinates, os.path.join(work_dir, f"{pdb_id}_final.pdb"))
+    else:
+        pdb = coordinates
+    return PreparedInputs(mtz, pdb, coordinates)
+
+
+def prepare_data_json(entry_dir: str, work_dir: str) -> str | None:
+    """Return an entry's readable ``data.json``, or ``None`` when it has none.
+
+    A gzipped mirror copy is decompressed into ``work_dir`` so every reader
+    can open the plain file.
+    """
+    plain = os.path.join(entry_dir, "data.json")
+    if os.path.exists(plain):
+        return plain
+    compressed = plain + ".gz"
+    if os.path.exists(compressed):
+        return _gunzip_to(compressed, os.path.join(work_dir, "data.json"))
+    return None
 
 
 def read_resolution(
-    entry_dir: str, mtz_path: str, data_json_path: str | None = None
+    mtz_path: str, data_json_path: str | None = None, *, required: bool = False
 ) -> float:
     """Return the overall diffraction-data high-resolution limit.
 
     Only the high-resolution limit is reported, because that is what the DPI
     metadata records; EDSTATS is given the map columns' own range by
-    ``read_map_column_resolution`` instead.
+    ``read_map_column_resolution`` instead. Without a data.json, or with one
+    that is incomplete, the MTZ is read. When ``required`` is true, the path
+    came from ``--data-json`` and read or structural errors are fatal instead.
     """
-    explicit = data_json_path is not None
-    dj = (
-        data_json_path
-        if data_json_path is not None
-        else os.path.join(entry_dir, "data.json")
-    )
-    if explicit or os.path.exists(dj):
+    if not data_json_path:
+        if required:
+            raise ValueError("an explicit data.json path is required")
+    else:
         try:
-            props = read_data_json_properties(dj)
+            props = read_data_json_properties(data_json_path)
             lo, hi = props.get("DATARESL"), props.get("DATARESH")
             # A half-populated record is not trusted; fall back to the MTZ.
             if lo and hi:
                 return float(hi)
         except (TypeError, ValueError):
-            if explicit:
+            if required:
                 raise
     return gemmi.read_mtz_file(mtz_path).resolution_high()
 
@@ -399,7 +421,12 @@ def download_entry_to_cache(pdb_id: str, cache_root: str) -> None:
     fetch_variant(f"{pdb_id}_final.mtz")
     if not fetch_variant(f"{pdb_id}_final.cif"):
         fetch_variant(f"{pdb_id}_final.pdb")
-    if not os.path.exists(os.path.join(entry, "data.json")):
+    if (
+        first_existing(
+            os.path.join(entry, "data.json"), os.path.join(entry, "data.json.gz")
+        )
+        is None
+    ):
         try_fetch("data.json")
 
     if not has_final_files(entry, pdb_id):

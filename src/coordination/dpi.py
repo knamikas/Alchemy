@@ -180,7 +180,7 @@ def calculate_dpi_components(
     resolution = float(dpi_inputs.resolution)
     data_json = dpi_inputs.data_json
     if not data_json:
-        # Distinguish missing manual metadata from a failed DPI calculation.
+        # Distinguish absent metadata from a failed DPI calculation.
         return _unavailable(ReasonCode.MISSING_DPI_METADATA_SOURCE, resolution)
 
     rfree = nobs = va = NAN

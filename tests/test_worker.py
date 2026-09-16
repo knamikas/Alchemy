@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,9 +28,9 @@ from worker import contracts, lifecycle, resolve, stages
 
 
 def _read_resolution_stub(
-    entry_dir: str, mtz_path: str, data_json_path: str | None = None
+    mtz_path: str, data_json_path: str | None = None, *, required: bool = False
 ) -> float:
-    del entry_dir, mtz_path, data_json_path
+    del mtz_path, data_json_path, required
     return 2.0
 
 
@@ -194,6 +195,38 @@ def _real_stats_density_stage(
         full_map_bytes=8192,
         edstats_map_bytes=2048,
     )
+
+
+def test_manual_inputs_ignore_metadata_beside_the_coordinates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only ``--data-json`` supplies manual metadata, never a neighbouring file.
+
+    A manual run pointed into a populated mirror must not read that entry's
+    resolution while reporting its twin flag and DPI metadata as absent.
+    """
+    (tmp_path / "data.json").write_text(
+        json.dumps(
+            {"properties": {"ISTWIN": True, "DATARESL": 40.0, "DATARESH": 9.99}}
+        ),
+        encoding="utf-8",
+    )
+    metadata_paths: list[str | None] = []
+
+    def recording_stub(
+        mtz_path: str, data_json_path: str | None = None, *, required: bool = False
+    ) -> float:
+        del mtz_path, required
+        metadata_paths.append(data_json_path)
+        return 2.0
+
+    # ``_manual_entry`` installs the stub by its module-level name.
+    monkeypatch.setattr(sys.modules[__name__], "_read_resolution_stub", recording_stub)
+
+    result = _manual_entry(tmp_path, monkeypatch, _real_stats_density_stage)
+
+    assert metadata_paths == [None]
+    assert result.pdb_redo.pdb_redo_is_twin is False
 
 
 def test_manifest_twin_flag_uses_the_density_routing_metadata(
