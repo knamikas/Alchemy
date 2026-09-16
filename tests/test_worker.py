@@ -500,6 +500,56 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
     assert worker.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True
 
 
+def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The later failure is appended; it must not erase the earlier one.
+
+    A timed-out density stage names the stalled tool in ``status_detail`` and
+    is the first reason confidence inputs are missing. A geometry crash that
+    follows keeps its own code, but leaves the counts unmeasured rather than
+    reporting a measured zero.
+    """
+
+    def fake_density(*args: Any, **kwargs: Any) -> None:
+        raise density.Ccp4ToolTimeoutError(
+            tool="edstats",
+            timeout_s=900,
+            elapsed_s=900.4,
+            log_path="",
+            timings={},
+        )
+
+    def fail_bond_analysis(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("geometry unavailable")
+
+    monkeypatch.setattr(worker_stages, "run_bond_analysis", fail_bond_analysis)
+    result = _manual_entry(tmp_path, monkeypatch, fake_density, bonds=True)
+
+    assert result.status == "partial"
+    assert result.reason_codes == ["ccp4_tool_timeout", "bond_stage_failure"]
+    assert "edstats" in result.status_detail
+    assert "bond: RuntimeError: geometry unavailable" in result.status_detail
+    assert result.confidence_inputs_missing_reason == "ccp4_tool_timeout"
+    assert result.n_metals == 1
+    assert result.n_bonds is None
+    assert result.n_candidates is None
+    assert result.retryable is True
+
+
+def test_an_already_capped_detail_still_admits_appended_messages() -> None:
+    """Capping the join again would silently drop the later stage's messages."""
+    cap = worker_stages.MAX_MANIFEST_STATUS_DETAIL_CHARS
+    existing = "density unavailable: " + "x" * cap
+    detail = worker._appended_detail(  # pyright: ignore[reportPrivateUsage]
+        existing, ["bond: RuntimeError: geometry unavailable"]
+    )
+
+    assert len(detail) <= cap
+    assert detail.startswith("density unavailable: ")
+    assert detail.endswith("bond: RuntimeError: geometry unavailable")
+
+
 @pytest.mark.parametrize(
     "status, reason_codes, expected",
     [

@@ -20,7 +20,6 @@ from multiprocessing.queues import Queue, SimpleQueue
 from typing import Literal
 
 from codes import EntryStatus, ReasonCode, WarningCode
-from coordination.analysis import BondAnalysisMetadata
 from crystallization_conditions import extract_crystallization_context
 from density_analysis import Ccp4EntryLimitationError, elapsed_s
 from inputs import MissingInputError
@@ -224,24 +223,57 @@ def _apply_density_outcome(result: EntryResult, outcome: DensityOutcome) -> None
         result.confidence_inputs_missing_reason = outcome.reason_code
 
 
+def _appended_detail(existing: str, messages: Sequence[str]) -> str:
+    """Join ``messages`` onto ``existing`` so the result fits the manifest cap.
+
+    Every stage caps its own detail at ``MAX_MANIFEST_STATUS_DETAIL_CHARS``
+    before handing it over. Joining a capped detail with new messages and
+    capping the result again would therefore cut off the new messages, and
+    a later failure would leave no trace in the manifest text.
+
+    When the plain join fits, it is returned unchanged. When it does not,
+    ``existing`` and the joined ``messages`` are truncated separately, each
+    to half the cap, so the manifest still names the earlier failure and
+    the later one. The untruncated messages remain in the debug log.
+    """
+    appended = "; ".join(messages)
+    if not existing:
+        return truncate(appended, MAX_MANIFEST_STATUS_DETAIL_CHARS)
+    if not appended:
+        return existing
+    joined = f"{existing}; {appended}"
+    if len(joined) <= MAX_MANIFEST_STATUS_DETAIL_CHARS:
+        return joined
+    half = (MAX_MANIFEST_STATUS_DETAIL_CHARS - 2) // 2
+    return f"{truncate(existing, half)}; {truncate(appended, half)}"
+
+
 def _apply_bond_outcome(result: EntryResult, outcome: BondOutcome) -> None:
-    """Fold the bond stage into the entry result."""
+    """Fold the bond stage into the entry result.
+
+    A density failure recorded earlier keeps its detail and its confidence
+    reason; the bond failure is appended rather than written over it.
+    """
     if outcome.failed:
-        result.status_detail = outcome.status_detail
+        result.status_detail = _appended_detail(
+            result.status_detail, [outcome.status_detail]
+        )
         result.reason_codes = merged_codes(
             result.reason_codes, [ReasonCode.BOND_STAGE_FAILURE]
         )
-        result.confidence_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
+        if not result.confidence_inputs_missing_reason:
+            result.confidence_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
     result.timings.update(outcome.timings)
 
 
 def _finalize_result(
     result: EntryResult,
     identification_codes: list[ReasonCode],
-    bond_meta: BondAnalysisMetadata,
+    bond: BondOutcome,
     selected_metals: Sequence[AtomSite],
 ) -> None:
     """Combine stage outcomes into the entry status, reason codes, and counts."""
+    bond_meta = bond.analysis.metadata
     result.reason_codes = merged_codes(
         result.reason_codes,
         [*identification_codes, *bond_meta.partial_reason_codes],
@@ -249,17 +281,18 @@ def _finalize_result(
     messages = [IDENTIFICATION_REASON_MESSAGES[code] for code in identification_codes]
     messages.extend(bond_meta.messages)
     if messages:
-        existing_detail = result.status_detail
-        result.status_detail = truncate(
-            "; ".join(([existing_detail] if existing_detail else []) + messages),
-            MAX_MANIFEST_STATUS_DETAIL_CHARS,
-        )
+        result.status_detail = _appended_detail(result.status_detail, messages)
     result.warning_codes = merged_codes(result.warning_codes, bond_meta.warning_codes)
     result.status = EntryStatus.PARTIAL if result.reason_codes else EntryStatus.OK
-    # Count coordinate sites even when their EDSTATS joins failed.
+    # Count coordinate sites even when their EDSTATS joins failed. A bond stage
+    # that raised measured nothing, so its counts stay unmeasured rather than zero.
     result.n_metals = len(selected_metals)
-    result.n_bonds = len(result.bond_rows)
-    result.n_candidates = len(result.candidate_rows)
+    if bond.failed:
+        result.n_bonds = None
+        result.n_candidates = None
+    else:
+        result.n_bonds = len(result.bond_rows)
+        result.n_candidates = len(result.candidate_rows)
 
 
 def process(pdb_id: str) -> EntryResult:
@@ -354,9 +387,7 @@ def _process_entry(pdb_id: str) -> EntryResult:
         result.rows = density.rows
         result.bond_rows = bond.analysis.bond_rows
         result.candidate_rows = bond.analysis.candidate_rows
-        _finalize_result(
-            result, identification_codes, bond.analysis.metadata, selected_metals
-        )
+        _finalize_result(result, identification_codes, bond, selected_metals)
     except MissingInputError as e:
         result.status = EntryStatus.SKIP
         result.reason_codes = [ReasonCode.MISSING_INPUT]
