@@ -174,12 +174,22 @@ def first_usable(*paths: str) -> str | None:
 
 
 class PreparedInputs(NamedTuple):
-    """The analysis inputs of a mirror entry and the coordinates they came from."""
+    """The analysis inputs of one entry and the coordinates they came from.
+
+    Mirror and manual inputs converge here so the worker need not know which
+    files it was given or whether the analysis PDB was converted from mmCIF.
+    """
 
     mtz: str
     pdb: str
     # The deposited coordinate file the analysis PDB was derived from.
     coordinates: str
+    converted: bool
+
+    @property
+    def source_coordinate_format(self) -> str:
+        """The deposited coordinate format."""
+        return "mmcif" if self.converted else "pdb"
 
 
 def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> PreparedInputs:
@@ -199,7 +209,8 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> PreparedInputs
     coordinates = first_usable(*final_file_candidates(entry_dir, pdb_id, "coordinates"))
     if coordinates is None:
         raise MissingInputError(f"{pdb_id}_final.cif or {pdb_id}_final.pdb")
-    if coordinates.endswith((".cif", ".cif.gz")):
+    converted = coordinates.endswith((".cif", ".cif.gz"))
+    if converted:
         pdb = cif_to_pdb(
             coordinates, os.path.join(work_dir, f"{pdb_id}_final_from_cif.pdb")
         )
@@ -207,7 +218,7 @@ def prepare_inputs(pdb_id: str, entry_dir: str, work_dir: str) -> PreparedInputs
         pdb = _gunzip_to(coordinates, os.path.join(work_dir, f"{pdb_id}_final.pdb"))
     else:
         pdb = coordinates
-    return PreparedInputs(mtz, pdb, coordinates)
+    return PreparedInputs(mtz, pdb, coordinates, converted)
 
 
 def prepare_data_json(entry_dir: str, work_dir: str) -> str | None:
@@ -506,8 +517,8 @@ def resolve_manual_inputs(
     mtz_file: str | None = None,
     cif_file: str | None = None,
     work_dir: str | None = None,
-) -> tuple[str, str]:
-    """Return (mtz_path, pdb_path) for a manually supplied local input set."""
+) -> PreparedInputs:
+    """Return the analysis inputs of a manually supplied local input set."""
     if not mtz_file:
         raise ValueError("manual mode requires --mtz-file")
     if not os.path.isfile(mtz_file):
@@ -517,12 +528,14 @@ def resolve_manual_inputs(
         if not os.path.isfile(cif_file):
             raise MissingInputError(f"cif file not found: {cif_file}")
         target_pdb = os.path.join(work_dir or os.getcwd(), f"{pdb_id}.pdb")
-        return mtz_file, cif_to_pdb(cif_file, target_pdb)
+        return PreparedInputs(
+            mtz_file, cif_to_pdb(cif_file, target_pdb), cif_file, converted=True
+        )
 
     if pdb_file:
         if not os.path.isfile(pdb_file):
             raise MissingInputError(f"pdb file not found: {pdb_file}")
-        return mtz_file, pdb_file
+        return PreparedInputs(mtz_file, pdb_file, pdb_file, converted=False)
 
     raise ValueError("manual mode requires --pdb-file or --cif-file")
 

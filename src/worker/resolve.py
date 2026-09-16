@@ -86,7 +86,7 @@ def prepare_analysis_inputs(
     """
     manual_inputs = cfg.manual_inputs
     if manual_inputs:
-        mtz, pdb = resolve_manual_inputs(
+        prepared = resolve_manual_inputs(
             pdb_id,
             pdb_file=manual_inputs.get("pdb_file"),
             mtz_file=manual_inputs.get("mtz_file"),
@@ -96,47 +96,40 @@ def prepare_analysis_inputs(
         data_json = manual_inputs.get("data_json")
         # An explicitly named metadata file is an input contract, not a probe.
         metadata_required = data_json is not None
-        source_coordinate_path = (
-            manual_inputs.get("cif_file") or manual_inputs.get("pdb_file") or ""
-        )
-        converted = bool(manual_inputs.get("cif_file"))
     else:
         if entry_dir is None:
             raise ValueError("a PDB-REDO entry directory is required")
         prepared = prepare_inputs(pdb_id, entry_dir, work_dir)
-        mtz, pdb = prepared.mtz, prepared.pdb
         data_json = prepare_data_json(entry_dir, work_dir)
         metadata_required = False
-        source_coordinate_path = prepared.coordinates
-        converted = source_coordinate_path.endswith((".cif", ".cif.gz"))
 
     # Feeds PDB-REDO provenance and the DPI stage; density never reads it.
-    metadata = read_entry_metadata(mtz, data_json, required=metadata_required)
-    map_reslo, map_reshi = read_map_column_resolution(mtz)
+    metadata = read_entry_metadata(prepared.mtz, data_json, required=metadata_required)
+    map_reslo, map_reshi = read_map_column_resolution(prepared.mtz)
     analysis_pdb, input_model_count = first_model_pdb(
-        pdb, os.path.join(work_dir, f"{pdb_id}_model1.pdb")
+        prepared.pdb, os.path.join(work_dir, f"{pdb_id}_model1.pdb")
     )
     inputs = EntryInputs(
         work_dir=work_dir,
-        mtz=mtz,
+        mtz=prepared.mtz,
         pdb=analysis_pdb,
         data_json=data_json,
         data_reshi=metadata.data_reshi,
         map_reslo=map_reslo,
         map_reshi=map_reshi,
         pdb_redo_is_twin=metadata.pdb_redo.is_twin,
-        source_coordinate_path=source_coordinate_path,
+        source_coordinate_path=prepared.coordinates,
     )
     structure = load_structure(
         pdb_id, analysis_pdb, source_model_count=input_model_count
     )
     provenance = InputProvenance(
         coordinates=CoordinateProvenance(
-            source_coordinate_format="mmcif" if converted else "pdb",
+            source_coordinate_format=prepared.source_coordinate_format,
             analysis_coordinate_format=structure.analysis_coordinate_format,
-            coordinate_conversion_performed=converted,
+            coordinate_conversion_performed=prepared.converted,
             source_coordinate_path=source_coordinate_provenance_path(
-                cfg, pdb_id, source_coordinate_path
+                cfg, pdb_id, prepared.coordinates
             ),
             input_model_count=structure.input_model_count,
             model_analyzed=structure.model_analyzed,

@@ -235,6 +235,7 @@ def test_a_legacy_pdb_export_is_used_when_no_mmcif_exists(
     pdb = prepared.pdb
 
     assert prepared.coordinates.startswith(entry_dir)
+    assert not prepared.converted
     assert pdb.endswith(".pdb"), "a gzipped export must be decompressed first"
     assert os.path.isfile(pdb)
     with open(pdb, encoding="ascii") as handle:
@@ -301,8 +302,11 @@ def test_a_compressed_mirror_is_decompressed_into_the_work_directory(
         return destination
 
     monkeypatch.setattr(inputs, "cif_to_pdb", fake_cif_to_pdb)
-    mtz, pdb, coordinates = inputs.prepare_inputs("9myr", entry_dir, str(work_dir))
+    mtz, pdb, coordinates, was_converted = inputs.prepare_inputs(
+        "9myr", entry_dir, str(work_dir)
+    )
 
+    assert was_converted
     assert coordinates.endswith("_final.cif.gz")
     assert os.path.dirname(mtz) == str(work_dir), "the mirror must not be written to"
     assert not mtz.endswith(".gz")
@@ -520,6 +524,32 @@ def test_a_missing_manual_file_is_reported_as_missing_input(tmp_path: Path) -> N
     # A directory is not an input file either.
     with pytest.raises(inputs.MissingInputError, match="pdb file not found"):
         inputs.resolve_manual_inputs("9myr", mtz_file=str(mtz), pdb_file=str(tmp_path))
+
+
+def test_manual_inputs_report_their_source_and_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker learns the deposited file and format from the reader itself."""
+    mtz = tmp_path / "entry.mtz"
+    mtz.write_bytes(b"MTZ ")
+    pdb = tmp_path / "entry.pdb"
+    pdb.write_bytes(b"END\n")
+    cif = tmp_path / "entry.cif"
+    cif.write_bytes(b"data_entry\n")
+    monkeypatch.setattr(inputs, "cif_to_pdb", lambda _cif, dst: dst)
+
+    from_pdb = inputs.resolve_manual_inputs(
+        "9myr", mtz_file=str(mtz), pdb_file=str(pdb)
+    )
+    from_cif = inputs.resolve_manual_inputs(
+        "9myr", mtz_file=str(mtz), cif_file=str(cif), work_dir=str(tmp_path)
+    )
+
+    assert from_pdb == inputs.PreparedInputs(str(mtz), str(pdb), str(pdb), False)
+    assert from_pdb.source_coordinate_format == "pdb"
+    assert from_cif.coordinates == str(cif)
+    assert from_cif.converted and from_cif.source_coordinate_format == "mmcif"
+    assert from_cif.pdb == os.path.join(str(tmp_path), "9myr.pdb")
 
 
 def test_a_body_matching_content_length_is_promoted(
