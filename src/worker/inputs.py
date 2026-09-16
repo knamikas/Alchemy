@@ -24,7 +24,7 @@ from inputs import (
     resolve_manual_inputs,
 )
 from structure_analysis import StructureContext, load_structure
-from worker_contracts import CoordinateProvenance, WorkerConfig
+from worker.contracts import CoordinateProvenance, WorkerConfig
 
 
 @dataclass(frozen=True, slots=True)

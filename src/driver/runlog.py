@@ -29,7 +29,7 @@ from codes import EntryStatus, ReasonCode
 from driver.resources import available_cpu_count, available_memory_bytes
 from output_rows import blank_if_unmeasured
 from run_config import RunConfig
-from worker_contracts import EntryResult
+from worker.contracts import EntryResult
 
 # Keep per-run logs separate from result CSVs and startup cleanup.
 DEFAULT_LOG_DIRNAME = "logs"

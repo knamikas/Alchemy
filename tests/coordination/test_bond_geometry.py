@@ -18,7 +18,6 @@ import coordinate_conversion
 import coordination.dpi as dpi_module
 import coordination.schema as coordination_schema
 import reference_data
-import worker
 from codes import EligibilityReason, EligibilityStatus, EntryStatus, ReferenceKind
 from coordination import donor_chemistry, policy
 from coordination.contact_record import Candidate
@@ -33,6 +32,7 @@ from structure_analysis import (
     count_ni,
     load_structure,
 )
+from worker import lifecycle
 
 # Transcribed from README.md's geometry-inference donor table.
 README_SIDE_CHAIN_DONORS: dict[str, set[str]] = {
@@ -321,7 +321,7 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
     assert "non_finite_metal_coordinates" in metadata.partial_reason_codes
     # The entry itself is unscorable, so an ordinary resume does not retry it.
     assert (
-        worker.retryable_for(EntryStatus.PARTIAL, metadata.partial_reason_codes)
+        lifecycle.retryable_for(EntryStatus.PARTIAL, metadata.partial_reason_codes)
         is False
     )
 

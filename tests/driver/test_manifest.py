@@ -12,8 +12,6 @@ import pytest
 from helpers import entry_result, run_config, worker_config
 
 import analysis_config
-import worker
-import worker_inputs
 from driver import confidence as driver_confidence, environment, pool, resume
 from driver.writers import (
     MANIFEST_COLUMNS,
@@ -24,7 +22,8 @@ from driver.writers import (
 )
 from output_rows import MetalStatsRow
 from run_config import RunConfig
-from worker_contracts import ManualInputs
+from worker import inputs as worker_inputs, lifecycle
+from worker.contracts import ManualInputs
 
 CFG = worker_config()
 
@@ -47,7 +46,7 @@ class TestInitialResult:
 
     def test_seeds_bond_counts_blank_not_zero(self) -> None:
         """``0`` is a measured result, so an unrun bond stage must stay blank."""
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         assert result.n_bonds is None
         assert result.n_candidates is None
         assert result.n_bonds != 0
@@ -55,7 +54,7 @@ class TestInitialResult:
 
     def test_every_non_derived_manifest_column_is_present_up_front(self) -> None:
         """A failure at any stage still projects onto a complete row."""
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         required = set(MANIFEST_COLUMNS) - DERIVED_MANIFEST_COLUMNS
         supplied = set(RUN_POLICY_COLUMNS)
         for column, path in MANIFEST_FIELDS.items():
@@ -66,12 +65,12 @@ class TestInitialResult:
 
     def test_supplies_the_fields_manifest_row_reads_directly(self) -> None:
         """``manifest_row`` reads these without a default; they must exist."""
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         for name in ("n_metals", "runtime_s", "n_bonds", "n_candidates", "pdb_id"):
             assert hasattr(result, name)
 
     def test_defaults_to_a_retryable_error(self) -> None:
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         assert result.status == "error"
         assert result.retryable is True
 
@@ -81,21 +80,21 @@ class TestInitialResult:
         Runs whose z-scores used different reference distances must remain
         distinguishable in the output.
         """
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         row = manifest_row(result, False, True, {}, {})
 
         assert result.software.reference_data_id == CFG.reference_data_id
         assert row["reference_data_id"] == CFG.reference_data_id
 
     def test_carries_the_analysis_configuration_identity(self) -> None:
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         row = manifest_row(result, False, True, {}, {})
 
         assert result.software.analysis_config_id == CFG.analysis_config_id
         assert row["analysis_config_id"] == CFG.analysis_config_id
 
     def test_carries_run_provenance_from_the_config(self) -> None:
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         assert result.software.alchemy_version == environment.ALCHEMY_VERSION
         assert result.software.alchemy_commit == CFG.alchemy_commit
         assert result.software.gemmi_version == CFG.gemmi_version
@@ -104,7 +103,7 @@ class TestInitialResult:
     def test_the_manifest_stamps_the_run_wide_analysis_policy(self) -> None:
         """The policy is a property of the checkout, so no result carries it."""
         row = manifest_row(
-            worker.initial_result("109m", CFG, None), False, True, {}, {}
+            lifecycle.initial_result("109m", CFG, None), False, True, {}, {}
         )
         assert row["model_policy"] == analysis_config.MODEL_POLICY
         assert row["altloc_policy"] == analysis_config.ALTLOC_POLICY
@@ -122,7 +121,7 @@ class TestInitialResult:
         self, manual_inputs: ManualInputs | None, expected: str
     ) -> None:
         """Manual coordinate/MTZ input is not a PDB-REDO final re-refinement."""
-        result = worker.initial_result("109m", CFG, manual_inputs)
+        result = lifecycle.initial_result("109m", CFG, manual_inputs)
         assert result.pdb_redo.refinement_state == expected
 
     def test_mirror_source_paths_are_portable_but_manual_paths_are_preserved(
@@ -145,8 +144,8 @@ class TestInitialResult:
         )
 
     def test_row_lists_are_independent_between_entries(self) -> None:
-        first = worker.initial_result("109m", CFG, None)
-        second = worker.initial_result("1cll", CFG, None)
+        first = lifecycle.initial_result("109m", CFG, None)
+        second = lifecycle.initial_result("1cll", CFG, None)
         first.rows.append(MetalStatsRow.from_output_fields("109m", "metal", [1]))
         first.reason_codes.append("boom")
         assert second.rows == []
@@ -158,7 +157,7 @@ class TestInitialResult:
         With ``slots=True``, a misspelled assignment is an error rather than an
         unread field that leaves a stale value in the manifest.
         """
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
 
         with pytest.raises(AttributeError, match="retryble"):
             result.retryble = True  # type: ignore[attr-defined]
@@ -171,7 +170,7 @@ class TestInitialResult:
         A ``None`` reaching CSV as ``"None"`` reads back to the next
         ``--resume`` as a completed stage.
         """
-        result = worker.initial_result("109m", CFG, None)
+        result = lifecycle.initial_result("109m", CFG, None)
         row = manifest_row(result, False, True, {}, {})
 
         for column in ("n_bonds", "n_candidates", "input_model_count"):

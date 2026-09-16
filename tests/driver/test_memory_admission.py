@@ -16,8 +16,6 @@ import pytest
 from helpers import entry_result
 
 import cli
-import worker
-import worker_memory
 from codes import EntryStatus
 from driver import (
     confidence as driver_confidence,
@@ -28,7 +26,8 @@ from driver import (
 )
 from driver.memory_admission import MemoryAdmission
 from driver.runlog import RunLog
-from worker_contracts import EntryResult, WorkerConfig
+from worker import lifecycle, memory
+from worker.contracts import EntryResult, WorkerConfig
 
 if TYPE_CHECKING:
     from multiprocessing.pool import AsyncResult
@@ -160,9 +159,9 @@ def test_cleanup_runs_after_analysis_locals_are_released(
         gc.collect()
         released.append(refs[0]() is None)
 
-    monkeypatch.setattr(worker, "_process_entry", analyze)
-    monkeypatch.setattr(worker, "release_idle_memory", clean)
-    assert worker.process("test") is result
+    monkeypatch.setattr(lifecycle, "_process_entry", analyze)
+    monkeypatch.setattr(lifecycle, "release_idle_memory", clean)
+    assert lifecycle.process("test") is result
     assert released == [True]
 
 
@@ -170,9 +169,9 @@ def test_unsupported_allocator_still_collects_garbage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     collected: list[bool] = []
-    monkeypatch.setattr(worker_memory, "_allocator_trim", lambda: None)
+    monkeypatch.setattr(memory, "_allocator_trim", lambda: None)
     monkeypatch.setattr(gc, "collect", lambda: collected.append(True))
-    worker_memory.release_idle_memory()
+    memory.release_idle_memory()
     assert collected == [True]
 
 
@@ -187,9 +186,9 @@ def test_housekeeping_failure_cannot_change_an_entry_result(
     def analyze(_: str) -> EntryResult:
         return result
 
-    monkeypatch.setattr(worker, "_process_entry", analyze)
-    monkeypatch.setattr(worker, "release_idle_memory", failed_cleanup)
-    assert worker.process("test") is result
+    monkeypatch.setattr(lifecycle, "_process_entry", analyze)
+    monkeypatch.setattr(lifecycle, "release_idle_memory", failed_cleanup)
+    assert lifecycle.process("test") is result
 
 
 @pytest.mark.parametrize(

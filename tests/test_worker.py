@@ -18,15 +18,12 @@ import analysis_config
 import density_analysis as density
 import scratch
 import structure_analysis
-import worker
-import worker_contracts
-import worker_inputs
-import worker_stages
 from codes import DensityMapScope, EntryStatus
 from driver import confidence as driver_confidence
 from driver.writers import manifest_row
 from edstats_statistics import EdstatsExtraction
 from inputs import PdbRedoMetadata
+from worker import contracts, inputs as worker_inputs, lifecycle, stages
 
 
 def _read_resolution_stub(
@@ -54,8 +51,8 @@ def _manual_entry(
     pdb_transform: Callable[[Path], None] | None = None,
     bonds: bool = False,
     **cfg_overrides: Any,
-) -> worker_contracts.EntryResult:
-    """Run one manual-input entry through ``worker.process``.
+) -> contracts.EntryResult:
+    """Run one manual-input entry through ``lifecycle.process``.
 
     Only the three MTZ-dependent readers are stubbed; structure loading, result
     assembly and status computation all run for real.
@@ -75,7 +72,7 @@ def _manual_entry(
     monkeypatch.setattr(
         worker_inputs, "read_map_column_resolution", _read_map_column_resolution_stub
     )
-    monkeypatch.setattr(worker_stages, "run_density_analysis", density_stage)
+    monkeypatch.setattr(stages, "run_density_analysis", density_stage)
 
     cfg = worker_config(
         input_root=str(tmp_path),
@@ -98,8 +95,8 @@ def _manual_entry(
     )
     # monkeypatch restores ``worker_config``; ``initialize_worker`` has no
     # teardown counterpart.
-    monkeypatch.setattr(worker, "worker_config", cfg)
-    return worker.process("1abc")
+    monkeypatch.setattr(lifecycle, "worker_config", cfg)
+    return lifecycle.process("1abc")
 
 
 @pytest.mark.parametrize(
@@ -163,9 +160,9 @@ def test_a_missing_manual_input_skips_the_entry_as_missing_input(
             "data_json": None,
         },
     )
-    monkeypatch.setattr(worker, "worker_config", cfg)
+    monkeypatch.setattr(lifecycle, "worker_config", cfg)
 
-    result = worker.process("1abc")
+    result = lifecycle.process("1abc")
 
     assert result.status == "skip"
     assert result.reason_codes == ["missing_input"]
@@ -446,7 +443,7 @@ def test_an_unanticipated_failure_logs_its_traceback(
     def failing_stage(*args: Any, **kwargs: Any) -> None:
         raise ValueError("no FWT column")
 
-    with caplog.at_level(logging.DEBUG, logger="alchemy.worker"):
+    with caplog.at_level(logging.DEBUG, logger="alchemy.lifecycle"):
         result = _manual_entry(tmp_path, monkeypatch, failing_stage)
 
     assert result.status == "error"
@@ -481,9 +478,9 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
     def fail_bond_analysis(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("geometry unavailable")
 
-    monkeypatch.setattr(worker_stages, "run_bond_analysis", fail_bond_analysis)
+    monkeypatch.setattr(stages, "run_bond_analysis", fail_bond_analysis)
 
-    outcome = worker_stages.run_bond_stage(
+    outcome = stages.run_bond_stage(
         "109m", worker_config(bonds=True), inputs, structure, [], [], []
     )
     analysis = outcome.analysis
@@ -494,10 +491,10 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
         {},
     )
     assert outcome.failed and outcome.status_detail.startswith("bond: RuntimeError")
-    worker._apply_bond_outcome(result, outcome)  # pyright: ignore[reportPrivateUsage]
+    lifecycle._apply_bond_outcome(result, outcome)  # pyright: ignore[reportPrivateUsage]
     assert result.reason_codes == ["bond_stage_failure"]
     assert result.confidence_inputs_missing_reason == "bond_stage_failure"
-    assert worker.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True
+    assert lifecycle.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True
 
 
 def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
@@ -523,7 +520,7 @@ def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
     def fail_bond_analysis(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("geometry unavailable")
 
-    monkeypatch.setattr(worker_stages, "run_bond_analysis", fail_bond_analysis)
+    monkeypatch.setattr(stages, "run_bond_analysis", fail_bond_analysis)
     result = _manual_entry(tmp_path, monkeypatch, fake_density, bonds=True)
 
     assert result.status == "partial"
@@ -539,9 +536,9 @@ def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
 
 def test_an_already_capped_detail_still_admits_appended_messages() -> None:
     """Capping the join again would silently drop the later stage's messages."""
-    cap = worker_stages.MAX_MANIFEST_STATUS_DETAIL_CHARS
+    cap = stages.MAX_MANIFEST_STATUS_DETAIL_CHARS
     existing = "density unavailable: " + "x" * cap
-    detail = worker._appended_detail(  # pyright: ignore[reportPrivateUsage]
+    detail = lifecycle._appended_detail(  # pyright: ignore[reportPrivateUsage]
         existing, ["bond: RuntimeError: geometry unavailable"]
     )
 
@@ -580,7 +577,7 @@ def test_retry_policy_follows_from_status_and_reason_codes(
     inputs; a partial entry is retried only when the failed stage reported
     nothing about the entry itself.
     """
-    assert worker.retryable_for(status, reason_codes) is expected
+    assert lifecycle.retryable_for(status, reason_codes) is expected
 
 
 class TestNoRecognizedMetalOutcome:
@@ -709,10 +706,8 @@ class TestDensityResultReachesTheResult:
         monkeypatch: pytest.MonkeyPatch,
         result: density.DensityResult,
         **cfg_overrides: Any,
-    ) -> worker_contracts.EntryResult:
-        monkeypatch.setattr(
-            worker_stages, "extract_metal_statistics", _empty_metal_statistics
-        )
+    ) -> contracts.EntryResult:
+        monkeypatch.setattr(stages, "extract_metal_statistics", _empty_metal_statistics)
 
         def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
             return result
@@ -796,9 +791,7 @@ def test_a_loaded_structure_fills_in_the_model_provenance(
     failed before ``load_structure`` cannot claim a model count; a successful
     load must fill them in.
     """
-    monkeypatch.setattr(
-        worker_stages, "extract_metal_statistics", _empty_metal_statistics
-    )
+    monkeypatch.setattr(stages, "extract_metal_statistics", _empty_metal_statistics)
 
     def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
         return TestDensityResultReachesTheResult.density_result()
@@ -829,7 +822,7 @@ class TestCcp4TimeoutOutcome:
     @staticmethod
     def _entry(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
-    ) -> worker_contracts.EntryResult:
+    ) -> contracts.EntryResult:
         """Run one manual-input entry whose density stage raises ``failure``."""
 
         def fake_density(*args: Any, **kwargs: Any) -> None:
@@ -893,7 +886,7 @@ class TestCcp4TimeoutOutcome:
             f"the retained log is missing at {kept}; the path named in the "
             "timeout message must outlive the scratch directory"
         )
-        assert worker_stages.TIMEOUT_LOG_DIRNAME in kept
+        assert stages.TIMEOUT_LOG_DIRNAME in kept
         with open(kept, encoding="utf-8") as handle:
             assert "before the stall" in handle.read()
 

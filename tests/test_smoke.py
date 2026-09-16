@@ -24,7 +24,6 @@ def test_src_modules_import() -> None:
     import edstats_statistics
     import metal_elements
     import structure_analysis
-    import worker
     from coordination import (
         contact_record,
         declared_connections,
@@ -34,12 +33,17 @@ def test_src_modules_import() -> None:
         schema,
     )
     from driver import ccp4_setup, pool, progress, resources, runlog, writers
+    from worker import contracts, inputs as worker_inputs, lifecycle, memory, stages
 
     assert "ZN" in metal_elements.METAL_ELEMENTS
     assert policy.CANDIDATE_SEARCH_RADIUS == 4.0
     assert callable(structure_analysis.load_structure)
     assert callable(pool.run)
-    assert callable(worker.process)
+    assert callable(lifecycle.process)
+    assert callable(worker_inputs.prepare_analysis_inputs)
+    assert callable(stages.run_density_stage)
+    assert callable(memory.release_idle_memory)
+    assert callable(contracts.EntryResult)
     assert writers.MANIFEST_COLUMNS[0] == "pdbID"
     assert callable(progress.ProgressReporter)
     assert callable(runlog.RunLog)

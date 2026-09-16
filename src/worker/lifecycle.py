@@ -1,8 +1,8 @@
 """Process one PDB entry and record its results and failures.
 
 Configuration is initialized once per worker to avoid serializing it per entry.
-Input resolution lives in ``worker_inputs`` and the analysis stages in
-``worker_stages``; this module owns the process lifecycle, the entry's scratch
+Input resolution lives in ``worker.inputs`` and the analysis stages in
+``worker.stages``; this module owns the process lifecycle, the entry's scratch
 directory, and the folds that combine stage outcomes into an ``EntryResult``.
 """
 
@@ -26,7 +26,7 @@ from inputs import MissingInputError
 from run_logging import configure_worker_logging, logger_for, truncate
 from scratch import ENTRY_SCRATCH, create_owned_scratch_directory
 from structure_analysis import AtomSite
-from worker_contracts import (
+from worker.contracts import (
     EntryResult,
     InflightEvent,
     ManualInputs,
@@ -34,13 +34,13 @@ from worker_contracts import (
     SoftwareProvenance,
     WorkerConfig,
 )
-from worker_inputs import (
+from worker.inputs import (
     InputProvenance,
     prepare_analysis_inputs,
     resolve_entry_dir,
 )
-from worker_memory import release_idle_memory
-from worker_stages import (
+from worker.memory import release_idle_memory
+from worker.stages import (
     IDENTIFICATION_REASON_MESSAGES,
     MAX_MANIFEST_STATUS_DETAIL_CHARS,
     METALS_SET,
@@ -57,7 +57,7 @@ from worker_stages import (
     sites_without_density_rows,
 )
 
-# The per-entry seams callers reach through ``worker`` besides the lifecycle
+# The per-entry seams callers reach through this module besides the lifecycle
 # functions defined below.
 __all__ = [
     "DETERMINISTIC_PROCESSING_ERRORS",

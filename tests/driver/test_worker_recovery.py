@@ -30,8 +30,6 @@ import analysis_config
 import cli
 import reference_data
 import run_logging
-import worker
-import worker_contracts
 from codes import EntryStatus
 from driver import (
     confidence as driver_confidence,
@@ -42,7 +40,8 @@ from driver import (
     writers,
 )
 from driver.writers import MANIFEST_COLUMNS
-from worker_contracts import InflightEvent
+from worker import contracts, lifecycle
+from worker.contracts import InflightEvent
 
 if TYPE_CHECKING:
     # Annotations and casts only: the fakes below stand in for these nominal
@@ -97,7 +96,7 @@ class _BrokenQueue:
 
 def _reference_cfg(
     output_dir: str, manual_inputs: dict[str, str | None] | None = None
-) -> worker_contracts.WorkerConfig:
+) -> contracts.WorkerConfig:
     """Build the worker config exactly as ``driver_pool.run`` assembles it."""
     env = dict(os.environ)
     return helpers.worker_config(
@@ -326,7 +325,7 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(
     again instead of treating it as terminally finished.
     """
     cfg = _reference_cfg(str(tmp_path))
-    result = worker.worker_death_result("1abc", cfg, 4321)
+    result = lifecycle.worker_death_result("1abc", cfg, 4321)
 
     assert result.pdb_id == "1abc"
     assert result.status == "error"
@@ -362,7 +361,7 @@ def test_worker_death_result_leaves_the_bond_counts_blank(tmp_path: Path) -> Non
     nothing", and ``--resume`` reads the difference.
     """
     cfg = _reference_cfg(str(tmp_path))
-    result = worker.worker_death_result("1abc", cfg, 7)
+    result = lifecycle.worker_death_result("1abc", cfg, 7)
     assert result.n_bonds is None
     assert result.n_candidates is None
 
@@ -388,7 +387,7 @@ def test_worker_death_result_reports_the_run_refinement_state(
 ) -> None:
     """Even a synthesized failure records which refinement the run targeted."""
     cfg = _reference_cfg(str(tmp_path), manual_inputs=manual_inputs)
-    result = worker.worker_death_result("1abc", cfg, 7)
+    result = lifecycle.worker_death_result("1abc", cfg, 7)
     assert result.pdb_redo.refinement_state == expected_state
 
 
@@ -401,8 +400,8 @@ def test_worker_death_reason_codes_discriminate_synthesized_from_real(
     from a genuine worker result for the same entry.
     """
     cfg = _reference_cfg(str(tmp_path))
-    synthesized = worker.worker_death_result("1abc", cfg, 7)
-    genuine = worker.initial_result("1abc", cfg, None)
+    synthesized = lifecycle.worker_death_result("1abc", cfg, 7)
+    genuine = lifecycle.initial_result("1abc", cfg, None)
 
     assert synthesized.reason_codes == ["worker_process_died"]
     assert genuine.reason_codes == []
@@ -431,7 +430,7 @@ _DRIVER_HARD_TIMEOUT_S: float = 60.0
 
 def _announce(state: Literal["start", "end"], pdb_id: str) -> None:
     """Forward a scripted notification through the real worker mechanism."""
-    worker.announce_inflight(state, pdb_id)
+    lifecycle.announce_inflight(state, pdb_id)
 
 
 def _announce_task_start(pdb_id: str) -> None:
@@ -475,18 +474,18 @@ def _kill_self_after(delay: float) -> None:
     threading.Thread(target=kill, daemon=True).start()
 
 
-def _stub_process(pdb_id: str) -> worker_contracts.EntryResult:
-    """Stand in for ``worker.process``: no CCP4, no downloads, scripted deaths.
+def _stub_process(pdb_id: str) -> contracts.EntryResult:
+    """Stand in for ``lifecycle.process``: no CCP4, no downloads, scripted deaths.
 
     Every entry announces itself exactly as the real worker does, so the driver
     sees the notification stream it would see in production.
     """
-    cfg = worker.worker_config
+    cfg = lifecycle.worker_config
     if cfg is None:  # pragma: no cover - would mean the initializer never ran
         raise RuntimeError("worker configuration has not been initialized")
     step = _stub_script.get(pdb_id, {})
     runtime = float(step.get("runtime", 0.02))
-    result = worker.initial_result(pdb_id, cfg, cfg.manual_inputs)
+    result = lifecycle.initial_result(pdb_id, cfg, cfg.manual_inputs)
 
     die = step.get("die")
     if die and _first_visit(pdb_id):
@@ -967,14 +966,14 @@ def test_an_entry_released_before_the_death_is_not_declared_lost(
 def _spawn_task(payload: tuple[str, str]) -> tuple[str, str, list[str]]:
     """Announce, then either finish or die abnormally, inside a spawn worker."""
     action, pdb_id = payload
-    worker.announce_inflight("start", pdb_id)
+    lifecycle.announce_inflight("start", pdb_id)
     if action == "die":
         # SIGKILL is not portable, os._exit is; the pause keeps the death after
         # the driver's first roster snapshot.
         time.sleep(0.5)
         os._exit(9)
-    worker.announce_inflight("end", pdb_id)
-    cfg = worker.worker_config
+    lifecycle.announce_inflight("end", pdb_id)
+    cfg = lifecycle.worker_config
     assert cfg is not None
     return (pdb_id, cfg.output_dir, sorted(cfg.cofactors)[:1])
 
@@ -997,7 +996,7 @@ def test_spawn_workers_report_inflight_entries_and_their_deaths(
     finished: list[tuple[str, str, list[str]]] = []
 
     with ctx.Pool(
-        2, initializer=worker.initialize_worker, initargs=(cfg, inflight)
+        2, initializer=lifecycle.initialize_worker, initargs=(cfg, inflight)
     ) as pool:
         # Prime the roster, as the driver's first loop iteration does.
         dispatch.dead_worker_pids(pool, worker_pids)
@@ -1049,9 +1048,9 @@ def test_worker_config_is_picklable(
     assert restored == cfg
     assert restored.cofactors == cfg.cofactors
     assert restored.cofactors, "the bundled cofactor catalog must be loaded"
-    assert worker.initial_result(
+    assert lifecycle.initial_result(
         "1abc", restored, restored.manual_inputs
-    ) == worker.initial_result("1abc", cfg, cfg.manual_inputs)
+    ) == lifecycle.initial_result("1abc", cfg, cfg.manual_inputs)
 
 
 def test_worker_config_cannot_be_edited_by_a_worker(tmp_path: Path) -> None:
@@ -1105,7 +1104,7 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
     )
     driver_pool.record_run_provenance(run_log, cfg, driver_confidence.ConfidencePlan())
 
-    assert isinstance(cfg, worker_contracts.WorkerConfig)
+    assert isinstance(cfg, contracts.WorkerConfig)
     assert run_log.details["confidence_mode"] == "disabled"
     # Keep both file hashes so changes in the combined ID can be traced.
     assert cfg.reference_data_id == reference_data.reference_data_id()
@@ -1164,7 +1163,7 @@ def _never_finishing_process(pdb_id: str) -> NoReturn:
     ``fork``, and a locally defined function fails with "Can't pickle local
     object" before any worker starts.
     """
-    cfg = worker.worker_config
+    cfg = lifecycle.worker_config
     assert cfg is not None
     external = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     marker = os.path.join(cfg.output_dir, f"external-{pdb_id}.pid")

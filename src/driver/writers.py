@@ -30,7 +30,7 @@ from crystallization_conditions import (
 from driver.layout import OutputLayout
 from edstats_statistics import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
 from output_rows import MetalStatsRow, blank_if_unmeasured, scientific_csv_value
-from worker_contracts import EntryResult
+from worker.contracts import EntryResult
 
 if TYPE_CHECKING:
     # The plan module reads this module's schemas; only the annotation crosses back.

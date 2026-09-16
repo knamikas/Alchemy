@@ -23,7 +23,7 @@ from multiprocessing import cpu_count
 from typing import Any, TextIO, cast
 
 from inputs import entry_dir_for, final_file_candidates
-from worker_contracts import ManualInputs
+from worker.contracts import ManualInputs
 
 GIB = 1024**3
 

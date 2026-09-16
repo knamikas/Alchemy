@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from output_rows import MetalStatsRow
     from run_config import RunConfig
     from structure_analysis import AtomSite, StructureContext
-    from worker_contracts import EntryResult, WorkerConfig
+    from worker.contracts import EntryResult, WorkerConfig
 
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -90,7 +90,7 @@ def entry_result(pdb_id: str = "109m", **overrides: Any) -> EntryResult:
     from dataclasses import fields
 
     from codes import EntryStatus
-    from worker_contracts import EntryResult, PdbRedoProvenance, SoftwareProvenance
+    from worker.contracts import EntryResult, PdbRedoProvenance, SoftwareProvenance
 
     result = EntryResult(
         pdb_id=pdb_id,
@@ -145,7 +145,7 @@ def worker_config(**overrides: Any) -> WorkerConfig:
     import logging
 
     from density_analysis import CCP4_TOOL_TIMEOUT_S
-    from worker_contracts import WorkerConfig
+    from worker.contracts import WorkerConfig
 
     fields: dict[str, Any] = {
         "input_root": "/nonexistent/root",

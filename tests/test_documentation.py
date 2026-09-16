@@ -80,7 +80,7 @@ def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
     known = {code.value for code in ReasonCode} - also_column_names
     offenders: list[str] = []
     for module in (
-        "worker.py",
+        "worker/lifecycle.py",
         "coordination/analysis.py",
         "coordination/site_summary.py",
         "coordination/dpi.py",

@@ -12,7 +12,6 @@ import pytest
 from helpers import entry_result, read_csv, run_config, write_manifest
 
 import scratch
-import worker_contracts
 from codes import EntryStatus
 from coordination import schema as coordination_schema
 from driver import (
@@ -29,6 +28,7 @@ from driver.writers import (
     OutputTargets,
     manifest_row,
 )
+from worker import contracts
 
 
 def _manifest_ids(path: str | Path, **kwargs: Any) -> set[str]:
@@ -653,7 +653,7 @@ class TestResumeStaging:
 
         def _dispatch(
             ids: Sequence[str],
-            cfg: worker_contracts.WorkerConfig,
+            cfg: contracts.WorkerConfig,
             workers: int,
             memory_plan: resources.MemoryPlan,
             run_log: RunLog,
@@ -682,7 +682,7 @@ class TestResumeStaging:
                 ["bbbb", "cccc"],
                 # ``None`` proves the halted-batch path never reaches the worker
                 # configuration: ``_dispatch_entries`` is replaced above.
-                cast(worker_contracts.WorkerConfig, None),
+                cast(contracts.WorkerConfig, None),
                 1,
                 layout,
                 driver_confidence.ConfidencePlan(),

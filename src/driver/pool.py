@@ -55,7 +55,7 @@ from reference_data import (
 from run_config import RunConfig
 from run_logging import logger_for, worker_level
 from scratch import sweep_owned_scratch_directories
-from worker_contracts import EntryResult, ManualInputs, WorkerConfig
+from worker.contracts import EntryResult, ManualInputs, WorkerConfig
 
 logger = logger_for(__name__)
 

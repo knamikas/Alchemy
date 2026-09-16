@@ -1,7 +1,7 @@
 """The per-entry analysis stages and the outcomes they hand back.
 
 Each stage returns an outcome instead of editing the entry result itself;
-``worker`` folds the outcomes in, in stage order. The early exit, the density
+``worker.lifecycle`` folds the outcomes in, in stage order. The early exit, the density
 stage, the bond stage, and the checks that join their rows all live here.
 """
 
@@ -45,8 +45,8 @@ from metal_elements import METAL_ELEMENTS
 from output_rows import MetalStatsRow, csv_value
 from run_logging import truncate
 from structure_analysis import NAN, AtomSite, StructureContext
-from worker_contracts import DensityProvenance, WorkerConfig
-from worker_inputs import EntryInputs
+from worker.contracts import DensityProvenance, WorkerConfig
+from worker.inputs import EntryInputs
 
 METALS_SET = set(METAL_ELEMENTS)
 

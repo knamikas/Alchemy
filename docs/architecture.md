@@ -69,14 +69,14 @@ applicable.
 
 ### One entry
 
-[worker.py](../src/worker.py) owns the entry lifecycle and its temporary
+[worker/lifecycle.py](../src/worker/lifecycle.py) owns the entry lifecycle and its temporary
 directory. The pool initializer installs `WorkerConfig` and logging once in each
 process; subsequent tasks call `process()` with a PDB ID. Input resolution lives
-in [worker_inputs.py](../src/worker_inputs.py) and the analysis stages in
-[worker_stages.py](../src/worker_stages.py); `worker.py` folds their outcomes
+in [worker/inputs.py](../src/worker/inputs.py) and the analysis stages in
+[worker/stages.py](../src/worker/stages.py); `lifecycle.py` folds their outcomes
 into the `EntryResult`.
 
-[worker_inputs.py](../src/worker_inputs.py) uses [inputs.py](../src/inputs.py)
+[worker/inputs.py](../src/worker/inputs.py) uses [inputs.py](../src/inputs.py)
 to locate or retrieve files and read reflection limits and PDB-REDO metadata.
 [coordinate_conversion.py](../src/coordinate_conversion.py) handles coordinate
 conversion and first-model extraction, recording source-residue provenance in
@@ -93,7 +93,7 @@ provenance.
 
 After loading the structure and extracting crystallization context, the worker
 checks whether analysis can proceed (the early-exit, density, and bond stages
-are the functions of `worker_stages.py`). Entries without selected metals return
+are the functions of `worker/stages.py`). Entries without selected metals return
 early; unknown element symbols can make metal absence indeterminate. Entries
 above `MAX_ANALYZED_METAL_SITES` also return early with an explicit reason.
 These paths avoid map generation and contact analysis.
@@ -207,7 +207,7 @@ Recovery spans several layers:
 | --- | --- |
 | [run_config.py](../src/run_config.py) | Validated command-line configuration. |
 | [paths.py](../src/paths.py) | The checkout root that default output, cache, and reference paths are anchored to. |
-| [worker_contracts.py](../src/worker_contracts.py) | Worker configuration, entry results, and input provenance records. |
+| [worker/contracts.py](../src/worker/contracts.py) | Worker configuration, entry results, and input provenance records. |
 | [output_rows.py](../src/output_rows.py) | Typed site rows and CSV value formatting. |
 | [codes.py](../src/codes.py) | Status, reason, warning, and contact vocabulary. |
 | [analysis_config.py](../src/analysis_config.py) | Analysis-policy identity and compatibility, including the 100-site entry limit. |
@@ -219,9 +219,9 @@ Recovery spans several layers:
 | [pdb_remarks.py](../src/pdb_remarks.py) | The `REMARK 950 ALCHEMY` provenance records of converted PDB files: record layouts, writer, and parser. |
 | [gemmi_typing.py](../src/gemmi_typing.py) | Typed views of Gemmi members its stub leaves untyped. |
 | [driver/progress.py](../src/driver/progress.py) | Batch progress reporting. |
-| [worker_memory.py](../src/worker_memory.py) | Release idle memory after an entry's analysis frame is gone. |
-| [worker_inputs.py](../src/worker_inputs.py) | Resolve one entry's inputs into the first-model PDB, structure, and provenance. |
-| [worker_stages.py](../src/worker_stages.py) | The per-entry early-exit, density, and bond stages and the outcomes they return. |
+| [worker/memory.py](../src/worker/memory.py) | Release idle memory after an entry's analysis frame is gone. |
+| [worker/inputs.py](../src/worker/inputs.py) | Resolve one entry's inputs into the first-model PDB, structure, and provenance. |
+| [worker/stages.py](../src/worker/stages.py) | The per-entry early-exit, density, and bond stages and the outcomes they return. |
 | [_version.py](../src/_version.py) | Software version used in provenance. |
 
 The maintenance tools are separate entry points, never automatic pipeline

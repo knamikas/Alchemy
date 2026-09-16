@@ -34,13 +34,13 @@ from run_logging import (
     logger_for,
     start_worker_log_listener,
 )
-from worker import (
+from worker.contracts import EntryResult, InflightEvent, WorkerConfig
+from worker.lifecycle import (
     initialize_worker,
     is_worker_death_result,
     process,
     worker_death_result,
 )
-from worker_contracts import EntryResult, InflightEvent, WorkerConfig
 
 if TYPE_CHECKING:
     # Import the actual Pool and Queue classes for type annotations.

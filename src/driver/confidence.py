@@ -29,7 +29,7 @@ from driver.writers import STATS_COLUMNS
 from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import logger_for
-from worker_contracts import EntryResult
+from worker.contracts import EntryResult
 
 if TYPE_CHECKING:
     from driver.dispatch import BatchTally

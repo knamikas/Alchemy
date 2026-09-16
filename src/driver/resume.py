@@ -27,7 +27,7 @@ from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.layout import OutputLayout
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS, OutputTargets
 from scratch import RESUME_SCRATCH, create_owned_scratch_directory
-from worker_contracts import EntryResult
+from worker.contracts import EntryResult
 
 # DictReader uses None for missing cells and stores surplus cells under a None key.
 _CsvRow = dict[str | None, str | list[str] | None]

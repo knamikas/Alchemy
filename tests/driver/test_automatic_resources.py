@@ -13,7 +13,7 @@ from driver import dispatch, resources
 if TYPE_CHECKING:
     from multiprocessing.pool import AsyncResult
 
-    from worker_contracts import EntryResult
+    from worker.contracts import EntryResult
 
 GIB = 1024**3
 

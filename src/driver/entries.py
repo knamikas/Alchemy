@@ -20,7 +20,7 @@ from inputs import (
 )
 from run_config import RunConfig
 from run_logging import logger_for
-from worker_contracts import ManualInputs
+from worker.contracts import ManualInputs
 
 logger = logger_for(__name__)
 

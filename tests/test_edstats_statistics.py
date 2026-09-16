@@ -17,7 +17,6 @@ import pytest
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
 import confidence_score
-import worker_stages
 from coordination.density_zscores import DensityZScoreIndex
 from driver.writers import STATS_COLUMNS
 from edstats_statistics import (
@@ -41,6 +40,7 @@ from structure_analysis import (
     StructureContext,
     load_structure,
 )
+from worker import stages
 
 HEADER = list(helpers.EDSTATS_HEADER)
 INDICES = validated_edstats_header(HEADER)
@@ -1068,7 +1068,7 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
         for row in rows
     ] == [2.0, 8.0]
 
-    worker_stages.append_site_fields(rows, {}, duplicated)
+    stages.append_site_fields(rows, {}, duplicated)
     confidence_inputs = confidence_score.prepare_result_confidence_inputs(
         rows, [], STATS_COLUMNS
     )
