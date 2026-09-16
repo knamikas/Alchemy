@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import Protocol, cast
 
 import gemmi
 
@@ -16,27 +15,38 @@ from pdb_remarks import (
     PolymerPositionRecord,
     ResidueIdentityRecord,
     ResnameRecord,
-    write_conversion_provenance,
+    conversion_provenance_remarks,
 )
 from structure_analysis import blank_if_missing
 
 # The one-character chain ids accepted by both Gemmi and the CCP4 tools.
 LEGACY_PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-
-
-class _PdbWritable(Protocol):
-    """The fully typed positional overload of Gemmi's PDB writer."""
-
-    def write_pdb(self, path: str, options: gemmi.PdbWriteOptions, /) -> None: ...
-
-
+_LEGACY_PDB_CHAIN_ID_SET = frozenset(LEGACY_PDB_CHAIN_IDS)
 LEGACY_PDB_MAX_RESIDUE_NUMBER = 9999
 
 # (atom name, element symbol) pairs, in residue order.
 _ResidueAtoms = tuple[tuple[str, str], ...]
 # Residue name plus its atoms, keyed elsewhere by author identifiers.
 _ResidueEntry = tuple[str, _ResidueAtoms]
+# One-based model, chain, number, insertion code, name, atoms, chain index,
+# residue index, polymer position of a source residue.
 _SourceRecord = tuple[int, str, int, str, str, _ResidueAtoms, int, int, str]
+# One-based model, chain, resnum with insertion code, name, atoms of a residue
+# as the PDB reader sees it in the converted file.
+_ConvertedRecord = tuple[int, str, str, str, _ResidueAtoms]
+
+
+def _residue_atoms(residue: gemmi.Residue) -> _ResidueAtoms:
+    """Describe a residue's atoms by name and element, in residue order."""
+    return tuple((str(atom.name), str(atom.element.name)) for atom in residue)
+
+
+def _author_resnum(residue: gemmi.Residue, label: str) -> str:
+    """Return the author number plus insertion code, e.g. ``"52A"``."""
+    number = residue.seqid.num
+    if number is None:
+        raise ValueError(f"{label} residue {residue.name!r} has no author number")
+    return f"{number}{blank_if_missing(str(residue.seqid.icode))}"
 
 
 def _structure_atom_signatures(
@@ -148,29 +158,18 @@ def residue_index_by_author(
 ) -> tuple[dict[tuple[int, str, str], list[_ResidueEntry]], list[tuple[int, str, str]]]:
     """Index residues by ``(model, chain, resnum)``, with the traversal order.
 
-    The order lets a conversion be checked for reordering, not only for changed
-    identifiers.
+    Models are numbered from one, as in the provenance records. The order lets
+    a conversion be checked for reordering, not only for changed identifiers.
     """
     by_author: dict[tuple[int, str, str], list[_ResidueEntry]] = {}
     order: list[tuple[int, str, str]] = []
-    for model_index, model in enumerate(structure):
+    for model_index, model in enumerate(structure, start=1):
         for chain in model:
             for residue in chain:
-                number = residue.seqid.num
-                if number is None:
-                    raise ValueError(
-                        f"{label} residue {residue.name!r} has no author number"
-                    )
-                insertion = blank_if_missing(str(residue.seqid.icode))
-                key = (model_index, str(chain.name), f"{number}{insertion}")
+                key = (model_index, str(chain.name), _author_resnum(residue, label))
                 order.append(key)
                 by_author.setdefault(key, []).append(
-                    (
-                        str(residue.name),
-                        tuple(
-                            (str(atom.name), str(atom.element.name)) for atom in residue
-                        ),
-                    )
+                    (str(residue.name), _residue_atoms(residue))
                 )
     return by_author, order
 
@@ -183,18 +182,17 @@ def residue_conversion_records(
     converted_by_author, converted_order = residue_index_by_author(
         converted_structure, "converted"
     )
-
-    records: list[ResnameRecord] = []
+    # Equal traversal orders imply equal key sets and equal multiplicities per
+    # key, so the per-key lists below always pair up.
     if converted_order != source_order:
         raise ValueError("PDB conversion changed residue ordering")
-    if set(converted_by_author) != set(source_by_author):
-        raise ValueError("PDB conversion changed residue author identifiers")
+
+    records: list[ResnameRecord] = []
     for key, source_residues in source_by_author.items():
-        converted_residues = converted_by_author[key]
-        if len(converted_residues) != len(source_residues):
-            raise ValueError("PDB conversion changed duplicate residue multiplicity")
         model_index, converted_chain, converted_resnum = key
-        for source, converted in zip(source_residues, converted_residues, strict=False):
+        for source, converted in zip(
+            source_residues, converted_by_author[key], strict=True
+        ):
             source_name, source_atoms = source
             converted_name, converted_atoms = converted
             if source_atoms != converted_atoms:
@@ -202,7 +200,7 @@ def residue_conversion_records(
             if converted_name != source_name:
                 records.append(
                     (
-                        model_index + 1,
+                        model_index,
                         converted_chain,
                         converted_resnum,
                         converted_name,
@@ -259,14 +257,33 @@ def _source_residue_records(structure: gemmi.Structure) -> list[_SourceRecord]:
                         int(number),
                         blank_if_missing(str(residue.seqid.icode)),
                         str(residue.name),
-                        tuple(
-                            (str(atom.name), str(atom.element.name)) for atom in residue
-                        ),
+                        _residue_atoms(residue),
                         source_chain_index,
                         residue_index,
                         polymer_position,
                     )
                 )
+    return records
+
+
+def _converted_residue_records(
+    converted_structure: gemmi.Structure, source_count: int
+) -> list[_ConvertedRecord]:
+    """Describe the converted residues in order, one per source residue."""
+    records: list[_ConvertedRecord] = [
+        (
+            model_index,
+            str(chain.name),
+            _author_resnum(residue, "converted"),
+            str(residue.name),
+            _residue_atoms(residue),
+        )
+        for model_index, model in enumerate(converted_structure, start=1)
+        for chain in model
+        for residue in chain
+    ]
+    if len(records) != source_count:
+        raise ValueError("PDB conversion changed residue count")
     return records
 
 
@@ -280,7 +297,7 @@ def _legacy_identifiers_need_packing(structure: gemmi.Structure) -> bool:
         identities: set[tuple[str, int | None, str]] = set()
         for chain in model:
             chain_name = str(chain.name)
-            if chain_name and chain_name not in LEGACY_PDB_CHAIN_IDS:
+            if chain_name and chain_name not in _LEGACY_PDB_CHAIN_ID_SET:
                 return True
             for residue in chain:
                 identity = (
@@ -327,34 +344,16 @@ def _pack_legacy_pdb_residue_ids(structure: gemmi.Structure) -> None:
 
 
 def _residue_identity_records(
-    source_records: Sequence[_SourceRecord], converted_structure: gemmi.Structure
+    source_records: Sequence[_SourceRecord],
+    converted_records: Sequence[_ConvertedRecord],
 ) -> list[ResidueIdentityRecord]:
-    """Map packed PDB residue identities back to source-mmCIF identities."""
-    converted_records: list[tuple[int, str, str, str, _ResidueAtoms]] = []
-    for model_index, model in enumerate(converted_structure, start=1):
-        for chain in model:
-            for residue in chain:
-                number = residue.seqid.num
-                if number is None:
-                    raise ValueError(
-                        f"converted residue {residue.name!r} has no number"
-                    )
-                converted_records.append(
-                    (
-                        model_index,
-                        str(chain.name),
-                        f"{number}{blank_if_missing(str(residue.seqid.icode))}",
-                        str(residue.name),
-                        tuple(
-                            (str(atom.name), str(atom.element.name)) for atom in residue
-                        ),
-                    )
-                )
-    if len(source_records) != len(converted_records):
-        raise ValueError("PDB conversion changed residue count")
+    """Map packed PDB residue identities back to source-mmCIF identities.
 
+    The source snapshot predates chain shortening and packing, so the checks
+    here also confirm that those in-place edits kept every residue in place.
+    """
     records: list[ResidueIdentityRecord] = []
-    for source, converted in zip(source_records, converted_records, strict=False):
+    for source, converted in zip(source_records, converted_records, strict=True):
         (
             source_model,
             source_chain,
@@ -403,48 +402,31 @@ def _residue_identity_records(
 
 
 def _polymer_position_records(
-    source_records: Sequence[_SourceRecord], converted_structure: gemmi.Structure
+    source_records: Sequence[_SourceRecord],
+    converted_records: Sequence[_ConvertedRecord],
 ) -> list[PolymerPositionRecord]:
     """Map every converted residue to its source polymer-boundary status."""
-    converted_records: list[tuple[int, str, str, str]] = []
-    for model_index, model in enumerate(converted_structure, start=1):
-        for chain in model:
-            for residue in chain:
-                number = residue.seqid.num
-                if number is None:
-                    raise ValueError(
-                        f"converted residue {residue.name!r} has no number"
-                    )
-                converted_records.append(
-                    (
-                        model_index,
-                        str(chain.name),
-                        f"{number}{blank_if_missing(str(residue.seqid.icode))}",
-                        str(residue.name),
-                    )
-                )
-    if len(source_records) != len(converted_records):
-        raise ValueError("PDB conversion changed residue count")
     positions: dict[tuple[int, str, str, str], str] = {}
-    for source, converted in zip(source_records, converted_records, strict=False):
+    for source, converted in zip(source_records, converted_records, strict=True):
+        key = converted[:4]
         position = source[-1]
-        previous = positions.get(converted)
+        previous = positions.get(key)
         if previous is not None and previous != position:
             # Ambiguous legacy keys cannot establish either source residue's boundary status.
             position = "?"
-        positions[converted] = position
-    return [(*converted, position) for converted, position in positions.items()]
+        positions[key] = position
+    return [(*key, position) for key, position in positions.items()]
 
 
-def _blank_missing_occupancies(dst: str, missing_occupancies: Sequence[bool]) -> None:
+def _blank_missing_occupancies(
+    pdb_text: str, missing_occupancies: Sequence[bool]
+) -> str:
     """Clear the occupancy columns of atoms whose mmCIF occupancy was null.
 
     Gemmi writes such atoms with occupancy 1.00; blank columns let the analysis
     report the value as unknown rather than as a full-occupancy site.
     """
-    with open(dst, encoding="utf-8", errors="strict", newline="") as handle:
-        lines = handle.readlines()
-
+    lines = pdb_text.splitlines(keepends=True)
     atom_line_indices = [
         index
         for index, line in enumerate(lines)
@@ -453,10 +435,8 @@ def _blank_missing_occupancies(dst: str, missing_occupancies: Sequence[bool]) ->
     if len(atom_line_indices) != len(missing_occupancies):
         raise ValueError("PDB conversion output atom count does not match mmCIF input")
     if not any(missing_occupancies):
-        return
-    for line_index, missing in zip(
-        atom_line_indices, missing_occupancies, strict=False
-    ):
+        return pdb_text
+    for line_index, missing in zip(atom_line_indices, missing_occupancies, strict=True):
         if not missing:
             continue
         line = lines[line_index]
@@ -464,8 +444,7 @@ def _blank_missing_occupancies(dst: str, missing_occupancies: Sequence[bool]) ->
         body = line[:-1] if newline else line
         body = body.ljust(60)
         lines[line_index] = body[:54] + "      " + body[60:] + newline
-    with open(dst, "w", encoding="utf-8", newline="") as handle:
-        handle.writelines(lines)
+    return "".join(lines)
 
 
 def cif_to_pdb(cif_path: str, dst: str) -> str:
@@ -492,7 +471,7 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
         )
     if _structure_atom_signatures(structure) != indexed_signatures:
         raise ValueError("generated atom_site ids changed Gemmi atom traversal")
-    for atom, serial in zip(structure_atoms, pdb_serials, strict=False):
+    for atom, serial in zip(structure_atoms, pdb_serials, strict=True):
         atom.serial = serial
     missing_occupancies = [occupancy in (".", "?") for occupancy in occupancies]
 
@@ -503,25 +482,30 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
     identifiers_packed = _legacy_identifiers_need_packing(structure)
     if identifiers_packed:
         _pack_legacy_pdb_residue_ids(structure)
-    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    cast(_PdbWritable, structure).write_pdb(dst, gemmi.PdbWriteOptions())
-    converted_structure = gemmi.read_structure(dst)
+    pdb_text = structure.make_pdb_string()
+    converted_structure = gemmi.read_pdb_string(pdb_text)
     residue_records = residue_conversion_records(structure, converted_structure)
+    converted_residues = _converted_residue_records(
+        converted_structure, len(source_residues)
+    )
     identity_records = (
-        _residue_identity_records(source_residues, converted_structure)
+        _residue_identity_records(source_residues, converted_residues)
         if identifiers_packed
         else []
     )
     # Preserve polymer position for every residue, independently of identity packing.
-    polymer_records = _polymer_position_records(source_residues, converted_structure)
-    _blank_missing_occupancies(dst, missing_occupancies)
-    write_conversion_provenance(
-        dst,
+    polymer_records = _polymer_position_records(source_residues, converted_residues)
+    pdb_text = _blank_missing_occupancies(pdb_text, missing_occupancies)
+    remarks = conversion_provenance_remarks(
         residue_records,
         identity_records,
         polymer_records,
         defaulted_occupancy_counts,
     )
+    os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+    with open(dst, "w", encoding="utf-8", newline="") as handle:
+        handle.writelines(remarks)
+        handle.write(pdb_text)
     return dst
 
 
@@ -538,7 +522,9 @@ def first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
     if model_count == 0:
         raise ValueError("coordinate file contains no models")
 
-    with open(pdb_path, encoding="utf-8", errors="replace", newline="") as fh:
+    # Latin-1 maps every byte to one code point, so the copied lines are the
+    # deposited bytes even when a header record is not valid UTF-8.
+    with open(pdb_path, encoding="latin-1", newline="") as fh:
         lines = fh.readlines()
     model_starts = [
         index for index, line in enumerate(lines) if line[:6].strip().upper() == "MODEL"
@@ -571,7 +557,7 @@ def first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
         line for line in lines[:first_start] if line[:6].strip().upper() != "NUMMDL"
     ]
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-    with open(dst, "w", encoding="utf-8", newline="") as fh:
+    with open(dst, "w", encoding="latin-1", newline="") as fh:
         fh.writelines(header)
         fh.writelines(first_block)
         fh.write("END\n")
@@ -579,7 +565,7 @@ def first_model_pdb(pdb_path: str, dst: str) -> tuple[str, int]:
     analysis_structure = gemmi.read_structure(dst)
     if len(analysis_structure) != 1:
         raise ValueError("failed to create a first-model-only analysis PDB")
-    with open(dst, encoding="utf-8", errors="replace") as fh:
+    with open(dst, encoding="latin-1") as fh:
         if any(line[:6].strip().upper() in ("MODEL", "ENDMDL") for line in fh):
             raise ValueError("first-model analysis PDB still contains a model wrapper")
     return dst, model_count

@@ -437,6 +437,49 @@ class TestCifToPdb:
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"
 
+    def test_two_character_chain_ids_made_of_adjacent_legal_ids_are_packed(
+        self, tmp_path: Path
+    ) -> None:
+        """A name such as ``AB`` is not a legal id just because ``A`` and ``B`` are.
+
+        Gemmi keeps two-character names once one-character ids run out, and
+        would write them into columns 21-22, which EDSTATS cannot read.
+        """
+        source_chains = list(conversion.LEGACY_PDB_CHAIN_IDS) + ["AB"]
+        cif = _write_cif(
+            tmp_path / "adjacent-ids.cif",
+            [
+                _cif_atom(
+                    index + 1,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    chain,
+                    index + 1,
+                    ".",
+                    (float(index), 0.0, 0.0),
+                    "1.00",
+                    1,
+                    chain,
+                    group="HETATM",
+                )
+                for index, chain in enumerate(source_chains)
+            ],
+        )
+        structure = gemmi.read_structure(cif)
+        structure.shorten_chain_names()
+        assert [chain.name for chain in structure[0]][-1] == "AB"
+        assert conversion._legacy_identifiers_need_packing(structure) is True
+
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "adjacent-ids.pdb"))
+        atom_lines = _pdb_atom_lines(out)
+        assert len(atom_lines) == 63
+        assert {line[20:21] for line in atom_lines} == {" "}
+        assert {line[21:22] for line in atom_lines} == {"A"}
+        context = structure_analysis.load_structure("test", out)
+        metals = context.metal_atoms({"ZN"}, canonical=True)
+        assert {metal.chain_id for metal in metals} == set(source_chains)
+
     def test_duplicate_author_residue_ids_are_reversibly_packed(
         self, tmp_path: Path
     ) -> None:
@@ -670,7 +713,7 @@ class TestResidueConversionRecords:
                 ("B", 99, "ZN", [("ZN", "ZN")]),
             ]
         )
-        with pytest.raises(ValueError, match="ordering|author identifiers"):
+        with pytest.raises(ValueError, match="changed residue ordering"):
             conversion.residue_conversion_records(source, converted)
 
     def test_changed_atom_membership_is_rejected(self) -> None:
@@ -696,15 +739,15 @@ class TestResidueConversionRecords:
                 ("A", 1, "GLY", [("N", "N")]),
             ]
         )
-        with pytest.raises(ValueError, match="ordering|multiplicity"):
+        with pytest.raises(ValueError, match="changed residue ordering"):
             conversion.residue_conversion_records(source, converted)
 
     def test_the_index_keys_on_model_chain_and_author_resnum(self) -> None:
         """Residues are located by the identifiers EDSTATS also reports."""
         structure = _simple_structure(_BASE_RESIDUES)
         index, order = conversion.residue_index_by_author(structure, "mmCIF")
-        assert order == [(0, "A", "1"), (0, "B", "2")]
-        assert index[(0, "B", "2")] == [("ZN", (("ZN", "Zn"),))]
+        assert order == [(1, "A", "1"), (1, "B", "2")]
+        assert index[(1, "B", "2")] == [("ZN", (("ZN", "Zn"),))]
 
     def test_duplicate_author_ids_are_indexed_together_in_order(self) -> None:
         structure = _simple_structure(
@@ -714,8 +757,8 @@ class TestResidueConversionRecords:
             ]
         )
         index, order = conversion.residue_index_by_author(structure, "mmCIF")
-        assert order == [(0, "A", "1"), (0, "A", "1")]
-        assert [name for name, _ in index[(0, "A", "1")]] == ["GLY", "ALA"]
+        assert order == [(1, "A", "1"), (1, "A", "1")]
+        assert [name for name, _ in index[(1, "A", "1")]] == ["GLY", "ALA"]
 
 
 _MULTI_MODEL_PDB = """\
@@ -812,6 +855,22 @@ class TestFirstModelPdb:
         assert [
             line.rstrip("\n") for line in _pdb_atom_lines(dst)
         ] == source_atom_lines[:2]
+
+    def test_header_bytes_outside_utf8_are_copied_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        """A Latin-1 byte in a REMARK must not become a replacement character."""
+        source = tmp_path / "multi.pdb"
+        latin_remark = b"REMARK   3 CAF\xc9\n"
+        source.write_bytes(
+            _MULTI_MODEL_PDB.encode("ascii").replace(
+                b"REMARK   3 SOMETHING\n", latin_remark
+            )
+        )
+        dst = tmp_path / "first.pdb"
+        conversion.first_model_pdb(str(source), str(dst))
+        assert latin_remark in dst.read_bytes()
+        assert b"\xef\xbf\xbd" not in dst.read_bytes()
 
     def test_creates_the_destination_directory(self, tmp_path: Path) -> None:
         source = tmp_path / "multi.pdb"
