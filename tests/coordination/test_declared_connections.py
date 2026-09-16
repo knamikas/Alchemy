@@ -26,6 +26,7 @@ import coordinate_conversion as conversion
 import reference_data
 from codes import CandidateSource
 from coordination import declared_connections
+from pdb_remarks import RESNAME_LAYOUT
 from structure_analysis import ResidueSelection, StructureContext, load_structure
 
 
@@ -207,8 +208,24 @@ def test_connection_source_labels_reach_the_bond_row(tmp_path: Path) -> None:
     assert labels == {"pdb": "LINK", "cif": "struct_conn"}
 
 
+def _without_residue_provenance(analysis_pdb: str, directory: Path) -> str:
+    """Copy an analysis PDB the way conversions before chain-rename records wrote it."""
+    stripped = directory / "analysis-legacy.pdb"
+    stripped.write_text(
+        "".join(
+            line
+            for line in Path(analysis_pdb)
+            .read_text(encoding="utf-8")
+            .splitlines(keepends=True)
+            if not line.startswith("REMARK 950 ALCHEMY RESIDUE")
+        ),
+        encoding="utf-8",
+    )
+    return str(stripped)
+
+
 def test_analysis_chain_names_reverses_conversion_shortening(tmp_path: Path) -> None:
-    """Long mmCIF chain names map onto the single-character analysis names."""
+    """Long mmCIF chain names map onto the single-character coordinate names."""
     builder = StructureBuilder()
     builder.add_amino_acid(
         "HIS",
@@ -222,11 +239,12 @@ def test_analysis_chain_names_reverses_conversion_shortening(tmp_path: Path) -> 
 
     mapping = declared_connections.analysis_chain_names(source)
     context = load_structure("test", analysis_pdb)
-    converted_chains = {residue.chain_id for residue in context.residues}
+    coordinate_chains = {residue.coordinate_chain_id for residue in context.residues}
 
     assert mapping == {"AAA": "A", "BBB": "B"}
-    assert converted_chains == {"A", "B"}
-    assert set(mapping.values()) <= converted_chains
+    assert coordinate_chains == {"A", "B"}
+    # The provenance records restore the source names in the analysis model.
+    assert {residue.chain_id for residue in context.residues} == {"AAA", "BBB"}
 
 
 def test_analysis_chain_names_is_empty_for_a_pdb_source(tmp_path: Path) -> None:
@@ -289,7 +307,12 @@ def test_analysis_atom_for_partner_resolves_author_identity(tmp_path: Path) -> N
 def test_analysis_atom_for_partner_applies_the_chain_name_mapping(
     tmp_path: Path,
 ) -> None:
-    """A source chain name is translated before the author lookup, not after."""
+    """Source chain names resolve through provenance, or by replaying shortening.
+
+    A current conversion records the rename in ``REMARK 950 ALCHEMY RESIDUE``
+    records, so the source name matches directly; an analysis PDB written
+    before those records existed falls back to the replayed chain mapping.
+    """
     builder = StructureBuilder()
     builder.add_amino_acid(
         "HIS",
@@ -300,12 +323,17 @@ def test_analysis_atom_for_partner_applies_the_chain_name_mapping(
     )
     builder.add_metal("ZN", 1, chain="BBB", pos=(0.0, 0.0, 0.0))
     source, analysis_pdb = _write_source_and_analysis(builder, tmp_path, "cif")
-    context = load_structure("test", analysis_pdb)
     address = _partner_address("AAA", "HIS", 10, "NE2")
 
-    assert declared_connections.analysis_atom_for_partner(context, address, {}) is None
+    context = load_structure("test", analysis_pdb)
+    resolved = declared_connections.analysis_atom_for_partner(context, address, {})
+    assert resolved is not None
+    assert (resolved.chain_id, resolved.atom_name) == ("AAA", "NE2")
+
+    legacy = load_structure("test", _without_residue_provenance(analysis_pdb, tmp_path))
+    assert declared_connections.analysis_atom_for_partner(legacy, address, {}) is None
     resolved = declared_connections.analysis_atom_for_partner(
-        context, address, declared_connections.analysis_chain_names(source)
+        legacy, address, declared_connections.analysis_chain_names(source)
     )
     assert resolved is not None
     assert (resolved.chain_id, resolved.atom_name) == ("A", "NE2")
@@ -602,8 +630,8 @@ def test_declared_partner_resolves_through_shortened_and_renamed_components(
 
     ``AAA``/``BBB`` do not fit the legacy chain field and ``A1LU6`` does not fit
     the legacy residue field, so the analysis PDB holds ``A``/``B`` and ``A1L``
-    plus a ``REMARK 950 ALCHEMY RESNAME`` mapping, while the declaration still
-    names the source identifiers.
+    plus ``REMARK 950 ALCHEMY`` mappings that restore the source identifiers
+    the declaration names.
     """
     builder = StructureBuilder()
     his = builder.add_amino_acid(
@@ -624,16 +652,16 @@ def test_declared_partner_resolves_through_shortened_and_renamed_components(
     remarks = [
         line
         for line in Path(analysis_pdb).read_text(encoding="utf-8").splitlines()
-        if line.startswith("REMARK 950 ALCHEMY RESNAME")
+        if RESNAME_LAYOUT.matches(line.split())
     ]
     assert any("A1L A1LU6" in line for line in remarks)
 
     result = helpers.analyze_bonds(analysis_pdb, connection_path=source)
 
     (row,) = result.declared_rows
-    assert (row["metal_resname"], row["metal_chain"]) == ("A1LU6", "B")
+    assert (row["metal_resname"], row["metal_chain"]) == ("A1LU6", "BBB")
     assert (row["neighbor_chain"], row["neighbor_resnum"], row["neighbor_atom"]) == (
-        "A",
+        "AAA",
         "10",
         "NE2",
     )

@@ -104,8 +104,8 @@ def analysis_atom_for_partner(
         str(residue.name), source_chain_id, resnum
     )
     if len(matches) != 1:
-        # Fallback for an analysis PDB carrying no residue provenance: retry
-        # under Gemmi's shortened chain name.
+        # Fallback for an analysis PDB converted before chain renames were
+        # recorded in its provenance: retry under Gemmi's shortened chain name.
         chain_id = chain_names.get(source_chain_id, source_chain_id)
         if chain_id != source_chain_id:
             matches = structure.residues_for_author(str(residue.name), chain_id, resnum)

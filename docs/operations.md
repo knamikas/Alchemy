@@ -314,7 +314,7 @@ the entry's status. The vocabulary is `WarningCode` in `src/codes.py`, and
 | `overfull_alternate_occupancy` | Alternate conformers of at least one atom site sum to more than one; see `overfull_occupancy_excess` for whether the DPI was affected. |
 | `occupancy_dictionary_default_applied` | The mmCIF source carried no occupancy column, so every atom was given the dictionary default of 1.0 during conversion. |
 | `raw_occupancy_mapping_failed` | Raw PDB occupancy records could not be matched one-to-one to the parsed atoms; `raw_occupancy_mapping_failure_reason` explains why, and occupancy validation fails. |
-| `legacy_pdb_identifiers_packed` | Converting mmCIF to PDB had to repack chain or residue identifiers into the fixed-width PDB namespace. The source identifiers are restored from `REMARK 950` records and reported in the outputs. |
+| `legacy_pdb_identifiers_packed` | Converting mmCIF to PDB had to rename or repack chain or residue identifiers into the fixed-width PDB namespace. The source identifiers are restored from `REMARK 950` records and reported in the outputs. |
 | `edstats_grid_point_count_overflow` | EDSTATS printed `****` because an `NPm`, `NPs`, or `NPa` grid-point count exceeded its fixed-width field. That count is recorded as unavailable; every other density metric remains usable. |
 | `twin_refmac_coefficients_normalized` | The guarded twin path rewrote Refmac's twinned map coefficients for EDSTATS after `mtzfix` validation failed. |
 | `declared_connection_conformer_substituted` | A `_struct_conn` or `LINK` record named an alternate conformer that per-residue selection did not choose, so it was re-pointed onto the chosen one. |

@@ -27,13 +27,14 @@ three-character legacy PDB residue-name field. The original CCD identifier is
 restored after EDSTATS so cofactor catalog matching and output retain the mmCIF
 identity.
 
-If a model has more chains than the one-character PDB namespace can represent,
-or distinct mmCIF residues share one legacy
+Multi-character mmCIF chain identifiers are shortened to one character. If a
+model has more chains than the one-character PDB namespace can represent, or
+distinct mmCIF residues share one legacy
 `(chain, sequence number, insertion code)` identity, Alchemy packs its residues
 into synthetic one-character chains with unique four-column sequence numbers.
-``REMARK 950 ALCHEMY RESIDUE`` records preserve the original component, chain,
-sequence number, insertion code, source traversal indices, and polymer-terminal
-position. EDSTATS and Gemmi analyze the same packed coordinates, then
+``REMARK 950 ALCHEMY RESIDUE`` records preserve, for every residue that
+shortening or packing renamed, the original component, chain, sequence number,
+insertion code, source traversal indices, and polymer-terminal position. EDSTATS and Gemmi analyze the same packed coordinates, then
 statistics, contacts, declarations, and CSV identifiers are mapped back to the
 source mmCIF identities. Conversion validates the atom and residue membership
 before analysis, so an oversized or legacy-incompatible structure cannot

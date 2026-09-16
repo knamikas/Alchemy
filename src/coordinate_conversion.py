@@ -347,7 +347,7 @@ def _residue_identity_records(
     source_records: Sequence[_SourceRecord],
     converted_records: Sequence[_ConvertedRecord],
 ) -> list[ResidueIdentityRecord]:
-    """Map packed PDB residue identities back to source-mmCIF identities.
+    """Map renamed or packed PDB residue identities back to their source.
 
     The source snapshot predates chain shortening and packing, so the checks
     here also confirm that those in-place edits kept every residue in place.
@@ -488,11 +488,9 @@ def cif_to_pdb(cif_path: str, dst: str) -> str:
     converted_residues = _converted_residue_records(
         converted_structure, len(source_residues)
     )
-    identity_records = (
-        _residue_identity_records(source_residues, converted_residues)
-        if identifiers_packed
-        else []
-    )
+    # Chain shortening renames chains even when nothing needs packing, so
+    # record every residue whose identity changed, not only packed ones.
+    identity_records = _residue_identity_records(source_residues, converted_residues)
     # Preserve polymer position for every residue, independently of identity packing.
     polymer_records = _polymer_position_records(source_residues, converted_residues)
     pdb_text = _blank_missing_occupancies(pdb_text, missing_occupancies)

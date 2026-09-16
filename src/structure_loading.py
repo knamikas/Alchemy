@@ -30,8 +30,7 @@ from pdb_records import (
 )
 from pdb_remarks import (
     SourceResidueIdentity,
-    read_defaulted_occupancy_counts,
-    read_residue_mapping,
+    read_conversion_provenance,
 )
 from structure_model import (
     HYDROGEN_ELEMENTS,
@@ -103,8 +102,9 @@ def source_model_data(path: str, model: gemmi.Model) -> SourceModelData:
     defaulted_occupancy_counts: dict[int, int] = {}
     if analysis_format == PDB_FORMAT:
         raw_models, raw_error = raw_pdb_occupancies(path)
-        source_residue_identities = read_residue_mapping(path)
-        defaulted_occupancy_counts = read_defaulted_occupancy_counts(path)
+        provenance = read_conversion_provenance(path)
+        source_residue_identities = provenance.residue_mapping
+        defaulted_occupancy_counts = provenance.defaulted_occupancy_counts
 
     legacy_identifiers_packed = any(
         identity.residue_number is not None

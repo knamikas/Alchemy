@@ -20,7 +20,7 @@ import coordinate_conversion as conversion
 import edstats_statistics
 import structure_analysis
 from coordination import declared_connections
-from pdb_remarks import RESIDUE_REMARK_PREFIX, RESNAME_REMARK_PREFIX
+from pdb_remarks import RESIDUE_LAYOUT, RESNAME_LAYOUT
 
 _CIF_HEADER = """data_TEST
 _cell.length_a 60.0
@@ -293,9 +293,7 @@ class TestCifToPdb:
         out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
             remarks = [
-                line.split()
-                for line in handle
-                if line.startswith(RESNAME_REMARK_PREFIX)
+                line.split() for line in handle if RESNAME_LAYOUT.matches(line.split())
             ]
         assert len(remarks) == 1
         fields = remarks[0]
@@ -330,7 +328,7 @@ class TestCifToPdb:
         )
         out = conversion.cif_to_pdb(cif, str(tmp_path / "out.pdb"))
         with open(out) as handle:
-            assert not any(line.startswith(RESNAME_REMARK_PREFIX) for line in handle)
+            assert not any(RESNAME_LAYOUT.matches(line.split()) for line in handle)
 
     def test_conversion_round_trips_through_load_structure(
         self, tmp_path: Path
@@ -390,7 +388,7 @@ class TestCifToPdb:
         assert {line[21:22] for line in atom_lines} == {"A"}
         with open(out) as handle:
             identity_remarks = [
-                line for line in handle if line.startswith(RESIDUE_REMARK_PREFIX)
+                line for line in handle if RESIDUE_LAYOUT.matches(line.split())
             ]
         assert len(identity_remarks) == 63
 
@@ -436,6 +434,49 @@ class TestCifToPdb:
         assert resolved is not None
         assert resolved.chain_id == "A"
         assert resolved.resnum == "1"
+
+    def test_shortened_chain_ids_are_recorded_and_restored(
+        self, tmp_path: Path
+    ) -> None:
+        """A chain Gemmi shortens to a free one-character id keeps its source id.
+
+        Shortening renames the chain without exhausting the legacy namespace,
+        so nothing is packed; the rename must still be recorded.
+        """
+        cif = _write_cif(
+            tmp_path / "shortened.cif",
+            [
+                _cif_atom(
+                    index + 1,
+                    "ZN",
+                    "ZN",
+                    "ZN",
+                    chain,
+                    index + 1,
+                    ".",
+                    (float(index), 0.0, 0.0),
+                    "1.00",
+                    1,
+                    chain,
+                    group="HETATM",
+                )
+                for index, chain in enumerate(["A", "AA"])
+            ],
+        )
+        out = conversion.cif_to_pdb(cif, str(tmp_path / "shortened.pdb"))
+        assert [line[21:22] for line in _pdb_atom_lines(out)] == ["A", "B"]
+        with open(out) as handle:
+            residue_remarks = [
+                line.split() for line in handle if RESIDUE_LAYOUT.matches(line.split())
+            ]
+        assert [fields[4:9] for fields in residue_remarks] == [
+            ["1", "B", "1", "ZN", "AA"]
+        ]
+        context = structure_analysis.load_structure("test", out)
+        metals = context.metal_atoms({"ZN"}, canonical=True)
+        assert {metal.chain_id for metal in metals} == {"A", "AA"}
+        assert {metal.coordinate_chain_id for metal in metals} == {"A", "B"}
+        assert "legacy_pdb_identifiers_packed" in context.warning_codes
 
     def test_two_character_chain_ids_made_of_adjacent_legal_ids_are_packed(
         self, tmp_path: Path
