@@ -1743,11 +1743,15 @@ def test_missing_rfree_is_named(tmp_path: Path, rffin: object) -> None:
 
 
 def test_missing_asu_volume_is_named(tmp_path: Path) -> None:
-    """Neither the MTZ nor the coordinate file yields a cell and a space group."""
+    """Neither the MTZ nor the coordinate file yields a usable cell.
+
+    The coordinates carry Gemmi's placeholder cell, so the loaded structure the
+    DPI reuses supplies no asymmetric-unit volume either.
+    """
     run = _dpi_details(
         tmp_path,
         atom_count=16,
-        cell_edge=100.0,
+        cell_edge=1.0,
         nrefcnt=4096,
         rffin=0.20,
         pdb_path=os.path.join(str(tmp_path), "absent.pdb"),
