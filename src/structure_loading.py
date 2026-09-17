@@ -107,14 +107,15 @@ def source_model_data(path: str, model: gemmi.Model) -> SourceModelData:
         defaulted_occupancy_counts = provenance.defaulted_occupancy_counts
 
     legacy_identifiers_packed = any(
-        identity.residue_number is not None
+        model_index == ANALYZED_MODEL_INDEX
+        and identity.residue_number is not None
         and (
             identity.chain_id != coordinate_chain
             or f"{identity.residue_number}{identity.insertion_code}"
             != coordinate_resnum
         )
         for (
-            _model_index,
+            model_index,
             _coordinate_name,
             coordinate_chain,
             coordinate_resnum,
@@ -241,11 +242,7 @@ def build_atom_sites(
             )
             is_water = bool(residue.is_water())
             for atom_index, atom in enumerate(residue):
-                raw = (
-                    source.raw_matches[gemmi_order]
-                    if gemmi_order < len(source.raw_matches)
-                    else None
-                )
+                raw = source.raw_matches[gemmi_order]
                 occupancy, occupancy_valid, occupancy_status = occupancy_for_atom(
                     atom, raw
                 )
@@ -284,19 +281,28 @@ def build_atom_sites(
     return all_sites
 
 
-def _overfull_occupancy_summary(
-    atoms: Iterable[AtomSite],
-) -> tuple[int, float, frozenset[tuple[object, ...]]]:
-    """Record sites whose alternate occupancies sum above one and their excess.
+@dataclass(frozen=True, slots=True)
+class OverfullOccupancySummary:
+    """Sites whose alternate occupancies sum above one, and by how much."""
 
-    Keep site identities so callers can locate the excess within a metal site.
-    """
+    site_count: int
+    #: Total excess over every overfull site, hydrogen sites included.
+    excess: float
+    #: The part of ``excess`` that inflates Ni, which excludes hydrogen sites.
+    ni_excess: float
+    #: Site identities, so callers can locate the excess within a metal site.
+    site_keys: frozenset[tuple[object, ...]]
+
+
+def _overfull_occupancy_summary(atoms: Iterable[AtomSite]) -> OverfullOccupancySummary:
+    """Record sites whose alternate occupancies sum above one and their excess."""
     by_chemical_site: dict[tuple[object, ...], list[AtomSite]] = defaultdict(list)
     for atom in atoms:
         by_chemical_site[atom.chemical_site_identity].append(atom)
 
     count = 0
     excess = 0.0
+    ni_excess = 0.0
     identities: list[tuple[object, ...]] = []
     for identity, alternates in by_chemical_site.items():
         if len(alternates) <= 1:
@@ -307,14 +313,19 @@ def _overfull_occupancy_summary(
         if total > 1.0:
             count += 1
             excess += total - 1.0
+            # Alternates of one chemical site share an element, so they are
+            # either all hydrogen or all counted in Ni.
+            if not alternates[0].is_hydrogen:
+                ni_excess += total - 1.0
             identities.append(identity)
-    return count, excess, frozenset(identities)
+    return OverfullOccupancySummary(count, excess, ni_excess, frozenset(identities))
 
 
 def _occupancy_weighted_atom_count(atoms: Iterable[AtomSite]) -> float:
-    """Count Ni without applying occupancy-validation flags.
+    """Sum the valid non-hydrogen occupancies, ignoring the entry-level verdict.
 
-    The raw count is needed to assess how much overfull sites affect DPI.
+    ``_occupancy_validation_failed`` needs this raw Ni to judge how much the
+    overfull excess matters, so it cannot wait for that verdict.
     """
     return math.fsum(
         atom.occupancy
@@ -360,9 +371,7 @@ class AtomInventory:
     zero_occupancy_count: int
     duplicate_count: int
     coordinate_conflict_count: int
-    overfull_site_count: int
-    overfull_excess: float
-    overfull_site_keys: frozenset[tuple[object, ...]]
+    overfull: OverfullOccupancySummary
     malformed_name_count: int
     unknown_element_count: int
     non_finite_coordinate_count: int
@@ -381,9 +390,6 @@ def prepare_atom_inventory(
         not atom.occupancy_valid and atom.occupancy_status != OccupancyStatus.MISSING
         for atom in all_sites
     )
-    zero_count = sum(
-        atom.occupancy_valid and atom.occupancy == 0.0 for atom in all_sites
-    )
 
     dedup: dict[tuple[object, ...], AtomSite] = {}
     duplicate_count = 0
@@ -399,9 +405,12 @@ def prepare_atom_inventory(
         if site_is_better(site, current):
             dedup[site.exact_identity] = site
     source_atoms = tuple(sorted(dedup.values(), key=lambda site: site.source_order))
-    overfull_site_count, overfull_excess, overfull_site_keys = (
-        _overfull_occupancy_summary(source_atoms)
+    # Zero occupancy is a property of the atom Ni counts, so a collapsed
+    # duplicate record must not count it twice.
+    zero_count = sum(
+        atom.occupancy_valid and atom.occupancy == 0.0 for atom in source_atoms
     )
+    overfull = _overfull_occupancy_summary(source_atoms)
 
     residue_groups: dict[ResidueKey, list[AtomSite]] = defaultdict(list)
     for site in source_atoms:
@@ -430,9 +439,7 @@ def prepare_atom_inventory(
         zero_occupancy_count=zero_count,
         duplicate_count=duplicate_count,
         coordinate_conflict_count=coordinate_conflicts,
-        overfull_site_count=overfull_site_count,
-        overfull_excess=overfull_excess,
-        overfull_site_keys=overfull_site_keys,
+        overfull=overfull,
         malformed_name_count=malformed_names,
         unknown_element_count=unknown_count,
         non_finite_coordinate_count=non_finite_count,
@@ -504,13 +511,15 @@ def _occupancy_validation_failed(
     inventory: AtomInventory, source: SourceModelData
 ) -> bool:
     """Whether the deposited occupancies are unfit for an occupancy-weighted Ni."""
-    # Unreadable occupancy makes Ni unknown; a known excess is judged relative to Ni.
+    # Unreadable occupancy makes Ni unknown; a known excess is judged relative
+    # to Ni, and only the excess Ni actually counts can inflate it.
     countable_ni = _occupancy_weighted_atom_count(inventory.source_atoms)
-    if inventory.overfull_excess <= 0.0:
+    ni_excess = inventory.overfull.ni_excess
+    if ni_excess <= 0.0:
         overfull_invalidates_dpi = False
     elif countable_ni > 0.0:
         overfull_invalidates_dpi = (
-            inventory.overfull_excess / countable_ni > OVERFULL_OCCUPANCY_NI_FRACTION
+            ni_excess / countable_ni > OVERFULL_OCCUPANCY_NI_FRACTION
         )
     else:
         overfull_invalidates_dpi = True
@@ -530,9 +539,9 @@ def occupancy_validation(
         validation_failed=_occupancy_validation_failed(inventory, source),
         missing_count=inventory.missing_occupancy_count,
         invalid_count=inventory.invalid_occupancy_count,
-        overfull_site_count=inventory.overfull_site_count,
-        overfull_excess=round(inventory.overfull_excess, 6),
-        overfull_site_keys=inventory.overfull_site_keys,
+        overfull_site_count=inventory.overfull.site_count,
+        overfull_excess=round(inventory.overfull.excess, 6),
+        overfull_site_keys=inventory.overfull.site_keys,
         defaulted_atom_count=source.defaulted_occupancy_count,
         zero_atom_count=inventory.zero_occupancy_count,
         raw_mapping_failed=source.mapping_failed,
@@ -576,7 +585,7 @@ def warning_codes(
         warnings.append(WarningCode.NON_FINITE_COORDINATES)
     if inventory.zero_occupancy_count:
         warnings.append(WarningCode.ZERO_OCCUPANCY_ATOMS)
-    if inventory.overfull_site_count:
+    if inventory.overfull.site_count:
         warnings.append(WarningCode.OVERFULL_ALTERNATE_OCCUPANCY)
     if source.defaulted_occupancy_count:
         warnings.append(WarningCode.OCCUPANCY_DICTIONARY_DEFAULT_APPLIED)

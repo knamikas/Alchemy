@@ -424,17 +424,18 @@ treated differently, because `Ni` is still known — only inflated by the excess
 DPI is proportional to `Ni`<sup>0.5</sup>, so a relative error in `Ni` produces
 half that relative error in the DPI, and the excess therefore matters only in
 proportion to the structure's own atom count. Alchemy sums the excess across all
-overfull sites and makes DPI unavailable only when it exceeds 0.2% of `Ni`, at
-which point the DPI is wrong by 0.1% — about one unit in the fourth decimal it
-is reported to, so the threshold sits where the excess first becomes visible in
-the reported value at all. Below that the DPI is reported normally. Deposited
-occupancies are written to two decimals, so independently rounded conformers
-routinely sum to 1.01; a fixed per-site tolerance would not scale with structure
-size, and one such residue would otherwise void every z-score in the entry.
+overfull non-hydrogen sites, since hydrogens never enter `Ni`, and makes DPI
+unavailable only when it exceeds 0.2% of `Ni`, at which point the DPI is wrong
+by 0.1% — about one unit in the fourth decimal it is reported to, so the
+threshold sits where the excess first becomes visible in the reported value at
+all. Below that the DPI is reported normally. Deposited occupancies are written
+to two decimals, so independently rounded conformers routinely sum to 1.01; a
+fixed per-site tolerance would not scale with structure size, and one such
+residue would otherwise void every z-score in the entry.
 `overfull_occupancy_site_count` and `overfull_occupancy_excess` report the
-measurement whether or not it crossed the threshold, and the
-`overfull_alternate_occupancy` warning is raised whenever any overfull site is
-present anywhere in the model.
+measurement over every overfull site, hydrogen sites included, whether or not
+it crossed the threshold, and the `overfull_alternate_occupancy` warning is
+raised whenever any overfull site is present anywhere in the model.
 
 Because that warning covers the whole entry, it cannot say whether a given metal
 site is implicated: a disordered side chain far from every metal raises it

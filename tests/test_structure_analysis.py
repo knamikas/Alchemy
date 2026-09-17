@@ -17,6 +17,7 @@ import pytest
 from helpers import AtomSpec, StructureBuilder, approx, simple_metal_site
 
 import structure_analysis as sa
+from pdb_remarks import RESIDUE_LAYOUT
 
 _OCC_COLUMN = 54  # PDB occupancy, columns 55-60 (0-based 54:60)
 _ELEMENT_COLUMN = 76  # PDB element, columns 77-78
@@ -196,6 +197,36 @@ def test_overfull_alternate_occupancy_makes_dpi_unavailable(tmp_path: Path) -> N
     assert "overfull_alternate_occupancy" in context.warning_codes
     assert math.isnan(sa.count_deposited_ni(context))
     assert math.isnan(sa.count_ni(context))
+
+
+def test_overfull_hydrogen_site_is_reported_but_keeps_the_dpi(tmp_path: Path) -> None:
+    """Hydrogens never enter Ni, so their excess cannot inflate it.
+
+    The site is still counted and warned about: the deposition defect is real,
+    it just has no bearing on the DPI.
+    """
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    builder.add_hetero_residue(
+        "HOH",
+        101,
+        [
+            AtomSpec("O", "O", (0.0, 2.09, 0.0)),
+            AtomSpec("H1", "H", (0.6, 2.60, 0.0), occupancy=0.8, altloc="A"),
+            AtomSpec("H1", "H", (0.7, 2.70, 0.0), occupancy=0.8, altloc="B"),
+        ],
+        chain="B",
+    )
+    context = sa.load_structure(
+        "test", builder.write_pdb(tmp_path / "overfull_hydrogen.pdb")
+    )
+
+    assert context.occupancy.overfull_site_count == 1
+    assert context.occupancy.overfull_excess == approx(0.6)
+    assert "overfull_alternate_occupancy" in context.warning_codes
+    assert context.occupancy.validation_failed is False
+    assert sa.count_deposited_ni(context) == approx(2.0)
+    assert math.isfinite(sa.count_ni(context))
 
 
 def test_load_structure_flags_altloc_fallback_from_the_file(tmp_path: Path) -> None:
@@ -525,6 +556,53 @@ def test_duplicate_atom_records_collapse_to_the_higher_occupancy(
     assert "duplicate_atom_records" in context.warning_codes
     assert "duplicate_atom_coordinate_conflict" not in context.warning_codes
     assert sa.count_deposited_ni(context) == approx(0.9 + 1.0)
+
+
+def test_duplicate_zero_occupancy_records_count_as_one_zero_atom(
+    tmp_path: Path,
+) -> None:
+    """Zero occupancy belongs to the collapsed atom, not to each of its records."""
+    builder = StructureBuilder()
+    builder.add_hetero_residue(
+        "ZN",
+        1,
+        [
+            AtomSpec("ZN", "ZN", (0.0, 0.0, 0.0), occupancy=0.0),
+            AtomSpec("ZN", "ZN", (0.0, 0.0, 0.0), occupancy=0.0),
+        ],
+        chain="B",
+    )
+    builder.add_water(101, (0.0, 2.09, 0.0), chain="B")
+    context = sa.load_structure("test", builder.write_pdb(tmp_path / "dup_zero.pdb"))
+
+    assert context.records.duplicate_record_count == 1
+    assert context.occupancy.zero_atom_count == 1
+    assert "zero_occupancy_atoms" in context.warning_codes
+    assert context.metal_atoms(["ZN"]) == []
+    assert sa.count_deposited_ni(context) == approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("record_model", "packed"), [(1, True), (2, False)], ids=["analyzed", "other"]
+)
+def test_legacy_packing_warning_follows_the_analyzed_model_only(
+    tmp_path: Path, record_model: int, packed: bool
+) -> None:
+    """A chain rename recorded for another model says nothing about model one."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    clean = builder.write_pdb(tmp_path / "clean.pdb")
+    remark = RESIDUE_LAYOUT.format(
+        record_model, "B", "1", "ZN", "BB", 1, "", "ZN", 0, 0, "-"
+    )
+    path = tmp_path / "renamed.pdb"
+    path.write_text(remark + Path(clean).read_text())
+
+    context = sa.load_structure("test", str(path))
+
+    assert ("legacy_pdb_identifiers_packed" in context.warning_codes) is packed
+    metal = context.metal_atoms(["ZN"])[0]
+    assert metal.chain_id == ("BB" if packed else "B")
 
 
 def test_duplicate_atom_records_at_different_positions_are_flagged(
