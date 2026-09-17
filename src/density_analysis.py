@@ -22,19 +22,9 @@ import numpy.typing as npt
 
 from codes import DensityMapScope
 from gemmi_typing import mtz_column_data
-from run_logging import logger_for, truncate
+from run_logging import elapsed_s, logger_for, truncate
 
 logger = logger_for(__name__)
-
-
-def elapsed_s(started: float) -> float:
-    """Return the seconds since a ``time.monotonic()`` reading, as a timing.
-
-    Every stage timing the pipeline records is rounded this way, so the
-    manifest's ``timings`` column is byte-stable across stages.
-    """
-    return round(time.monotonic() - started, 3)
-
 
 MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 
@@ -42,6 +32,9 @@ MODEL_ENVELOPE_BORDER_ANGSTROM = 10
 CCP4_TOOL_TIMEOUT_S = 15 * 60
 #: The scopes a run may request; the fallbacks in ``DensityMapScope`` cannot be.
 DENSITY_MAP_SCOPES = (DensityMapScope.MODEL_ENVELOPE, DensityMapScope.FULL)
+# Every column Refmac writes, with its MTZ type. Only the six map and model
+# coefficient columns are read; FP, SIGFP, and FOM are required as a
+# fingerprint so that a file with merely Refmac-like labels is refused.
 REFMAC_TWIN_COLUMNS = {
     "FP": "F",
     "SIGFP": "Q",
@@ -84,7 +77,7 @@ class DensityResult:
     mtz_for_maps: str
     mtzfix_log: str
     mtzfix_applied: bool
-    timings: dict[str, Any]
+    timings: dict[str, float]
     twin_coefficient_normalization_applied: bool
     twin_coefficient_normalization: dict[str, Any] | None
     density_map_scope_requested: str
@@ -181,6 +174,12 @@ class _Ccp4Runner:
         timeout_s: float | None = None,
     ) -> None:
         budget = self.tool_timeout_s if timeout_s is None else timeout_s
+        # The timeout path records its timing before raising, and the finally
+        # below only fills a missing one; a repeated name would be dropped.
+        if timing_name in self.timings:
+            raise ValueError(
+                f"timing {timing_name!r} was already recorded for {self.pdb_id}"
+            )
         log_path = os.path.join(self.out_dir, logname)
         resolved = shutil.which(cmd[0], path=(self.env or {}).get("PATH"))
         if resolved is None:
@@ -222,7 +221,7 @@ class _Ccp4Runner:
             elapsed = time.monotonic() - started
             self.timings[timing_name] = round(elapsed, 3)
             raise Ccp4ToolTimeoutError(
-                tool=os.path.basename(resolved_cmd[0]),
+                tool=program,
                 timeout_s=budget,
                 elapsed_s=elapsed,
                 log_path=log_path,
@@ -249,7 +248,7 @@ class _Ccp4Runner:
             log_path,
             detail_suffix,
         )
-        if os.path.basename(resolved_cmd[0]).lower() == "mtzfix":
+        if program.lower() == "mtzfix":
             try:
                 with open(log_path, encoding="utf-8", errors="replace") as handle:
                     mtzfix_log_text = handle.read()
@@ -265,7 +264,11 @@ class _Ccp4Runner:
             f"{resolved_cmd[0]} failed for {self.pdb_id} (rc={proc.returncode}): "
             f"see {log_path}{detail_suffix}"
         )
-        if any(marker in detail.lower() for marker in _CCP4_ENTRY_LIMITATION_MARKERS):
+        # Match against the whole stderr: CCP4 programs often print hundreds
+        # of characters of warnings before the fatal line, which the truncated
+        # detail would cut off.
+        stderr_lower = stderr_text.lower()
+        if any(marker in stderr_lower for marker in _CCP4_ENTRY_LIMITATION_MARKERS):
             raise Ccp4EntryLimitationError(message)
         raise RuntimeError(message)
 
@@ -623,6 +626,8 @@ class _DensityMapBuilder:
     def build(self, map_scope: str, keep_full_maps: bool) -> _MapBuildResult:
         requested = DensityMapScope(map_scope)
         if requested is DensityMapScope.FULL:
+            # FFT covers the whole unit cell from its origin, so only MAPMASK
+            # crops below need the header extent check.
             self._fft(self.paths.fo_map, "FWT", "PHWT", "fo", "fft_2fofc_s")
             self._fft(self.paths.df_map, "DELFWT", "PHDELWT", "df", "fft_fofc_s")
             full_bytes = self._map_size(
@@ -709,6 +714,10 @@ def run_density_analysis(
         pdb_id, pdb_path, out_dir, map_mtz, paths, runner
     ).build(map_scope, keep_full_maps)
 
+    # EDSTATS writes OUT itself, so a retained file from an earlier run must
+    # not be read as this run's statistics.
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(paths.stats_out)
     runner.run(
         [
             "edstats",

@@ -11,6 +11,7 @@ import logging.handlers
 import multiprocessing
 import os
 import sys
+import time
 from typing import IO
 
 from typing_extensions import override
@@ -59,6 +60,15 @@ def truncate(text: object, limit: int = MAX_TOOL_OUTPUT_CHARS) -> str:
     if keep == 0:
         return rendered[:limit]
     return (rendered[:keep] + marker)[:limit]
+
+
+def elapsed_s(started: float) -> float:
+    """Return the seconds since a ``time.monotonic()`` reading, as a timing.
+
+    Every stage timing the pipeline records is rounded this way, so the
+    manifest's ``timings`` column is byte-stable across stages.
+    """
+    return round(time.monotonic() - started, 3)
 
 
 class _BoundedMessage(logging.Filter):

@@ -21,9 +21,8 @@ from typing import Literal
 
 from codes import EntryStatus, ReasonCode, RefinementState, WarningCode
 from crystallization_conditions import extract_crystallization_context
-from density_analysis import elapsed_s
 from inputs import MissingInputError
-from run_logging import configure_worker_logging, logger_for, truncate
+from run_logging import configure_worker_logging, elapsed_s, logger_for, truncate
 from scratch import ENTRY_SCRATCH, create_owned_scratch_directory
 from structure_analysis import AtomSite
 from worker.contracts import (

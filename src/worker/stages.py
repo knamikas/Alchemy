@@ -39,13 +39,12 @@ from density_analysis import (
     Ccp4EntryLimitationError,
     Ccp4ToolTimeoutError,
     MtzfixValidationError,
-    elapsed_s,
     run_density_analysis,
 )
 from edstats_statistics import extract_metal_statistics
 from metal_elements import METAL_ELEMENTS
 from output_rows import MetalStatsRow, csv_value
-from run_logging import truncate
+from run_logging import elapsed_s, truncate
 from structure_analysis import NAN, AtomSite, StructureContext
 from worker.contracts import DensityProvenance, WorkerConfig
 from worker.resolve import EntryInputs

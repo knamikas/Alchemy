@@ -17,6 +17,7 @@ from helpers import approx, write_mtz
 
 import density_analysis as density
 import inputs
+import run_logging
 
 _Ccp4Runner = density._Ccp4Runner  # pyright: ignore[reportPrivateUsage]
 
@@ -254,6 +255,40 @@ def test_known_ccp4_entry_limitations_are_deterministic(
     runner = _Ccp4Runner("1abc", str(tmp_path), None, 900, {})
 
     with pytest.raises(density.Ccp4EntryLimitationError, match="rc=1"):
+        runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")
+
+
+def test_a_limitation_marker_after_a_long_preamble_is_still_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The marker must be found even when truncation would cut it from the detail."""
+    preamble = "WARNING: something harmless\n" * 30
+    fatal = "mapmask: ccpmapin - Map section > maxsec: change maxsec and recompile"
+    assert len(preamble) > run_logging.MAX_TOOL_OUTPUT_CHARS
+
+    def failed_program(
+        *args: object, stderr: IO[bytes] | None = None, **kwargs: object
+    ) -> SimpleNamespace:
+        assert stderr is not None
+        stderr.write((preamble + fatal).encode("ascii"))
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
+    monkeypatch.setattr("density_analysis.subprocess.run", failed_program)
+    runner = _Ccp4Runner("1abc", str(tmp_path), None, 900, {})
+
+    with pytest.raises(density.Ccp4EntryLimitationError):
+        runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")
+
+
+def test_a_repeated_timing_name_is_a_code_defect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two runs under one timing name would silently lose the second duration."""
+    monkeypatch.setattr("density_analysis.shutil.which", _found_command)
+    runner = _Ccp4Runner("1abc", str(tmp_path), None, 900, {"mapmask_s": 0.5})
+
+    with pytest.raises(ValueError, match="mapmask_s"):
         runner.run(["mapmask"], None, "mapmask.log", "mapmask_s")
 
 
