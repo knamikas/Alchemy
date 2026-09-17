@@ -415,6 +415,9 @@ class StructureContext:
     symmetry: SymmetryMetadata
     analysis_coordinate_format: str
     warning_codes: tuple[str, ...]
+    #: Occupancy-weighted non-H/D count of the deposited first-model records,
+    #: or NaN when the occupancies or elements leave it unknowable.
+    deposited_ni: float
     _spatial_model: gemmi.Model = field(repr=False)
     _atom_by_indices: Mapping[AtomIndices, AtomSite] = field(
         repr=False, default_factory=dict[AtomIndices, AtomSite]

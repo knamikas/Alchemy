@@ -17,8 +17,11 @@ import gemmi
 from conformer_selection import select_residue, site_is_better
 from pdb_records import (
     MISSING_VALUE_TOKENS,
+    MMCIF_FORMAT,
+    PDB_FORMAT,
     PDB_HYBRID36_DIGITS,
     RawOccupancy,
+    analysis_format_for_path,
     blank_if_missing,
     canonical_pdb_residue_id,
     decode_pdb_resseq,
@@ -55,7 +58,10 @@ from structure_model import (
 )
 
 __all__ = [
+    "ANALYZED_MODEL_COUNT",
+    "ANALYZED_MODEL_INDEX",
     "DUPLICATE_ATOM_POSITION_TOLERANCE",
+    "FIRST_MODEL_POLICY",
     "MISSING_VALUE_TOKENS",
     "NAN",
     "OVERFULL_OCCUPANCY_NI_FRACTION",
@@ -89,6 +95,13 @@ __all__ = [
 FIRST_MODEL_POLICY = "first"
 ANALYZED_MODEL_COUNT = 1
 
+#: Gemmi is told the format Alchemy decided on, so that the raw PDB fields are
+#: never read from a file Gemmi parsed as something else.
+_GEMMI_FORMATS = {
+    PDB_FORMAT: gemmi.CoorFormat.Pdb,
+    MMCIF_FORMAT: gemmi.CoorFormat.Mmcif,
+}
+
 
 def load_structure(
     pdb_id: str,
@@ -96,9 +109,12 @@ def load_structure(
     source_model_count: int | None = None,
 ) -> StructureContext:
     """Parse ``path`` with Gemmi and build Alchemy's first-model atom sets."""
-    structure = gemmi.read_structure(path)
+    analysis_format = analysis_format_for_path(path)
+    structure = gemmi.read_structure(path, format=_GEMMI_FORMATS[analysis_format])
     if len(structure) == 0:
-        raise ValueError("coordinate file contains no models")
+        raise ValueError(
+            f"coordinate file contains no models when read as {analysis_format}"
+        )
     input_model_count = (
         len(structure) if source_model_count is None else source_model_count
     )
@@ -108,12 +124,19 @@ def load_structure(
         )
     model = structure[ANALYZED_MODEL_INDEX]
     model_id = str(model.num)
-    source = source_model_data(path, model)
+    source = source_model_data(path, model, analysis_format)
     all_sites = build_atom_sites(model, model_id, source)
 
     inventory = prepare_atom_inventory(model, all_sites)
     symmetry = symmetry_metadata(structure)
     indexes = residue_indexes(inventory.residues)
+    occupancy = occupancy_validation(inventory, source)
+    records = record_audit(inventory)
+    deposited_ni = (
+        NAN
+        if occupancy.validation_failed or records.unknown_element_atom_count
+        else inventory.occupancy_weighted_atom_count
+    )
     return StructureContext(
         pdb_id=pdb_id,
         structure=structure,
@@ -127,11 +150,12 @@ def load_structure(
         source_atoms=inventory.source_atoms,
         contact_atoms=inventory.contact_atoms,
         residues=inventory.residues,
-        occupancy=occupancy_validation(inventory, source),
-        records=record_audit(inventory),
+        occupancy=occupancy,
+        records=records,
         symmetry=symmetry,
         analysis_coordinate_format=source.analysis_format,
         warning_codes=warning_codes(inventory, source, input_model_count),
+        deposited_ni=deposited_ni,
         _spatial_model=inventory.spatial_model,
         _atom_by_indices={
             (atom.chain_index, atom.residue_index, atom.atom_index): atom
@@ -145,20 +169,12 @@ def load_structure(
 
 
 def count_deposited_ni(context: StructureContext) -> float:
-    """Occupancy-weighted non-H/D count in deposited first-model records."""
-    if (
-        context.occupancy.validation_failed
-        or context.records.unknown_element_atom_count
-    ):
-        return NAN
-    total = 0.0
-    for atom in context.source_atoms:
-        if atom.is_hydrogen:
-            continue
-        if not atom.occupancy_valid:
-            return NAN
-        total += atom.occupancy
-    return total
+    """Occupancy-weighted non-H/D count in deposited first-model records.
+
+    The count is fixed when the structure is loaded: NaN when any counted
+    atom's occupancy or element is unknown, otherwise the deposited sum.
+    """
+    return context.deposited_ni
 
 
 def count_ni(context: StructureContext) -> float:

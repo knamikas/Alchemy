@@ -770,7 +770,7 @@ def test_neighbor_search_excludes_non_finite_coordinates(
     )
     donor.pos = gemmi.Position(non_finite, donor.pos.y, donor.pos.z)
 
-    def read_parsed_structure(_path: str) -> gemmi.Structure:
+    def read_parsed_structure(_path: str, **_options: object) -> gemmi.Structure:
         return parsed
 
     monkeypatch.setattr(
@@ -805,3 +805,129 @@ def test_neighbor_search_requires_symmetry_metadata_when_asked(tmp_path: Path) -
     with pytest.raises(ValueError, match="space_group"):
         context.make_neighbor_search(4.0, include_symmetry=True)
     assert context.make_neighbor_search(4.0, include_symmetry=False) is not None
+
+
+def _hydrogenated_water_site() -> StructureBuilder:
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    builder.add_hetero_residue(
+        "HOH",
+        101,
+        [
+            AtomSpec("O", "O", (0.0, 2.09, 0.0)),
+            AtomSpec("H1", "H", (0.6, 2.60, 0.0)),
+            AtomSpec("D2", "D", (-0.6, 2.60, 0.0)),
+        ],
+        chain="B",
+    )
+    return builder
+
+
+@pytest.mark.parametrize(
+    ("label", "field", "missing", "invalid"),
+    [("missing", "      ", 1, 0), ("above_one", "  1.50", 0, 1)],
+)
+def test_unreadable_hydrogen_occupancy_is_reported_but_keeps_the_dpi(
+    tmp_path: Path, label: str, field: str, missing: int, invalid: int
+) -> None:
+    """Hydrogens never enter Ni, so an unreadable one cannot make Ni unknowable.
+
+    The record defect is still published in the occupancy counts, exactly as
+    an overfull hydrogen site is; only the DPI verdict ignores it.
+    """
+    clean = _hydrogenated_water_site().write_pdb(tmp_path / "clean.pdb")
+    path = _rewrite_atom_field(
+        clean, tmp_path / f"{label}.pdb", atom_name="D2", column=_OCC_COLUMN, text=field
+    )
+
+    context = sa.load_structure("test", path)
+    deuterium = next(atom for atom in context.source_atoms if atom.atom_name == "D2")
+
+    assert deuterium.is_hydrogen is True
+    assert deuterium.occupancy_valid is False
+    assert context.occupancy.missing_count == missing
+    assert context.occupancy.invalid_count == invalid
+    assert context.occupancy.validation_failed is False
+    assert sa.count_deposited_ni(context) == approx(2.0)
+    assert math.isfinite(sa.count_ni(context))
+
+
+def test_unreadable_heavy_atom_occupancy_still_voids_the_dpi_beside_hydrogens(
+    tmp_path: Path,
+) -> None:
+    """The hydrogen exemption is per record: a blank oxygen occupancy still voids Ni."""
+    clean = _hydrogenated_water_site().write_pdb(tmp_path / "clean.pdb")
+    path = _rewrite_atom_field(
+        clean,
+        tmp_path / "blank_o.pdb",
+        atom_name="O",
+        column=_OCC_COLUMN,
+        text="      ",
+    )
+
+    context = sa.load_structure("test", path)
+
+    assert context.occupancy.missing_count == 1
+    assert context.occupancy.validation_failed is True
+    assert math.isnan(sa.count_deposited_ni(context))
+    assert math.isnan(sa.count_ni(context))
+
+
+@pytest.mark.parametrize("name", ["site.pdb", "site.cif.gz"])
+def test_load_structure_reads_the_format_the_extension_names(
+    tmp_path: Path, name: str
+) -> None:
+    """Gemmi is told the format Alchemy decided on, so the two cannot disagree.
+
+    mmCIF content under a PDB extension (or a gzipped mmCIF, whose extension
+    is ``.gz``) previously parsed as mmCIF in Gemmi while the raw PDB fields
+    were read from the same file, producing a complete context with every
+    element unknown instead of an error.
+    """
+    builder = simple_metal_site("ZN", [("HOH", "O", 2.09)])
+    cif = Path(builder.write_cif(tmp_path / "source.cif"))
+    path = tmp_path / name
+    if name.endswith(".gz"):
+        import gzip
+
+        with gzip.open(path, "wb") as handle:
+            handle.write(cif.read_bytes())
+    else:
+        path.write_bytes(cif.read_bytes())
+
+    with pytest.raises((RuntimeError, ValueError)):
+        sa.load_structure("test", str(path))
+
+
+def test_provenance_after_an_undecodable_record_is_still_read(tmp_path: Path) -> None:
+    """One pass reads raw fields and provenance; a bad record does not cut it short."""
+    builder = StructureBuilder()
+    builder.add_metal("ZN", 1, chain="B")
+    builder.add_amino_acid("HIS", 10, chain="B")
+    clean = Path(builder.write_pdb(tmp_path / "clean.pdb"))
+    lines = clean.read_text().splitlines(keepends=True)
+    index = next(i for i, line in enumerate(lines) if line[17:20] == "HIS")
+    lines[index] = lines[index][:22] + " 1.5" + lines[index][26:]
+    remark = RESIDUE_LAYOUT.format(1, "B", "1", "ZN", "BB", 1, "", "ZN", 0, 0, "-")
+    path = tmp_path / "trailing_remark.pdb"
+    path.write_text("".join(lines) + remark)
+
+    context = sa.load_structure("test", str(path))
+    metal = next(atom for atom in context.source_atoms if atom.atom_name == "ZN")
+
+    assert context.occupancy.raw_mapping_failed is True
+    assert "residue sequence" in context.occupancy.raw_mapping_failure_reason
+    assert metal.chain_id == "BB"
+    assert "legacy_pdb_identifiers_packed" in context.warning_codes
+
+
+def test_model_selection_constants_are_public() -> None:
+    """The model policy a consumer may need to name is exported alongside the rest."""
+    assert {
+        "ANALYZED_MODEL_INDEX",
+        "ANALYZED_MODEL_COUNT",
+        "FIRST_MODEL_POLICY",
+    } <= set(sa.__all__)
+    assert sa.ANALYZED_MODEL_INDEX == 0
+    assert sa.ANALYZED_MODEL_COUNT == 1
+    assert sa.FIRST_MODEL_POLICY == "first"

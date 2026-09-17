@@ -414,10 +414,13 @@ positions contribute separately to this global sum. If non-given strict-NCS
 operations generate copies that are not explicitly deposited, each copy is
 included in `Ni`; NCS operations marked as already given are not counted again.
 The deposited count, strict-NCS multiplier, and resulting complete count are all
-reported. A missing, non-finite, negative, or greater-than-one occupancy makes
-DPI unavailable rather than being silently repaired, because an occupancy that
-cannot be read leaves `Ni` unknowable; contact distances that do not require DPI
-are retained.
+reported. A missing, non-finite, negative, or greater-than-one occupancy on any
+atom `Ni` counts makes DPI unavailable rather than being silently repaired,
+because an occupancy that cannot be read leaves `Ni` unknowable; contact
+distances that do not require DPI are retained. The same defect on a hydrogen
+or deuterium record is reported in `missing_occupancy_count` and
+`invalid_occupancy_count` but leaves the DPI available, since those atoms never
+enter `Ni`.
 
 A sum greater than one across alternate conformers of the same atom site is
 treated differently, because `Ni` is still known — only inflated by the excess.

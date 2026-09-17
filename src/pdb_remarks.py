@@ -20,7 +20,7 @@ mappings. Records may appear in any order.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field as dataclass_field, replace
 
 REMARK_PREFIX = "REMARK 950 ALCHEMY"
@@ -219,23 +219,20 @@ def conversion_provenance_remarks(
     return remarks
 
 
-def _provenance_records(path: str) -> Iterator[tuple[RemarkLayout, list[str], str]]:
-    """Yield ``(layout, tokens, line)`` for every provenance record in a PDB."""
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if not line.startswith(REMARK_PREFIX):
-                continue
-            tokens = line.split()
-            layout = next(
-                (layout for layout in LAYOUTS if layout.matches(tokens)), None
-            )
-            if layout is None:
-                continue
-            if len(tokens) != layout.token_count:
-                raise ValueError(
-                    f"malformed Alchemy provenance record: {line.rstrip()}"
-                )
-            yield layout, tokens, line
+def _provenance_records(
+    lines: Iterable[str],
+) -> Iterator[tuple[RemarkLayout, list[str], str]]:
+    """Yield ``(layout, tokens, line)`` for every provenance record in ``lines``."""
+    for line in lines:
+        if not line.startswith(REMARK_PREFIX):
+            continue
+        tokens = line.split()
+        layout = next((layout for layout in LAYOUTS if layout.matches(tokens)), None)
+        if layout is None:
+            continue
+        if len(tokens) != layout.token_count:
+            raise ValueError(f"malformed Alchemy provenance record: {line.rstrip()}")
+        yield layout, tokens, line
 
 
 def _int_field(
@@ -319,7 +316,13 @@ def _merged_identity(
 
 
 def read_conversion_provenance(path: str) -> ConversionProvenance:
-    """Read the provenance records embedded in a converted PDB in one pass.
+    """Read the provenance records embedded in the converted PDB at ``path``."""
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        return parse_conversion_provenance(handle)
+
+
+def parse_conversion_provenance(lines: Iterable[str]) -> ConversionProvenance:
+    """Read the provenance records among a converted PDB's ``lines`` in one pass.
 
     ``RESNAME`` records carry the source component name alone; ``RESIDUE``
     records, written when a residue's chain, number, or name changed in
@@ -333,7 +336,7 @@ def read_conversion_provenance(path: str) -> ConversionProvenance:
     mapping: dict[ResidueMappingKey, SourceResidueIdentity] = {}
     polymer_positions: dict[ResidueMappingKey, str] = {}
     counts: dict[int, int] = {}
-    for layout, tokens, line in _provenance_records(path):
+    for layout, tokens, line in _provenance_records(lines):
         if layout is OCCUPANCY_DEFAULT_LAYOUT:
             model_index = _model_index_field(layout, tokens, line)
             count = _int_field(layout, tokens, "count", line)

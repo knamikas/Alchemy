@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import os
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -208,49 +208,58 @@ def _serial_field(text: str) -> int | None:
         return None
 
 
-def raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
-    """Read PDB occupancy and element fields without losing provenance.
+def parse_pdb_occupancies(lines: Iterable[str]) -> list[list[RawOccupancy]]:
+    """Read PDB occupancy and element fields from ``lines`` without losing provenance.
 
-    Returns one record list per MODEL block, in file order, and the error text
-    if the file could not be read or a record's resSeq could not be decoded.
+    Returns one record list per MODEL block, in file order, and raises
+    ``ValueError`` when a record's resSeq cannot be decoded.
     """
     records: list[list[RawOccupancy]] = [[]]
     model_index = 0
     saw_model = False
+    for line in lines:
+        record = line[RECORD_NAME_COLUMNS].strip().upper()
+        if record == MODEL_RECORD_NAME:
+            if saw_model:
+                model_index += 1
+                records.append([])
+            else:
+                saw_model = True
+            continue
+        if record not in COORDINATE_RECORD_NAMES:
+            continue
+        element, element_status = parse_pdb_element(line[ELEMENT_COLUMNS])
+        value, status = _occupancy_field(line[OCCUPANCY_COLUMNS])
+        records[model_index].append(
+            RawOccupancy(
+                value=value,
+                status=status,
+                element=element,
+                element_status=element_status,
+                atom_name=line[ATOM_NAME_COLUMNS].strip(),
+                altloc=blank_if_missing(line[ALTLOC_COLUMN]),
+                chain_id=line[CHAIN_ID_COLUMNS].strip(),
+                residue_name=line[RESIDUE_NAME_COLUMNS].strip(),
+                residue_number=str(decode_pdb_resseq(line[RESSEQ_COLUMNS])),
+                insertion_code=blank_if_missing(line[INSERTION_CODE_COLUMN]),
+                serial=_serial_field(line[SERIAL_COLUMNS]),
+                source_order=len(records[model_index]),
+            )
+        )
+    return records
+
+
+def raw_pdb_occupancies(path: str) -> tuple[list[list[RawOccupancy]], str]:
+    """Read the occupancy and element fields of the PDB file at ``path``.
+
+    Returns the per-model records of ``parse_pdb_occupancies`` and the error
+    text if the file could not be read or a record could not be decoded.
+    """
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                record = line[RECORD_NAME_COLUMNS].strip().upper()
-                if record == MODEL_RECORD_NAME:
-                    if saw_model:
-                        model_index += 1
-                        records.append([])
-                    else:
-                        saw_model = True
-                    continue
-                if record not in COORDINATE_RECORD_NAMES:
-                    continue
-                element, element_status = parse_pdb_element(line[ELEMENT_COLUMNS])
-                value, status = _occupancy_field(line[OCCUPANCY_COLUMNS])
-                records[model_index].append(
-                    RawOccupancy(
-                        value=value,
-                        status=status,
-                        element=element,
-                        element_status=element_status,
-                        atom_name=line[ATOM_NAME_COLUMNS].strip(),
-                        altloc=blank_if_missing(line[ALTLOC_COLUMN]),
-                        chain_id=line[CHAIN_ID_COLUMNS].strip(),
-                        residue_name=line[RESIDUE_NAME_COLUMNS].strip(),
-                        residue_number=str(decode_pdb_resseq(line[RESSEQ_COLUMNS])),
-                        insertion_code=blank_if_missing(line[INSERTION_CODE_COLUMN]),
-                        serial=_serial_field(line[SERIAL_COLUMNS]),
-                        source_order=len(records[model_index]),
-                    )
-                )
+            return parse_pdb_occupancies(handle), ""
     except (OSError, ValueError) as exc:
         return [], str(exc)
-    return records, ""
 
 
 def _gemmi_atom_identity(

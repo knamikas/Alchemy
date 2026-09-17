@@ -296,7 +296,7 @@ def test_non_finite_metal_is_partial_and_geometry_is_unscorable(
     )
     metal_atom.pos = gemmi.Position(float("nan"), 0.0, 0.0)
 
-    def read_parsed_structure(_path: str) -> gemmi.Structure:
+    def read_parsed_structure(_path: str, **_options: object) -> gemmi.Structure:
         return parsed
 
     monkeypatch.setattr(gemmi, "read_structure", read_parsed_structure)

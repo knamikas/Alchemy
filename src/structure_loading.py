@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 import gemmi
@@ -20,17 +20,18 @@ from conformer_selection import select_residue, site_is_better
 from pdb_records import (
     PDB_FORMAT,
     RawOccupancy,
-    analysis_format_for_path,
     author_residue_number,
     blank_if_missing,
     element_for_atom,
     match_raw_occupancies,
     occupancy_for_atom,
-    raw_pdb_occupancies,
+    parse_pdb_occupancies,
 )
 from pdb_remarks import (
+    REMARK_PREFIX,
+    ConversionProvenance,
     SourceResidueIdentity,
-    read_conversion_provenance,
+    parse_conversion_provenance,
 )
 from structure_model import (
     HYDROGEN_ELEMENTS,
@@ -86,14 +87,49 @@ class SourceModelData:
     legacy_identifiers_packed: bool
 
 
-def source_model_data(path: str, model: gemmi.Model) -> SourceModelData:
+def _read_pdb_source(
+    path: str,
+) -> tuple[list[list[RawOccupancy]], str, ConversionProvenance]:
+    """Read the raw coordinate fields and the conversion provenance in one pass.
+
+    Returns the per-model records, the error text if a record could not be
+    decoded, and the ``REMARK 950`` provenance, which is read to the end of
+    the file even when a coordinate record fails so that an undecodable
+    record cannot hide the residue identities written after it.
+    """
+    remarks: list[str] = []
+
+    def coordinate_lines() -> Iterator[str]:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith(REMARK_PREFIX):
+                    remarks.append(line)
+                else:
+                    yield line
+
+    lines = coordinate_lines()
+    raw_error = ""
+    try:
+        raw_models = parse_pdb_occupancies(lines)
+    except ValueError as exc:
+        raw_models = []
+        raw_error = str(exc)
+        for _line in lines:
+            pass
+    return raw_models, raw_error, parse_conversion_provenance(remarks)
+
+
+def source_model_data(
+    path: str, model: gemmi.Model, analysis_format: str
+) -> SourceModelData:
     """Read the raw records and conversion provenance behind ``model``.
 
     For PDB input the deposited occupancy and element columns and any
     ``REMARK 950`` provenance are read from ``path`` and matched to Gemmi's
     atoms; mmCIF input has nothing to recover, so every match is ``None``.
+    ``analysis_format`` is the format ``path`` was parsed as, so the raw
+    fields are read the same way Gemmi read the coordinates.
     """
-    analysis_format = analysis_format_for_path(path)
     raw_models: list[list[RawOccupancy]] = []
     raw_error = ""
     source_residue_identities: dict[
@@ -101,8 +137,7 @@ def source_model_data(path: str, model: gemmi.Model) -> SourceModelData:
     ] = {}
     defaulted_occupancy_counts: dict[int, int] = {}
     if analysis_format == PDB_FORMAT:
-        raw_models, raw_error = raw_pdb_occupancies(path)
-        provenance = read_conversion_provenance(path)
+        raw_models, raw_error, provenance = _read_pdb_source(path)
         source_residue_identities = provenance.residue_mapping
         defaulted_occupancy_counts = provenance.defaulted_occupancy_counts
 
@@ -324,8 +359,9 @@ def _overfull_occupancy_summary(atoms: Iterable[AtomSite]) -> OverfullOccupancyS
 def _occupancy_weighted_atom_count(atoms: Iterable[AtomSite]) -> float:
     """Sum the valid non-hydrogen occupancies, ignoring the entry-level verdict.
 
-    ``_occupancy_validation_failed`` needs this raw Ni to judge how much the
-    overfull excess matters, so it cannot wait for that verdict.
+    This is the deposited Ni once ``_occupancy_validation_failed`` accepts the
+    occupancies; that verdict itself needs the raw sum to judge how much the
+    overfull excess matters.
     """
     return math.fsum(
         atom.occupancy
@@ -366,8 +402,13 @@ class AtomInventory:
     contact_atoms: tuple[AtomSite, ...]
     residues: tuple[ResidueSelection, ...]
     spatial_model: gemmi.Model
+    #: Sum of the valid non-hydrogen occupancies, whatever the verdict on them.
+    occupancy_weighted_atom_count: float
     missing_occupancy_count: int
     invalid_occupancy_count: int
+    #: Non-hydrogen records whose occupancy is missing or invalid: the ones
+    #: that leave Ni unknowable, as hydrogen records never enter it.
+    unreadable_ni_occupancy_count: int
     zero_occupancy_count: int
     duplicate_count: int
     coordinate_conflict_count: int
@@ -390,6 +431,9 @@ def prepare_atom_inventory(
         not atom.occupancy_valid and atom.occupancy_status != OccupancyStatus.MISSING
         for atom in all_sites
     )
+    unreadable_ni_count = sum(
+        not atom.occupancy_valid and not atom.is_hydrogen for atom in all_sites
+    )
 
     dedup: dict[tuple[object, ...], AtomSite] = {}
     duplicate_count = 0
@@ -411,6 +455,7 @@ def prepare_atom_inventory(
         atom.occupancy_valid and atom.occupancy == 0.0 for atom in source_atoms
     )
     overfull = _overfull_occupancy_summary(source_atoms)
+    occupancy_weighted_atom_count = _occupancy_weighted_atom_count(source_atoms)
 
     residue_groups: dict[ResidueKey, list[AtomSite]] = defaultdict(list)
     for site in source_atoms:
@@ -434,8 +479,10 @@ def prepare_atom_inventory(
         contact_atoms=contact_atoms,
         residues=residues,
         spatial_model=_spatial_model(model),
+        occupancy_weighted_atom_count=occupancy_weighted_atom_count,
         missing_occupancy_count=missing_count,
         invalid_occupancy_count=invalid_count,
+        unreadable_ni_occupancy_count=unreadable_ni_count,
         zero_occupancy_count=zero_count,
         duplicate_count=duplicate_count,
         coordinate_conflict_count=coordinate_conflicts,
@@ -511,9 +558,11 @@ def _occupancy_validation_failed(
     inventory: AtomInventory, source: SourceModelData
 ) -> bool:
     """Whether the deposited occupancies are unfit for an occupancy-weighted Ni."""
-    # Unreadable occupancy makes Ni unknown; a known excess is judged relative
-    # to Ni, and only the excess Ni actually counts can inflate it.
-    countable_ni = _occupancy_weighted_atom_count(inventory.source_atoms)
+    # An unreadable occupancy on an atom Ni counts makes Ni unknown; a known
+    # excess is judged relative to Ni, and only the excess Ni actually counts
+    # can inflate it. Hydrogen records never enter Ni, so their defects are
+    # reported but do not disqualify it.
+    countable_ni = inventory.occupancy_weighted_atom_count
     ni_excess = inventory.overfull.ni_excess
     if ni_excess <= 0.0:
         overfull_invalidates_dpi = False
@@ -524,8 +573,7 @@ def _occupancy_validation_failed(
     else:
         overfull_invalidates_dpi = True
     return bool(
-        inventory.missing_occupancy_count
-        or inventory.invalid_occupancy_count
+        inventory.unreadable_ni_occupancy_count
         or overfull_invalidates_dpi
         or source.mapping_failed
     )

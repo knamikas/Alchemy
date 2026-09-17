@@ -58,6 +58,17 @@ confidence scores.
   explicitly on Windows and macOS.
 - Integration tests handle documented blank z-scores and verify actual map
   cropping before comparing numerical outputs.
+- A missing or invalid occupancy on a hydrogen or deuterium record no longer
+  makes the DPI unavailable. Hydrogens never enter `Ni`, so the defect is
+  reported in the occupancy counts but does not disqualify the atom count,
+  matching the treatment of overfull hydrogen sites.
+- Coordinate files are parsed in the format their extension names, so a file
+  whose content disagrees with its extension fails with a format error instead
+  of loading with every element unknown and the DPI silently unavailable.
+- The deposited occupancy-weighted atom count is computed once when the
+  structure is loaded, with the same summation the overfull-occupancy
+  threshold is judged against, and the raw PDB fields and conversion
+  provenance are read from the file in a single pass.
 
 ### Tested software and platforms
 

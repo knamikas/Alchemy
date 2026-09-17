@@ -219,7 +219,7 @@ The concrete metric columns are:
 | Columns | Meaning |
 | --- | --- |
 | `symmetry_search_available`, `symmetry_search_failure_reason` | Whether generated-image search completed and why it did not. |
-| `occupancy_validation_failed`, `missing_occupancy_count`, `invalid_occupancy_count` | Entry-level occupancy parsing and validation results. |
+| `occupancy_validation_failed`, `missing_occupancy_count`, `invalid_occupancy_count` | Entry-level occupancy parsing and validation results. The counts cover every deposited record, hydrogen included; validation fails only for defects on atoms that enter `Ni`. |
 | `overfull_occupancy_site_count`, `overfull_occupancy_excess`, `metal_overfull_occupancy` | Alternate-conformer occupancy excess and whether it affects this metal site. |
 | `defaulted_occupancy_atom_count`, `zero_occupancy_atom_count` | Counts of defaulted and explicitly absent atoms. |
 | `duplicate_atom_records_present`, `duplicate_atom_record_count`, `duplicate_atom_coordinate_conflict_count`, `malformed_duplicate_atom_name_count` | Duplicate-coordinate-record diagnostics. |
