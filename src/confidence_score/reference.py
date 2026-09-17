@@ -1,4 +1,11 @@
-"""Build, persist, load, and validate frozen confidence references."""
+"""Build, persist, load, and apply frozen confidence references.
+
+Two responsibilities live here, either side of the frozen reference. The
+reference lifecycle writes a cohort's component distributions and their policy
+metadata, reloads them under strict verification, and refuses output built
+against a different reference. Applying a reference adds one verdict per
+prepared row, in memory for a single entry or streaming a whole input file.
+"""
 
 import contextlib
 import csv
@@ -8,7 +15,7 @@ import math
 import os
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Any, TextIO
+from typing import Any, NamedTuple, TextIO
 
 from analysis_config import analysis_config_id
 from confidence_score.schema import (
@@ -27,10 +34,31 @@ from confidence_score.schema import (
 )
 from confidence_score.scoring import (
     ConfidenceReference,
+    EmpiricalDistribution,
     score_site,
 )
 from output_rows import finite_float
 from reference_data import reference_data_id, sha256
+
+#: The header every component distribution file carries.
+DISTRIBUTION_COLUMNS = ("component", "value", "count")
+
+
+class FinalizedConfidence(NamedTuple):
+    """What finalizing a database reference produced.
+
+    ``rows`` and ``scored_rows`` describe the scoring pass: every input row
+    written to the scores file, and how many of those earned a finite ranking
+    score. ``cohort_size`` is the frozen reference's ``input_row_count``, which
+    the counting pass measured. Both passes read one file, so ``cohort_size``
+    equals ``rows`` by construction today; the two can only differ if the input
+    file changes between the passes, and they are reported separately so that
+    such a change is visible rather than assumed away.
+    """
+
+    rows: int
+    scored_rows: int
+    cohort_size: int
 
 
 def _scoring_metadata() -> dict[str, Any]:
@@ -71,14 +99,35 @@ def _reference_identifier(
 
 
 def _normalized_metric_counts(counts: Mapping[float, int]) -> Counter[float]:
+    """Round every metric to its published precision, merging the ties it creates.
+
+    Values and counts are not checked here: ``EmpiricalDistribution`` is the one
+    validator of a reference component, and every path builds one from this
+    mapping before anything is written or scored.
+    """
     normalized: Counter[float] = Counter()
     for value, count in counts.items():
-        if not math.isfinite(value) or value < 0:
-            raise ValueError("confidence reference contains an invalid value")
-        if isinstance(count, bool) or count < 1:
-            raise ValueError("confidence reference contains an invalid count")
         normalized[canonical_metric(value)] += count
     return normalized
+
+
+def _validated_input_row_count(value: object, minimum: int = 0) -> int:
+    """Return a cohort size large enough to hold the observations it describes.
+
+    ``value`` is read from metadata or handed in by a caller, so it is validated
+    rather than coerced: the cohort size must be a real count, and no component
+    can hold more observations than the cohort it was drawn from. Leaving
+    ``minimum`` at zero checks only that the value is a count, which is what a
+    caller that has not yet built the distributions can check.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"confidence reference input row count is invalid: {value!r}")
+    if value < minimum:
+        raise ValueError(
+            f"confidence reference input row count is invalid: {value} is fewer "
+            f"than the {minimum} observation(s) it is said to cover"
+        )
+    return value
 
 
 def write_reference(
@@ -91,58 +140,87 @@ def write_reference(
     """Write reusable component distributions and their policy metadata."""
     density_counts = _normalized_metric_counts(density_counts)
     geometry_counts = _normalized_metric_counts(geometry_counts)
-    if not density_counts and not geometry_counts:
+    density = EmpiricalDistribution.from_counts(density_counts)
+    geometry = EmpiricalDistribution.from_counts(geometry_counts)
+    if not density.size and not geometry.size:
         raise ValueError("cannot build a confidence reference with no evidence")
+    # Validate everything the reference claims before a byte is written, so a
+    # rejected build cannot leave a half-written reference directory behind.
+    input_row_count = _validated_input_row_count(
+        input_row_count, max(density.size, geometry.size)
+    )
     os.makedirs(reference_dir, exist_ok=True)
     distribution_path = os.path.join(reference_dir, REFERENCE_DISTRIBUTION_FILE)
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
 
+    # The metadata file is this directory's completion marker. Remove a stale
+    # one first so that a failure part-way through cannot leave metadata
+    # describing distributions the directory no longer holds.
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(metadata_path)
+
     distribution_tmp = distribution_path + ".tmp"
-    with open(distribution_tmp, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(("component", "value", "count"))
-        for component, counts in (
-            ("density", density_counts),
-            ("geometry", geometry_counts),
-        ):
-            for value in sorted(counts):
-                writer.writerow(
-                    (
-                        component,
-                        format_decimal(value, METRIC_DECIMAL_PLACES),
-                        counts[value],
+    try:
+        with open(distribution_tmp, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(DISTRIBUTION_COLUMNS)
+            for component, distribution in (
+                ("density", density),
+                ("geometry", geometry),
+            ):
+                for value, count in zip(
+                    distribution.values, distribution.counts, strict=True
+                ):
+                    writer.writerow(
+                        (
+                            component,
+                            format_decimal(value, METRIC_DECIMAL_PLACES),
+                            count,
+                        )
                     )
-                )
-    os.replace(distribution_tmp, distribution_path)
+        os.replace(distribution_tmp, distribution_path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(distribution_tmp)
+        raise
 
     metadata = _scoring_metadata()
+    reference_id = _reference_identifier(density_counts, geometry_counts)
     metadata.update(
         {
-            "reference_id": _reference_identifier(density_counts, geometry_counts),
+            "reference_id": reference_id,
             "input_row_count": input_row_count,
-            "density_reference_size": sum(density_counts.values()),
-            "geometry_reference_size": sum(geometry_counts.values()),
-            "density_distinct_value_count": len(density_counts),
-            "geometry_distinct_value_count": len(geometry_counts),
+            "density_reference_size": density.size,
+            "geometry_reference_size": geometry.size,
+            "density_distinct_value_count": density.distinct_value_count,
+            "geometry_distinct_value_count": geometry.distinct_value_count,
             "distribution_file": REFERENCE_DISTRIBUTION_FILE,
         }
     )
     provenance = dict(cohort_provenance or {})
     if "cohort_id" not in provenance:
         fallback_identity = hashlib.sha256(
-            (
-                f"{_reference_identifier(density_counts, geometry_counts)}\n"
-                f"{input_row_count}\n"
-            ).encode("ascii")
+            f"{reference_id}\n{input_row_count}\n".encode("ascii")
         ).hexdigest()
         provenance["cohort_id"] = "alchemy-cohort-" + fallback_identity[:20]
     metadata.update(provenance)
     metadata_tmp = metadata_path + ".tmp"
-    with open(metadata_tmp, "w", encoding="utf-8") as handle:
-        json.dump(metadata, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-    os.replace(metadata_tmp, metadata_path)
-    return ConfidenceReference.from_counts(density_counts, geometry_counts, metadata)
+    try:
+        with open(metadata_tmp, "w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(metadata_tmp, metadata_path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(metadata_tmp)
+        raise
+    return ConfidenceReference(
+        density_values=density.values,
+        density_counts=density.counts,
+        geometry_values=geometry.values,
+        geometry_counts=geometry.counts,
+        metadata=metadata,
+    )
 
 
 def _read_csv_table(
@@ -156,11 +234,68 @@ def _read_csv_table(
         return tuple(reader.fieldnames), list(reader)
 
 
+def _distribution_path(reference_dir: str, metadata: Mapping[str, Any]) -> str:
+    """Resolve the distribution file a reference's metadata names.
+
+    The name is a sibling of the metadata file, never a path: a hand-edited
+    ``distribution_file`` must not be able to send the loader elsewhere.
+    """
+    name = metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE)
+    if not isinstance(name, str) or not name or os.path.basename(name) != name:
+        raise ValueError(
+            f"confidence reference distribution file name is invalid: {name!r}"
+        )
+    return os.path.join(reference_dir, name)
+
+
+def _distribution_counts(path: str) -> dict[str, Counter[float]]:
+    """Read one distribution file into its per-component count mappings.
+
+    Only the checks the file format itself owns live here -- an unknown
+    component, a repeated value, a count that is not an integer. Every rule
+    about the values and counts themselves belongs to ``EmpiricalDistribution``,
+    which the caller builds from what this returns.
+    """
+    header, rows = _read_csv_table(path, "confidence reference distribution")
+    if header != DISTRIBUTION_COLUMNS:
+        raise ValueError(
+            "confidence reference distribution has invalid columns: "
+            f"{path} has {', '.join(header)}"
+        )
+    counts: dict[str, Counter[float]] = {"density": Counter(), "geometry": Counter()}
+    # Row 1 is the header, so the first data row is CSV row 2.
+    for line_number, row in enumerate(rows, start=2):
+        location = f"{path} row {line_number}"
+        component = row["component"]
+        if component not in counts:
+            raise ValueError(
+                "confidence reference contains an unknown component: "
+                f"{component!r} at {location}"
+            )
+        value = finite_float(row["value"])
+        try:
+            count = int(row["count"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "confidence reference contains a non-integer count: "
+                f"{row['count']!r} for {component} {row['value']!r} at {location}"
+            ) from exc
+        if value in counts[component]:
+            raise ValueError(
+                "confidence reference contains a duplicate value: "
+                f"{row['value']!r} for {component} at {location}"
+            )
+        counts[component][value] = count
+    return counts
+
+
 def load_reference(reference_dir: str) -> ConfidenceReference:
     """Load and strictly validate a frozen database confidence reference."""
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     with open(metadata_path, encoding="utf-8") as handle:
         metadata = json.load(handle)
+    if not isinstance(metadata, dict):
+        raise ValueError("confidence reference metadata is not a JSON object")
     expected = _scoring_metadata()
     # reference_data_id is checked separately below with a fuller explanation.
     for key in (key for key in expected if key != "reference_data_id"):
@@ -186,59 +321,37 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
         or cohort_id != "alchemy-cohort-" + inputs_sha256[:20]
     ):
         raise ValueError("confidence reference cohort identifier does not match input")
-    distribution_path = os.path.join(
-        reference_dir,
-        metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE),
-    )
-    header, rows = _read_csv_table(
-        distribution_path, "confidence reference distribution"
-    )
-    if header != ("component", "value", "count"):
-        raise ValueError("confidence reference distribution has invalid columns")
-    component_counts: dict[str, Counter[float]] = {
-        "density": Counter(),
-        "geometry": Counter(),
-    }
-    for row in rows:
-        component = row["component"]
-        value = finite_float(row["value"])
-        try:
-            count = int(row["count"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "confidence reference contains a non-integer count"
-            ) from exc
-        if component not in component_counts:
-            raise ValueError("confidence reference contains an unknown component")
-        if not math.isfinite(value) or value < 0:
-            raise ValueError("confidence reference contains an invalid value")
-        if value in component_counts[component]:
-            raise ValueError("confidence reference contains a duplicate value")
-        component_counts[component][value] = count
+    distribution_path = _distribution_path(reference_dir, metadata)
+    component_counts = _distribution_counts(distribution_path)
     density_counts = component_counts["density"]
     geometry_counts = component_counts["geometry"]
+    # Report a malformed cohort size before the reference is built, so that the
+    # loader's message, which says which metadata file it came from, is the one
+    # an operator sees rather than the constructor's.
+    _validated_input_row_count(metadata.get("input_row_count"))
+    reference = ConfidenceReference.from_counts(
+        density_counts, geometry_counts, metadata
+    )
     if metadata.get("reference_id") != _reference_identifier(
         density_counts, geometry_counts
     ):
         raise ValueError("confidence reference identifier does not match data")
-    reference = ConfidenceReference.from_counts(
-        density_counts, geometry_counts, metadata
-    )
     if reference.density_reference_size != metadata.get("density_reference_size"):
         raise ValueError("density reference size does not match metadata")
     if reference.geometry_reference_size != metadata.get("geometry_reference_size"):
         raise ValueError("geometry reference size does not match metadata")
-    if len(reference.density.values) != metadata.get("density_distinct_value_count"):
-        raise ValueError("density distinct-value count does not match metadata")
-    if len(reference.geometry.values) != metadata.get("geometry_distinct_value_count"):
-        raise ValueError("geometry distinct-value count does not match metadata")
-    input_row_count = metadata.get("input_row_count")
-    if (
-        not isinstance(input_row_count, int)
-        or input_row_count < reference.density_reference_size
-        or input_row_count < reference.geometry_reference_size
+    if reference.density_distinct_value_count != metadata.get(
+        "density_distinct_value_count"
     ):
-        raise ValueError("confidence reference input row count is invalid")
+        raise ValueError("density distinct-value count does not match metadata")
+    if reference.geometry_distinct_value_count != metadata.get(
+        "geometry_distinct_value_count"
+    ):
+        raise ValueError("geometry distinct-value count does not match metadata")
+    _validated_input_row_count(
+        metadata.get("input_row_count"),
+        max(reference.density_reference_size, reference.geometry_reference_size),
+    )
     return reference
 
 
@@ -248,8 +361,9 @@ def _format_support_score(score: float) -> str:
 
 
 def _score_prepared_row(
-    row: Mapping[str, Any], reference: "ConfidenceReference | None"
-) -> tuple[dict[str, Any], float | None]:
+    row: Mapping[str, Any], reference: ConfidenceReference | None
+) -> tuple[dict[str, Any], bool]:
+    """Return one prepared row with its verdict, and whether it was ranked."""
     rszd = finite_float(row.get("rszd_abs", ""))
     geometry_rms = finite_float(row.get("geometry_rms_zbond", ""))
     verdict = score_site(rszd, geometry_rms, reference)
@@ -272,24 +386,33 @@ def _score_prepared_row(
             ),
         }
     )
-    alchemy_score = verdict.alchemy_score
-    return output, (
-        canonical_support_score(alchemy_score) if math.isfinite(alchemy_score) else None
-    )
+    return output, math.isfinite(verdict.alchemy_score)
 
 
-def score_against_reference(
-    rows: Sequence[dict[str, Any]], reference: ConfidenceReference
+def _score_rows(
+    rows: Sequence[Mapping[str, Any]], reference: ConfidenceReference | None
 ) -> list[dict[str, Any]]:
-    """Score prepared rows against a frozen database reference."""
+    """Add a verdict to each prepared row, ranked against ``reference`` if given.
+
+    The rows are not validated against the input schema: this path serves one
+    entry's freshly prepared rows, which the preparation step already built to
+    that schema, while the file paths validate the header they read.
+    """
     return [_score_prepared_row(row, reference)[0] for row in rows]
 
 
+def score_against_reference(
+    rows: Sequence[Mapping[str, Any]], reference: ConfidenceReference
+) -> list[dict[str, Any]]:
+    """Score prepared rows against a frozen database reference."""
+    return _score_rows(rows, reference)
+
+
 def classify_without_reference(
-    rows: Sequence[dict[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """Classify prepared rows when no empirical ranking reference is installed."""
-    return [_score_prepared_row(row, None)[0] for row in rows]
+    return _score_rows(rows, None)
 
 
 def _validated_input_reader(
@@ -300,6 +423,7 @@ def _validated_input_reader(
     require_columns(
         input_columns,
         (
+            "pdbID",
             "metal_site_id",
             "rszd_abs",
             "geometry_rms_zbond",
@@ -362,18 +486,41 @@ def manifest_provenance(path: str) -> dict[str, Any]:
     }
 
 
+def _validated_manifest_summary(manifest_path: str) -> dict[str, Any]:
+    """Summarize a manifest built by this code, refusing one that was not.
+
+    The ``analysis_config_id`` is compared and then dropped: it is a
+    code-owned metadata key that ``_scoring_metadata`` already writes, and
+    provenance must describe the cohort rather than restate the policy.
+    """
+    summary = manifest_provenance(manifest_path)
+    if summary["analysis_config_id"] != _scoring_metadata()["analysis_config_id"]:
+        raise ValueError(
+            "source manifest analysis configuration identity is "
+            "incompatible with this code"
+        )
+    summary.pop("analysis_config_id")
+    return summary
+
+
 def finalize_database_confidence(
     input_path: str,
     output_path: str,
     reference_dir: str,
     manifest_path: str | None = None,
-) -> tuple[int, int, int]:
+) -> FinalizedConfidence:
     """Build the database reference and assign final values from compact rows."""
     # Metadata is the completion marker. Remove it before rebuilding so a
     # failed finalization cannot leave an older reference looking current.
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     if os.path.isfile(metadata_path):
         os.unlink(metadata_path)
+    # Check the manifest before the input file is streamed: an incompatible
+    # source manifest rejects the whole finalization, so it should cost one
+    # read of the manifest rather than a pass over every input row.
+    manifest_summary = (
+        None if manifest_path is None else _validated_manifest_summary(manifest_path)
+    )
     density_counts: Counter[float] = Counter()
     geometry_counts: Counter[float] = Counter()
     input_row_count = 0
@@ -391,6 +538,10 @@ def finalize_database_confidence(
             rszd = finite_float(row.get("rszd_abs", ""))
             geometry_rms = finite_float(row.get("geometry_rms_zbond", ""))
             if math.isfinite(rszd) and rszd >= 0:
+                # Saturated |RSZD| observations (the 99.9 EDSTATS ceiling) are
+                # counted into the density distribution even though they are
+                # never ranked against it: they score a fixed 0. This is the
+                # published policy and is retained deliberately.
                 density_counts[rszd] += 1
             if math.isfinite(geometry_rms) and geometry_rms >= 0:
                 geometry_counts[geometry_rms] += 1
@@ -405,16 +556,7 @@ def finalize_database_confidence(
         "scorable_entry_count": len(scorable_entry_ids),
         "input_status_counts": dict(sorted(input_status_counts.items())),
     }
-    if manifest_path is not None:
-        manifest_summary = manifest_provenance(manifest_path)
-        if (
-            manifest_summary["analysis_config_id"]
-            != _scoring_metadata()["analysis_config_id"]
-        ):
-            raise ValueError(
-                "source manifest analysis configuration identity is "
-                "incompatible with this code"
-            )
+    if manifest_summary is not None:
         provenance.update(manifest_summary)
     reference = write_reference(
         reference_dir,
@@ -424,7 +566,7 @@ def finalize_database_confidence(
         cohort_provenance=provenance,
     )
     total, scored = score_file_against_reference(input_path, output_path, reference)
-    return total, scored, reference.cohort_size
+    return FinalizedConfidence(total, scored, reference.cohort_size)
 
 
 def score_file_against_reference(
@@ -447,7 +589,7 @@ def score_file_against_reference(
             )
             writer.writeheader()
             for row in rows:
-                output, score = _score_prepared_row(row, reference)
+                output, row_scored = _score_prepared_row(row, reference)
                 writer.writerow(
                     {
                         column: confidence_csv_value(column, value)
@@ -455,7 +597,7 @@ def score_file_against_reference(
                     }
                 )
                 total += 1
-                scored += score is not None
+                scored += row_scored
         os.replace(output_tmp, output_path)
     except Exception:
         with contextlib.suppress(OSError):

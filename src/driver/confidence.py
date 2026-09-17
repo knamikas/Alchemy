@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 
@@ -290,7 +291,7 @@ class ReferencePlan(ConfidencePlan):
             return
         try:
             validate_scored_reference(self._stream_path, self.reference)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, csv.Error) as exc:
             raise DriverError(f"Cannot resume confidence output: {exc}") from None
 
     @override
@@ -412,7 +413,7 @@ def plan_confidence(
 
     try:
         reference = load_confidence_reference(reference_dir)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, csv.Error) as exc:
         raise DriverError(f"Invalid confidence reference: {exc}") from None
     run_log.details["confidence_reference_dir"] = reference_dir
     return ReferencePlan(
@@ -431,16 +432,19 @@ def finalize_database_reference(
     run found nothing left to retry.
     """
     try:
-        finalized = FinalizedReference(
-            *finalize_database_confidence(
-                layout.confidence_inputs,
-                layout.confidence_scores,
-                layout.reference_dir,
-                manifest_path=layout.manifest,
-            )
+        result = finalize_database_confidence(
+            layout.confidence_inputs,
+            layout.confidence_scores,
+            layout.reference_dir,
+            manifest_path=layout.manifest,
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, csv.Error) as exc:
         raise DriverError(f"Confidence finalization failed: {exc}") from None
+    finalized = FinalizedReference(
+        rows=result.rows,
+        scored_rows=result.scored_rows,
+        cohort=result.cohort_size,
+    )
     summary = run_log.summary
     summary.confidence_status = "finalized"
     summary.confidence_rows = finalized.rows
@@ -478,7 +482,7 @@ def finalize_review_queue(layout: OutputLayout, run_log: RunLog) -> int:
             layout.review_queue,
             SCORED_CONFIDENCE_COLUMNS,
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, csv.Error) as exc:
         raise DriverError(f"Review queue finalization failed: {exc}") from None
     run_log.summary.review_queue_rows = rows
     run_log.summary.review_queue_path = layout.review_queue

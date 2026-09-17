@@ -11,7 +11,12 @@ import pytest
 import cli
 import confidence_score
 from codes import RunMode
-from driver import confidence as driver_confidence, layout as driver_layout, runlog
+from driver import (
+    confidence as driver_confidence,
+    errors as driver_errors,
+    layout as driver_layout,
+    runlog,
+)
 
 
 def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> None:
@@ -139,3 +144,52 @@ def test_a_disabled_plan_scores_nothing_and_clears_every_confidence_output(
     )
     rows = [{"pdbID": "1abc"}]
     assert plan.score_rows(rows) is rows
+
+
+def _malformed_csv_text(header: str) -> str:
+    """A CSV whose single field exceeds the reader's limit, so parsing fails."""
+    return f'{header}\n"{"x" * 200_000}"\n'
+
+
+def test_a_malformed_resumed_scores_file_is_reported_as_a_driver_error(
+    tmp_path: Path,
+) -> None:
+    """``csv.Error`` is not a ``ValueError``, so it needs catching in its own right."""
+    layout = driver_layout.OutputLayout(str(tmp_path))
+    reference = confidence_score.write_reference(
+        str(tmp_path / "reference"), {1.0: 1}, {0.5: 1}, 1
+    )
+    Path(layout.confidence_scores).write_text(
+        _malformed_csv_text("confidence_reference_version,confidence_cohort_id"),
+        encoding="utf-8",
+    )
+    plan = driver_confidence.ReferencePlan(layout, reference, synchronize_inputs=False)
+    with pytest.raises(driver_errors.DriverError, match="Cannot resume confidence"):
+        plan.validate_resumed_output()
+
+
+def test_a_malformed_reference_distribution_is_reported_as_a_driver_error(
+    tmp_path: Path,
+) -> None:
+    reference_dir = tmp_path / "reference"
+    confidence_score.write_reference(str(reference_dir), {1.0: 1}, {0.5: 1}, 1)
+    (reference_dir / confidence_score.REFERENCE_DISTRIBUTION_FILE).write_text(
+        _malformed_csv_text("component,value,count"), encoding="utf-8"
+    )
+    args = cli.parse_args(
+        [
+            "--id",
+            "1abc",
+            "--output-dir",
+            str(tmp_path),
+            "--confidence-reference-dir",
+            str(reference_dir),
+        ]
+    )
+    with pytest.raises(driver_errors.DriverError, match="Invalid confidence reference"):
+        driver_confidence.plan_confidence(
+            args,
+            driver_layout.OutputLayout(str(tmp_path)),
+            RunMode.SINGLE,
+            cast("runlog.RunLog", None),
+        )

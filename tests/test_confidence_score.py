@@ -1544,3 +1544,176 @@ def test_a_saturated_site_is_flagged_through_the_shared_predicate() -> None:
     assert negative_saturated["density_saturated"] is True
 
 
+def test_load_reference_rejects_metadata_that_is_not_an_object(tmp_path: Path) -> None:
+    cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
+    (tmp_path / cs.REFERENCE_METADATA_FILE).write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="metadata is not a JSON object"):
+        cs.load_reference(str(tmp_path))
+
+
+@pytest.mark.parametrize("distribution_file", [["a"], "../x.csv", "sub/x.csv", ""])
+def test_load_reference_rejects_a_distribution_file_that_is_not_a_sibling(
+    tmp_path: Path, distribution_file: object
+) -> None:
+    """A hand-edited name must fail as ``ValueError``, not read another path."""
+    cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
+    metadata_path = tmp_path / cs.REFERENCE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["distribution_file"] = distribution_file
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="distribution file name is invalid"):
+        cs.load_reference(str(tmp_path))
+
+
+@pytest.mark.parametrize("input_row_count", [None, "1", [1], True, -1])
+def test_load_reference_rejects_a_metadata_row_count_that_is_not_a_count(
+    tmp_path: Path, input_row_count: object
+) -> None:
+    cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
+    metadata_path = tmp_path / cs.REFERENCE_METADATA_FILE
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["input_row_count"] = input_row_count
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="input row count is invalid"):
+        cs.load_reference(str(tmp_path))
+
+
+def test_write_reference_rejects_a_cohort_smaller_than_its_evidence(
+    tmp_path: Path,
+) -> None:
+    """The writer refuses what the loader would, and leaves nothing behind."""
+    with pytest.raises(ValueError, match="input row count is invalid"):
+        cs.write_reference(str(tmp_path / "reference"), {1.0: 2}, {0.5: 1}, 1)
+    assert not (tmp_path / "reference").exists()
+
+
+def test_write_reference_replaces_a_stale_completion_marker(tmp_path: Path) -> None:
+    cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
+    marker = tmp_path / cs.REFERENCE_METADATA_FILE
+    marker.write_text("stale", encoding="utf-8")
+    cs.write_reference(str(tmp_path), {2.0: 1}, {0.5: 1}, 1)
+    assert json.loads(marker.read_text(encoding="utf-8"))["input_row_count"] == 1
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_load_reference_errors_name_the_file_row_and_offending_cell(
+    tmp_path: Path,
+) -> None:
+    """A distribution failure must say where in which file it was found."""
+    cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
+    distribution = tmp_path / cs.REFERENCE_DISTRIBUTION_FILE
+    tampering = {
+        "component,value,count\ndensity,1,1\nbonds,0.5,1\n": (
+            "unknown component: 'bonds' at",
+            "row 3",
+        ),
+        "component,value,count\ndensity,1,1\ndensity,1,2\n": (
+            "duplicate value: '1' for density at",
+            "row 3",
+        ),
+        "component,value,count\ndensity,1,x\n": (
+            "non-integer count: 'x' for density '1' at",
+            "row 2",
+        ),
+        "component,value\ndensity,1\n": ("invalid columns", "component, value"),
+    }
+    for text, (message, location) in tampering.items():
+        distribution.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError) as excinfo:
+            cs.load_reference(str(tmp_path))
+        assert message in str(excinfo.value)
+        assert location in str(excinfo.value)
+        assert str(distribution) in str(excinfo.value)
+
+
+def test_finalize_requires_the_entry_identifier_column(tmp_path: Path) -> None:
+    """Without ``pdbID`` the entry counts would silently be recorded as zero."""
+    columns = [column for column in cs.CONFIDENCE_INPUT_COLUMNS if column != "pdbID"]
+    row = _input_row()
+    input_path = _write_input_csv(
+        tmp_path / "inputs.csv",
+        [{column: row[column] for column in columns}],
+        columns,
+    )
+    with pytest.raises(ValueError, match="missing required columns: pdbID"):
+        cs.finalize_database_confidence(
+            input_path, str(tmp_path / "scores.csv"), str(tmp_path / "reference")
+        )
+
+
+def test_finalize_reports_its_counts_by_name(tmp_path: Path) -> None:
+    input_path = _write_input_csv(
+        tmp_path / "inputs.csv",
+        [
+            _input_row(pdbID="1aaa", metal_site_id="1aaa:1"),
+            _input_row(
+                pdbID="2bbb",
+                metal_site_id="2bbb:1",
+                rszd_abs="",
+                geometry_rms_zbond="",
+                confidence_inputs_status="unscorable",
+            ),
+        ],
+    )
+    finalized = cs.finalize_database_confidence(
+        input_path, str(tmp_path / "scores.csv"), str(tmp_path / "reference")
+    )
+    assert (finalized.rows, finalized.scored_rows, finalized.cohort_size) == (2, 1, 2)
+    assert tuple(finalized) == (2, 1, 2)
+
+
+def test_finalize_rejects_an_incompatible_manifest_before_reading_the_input(
+    tmp_path: Path,
+) -> None:
+    """The manifest is cheap to check, so it must fail before the input pass."""
+    manifest_path = tmp_path / "manifest.csv"
+    with open(manifest_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["pdbID", "analysis_config_id"])
+        writer.writeheader()
+        writer.writerow({"pdbID": "1abc", "analysis_config_id": "incompatible"})
+    with pytest.raises(ValueError, match="source manifest analysis configuration"):
+        cs.finalize_database_confidence(
+            str(tmp_path / "absent-inputs.csv"),
+            str(tmp_path / "scores.csv"),
+            str(tmp_path / "reference"),
+            str(manifest_path),
+        )
+
+
+def test_finalized_metadata_keeps_the_code_owned_analysis_config_id(
+    tmp_path: Path,
+) -> None:
+    """Provenance describes the cohort; the policy identity stays the code's."""
+    input_path = _write_input_csv(tmp_path / "inputs.csv", [_input_row()])
+    manifest_path = tmp_path / "manifest.csv"
+    with open(manifest_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["pdbID", "analysis_config_id"])
+        writer.writeheader()
+        writer.writerow({"pdbID": "1abc", "analysis_config_id": ANALYSIS_CONFIG_ID})
+    reference_dir = tmp_path / "reference"
+    cs.finalize_database_confidence(
+        input_path,
+        str(tmp_path / "scores.csv"),
+        str(reference_dir),
+        str(manifest_path),
+    )
+    metadata = json.loads(
+        (reference_dir / cs.REFERENCE_METADATA_FILE).read_text(encoding="utf-8")
+    )
+    assert metadata["analysis_config_id"] == ANALYSIS_CONFIG_ID
+    assert cs.load_reference(str(reference_dir)).metadata["source_entry_count"] == 1
+
+
+def test_the_two_in_memory_entry_points_share_one_scoring_path() -> None:
+    """Both wrappers add the same columns to the same rows; only ranking differs."""
+    row = _input_row()
+    ranked = cs.score_against_reference([row], _reference())[0]
+    unranked = cs.classify_without_reference([row])[0]
+    assert set(ranked) == set(unranked) == {*row, *cs.ANALYSIS_COLUMNS}
+    assert ranked["alchemy_level"] == unranked["alchemy_level"]
+    assert ranked["evidence_basis"] == unranked["evidence_basis"]
+    assert ranked["verdict_reason"] == unranked["verdict_reason"]
+    assert ranked["alchemy_score"] != ""
+    assert unranked["alchemy_score"] == ""
+    assert unranked["confidence_reference_version"] == ""
+    assert row == _input_row(), "scoring must not edit the row it was handed"

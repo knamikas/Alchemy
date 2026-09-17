@@ -12,6 +12,7 @@ from helpers import entry_result, tally_of
 
 import cli
 from codes import EntryStatus
+from confidence_score.reference import FinalizedConfidence
 from driver import (
     confidence as driver_confidence,
     layout as driver_layout,
@@ -53,10 +54,10 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
 
     def finalize(
         inputs_path: str, scores_path: str, reference_dir: str, *, manifest_path: str
-    ) -> tuple[int, int, str]:
+    ) -> FinalizedConfidence:
         del scores_path, reference_dir, manifest_path
         finalized.append(os.path.dirname(inputs_path))
-        return 0, 0, "test-cohort"
+        return FinalizedConfidence(rows=0, scored_rows=0, cohort_size=0)
 
     monkeypatch.setattr(driver_confidence, "finalize_database_confidence", finalize)
 
