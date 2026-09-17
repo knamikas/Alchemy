@@ -285,6 +285,36 @@ class TestOutputWriters:
         finally:
             self._close(handles)
 
+    def test_confidence_inputs_require_scored_columns_to_cover_them(
+        self, tmp_path: Path
+    ) -> None:
+        """A projection gap must fail before the two streams desynchronize."""
+        columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)[:-1]
+        handles = self._handles(tmp_path, confidence=True)
+        inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
+        try:
+            with pytest.raises(ValueError, match="every confidence input column"):
+                OutputWriters(
+                    {**handles, "confidence_inputs": inputs_handle},
+                    confidence_columns=columns,
+                )
+        finally:
+            self._close(handles)
+            inputs_handle.close()
+
+    def test_manifest_row_schema_mismatch_is_rejected(self, tmp_path: Path) -> None:
+        """A missing manifest column must not be written as a silent blank."""
+        handles = self._handles(tmp_path)
+        writers = OutputWriters(handles)
+        row = manifest_row(entry_result(status="ok"), False, True, {}, {})
+        row.pop("status")
+        try:
+            with pytest.raises(RuntimeError):
+                writers.write_manifest_row(row)
+        finally:
+            self._close(handles)
+        assert read_csv(tmp_path / "manifest.csv") == [MANIFEST_COLUMNS]
+
     def test_confidence_header_and_counts(self, tmp_path: Path) -> None:
         columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
         handles = self._handles(tmp_path, confidence=True)

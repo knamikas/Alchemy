@@ -124,10 +124,7 @@ MANIFEST_FIELDS: Mapping[str, str] = {
 
 
 def _manifest_value(value: object) -> object:
-    value = blank_if_unmeasured(value)
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return value
+    return scientific_csv_value(blank_if_unmeasured(value))
 
 
 def manifest_row(
@@ -283,8 +280,18 @@ class OutputWriters:
         confidence_handle = handles.get("confidence")
         if confidence_handle is not None and confidence_columns is None:
             raise ValueError("confidence columns are required with a confidence output")
-        if "confidence_inputs" in handles and confidence_handle is None:
-            raise ValueError("confidence inputs synchronization requires scored output")
+        if handles.get("confidence_inputs") is not None:
+            if confidence_handle is None:
+                raise ValueError(
+                    "confidence inputs synchronization requires scored output"
+                )
+            # The inputs stream is projected from the scored rows, so check the
+            # projection here rather than desynchronizing the two mid-batch.
+            if not set(CONFIDENCE_INPUT_COLUMNS) <= set(confidence_columns or ()):
+                raise ValueError(
+                    "confidence inputs synchronization requires the scored "
+                    "columns to include every confidence input column"
+                )
         self._manifest = _CsvStream(handles["manifest"], MANIFEST_COLUMNS)
         self._stats = _CsvStream(handles["stats"], STATS_COLUMNS)
         self._bonds = _stream_if_open(handles, "bonds", BOND_COLUMNS)
@@ -362,8 +369,14 @@ class OutputWriters:
         self._candidates.write_rows(candidate.as_dict() for candidate in candidate_rows)
 
     def write_manifest_row(self, row: Mapping[str, Any]) -> None:
-        """Write and flush one entry manifest row."""
-        self._manifest.write_row(row)
+        """Write and flush one entry manifest row.
+
+        The row is projected onto the manifest schema so a missing column
+        fails here instead of being written as a silent blank.
+        """
+        if set(row) != set(MANIFEST_COLUMNS):
+            raise RuntimeError("manifest row does not match its output schema")
+        self._manifest.write_row({column: row[column] for column in MANIFEST_COLUMNS})
 
     def write_crystallization_rows(self, result: EntryResult) -> None:
         """Write condition and summary rows for one entry when enabled."""
