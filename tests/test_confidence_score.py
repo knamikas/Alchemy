@@ -197,11 +197,11 @@ def _read_csv_rows(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
 
 def _reference() -> cs.ConfidenceReference:
     return cs.ConfidenceReference(
-        [1.0, 3.0, 6.0],
-        [1, 2, 1],
-        [0.5, 1.0, 2.0],
-        [1, 2, 1],
-        {
+        density_values=[1.0, 3.0, 6.0],
+        density_counts=[1, 2, 1],
+        geometry_values=[0.5, 1.0, 2.0],
+        geometry_counts=[1, 2, 1],
+        metadata={
             "reference_id": "alchemy-confidence-test",
             "cohort_id": "alchemy-cohort-test",
             "input_row_count": 4,
@@ -1027,11 +1027,29 @@ def test_manifest_provenance_counts_no_metal_and_limited_entries(
 def test_reference_distribution_constructor_rejects_bad_shapes() -> None:
     metadata = {"input_row_count": 1}
     with pytest.raises(ValueError, match="differ in size"):
-        cs.ConfidenceReference([1.0], [], [], [], metadata)
+        cs.ConfidenceReference(
+            density_values=[1.0],
+            density_counts=[],
+            geometry_values=[],
+            geometry_counts=[],
+            metadata=metadata,
+        )
     with pytest.raises(ValueError, match="not increasing"):
-        cs.ConfidenceReference([2.0, 1.0], [1, 1], [], [], metadata)
+        cs.ConfidenceReference(
+            density_values=[2.0, 1.0],
+            density_counts=[1, 1],
+            geometry_values=[],
+            geometry_counts=[],
+            metadata=metadata,
+        )
     with pytest.raises(ValueError, match="invalid count"):
-        cs.ConfidenceReference([1.0], [0], [], [], metadata)
+        cs.ConfidenceReference(
+            density_values=[1.0],
+            density_counts=[0],
+            geometry_values=[],
+            geometry_counts=[],
+            metadata=metadata,
+        )
 
 
 def test_main_reports_invalid_reference(
@@ -1101,6 +1119,8 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> Non
     assert published["geometry_statistic"] == "rms_finite_score_eligible_zbond"
     assert published["overall_rule"] == "any_suspect_or_review_plus_review"
     assert published["support_score_method"] == ("reverse_average_rank_empirical_cdf")
+
+
 @pytest.mark.parametrize(
     ("value", "decimal_places", "expected"),
     [
@@ -1253,5 +1273,120 @@ def test_is_density_saturated_covers_the_edstats_ceiling(
     rszd_abs: float, expected: bool
 ) -> None:
     assert confidence_schema.is_density_saturated(rszd_abs) is expected
+
+
+def test_prepared_input_status_matches_the_scored_evidence_basis() -> None:
+    """Preparation and scoring must agree on which evidence a site has.
+
+    ``confidence_inputs_status`` is decided by ``prepare_confidence_inputs``
+    from the raw metrics, while ``evidence_basis`` is decided independently by
+    ``classify_site`` from the parsed ones; a drift between the two modules
+    would silently publish rows whose status contradicts their verdict.
+    """
+    prepared = [
+        cs.prepare_confidence_inputs([_stats_row()], [_bond_row()])[0],
+        cs.prepare_confidence_inputs([_stats_row()], [])[0],
+        cs.prepare_confidence_inputs([_stats_row(zdm=None)], [_bond_row()])[0],
+        cs.prepare_confidence_inputs([_stats_row(zdm=None)], [])[0],
+    ]
+    scored = cs.classify_without_reference(prepared)
+    assert {
+        row["confidence_inputs_status"]: row["evidence_basis"] for row in scored
+    } == {
+        "complete": "density_and_geometry",
+        "density_only": "density_only",
+        "geometry_only": "geometry_only",
+        "unscorable": "no_assessable_evidence",
+    }
+
+
+@pytest.mark.parametrize("input_row_count", [None, [4], "4", 4.0, True, -1])
+def test_reference_rejects_a_non_count_input_row_count(
+    input_row_count: object,
+) -> None:
+    """Bad metadata must fail with ValueError, the contract callers catch.
+
+    ``cli.py`` and ``driver/confidence.py`` guard reference loading with
+    ``(OSError, ValueError)``, so a ``null`` or list in ``metadata.json`` must
+    not escape as a ``TypeError``.
+    """
+    with pytest.raises(ValueError, match="input row count is invalid"):
+        cs.ConfidenceReference(
+            density_values=[1.0],
+            density_counts=[1],
+            geometry_values=[],
+            geometry_counts=[],
+            metadata={"input_row_count": input_row_count},
+        )
+
+
+@pytest.mark.parametrize("field", ["reference_id", "cohort_id"])
+def test_reference_rejects_a_non_string_identifier(field: str) -> None:
+    with pytest.raises(ValueError, match="is invalid"):
+        cs.ConfidenceReference(
+            density_values=[1.0],
+            density_counts=[1],
+            geometry_values=[],
+            geometry_counts=[],
+            metadata={"input_row_count": 1, field: None},
+        )
+
+
+def test_reference_metadata_is_a_read_only_copy() -> None:
+    fields: dict[str, object] = {"input_row_count": 4, "cohort_id": "c"}
+    reference = cs.ConfidenceReference(
+        density_values=[1.0],
+        density_counts=[1],
+        geometry_values=[],
+        geometry_counts=[],
+        metadata=fields,
+    )
+    assert reference.metadata["cohort_id"] == "c"
+    fields["cohort_id"] = "mutated"
+    assert reference.metadata["cohort_id"] == "c"
+    with pytest.raises(TypeError):
+        reference.metadata["cohort_id"] = "mutated"  # type: ignore[index]
+
+
+def test_reference_reports_its_distinct_value_counts() -> None:
+    reference = _reference()
+    assert reference.density_distinct_value_count == 3
+    assert reference.geometry_distinct_value_count == 3
+    assert reference.density_distinct_value_count == len(reference.density.values)
+    assert reference.geometry.distinct_value_count == len(reference.geometry.values)
+
+
+def test_empirical_distribution_from_counts_sorts_and_validates() -> None:
+    from confidence_score.scoring import EmpiricalDistribution
+
+    distribution = EmpiricalDistribution.from_counts({3.0: 1, 1.0: 2, 6.0: 1})
+    assert distribution.values == (1.0, 3.0, 6.0)
+    assert distribution.counts == (2, 1, 1)
+    assert distribution.size == 4
+    assert distribution.distinct_value_count == 3
+    assert distribution.support_score(1.0) == approx(75.0)
+
+    with pytest.raises(ValueError, match="invalid value"):
+        EmpiricalDistribution.from_counts({-1.0: 1})
+    with pytest.raises(ValueError, match="invalid count"):
+        EmpiricalDistribution.from_counts({1.0: 0})
+
+
+def test_reference_from_counts_matches_the_direct_constructor() -> None:
+    metadata = {"input_row_count": 4}
+    from_counts = cs.ConfidenceReference.from_counts(
+        {3.0: 2, 1.0: 1, 6.0: 1}, {1.0: 2, 0.5: 1, 2.0: 1}, metadata
+    )
+    direct = cs.ConfidenceReference(
+        density_values=[1.0, 3.0, 6.0],
+        density_counts=[1, 2, 1],
+        geometry_values=[0.5, 1.0, 2.0],
+        geometry_counts=[1, 2, 1],
+        metadata=metadata,
+    )
+    assert from_counts.density.values == direct.density.values
+    assert from_counts.density.counts == direct.density.counts
+    assert from_counts.geometry.values == direct.geometry.values
+    assert from_counts.geometry.counts == direct.geometry.counts
 
 
