@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import math
+import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -142,7 +143,15 @@ _METAL_ALIASES: Mapping[str, tuple[str, ...]] = {
     "IR": ("iridium",),
     "YB": ("ytterbium",),
     "GD": ("gadolinium",),
-    "PB": ("lead",),
+    "PB": (
+        "lead acetate",
+        "lead nitrate",
+        "lead chloride",
+        "lead ion",
+        "lead ions",
+        "trimethyllead",
+        "trimethyl lead",
+    ),
     "TL": ("thallium",),
     "U": ("uranium", "uranyl"),
     "Y": ("yttrium",),
@@ -177,19 +186,23 @@ _FORMULA_SUFFIX = r"(?=[A-Z0-9(])[A-Za-z0-9()]*\d[A-Za-z0-9()]*"
 _MASS_UNIT_RE = re.compile(
     r"(?<![A-Za-z])(?:MG|Mg)\s*/\s*(?:[MDUmdu]|\u00b5)?L\b|\d[\d.]*\s*MG\b"
 )
-_SIMPLE_FORMULAS: Mapping[str, tuple[str, ...]] = {
-    "LI": ("LiCl", "LICL"),
-    "NA": ("NaCl", "NACL"),
-    "K": ("KCl", "KCL"),
-    "AG": ("AgCl", "AGCL"),
-}
+# Monovalent metals whose common salts have digit-free formulas (``NaBr``,
+# ``KI``, ``CsCl``, ``NaOH``, ``KOAc``). ``_FORMULA_SUFFIX`` requires a digit,
+# so these are matched against the anion list instead.
+_DIGIT_FREE_SALT_METALS = frozenset({"LI", "NA", "K", "RB", "CS", "AG", "CU", "TL"})
+_DIGIT_FREE_SALT_ANIONS = ("Cl", "Br", "I", "F", "OH", "OAc")
+# Hyphenated prefixes such as ``CO-CRYSTALLIZED`` or ``Co-expressed`` spell a
+# bare symbol without naming a metal.
+_HYPHENATED_PREFIX = r"(?!-[A-Za-z])"
 _PH_RE = re.compile(r"(?i)\bp\s*h\s*(?:=|:)?\s*(-?\d+(?:\.\d+)?)")
 _PH_RANGE_RE = re.compile(
-    r"(?i)\bp\s*h\s*(?:range)?\s*(?:=|:)?\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)"
+    r"(?i)\bp\s*h\s*(?:range)?\s*(?:=|:)?\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*"
+    r"(-?\d+(?:\.\d+)?)(?![\d.]*\s*%)"
 )
 _TEMP_RE = re.compile(
     r"(?i)\b(?:temperature|temp\.?)\s*(?:=|:)?\s*(?P<value>\d+(?:\.\d+)?)\s*"
-    r"(?:(?P<kelvin>k\b|kelvin\b)|(?P<celsius>(?:deg(?:rees?)?\.?\s*|\u00b0\s*)?c\b))?"
+    r"(?:(?P<kelvin>k\b|kelvin\b)"
+    r"|(?P<celsius>(?:deg(?:rees?)?\.?\s*|\u00b0\s*)?(?:c\b|celsius\b|centigrade\b)))?"
 )
 # A unitless temperature is taken as kelvin only inside this window; a value
 # such as ``TEMPERATURE 20`` is ambiguous and is not recorded.
@@ -213,7 +226,12 @@ class _MmcifCategoryBlock(Protocol):
 
 
 def _clean_cif_value(value: object) -> str:
-    if value is None:
+    """Blank the mmCIF placeholders.
+
+    Gemmi's non-raw category view maps ``?`` to ``None`` and ``.`` to ``False``;
+    the cache stores the item as JSON ``null`` or the literal placeholder.
+    """
+    if value is None or value is False:
         return ""
     text = str(value).strip()
     return "" if text in {".", "?"} else text
@@ -385,10 +403,13 @@ def _pdb_conditions(
     with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
         pieces = [line[10:].strip() for line in handle if line.startswith("REMARK 280")]
     details = " ".join(piece for piece in pieces if piece).strip()
+    # REMARK 280 also carries the solvent content and Matthews coefficient;
+    # only the text after the marker describes the crystallization.
     marker = re.search(r"(?i)CRYSTALLIZATION CONDITIONS\s*:\s*", details)
-    if marker:
-        details = details[marker.end() :].strip()
-    if not details:
+    if marker is None:
+        return []
+    details = details[marker.end() :].strip()
+    if not details or details.upper() == "NULL":
         return []
     ph, ph_range, temperature = _parse_text_measurements(details)
     values = {
@@ -412,19 +433,27 @@ def detected_metals(text: str) -> frozenset[str]:
     }
     for symbol in _METAL_ALIASES:
         title_symbol = symbol.title()
-        if len(symbol) > 1 and re.search(rf"\b(?:{symbol}|{title_symbol})\b", text):
+        if len(symbol) > 1 and re.search(
+            rf"\b(?:{symbol}|{title_symbol})\b{_HYPHENATED_PREFIX}", text
+        ):
             detected.add(symbol)
             continue
         formula_symbol = rf"(?:{re.escape(title_symbol)}|{re.escape(symbol)})"
         if re.search(rf"(?<![A-Za-z]){formula_symbol}{_FORMULA_SUFFIX}", text):
             detected.add(symbol)
             continue
-        if any(
-            re.search(rf"(?<![A-Za-z]){formula}(?![A-Za-z])", text)
-            for formula in _SIMPLE_FORMULAS.get(symbol, ())
+        if symbol in _DIGIT_FREE_SALT_METALS and re.search(
+            _digit_free_salt_pattern(symbol), text
         ):
             detected.add(symbol)
     return frozenset(detected)
+
+
+def _digit_free_salt_pattern(symbol: str) -> str:
+    """Match ``NaBr``/``NABR``-style formulas of ``symbol`` as whole tokens."""
+    title = "|".join(symbol.title() + anion for anion in _DIGIT_FREE_SALT_ANIONS)
+    upper = "|".join(symbol + anion.upper() for anion in _DIGIT_FREE_SALT_ANIONS)
+    return rf"(?<![A-Za-z])(?:{title}|{upper})(?![A-Za-z])"
 
 
 def unavailable_summary(
@@ -455,7 +484,12 @@ def _summary(
     rows: Sequence[Mapping[str, CsvValue]],
     source_format: str,
 ) -> dict[str, CsvValue]:
-    first: Mapping[str, CsvValue] = rows[0] if rows else {}
+    """Summarize at least one recorded condition row.
+
+    The rows share their provenance, so the first row supplies it; an entry
+    with no rows gets ``unavailable_summary`` from the caller instead.
+    """
+    first = rows[0]
     provenance = {
         "crystallization_source_format": source_format,
         "crystallization_metadata_source": str(first.get("metadata_source", "")),
@@ -466,14 +500,8 @@ def _summary(
             first.get("entry_revision_date", "")
         ),
     }
-    if not rows:
-        return (
-            unavailable_summary(pdb_id, CrystallizationDataStatus.NOT_REPORTED)
-            | provenance
-        )
-    raw_text = " || ".join(
-        dict.fromkeys(str(row.get("raw_details", "")).strip() for row in rows)
-    ).strip(" |")
+    raw_details = [str(row.get("raw_details", "")).strip() for row in rows]
+    raw_text = " || ".join(dict.fromkeys(detail for detail in raw_details if detail))
     searchable = " ".join(
         " ".join(
             str(row.get(column, ""))
@@ -539,6 +567,15 @@ def extract_crystallization_conditions(
         if lower_path.endswith((".cif", ".cif.gz", ".mmcif", ".mmcif.gz"))
         else "pdb"
     )
+    if not os.path.isfile(path):
+        return CrystallizationExtraction(
+            (),
+            unavailable_summary(
+                pdb_id,
+                source_format=source_format,
+                metadata_source=metadata_source,
+            ),
+        )
     try:
         rows = (
             _mmcif_conditions(pdb_id, path, metadata_source)
@@ -558,6 +595,16 @@ def extract_crystallization_conditions(
             unavailable_summary(
                 pdb_id,
                 CrystallizationDataStatus.UNPARSEABLE,
+                source_format=source_format,
+                metadata_source=metadata_source,
+            ),
+        )
+    if not rows:
+        return CrystallizationExtraction(
+            (),
+            unavailable_summary(
+                pdb_id,
+                CrystallizationDataStatus.NOT_REPORTED,
                 source_format=source_format,
                 metadata_source=metadata_source,
             ),

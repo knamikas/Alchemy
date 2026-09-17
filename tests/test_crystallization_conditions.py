@@ -263,3 +263,133 @@ def test_mass_units_do_not_spell_magnesium() -> None:
     assert detected_metals("5 MG PROTEIN IN 0.2 M MG ACETATE") == frozenset({"MG"})
     assert detected_metals("2 mg/mL protein, 0.2 M Mg acetate") == frozenset({"MG"})
     assert detected_metals("10 mM MgCl2, 20 mM Mg2+") == frozenset({"MG"})
+
+
+def test_inapplicable_mmcif_placeholders_are_not_a_condition(tmp_path: Path) -> None:
+    """Gemmi maps ``.`` to ``False``; a row of placeholders reports nothing."""
+    path = _write(
+        tmp_path / "entry.cif",
+        """data_1abc
+loop_
+_exptl_crystal_grow.crystal_id
+_exptl_crystal_grow.method
+_exptl_crystal_grow.pH
+_exptl_crystal_grow.pdbx_pH_range
+_exptl_crystal_grow.temp
+_exptl_crystal_grow.pdbx_details
+1 . . . . .
+""",
+    )
+    extraction = extract_crystallization_conditions("1abc", path)
+
+    assert extraction.conditions == ()
+    assert extraction.summary["crystallization_data_status"] == "not_reported"
+
+
+@pytest.mark.parametrize(
+    "remark",
+    [
+        "REMARK 280 SOLVENT CONTENT, VS (%): 45.00\n"
+        "REMARK 280 MATTHEWS COEFFICIENT, VM (ANGSTROMS**3/DA): 2.26\n",
+        "REMARK 280 CRYSTALLIZATION CONDITIONS: NULL\n",
+    ],
+)
+def test_remark_280_without_conditions_is_not_reported(
+    tmp_path: Path, remark: str
+) -> None:
+    path = _write(tmp_path / "entry.pdb", remark)
+    extraction = extract_crystallization_conditions("1abc", path)
+
+    assert extraction.conditions == ()
+    assert extraction.summary["crystallization_data_status"] == "not_reported"
+
+
+def test_remark_280_keeps_only_the_text_after_the_marker(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "entry.pdb",
+        "REMARK 280 SOLVENT CONTENT, VS (%): 45.00\n"
+        "REMARK 280 CRYSTALLIZATION CONDITIONS: 10 MM NICL2, PH 7.0\n",
+    )
+    extraction = extract_crystallization_conditions("1abc", path)
+
+    assert extraction.conditions[0]["raw_details"] == "10 MM NICL2, PH 7.0"
+
+
+def test_not_reported_coordinate_file_keeps_its_metadata_source(
+    tmp_path: Path,
+) -> None:
+    path = _write(tmp_path / "entry.pdb", "END\n")
+    extraction = extract_crystallization_conditions(
+        "1abc", path, metadata_source="pdb_redo_coordinate_file"
+    )
+
+    assert extraction.summary["crystallization_data_status"] == "not_reported"
+    assert extraction.summary["crystallization_source_format"] == "pdb"
+    assert (
+        extraction.summary["crystallization_metadata_source"]
+        == "pdb_redo_coordinate_file"
+    )
+
+
+def test_missing_coordinate_file_is_input_unavailable(tmp_path: Path) -> None:
+    extraction = extract_crystallization_conditions(
+        "1abc", str(tmp_path / "missing.pdb")
+    )
+
+    assert extraction.summary["crystallization_data_status"] == "input_unavailable"
+    assert extraction.summary["crystallization_source_format"] == "pdb"
+
+
+def test_hyphenated_prefixes_and_verbs_are_not_metals() -> None:
+    assert detected_metals("CO-CRYSTALLIZED WITH LIGAND, PEG 3350") == frozenset()
+    assert detected_metals("Co-crystallization with inhibitor") == frozenset()
+    assert detected_metals("MICROSEEDING LEAD TO LARGER CRYSTALS") == frozenset()
+    assert detected_metals("10 mM CoCl2, 1 mM lead acetate") == frozenset({"CO", "PB"})
+
+
+def test_digit_free_salt_formulas_are_detected() -> None:
+    assert detected_metals("0.2 M NaBr, 0.1 M Bis-Tris pH 6.5") == frozenset({"NA"})
+    assert detected_metals("0.1 M KI, 0.1 M HEPES-NaOH pH 7.5") == frozenset(
+        {"K", "NA"}
+    )
+    assert detected_metals("0.2 M CSCL, 0.1 M NAOH") == frozenset({"CS", "NA"})
+
+
+def test_spelled_out_celsius_is_converted(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "entry.pdb",
+        "REMARK 280 CRYSTALLIZATION CONDITIONS: PH 7, TEMPERATURE 20 DEGREES CELSIUS\n",
+    )
+    extraction = extract_crystallization_conditions("1abc", path)
+
+    assert extraction.conditions[0]["temperature_K"] == "293.15"
+
+
+def test_a_dash_before_a_percentage_is_not_a_ph_range(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "entry.pdb",
+        "REMARK 280 CRYSTALLIZATION CONDITIONS: PH 8.5 - 10% PEG 4000\n",
+    )
+    extraction = extract_crystallization_conditions("1abc", path)
+
+    assert extraction.conditions[0]["pH"] == "8.5"
+    assert extraction.conditions[0]["pH_range"] == ""
+    assert extraction.summary["crystallization_pH_max"] == 8.5
+
+
+def test_raw_text_skips_rows_without_details(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "entry.cif",
+        """data_1abc
+loop_
+_exptl_crystal_grow.crystal_id
+_exptl_crystal_grow.method
+_exptl_crystal_grow.pdbx_details
+1 batch 'a'
+2 batch ?
+3 batch 'b'
+""",
+    )
+    extraction = extract_crystallization_conditions("1abc", path)
+
+    assert extraction.summary["crystallization_raw_text"] == "a || b"
