@@ -43,6 +43,7 @@ from structure_loading import (
 )
 from structure_model import (
     NAN,
+    AtomKey,
     AtomRecordAudit,
     AtomSite,
     ContactImage,
@@ -66,6 +67,7 @@ __all__ = [
     "NAN",
     "OVERFULL_OCCUPANCY_NI_FRACTION",
     "PDB_HYBRID36_DIGITS",
+    "AtomKey",
     "AtomRecordAudit",
     "AtomSite",
     "ContactImage",

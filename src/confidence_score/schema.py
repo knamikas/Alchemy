@@ -8,7 +8,7 @@ from typing import Any
 
 from analysis_config import MAX_ANALYZED_METAL_SITES
 from codes import ConfidenceInputStatus, EvidenceBasis, VerdictReason
-from output_rows import scientific_csv_value
+from output_rows import finite_float as finite_float, scientific_csv_value
 
 #: Policy-and-provenance file of a frozen reference directory. It is also the
 #: completion marker: finalization removes it before rebuilding
@@ -233,15 +233,6 @@ def site_key(row: Mapping[str, Any]) -> tuple[str, ...]:
     site_id = str(row.get("metal_site_id", "")).strip()
     columns = SITE_KEY_COLUMNS if site_id else LEGACY_SITE_KEY_COLUMNS
     return tuple(str(row.get(column, "")).strip() for column in columns)
-
-
-def finite_float(value: Any) -> float:
-    """Parse a CSV number, returning NaN for blank, malformed, or non-finite text."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return math.nan
-    return number if math.isfinite(number) else math.nan
 
 
 def parse_csv_bool(value: object) -> bool:

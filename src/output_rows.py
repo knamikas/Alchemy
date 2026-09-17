@@ -7,10 +7,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from structure_analysis import AtomSite
+from structure_analysis import AtomKey as AtomKey, AtomSite
 
 CsvValue = str | int | float | bool | None
-AtomKey = tuple[int, int, int, int]
 ResidueKey = tuple[int, int, int]
 
 
@@ -67,6 +66,15 @@ class MetalStatsRow:
         if len(values) != len(columns):
             raise ValueError("metal statistics row does not match its output schema")
         return dict(zip(columns, values, strict=True))
+
+
+def finite_float(value: Any) -> float:
+    """Parse a CSV number, returning NaN for blank, malformed, or non-finite text."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return math.nan
+    return number if math.isfinite(number) else math.nan
 
 
 def blank_if_unmeasured(value: Any) -> Any:

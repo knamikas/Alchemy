@@ -60,6 +60,16 @@ def spacegroup_or_none(structure: gemmi.Structure) -> gemmi.SpaceGroup | None:
     return cast("gemmi.SpaceGroup | None", structure.find_spacegroup())
 
 
+def normalized_residue_name(name: str) -> str:
+    """Return a deposited component name in Alchemy's canonical spelling.
+
+    Component identifiers are case-insensitive and column-padded in the
+    deposited formats; every catalogue Alchemy matches against is keyed by the
+    whitespace-stripped upper-case name.
+    """
+    return str(name).strip().upper()
+
+
 @dataclass(frozen=True, slots=True)
 class ResidueIdentity:
     """Where one residue sits in the analyzed model and how its authors name it.
@@ -69,6 +79,10 @@ class ResidueIdentity:
     namespace, the analysis coordinates (and EDSTATS) instead see the
     ``coordinate_*`` identity, and the ``source_*`` indices place the residue
     in the source model rather than the analysis model.
+
+    Both component names are whitespace-stripped and upper-cased here, once,
+    so that every catalogue lookup and author-identity join downstream can
+    compare them directly instead of re-normalizing a deposited spelling.
     """
 
     model_index: int
@@ -86,6 +100,17 @@ class ResidueIdentity:
     source_polymer_position: str = ""
     source_chain_index: int | None = None
     source_residue_index: int | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize the deposited component names to the canonical spelling."""
+        object.__setattr__(
+            self, "residue_name", normalized_residue_name(self.residue_name)
+        )
+        object.__setattr__(
+            self,
+            "coordinate_residue_name",
+            normalized_residue_name(self.coordinate_residue_name),
+        )
 
     @property
     def key(self) -> tuple[int, int, int]:
@@ -267,7 +292,7 @@ class AtomSite(_ResidueIdentityAccess):
         return self.identity.key
 
     @property
-    def source_key(self) -> tuple[int, int, int, int]:
+    def source_key(self) -> AtomKey:
         """Return stable model-local indices for this atom."""
         return (*self.residue_key, self.atom_index)
 
@@ -332,6 +357,8 @@ class ResidueSelection(_ResidueIdentityAccess):
 ResidueKey = tuple[int, int, int]
 #: ``(chain_index, residue_index, atom_index)``, as a Gemmi neighbor mark reports.
 AtomIndices = tuple[int, int, int]
+#: ``(model_index, chain_index, residue_index, atom_index)``, as ``AtomSite.source_key``.
+AtomKey = tuple[int, int, int, int]
 #: ``(residue_name, chain_id, resnum)`` in either source or coordinate form.
 AuthorResidueKey = tuple[str, str, str]
 #: Residues sharing one author identity, in model order.
@@ -400,6 +427,19 @@ class AtomRecordAudit:
     non_finite_coordinate_atom_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class ModeledPolymer:
+    """The modeled polymer residues of one subchain of the analyzed model."""
+
+    #: Indices, within the subchain's Gemmi chain and in model order, of the
+    #: polymer residues actually present in the coordinates.
+    residue_indices: tuple[int, ...]
+    #: Whether those residues reproduce the entity's ``full_sequence`` exactly.
+    #: Only then are the first and last of them the real polymer termini; with
+    #: a gap or an unmodeled terminus they are not.
+    complete: bool
+
+
 @dataclass
 class StructureContext:
     """Gemmi structure plus deterministic first-model analysis metadata."""
@@ -443,6 +483,55 @@ class StructureContext:
         repr=False,
         default_factory=dict[AuthorResidueKey, tuple[ResidueSelection, ...]],
     )
+    #: Built on first use rather than during loading: only the donor rules of
+    #: an entry with modeled polymer termini ever ask for it.
+    _modeled_polymers: dict[tuple[int, str], ModeledPolymer] | None = field(
+        repr=False, compare=False, default=None
+    )
+
+    def modeled_polymer(self, chain_index: int, subchain: str) -> ModeledPolymer | None:
+        """Return one subchain's modeled polymer residues, or ``None``.
+
+        ``None`` means the subchain holds no polymer residue in the analyzed
+        model. The index behind this is built once per structure, because the
+        alternative is rescanning every chain and entity per donor atom.
+        """
+        polymers = self._modeled_polymers
+        if polymers is None:
+            polymers = self._build_modeled_polymers()
+            self._modeled_polymers = polymers
+        return polymers.get((chain_index, str(subchain)))
+
+    def _build_modeled_polymers(self) -> dict[tuple[int, str], ModeledPolymer]:
+        """Index the modeled polymer residues of every subchain, once."""
+        residue_indices: dict[tuple[int, str], list[int]] = {}
+        residue_names: dict[tuple[int, str], list[str]] = {}
+        for chain_index, chain in enumerate(self.model):
+            for residue_index, residue in enumerate(chain):
+                if residue.entity_type != gemmi.EntityType.Polymer:
+                    continue
+                key = (chain_index, str(residue.subchain))
+                residue_indices.setdefault(key, []).append(residue_index)
+                residue_names.setdefault(key, []).append(str(residue.name))
+        full_sequences: dict[str, tuple[str, ...]] = {}
+        for entity in self.structure.entities:
+            if not entity.full_sequence:
+                continue
+            sequence = tuple(str(name) for name in entity.full_sequence)
+            for subchain in entity.subchains:
+                full_sequences.setdefault(str(subchain), sequence)
+        return {
+            (chain_index, subchain): ModeledPolymer(
+                residue_indices=tuple(indices),
+                # An entity without a declared full sequence never matches: the
+                # empty default cannot equal a non-empty modeled sequence.
+                complete=(
+                    tuple(residue_names[(chain_index, subchain)])
+                    == full_sequences.get(subchain, ())
+                ),
+            )
+            for (chain_index, subchain), indices in residue_indices.items()
+        }
 
     def image_provenance(
         self,
@@ -507,7 +596,7 @@ class StructureContext:
     ) -> tuple[ResidueSelection, ...]:
         """Return residues matching either source or coordinate author identity."""
         return self._residues_by_author.get(
-            (str(residue_name), str(chain_id), str(resnum)), ()
+            (normalized_residue_name(residue_name), str(chain_id), str(resnum)), ()
         )
 
     def residues_for_source_author(
@@ -515,7 +604,7 @@ class StructureContext:
     ) -> tuple[ResidueSelection, ...]:
         """Return residues matching a source-coordinate author identity."""
         return self._residues_by_source_author.get(
-            (str(residue_name), str(chain_id), str(resnum)), ()
+            (normalized_residue_name(residue_name), str(chain_id), str(resnum)), ()
         )
 
     def residues_for_coordinate_author(
@@ -523,7 +612,7 @@ class StructureContext:
     ) -> tuple[ResidueSelection, ...]:
         """Return residues matching the analysis-coordinate author identity."""
         return self._residues_by_coordinate_author.get(
-            (str(residue_name), str(chain_id), str(resnum)), ()
+            (normalized_residue_name(residue_name), str(chain_id), str(resnum)), ()
         )
 
     def metal_atoms(
