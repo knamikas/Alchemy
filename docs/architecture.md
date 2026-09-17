@@ -6,7 +6,7 @@ sequence of standalone commands. The driver coordinates the batch, worker
 processes analyze individual entries, and the driver writes the combined
 outputs.
 
-This page maps execution and ownership; [architecture.png](architecture.png)
+This page maps execution and ownership; [workflow.png](workflow.png)
 renders the same lanes as one picture. For scientific rules, see the
 [method reference](method.md); for CSV fields, see the
 [output schema](output-schema.md); for retries and resource controls, see the

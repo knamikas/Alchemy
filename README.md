@@ -131,7 +131,7 @@ handling, see the [operations guide](docs/operations.md).
 - [Usage guide](docs/usage.md): Choose an input mode and configure the command.
 - [Architecture](docs/architecture.md): Follow execution, process boundaries,
   and module relationships. A rendered overview of the same lanes is in
-  [docs/architecture.png](docs/architecture.png).
+  [docs/workflow.png](docs/workflow.png).
 - [Method reference](docs/method.md): Understand each analysis stage, contact
   assignment, reference coverage, and confidence classification.
 - [Output schema](docs/output-schema.md): Interpret results and find the data
