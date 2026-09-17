@@ -352,6 +352,50 @@ class ConfidenceInputStatus(StrEnum):
     UNSCORABLE = "unscorable"
 
 
+class ConfidenceMissingReason(StrEnum):
+    """Why a prepared confidence-input row lacks part of its evidence.
+
+    Written pipe-joined to ``confidence_inputs_missing_reasons``, which mixes
+    this vocabulary with ``ReasonCode.NON_FINITE_METAL_COORDINATES``,
+    ``CoordinateMappingStatus.DENSITY_ROW_UNAVAILABLE``, and whichever
+    ``ReasonCode`` the entry's own failure recorded. A reader therefore
+    resolves a value against all three vocabularies, not this one alone.
+    """
+
+    #: No finite ``ZDm``, so the site carries no density evidence.
+    RSZD_UNAVAILABLE = "rszd_unavailable"
+    #: The site has no assigned contact, so no geometry could be computed.
+    NO_ASSIGNED_CONTACTS = "no_assigned_contacts"
+    #: Contacts exist but the literature reference covers none of them.
+    NO_GEOMETRY_REFERENCE = "no_geometry_reference"
+    #: A reference-covered contact yielded no finite score-eligible z-score.
+    ZBOND_UNAVAILABLE_FOR_REFERENCE = "zbond_unavailable_for_reference"
+    #: The reference covers only some of the assigned contacts.
+    PARTIAL_GEOMETRY_COVERAGE = "partial_geometry_coverage"
+    #: A placeholder row: the manifest counts the site but nothing names it.
+    SITE_IDENTITY_UNAVAILABLE = "site_identity_unavailable"
+    #: A placeholder row: no evidence of any kind reached the site. Also
+    #: written to that row's ``context_warning_reasons``.
+    SITE_EVIDENCE_UNAVAILABLE = "site_evidence_unavailable"
+
+
+class GeometryContactBasis(StrEnum):
+    """Which coordination provenance the scored contacts of a site came from.
+
+    Written to ``geometry_contact_basis``; it describes the score-eligible
+    contacts only, not every assigned one.
+    """
+
+    #: Both a declared and an inferred contact were scored.
+    DECLARED_AND_INFERRED = "declared_and_inferred"
+    #: Every scored contact was declared by the source.
+    DECLARED_ONLY = "declared_only"
+    #: Every scored contact was inferred from geometry.
+    INFERRED_ONLY = "inferred_only"
+    #: No contact was scored, so no provenance applies.
+    NONE = "none"
+
+
 class EligibilityStatus(StrEnum):
     """Whether a candidate contact may become an assigned first-sphere bond."""
 
@@ -470,4 +514,5 @@ SHARED_VALUES: dict[str, frozenset[str]] = {
     "no_assessable_evidence": frozenset({"EvidenceBasis", "VerdictReason"}),
     "other": frozenset({"ParentType", "NeighborClass"}),
     "manual": frozenset({"RunMode", "RefinementState"}),
+    "none": frozenset({"ContactScope", "GeometryContactBasis"}),
 }

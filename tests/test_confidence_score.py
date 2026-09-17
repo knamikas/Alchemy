@@ -1390,3 +1390,157 @@ def test_reference_from_counts_matches_the_direct_constructor() -> None:
     assert from_counts.geometry.counts == direct.geometry.counts
 
 
+@pytest.mark.parametrize(
+    ("resname", "parent_type", "expected"),
+    [
+        # HEM is a real entry in the frozen cofactor catalog.
+        ("HEM", "other", "cofactor"),
+        ("hem", "other", "cofactor"),
+        ("ZN", "ion", "metal"),
+        ("XXX", "other", ""),
+    ],
+)
+def test_an_orphan_site_classifies_its_category_from_the_bond_row_alone(
+    resname: str, parent_type: str, expected: str
+) -> None:
+    """The orphan path has only bond-row fields, so it has its own rule.
+
+    ``edstats_statistics.classify_residue`` is unavailable here: no density row
+    was joined, so the catalog name and ``parent_type`` are all there is. A
+    site that is neither a catalog cofactor nor an ion therefore publishes a
+    blank category, which is retained as published.
+    """
+    orphan = cs.prepare_confidence_inputs(
+        [], [_bond_row(metal_resname=resname, parent_type=parent_type)]
+    )[0]
+    assert orphan["category"] == expected
+    assert orphan["coordinate_mapping_status"] == "density_row_unavailable"
+    assert orphan["selected_metal_site_status"] == "selected_without_density_row"
+    # No density row was joined, so the density identity block stays blank.
+    assert [
+        orphan[column]
+        for column in (
+            "density_observation_id",
+            "density_scope",
+            "density_shared_site_count",
+            "density_is_shared",
+        )
+    ] == ["", "", "", ""]
+
+
+@pytest.mark.parametrize(
+    ("bonds", "expected"),
+    [
+        ([("True", "declared"), ("False", "inferred")], "declared_and_inferred"),
+        ([("True", "declared")], "declared_only"),
+        ([("False", "inferred")], "inferred_only"),
+        ([("False", "unassigned")], "none"),
+        ([], "none"),
+    ],
+)
+def test_geometry_contact_basis_describes_the_scored_contacts(
+    bonds: list[tuple[str, str]], expected: str
+) -> None:
+    """The published basis counts scored contacts, not assigned ones."""
+    rows = [
+        _bond_row(
+            contact_id=f"1abc:c{index}",
+            declared_connection=declared,
+            coordination_status=status,
+        )
+        for index, (declared, status) in enumerate(bonds)
+    ]
+    prepared = cs.prepare_confidence_inputs([_stats_row()], rows)[0]
+    assert prepared["geometry_contact_basis"] == expected
+
+
+def test_an_unscored_contact_leaves_no_basis_even_when_declared() -> None:
+    """A declared contact with no z-score contributes no provenance."""
+    prepared = cs.prepare_confidence_inputs(
+        [_stats_row()],
+        [
+            _bond_row(
+                zscore=None, declared_connection="True", coordination_status="declared"
+            )
+        ],
+    )[0]
+    assert prepared["geometry_contact_basis"] == "none"
+    assert prepared["declared_contact_count"] == 1
+    assert prepared["declared_scored_bond_count"] == 0
+
+
+def test_missing_reason_vocabulary_keeps_its_published_spelling() -> None:
+    """Pin the pipe-joined reasons, which mix three vocabularies."""
+    no_contacts = cs.prepare_confidence_inputs([_stats_row(zdm=None)], [])[0]
+    assert (
+        no_contacts["confidence_inputs_missing_reasons"]
+        == "rszd_unavailable|no_assigned_contacts"
+    )
+    invalid = cs.prepare_confidence_inputs(
+        [_stats_row(metal_coordinates_valid="false")],
+        [_bond_row(covered=False)],
+    )[0]
+    assert (
+        invalid["confidence_inputs_missing_reasons"]
+        == "non_finite_metal_coordinates|no_geometry_reference|partial_geometry_coverage"
+    )
+    partial = cs.prepare_confidence_inputs(
+        [_stats_row()], [_bond_row(), _bond_row(contact_id="1abc:c2", covered=False)]
+    )[0]
+    assert partial["confidence_inputs_missing_reasons"] == "partial_geometry_coverage"
+    unscored = cs.prepare_confidence_inputs([_stats_row()], [_bond_row(zscore=None)])[0]
+    assert (
+        unscored["confidence_inputs_missing_reasons"]
+        == "zbond_unavailable_for_reference"
+    )
+    orphan = cs.prepare_confidence_inputs([], [_bond_row()])[0]
+    assert (
+        orphan["confidence_inputs_missing_reasons"]
+        == "rszd_unavailable|density_row_unavailable"
+    )
+
+
+def test_a_placeholder_keeps_its_published_reasons_and_sentinel_index() -> None:
+    """The placeholder's reasons, warning, and sentinel index are published."""
+    completed = cs.complete_confidence_site_count([], "1abc", 2, "bond_stage_failure")
+    assert [row["metal_atom_index"] for row in completed] == [
+        "unresolved-1",
+        "unresolved-2",
+    ]
+    for row in completed:
+        assert row["context_warning"] is True
+        assert row["context_warning_reasons"] == "site_evidence_unavailable"
+        assert row["selected_metal_site_status"] == "selected_site_unresolved"
+        assert row["confidence_inputs_missing_reasons"] == (
+            "rszd_unavailable|site_identity_unavailable|"
+            "site_evidence_unavailable|bond_stage_failure"
+        )
+    assert set(completed[0]) == set(cs.CONFIDENCE_INPUT_COLUMNS)
+    assert (
+        cs.complete_confidence_site_count([], "1abc", 1)[0][
+            "confidence_inputs_missing_reasons"
+        ]
+        == "rszd_unavailable|site_identity_unavailable|site_evidence_unavailable"
+    )
+
+
+def test_every_prepared_row_carries_the_full_schema_in_order() -> None:
+    """All three producers build rows through one builder, so order is fixed."""
+    rows = cs.prepare_confidence_inputs([_stats_row()], [_bond_row()])
+    rows += cs.prepare_confidence_inputs([], [_bond_row(pdb_id="9zzz")])
+    rows = cs.complete_confidence_site_count(rows, "1abc", len(rows) + 1)
+    for row in rows:
+        assert list(row) == list(cs.CONFIDENCE_INPUT_COLUMNS)
+
+
+def test_a_saturated_site_is_flagged_through_the_shared_predicate() -> None:
+    """``density_saturated`` and the zero-support rule share one predicate."""
+    saturated = cs.prepare_confidence_inputs([_stats_row(zdm=99.9)], [])[0]
+    assert saturated["density_saturated"] is True
+    assert confidence_schema.is_density_saturated(99.9)
+    ordinary = cs.prepare_confidence_inputs([_stats_row(zdm=-3.0)], [])[0]
+    assert ordinary["density_saturated"] is False
+    negative_saturated = cs.prepare_confidence_inputs([_stats_row(zdm=-99.9)], [])[0]
+    assert negative_saturated["density_saturated"] is True
+
+

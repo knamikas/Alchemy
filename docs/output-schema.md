@@ -367,6 +367,28 @@ component never prevents the other from determining the site level. Partial
 geometry coverage remains explicit in `confidence_inputs_missing_reasons`, but
 does not weaken or strengthen finite geometry evidence.
 
+`geometry_contact_basis` records where the scored contacts came from, not where
+every assigned contact came from. It is `declared_and_inferred` when both a
+source-declared and a geometry-inferred contact were scored, `declared_only`
+when every scored contact was declared, `inferred_only` when every scored
+contact was inferred, and `none` when no contact was scored at all.
+
+`confidence_inputs_missing_reasons` is pipe-separated and draws on three
+vocabularies at once, so a reader resolves a value against all of them. Its own
+values are `rszd_unavailable` (no finite `ZDm`, so there is no density
+evidence), `no_assigned_contacts` (the site has no assigned contact to score),
+`no_geometry_reference` (contacts exist but the literature reference covers
+none of them), `zbond_unavailable_for_reference` (a reference-covered contact
+produced no finite score-eligible z-score), `partial_geometry_coverage` (the
+reference covers only some assigned contacts), `site_identity_unavailable` and
+`site_evidence_unavailable` (a placeholder row for a manifest-counted site that
+no output row identifies, and which carries no evidence of any kind;
+`site_evidence_unavailable` is written to that row's `context_warning_reasons`
+as well). To those the column adds `density_row_unavailable`, from the
+`coordinate_mapping_status` vocabulary, for a row built from bond rows alone,
+and `non_finite_metal_coordinates` together with whichever manifest reason code
+(docs/operations.md) records why the entry itself could not be completed.
+
 ## `confidence_scores_all.csv`
 
 Grain: one row per confidence input. All `confidence_inputs_all.csv` columns are
