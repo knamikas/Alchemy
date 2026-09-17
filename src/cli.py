@@ -19,6 +19,7 @@ from types import FrameType, TracebackType
 
 from typing_extensions import override
 
+from codes import DensityMapScope
 from density_analysis import (
     CCP4_TOOL_TIMEOUT_S,
     DENSITY_MAP_SCOPES,
@@ -203,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--density-map-scope",
         choices=DENSITY_MAP_SCOPES,
-        default="model-envelope",
+        default=DensityMapScope.MODEL_ENVELOPE,
         help=(
             "map extent supplied to EDSTATS; model-envelope retains every "
             f"coordinate plus a {MODEL_ENVELOPE_BORDER_ANGSTROM} Angstrom "

@@ -12,6 +12,8 @@ from functools import cache
 from types import MappingProxyType
 from typing import NamedTuple
 
+from codes import ParentType
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
@@ -109,9 +111,9 @@ def _parse_cofactor_catalog(path: str) -> CofactorCatalog:
             if len(fields) < 3:
                 continue
             structural_class = fields[2].strip()
-            if structural_class == "cluster":
+            if structural_class == ParentType.CLUSTER:
                 cluster.add(component_id)
-            elif structural_class == "heme":
+            elif structural_class == ParentType.HEME:
                 heme.add(component_id)
     if not ids:
         raise ValueError("bundled metallocofactor catalog is empty")

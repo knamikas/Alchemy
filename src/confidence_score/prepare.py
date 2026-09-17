@@ -7,7 +7,14 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from codes import ConfidenceInputStatus
+from codes import (
+    ConfidenceInputStatus,
+    CoordinateMappingStatus,
+    CoordinationStatus,
+    ParentType,
+    ReasonCode,
+    SelectedSiteStatus,
+)
 from confidence_score.schema import (
     CONFIDENCE_INPUT_COLUMNS,
     EDSTATS_SATURATION_MAGNITUDE,
@@ -82,7 +89,9 @@ def _bond_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     for row in rows:
         reference_covered += parse_csv_bool(row.get("reference_covered", ""))
         is_declared = parse_csv_bool(row.get("declared_connection", ""))
-        is_inferred = row.get("coordination_status", "").strip() == "inferred"
+        is_inferred = (
+            row.get("coordination_status", "").strip() == CoordinationStatus.INFERRED
+        )
         declared += is_declared
         inferred += is_inferred
         multi_donor += parse_csv_bool(row.get("multi_donor_detected", ""))
@@ -137,11 +146,12 @@ def _bond_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         ),
         "worst_bond": largest_row.get("contact_id", ""),
         "worst_bond_source": (
-            "declared"
+            CoordinationStatus.DECLARED
             if largest and parse_csv_bool(largest_row.get("declared_connection", ""))
-            else "inferred"
+            else CoordinationStatus.INFERRED
             if largest
-            and largest_row.get("coordination_status", "").strip() == "inferred"
+            and largest_row.get("coordination_status", "").strip()
+            == CoordinationStatus.INFERRED
             else ""
         ),
         "worst_bond_neighbor_resname": largest_row.get("neighbor_resname", ""),
@@ -184,7 +194,7 @@ def _orphan_bond_site_input(
         )
     missing_reasons = [
         "rszd_unavailable",
-        "density_row_unavailable",
+        CoordinateMappingStatus.DENSITY_ROW_UNAVAILABLE,
         *_geometry_missing_reasons(summary),
     ]
     values: dict[str, Any] = dict.fromkeys(CONFIDENCE_INPUT_COLUMNS, "")
@@ -195,12 +205,12 @@ def _orphan_bond_site_input(
                 "cofactor"
                 if str(first.get("metal_resname", "")).upper() in cofactor_ids()
                 else "metal"
-                if first.get("parent_type", "") == "ion"
+                if first.get("parent_type", "") == ParentType.ION
                 else ""
             ),
             "metal_site_id": first.get("metal_site_id", ""),
-            "coordinate_mapping_status": "density_row_unavailable",
-            "selected_metal_site_status": "selected_without_density_row",
+            "coordinate_mapping_status": CoordinateMappingStatus.DENSITY_ROW_UNAVAILABLE,
+            "selected_metal_site_status": SelectedSiteStatus.SELECTED_WITHOUT_DENSITY_ROW,
             "metal_model_index": first.get("metal_model_index", ""),
             "metal_chain_index": first.get("metal_chain_index", ""),
             "metal_residue_index": first.get("metal_residue_index", ""),
@@ -242,7 +252,10 @@ def prepare_confidence_inputs(
     seen_sites: set[tuple[str, ...]] = set()
     prepared: list[dict[str, Any]] = []
     for stats in stats_rows:
-        if stats.get("selected_metal_site_status", "").strip() != "selected":
+        if (
+            stats.get("selected_metal_site_status", "").strip()
+            != SelectedSiteStatus.SELECTED
+        ):
             continue
         key = site_key(stats)
         if key in seen_sites:
@@ -258,7 +271,7 @@ def prepare_confidence_inputs(
         summary = _bond_summary(bonds_by_site.pop(key, ()))
         missing_reasons: list[str] = []
         if str(stats.get("metal_coordinates_valid", "")).strip().lower() == "false":
-            missing_reasons.append("non_finite_metal_coordinates")
+            missing_reasons.append(ReasonCode.NON_FINITE_METAL_COORDINATES)
         if not math.isfinite(rszd_abs):
             missing_reasons.append("rszd_unavailable")
         if summary["assigned_contact_count"] == 0:
@@ -343,7 +356,7 @@ def complete_confidence_site_count(
         values.update(
             {
                 "pdbID": pdb_id,
-                "selected_metal_site_status": "selected_site_unresolved",
+                "selected_metal_site_status": SelectedSiteStatus.SELECTED_SITE_UNRESOLVED,
                 "metal_atom_index": f"unresolved-{index + 1}",
                 "context_warning": True,
                 "context_warning_reasons": "site_evidence_unavailable",

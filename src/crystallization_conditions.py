@@ -15,6 +15,7 @@ from typing import Any, Protocol, cast
 
 import gemmi
 
+from codes import CrystallizationDataStatus
 from output_rows import CsvValue
 from rcsb_metadata_cache import read_cache_payload
 from run_logging import logger_for
@@ -77,10 +78,6 @@ SUMMARY_COLUMNS = (
     "crystallization_sulfate",
     "crystallization_cacodylate",
     "crystallization_acetate",
-)
-
-CRYSTALLIZATION_DATA_STATUSES = frozenset(
-    {"available", "not_reported", "unparseable", "input_unavailable"}
 )
 
 PROMISCUOUS_TRANSITION_METALS = frozenset({"MN", "FE", "CO", "NI", "CU", "ZN", "CD"})
@@ -432,7 +429,7 @@ def detected_metals(text: str) -> frozenset[str]:
 
 def unavailable_summary(
     pdb_id: str,
-    status: str = "input_unavailable",
+    status: CrystallizationDataStatus = CrystallizationDataStatus.INPUT_UNAVAILABLE,
     *,
     source_format: str = "",
     metadata_source: str = "",
@@ -470,7 +467,10 @@ def _summary(
         ),
     }
     if not rows:
-        return unavailable_summary(pdb_id, "not_reported") | provenance
+        return (
+            unavailable_summary(pdb_id, CrystallizationDataStatus.NOT_REPORTED)
+            | provenance
+        )
     raw_text = " || ".join(
         dict.fromkeys(str(row.get("raw_details", "")).strip() for row in rows)
     ).strip(" |")
@@ -496,7 +496,7 @@ def _summary(
     lowered = searchable.lower()
     return {
         "pdbID": pdb_id,
-        "crystallization_data_status": "available",
+        "crystallization_data_status": CrystallizationDataStatus.AVAILABLE,
         "crystallization_condition_count": len(rows),
         **provenance,
         "crystallization_condition_ids": "|".join(
@@ -557,7 +557,7 @@ def extract_crystallization_conditions(
             (),
             unavailable_summary(
                 pdb_id,
-                "unparseable",
+                CrystallizationDataStatus.UNPARSEABLE,
                 source_format=source_format,
                 metadata_source=metadata_source,
             ),
@@ -597,7 +597,11 @@ def cached_rcsb_crystallization_conditions(
     rows = _condition_rows_from_cache(pdb_id, payload)
     if rows:
         return CrystallizationExtraction(tuple(rows), _summary(pdb_id, rows, "json"))
-    status = "not_reported" if payload["entry_available"] else "input_unavailable"
+    status = (
+        CrystallizationDataStatus.NOT_REPORTED
+        if payload["entry_available"]
+        else CrystallizationDataStatus.INPUT_UNAVAILABLE
+    )
     summary = unavailable_summary(
         pdb_id,
         status,
@@ -628,9 +632,13 @@ def extract_crystallization_context(
     deposited = cached_rcsb_crystallization_conditions(pdb_id, cache_root)
     if deposited is None:
         return local
-    local_available = local.summary["crystallization_data_status"] == "available"
+    local_available = (
+        local.summary["crystallization_data_status"]
+        == CrystallizationDataStatus.AVAILABLE
+    )
     deposited_available = (
-        deposited.summary["crystallization_data_status"] == "available"
+        deposited.summary["crystallization_data_status"]
+        == CrystallizationDataStatus.AVAILABLE
     )
     if prefer_coordinate_file and local_available:
         return local

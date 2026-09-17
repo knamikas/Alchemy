@@ -11,7 +11,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from codes import ConfidenceLevel
+from codes import ConfidenceLevel, CrystallizationDataStatus
 from confidence_score.schema import parse_csv_bool
 from crystallization_conditions import PROMISCUOUS_TRANSITION_METALS, SUMMARY_COLUMNS
 from output_rows import CsvValue, scientific_csv_value
@@ -82,7 +82,9 @@ def _review_context(summary: Mapping[str, str] | None) -> _ReviewContext:
     )
     return _ReviewContext(
         cells=cells,
-        available=cells["crystallization_data_status"] == "available",
+        available=(
+            cells["crystallization_data_status"] == CrystallizationDataStatus.AVAILABLE
+        ),
         detected_metals=detected_metals,
     )
 

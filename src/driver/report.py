@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from codes import EntryStatus
 from driver import confidence
 from driver.dispatch import BatchTally
 from driver.layout import OutputLayout
@@ -72,10 +73,10 @@ def report_batch(
         logger.warning(
             "completed with incomplete entries: errors=%d "
             "(recoverable=%d, terminal=%d), skips=%d, retryable_partials=%d",
-            tally.counts["error"],
+            tally.counts[EntryStatus.ERROR],
             tally.recoverable_errors,
             tally.terminal_errors,
-            tally.counts["skip"],
+            tally.counts[EntryStatus.SKIP],
             tally.retryable_partials,
         )
     return exit_code

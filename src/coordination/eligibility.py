@@ -13,7 +13,12 @@ from collections.abc import Iterable, Sequence
 
 import gemmi
 
-from codes import EligibilityReason, EligibilityStatus, ReferenceKind
+from codes import (
+    DonorRuleOverride,
+    EligibilityReason,
+    EligibilityStatus,
+    ReferenceKind,
+)
 from coordination.candidates import deduplicate_special_position_contacts
 from coordination.contact_record import Candidate, DonorPolicy, EligibilityResult
 from coordination.donor_chemistry import (
@@ -156,7 +161,7 @@ def annotate_donor_policy(
                 inferred_allowed=allowed,
                 rule=rule,
                 override=(
-                    "declared_connection"
+                    DonorRuleOverride.DECLARED_CONNECTION
                     if declared and not allowed and supported
                     else ""
                 ),

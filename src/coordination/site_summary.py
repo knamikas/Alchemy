@@ -13,7 +13,13 @@ from dataclasses import dataclass
 from statistics import median
 from typing import TypedDict
 
-from codes import GeometryStatus, MultiDonorStatus, ReasonCode
+from codes import (
+    ContactScope,
+    DonorRuleOverride,
+    GeometryStatus,
+    MultiDonorStatus,
+    ReasonCode,
+)
 from coordination.contact_record import Candidate, MultiDonorResult
 from coordination.dpi import DpiComponents
 from coordination.geometry import residue_image_key
@@ -315,7 +321,7 @@ def _site_context(
         warning_reasons="|".join(reasons),
         non_typical_first_sphere_candidate_count=len(non_typical_first_sphere),
         declared_donor_override_contact_count=sum(
-            contact.donor_policy().override == "declared_connection"
+            contact.donor_policy().override == DonorRuleOverride.DECLARED_CONNECTION
             for contact in contacts
         ),
     )
@@ -326,11 +332,11 @@ def _site_context(
 # site has generated contacts, and every generated contact is one or the other,
 # so the (False, False) row is unreachable; it is kept so an inconsistent count
 # degrades to the NCS scope instead of raising.
-_GENERATED_SCOPES: dict[tuple[bool, bool], tuple[str, bool, bool]] = {
-    (True, True): ("strict_ncs_and_crystallographic", True, True),
-    (True, False): ("crystallographic", True, False),
-    (False, True): ("strict_ncs", False, True),
-    (False, False): ("strict_ncs", False, True),
+_GENERATED_SCOPES: dict[tuple[bool, bool], tuple[ContactScope, bool, bool]] = {
+    (True, True): (ContactScope.STRICT_NCS_AND_CRYSTALLOGRAPHIC, True, True),
+    (True, False): (ContactScope.CRYSTALLOGRAPHIC, True, False),
+    (False, True): (ContactScope.STRICT_NCS, False, True),
+    (False, False): (ContactScope.STRICT_NCS, False, True),
 }
 
 

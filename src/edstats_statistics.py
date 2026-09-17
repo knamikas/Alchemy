@@ -18,7 +18,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from codes import CoordinateMappingStatus, SelectedSiteStatus, WarningCode
+from codes import (
+    CoordinateMappingStatus,
+    DensityContextStatus,
+    SelectedSiteStatus,
+    WarningCode,
+)
 from output_rows import MetalStatsRow
 from structure_analysis import (
     AtomSite,
@@ -85,7 +90,6 @@ DENSITY_CONTEXT_COLUMNS = (
         for column in _DENSITY_CONTEXT_GROUP_COLUMNS
     ),
 )
-DENSITY_CONTEXT_STATUSES = frozenset(("available", "not_computed"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +167,7 @@ class _DensityContextAccumulator:
     def as_row(self, pdb_id: str) -> dict[str, Any]:
         row: dict[str, Any] = {
             "pdbID": pdb_id,
-            "density_context_status": "available",
+            "density_context_status": DensityContextStatus.AVAILABLE,
             "edstats_residue_count": self.edstats_residue_count,
             "target_residue_count": self.target_residue_count,
         }
@@ -645,7 +649,7 @@ def _append_density_rows(
     for residue, resname, category, site in selected_sites:
         output_fields = list(resolved.fields)
         output_fields[resolved.indices["RT"]] = resname
-        if resolved.mapping_status == "matched":
+        if resolved.mapping_status == CoordinateMappingStatus.MATCHED:
             output_fields[resolved.indices["CI"]] = residue.chain_id
             output_fields[resolved.indices["RN"]] = residue.resnum
         rows.append(

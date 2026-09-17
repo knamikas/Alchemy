@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 
-from codes import ContactScope, MultiDonorStatus
+from codes import ContactScope, MultiDonorStatus, ScoreExclusionReason
 from coordination.contact_record import Candidate, GeometryResult, MultiDonorResult
 from coordination.eligibility import bonding_key
 from coordination.policy import ZSCORE_OUTLIER_CUTOFF
@@ -115,7 +115,9 @@ def annotate_multi_donor_groups(contacts: Iterable[Candidate]) -> None:
                     geometry_status=MultiDonorStatus.SINGLE_DONOR,
                     contains_suspect_bond=False,
                     score_eligible=assessable,
-                    score_exclusion_reason=("" if assessable else "zscore_unavailable"),
+                    score_exclusion_reason=(
+                        "" if assessable else ScoreExclusionReason.ZSCORE_UNAVAILABLE
+                    ),
                 )
             )
             continue
@@ -138,6 +140,8 @@ def annotate_multi_donor_groups(contacts: Iterable[Candidate]) -> None:
                     geometry_status=status,
                     contains_suspect_bond=any_outlier,
                     score_eligible=assessable,
-                    score_exclusion_reason=("" if assessable else "zscore_unavailable"),
+                    score_exclusion_reason=(
+                        "" if assessable else ScoreExclusionReason.ZSCORE_UNAVAILABLE
+                    ),
                 )
             )

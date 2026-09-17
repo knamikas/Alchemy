@@ -217,14 +217,18 @@ reference data, see [Reference-data maintenance](maintenance.md).
   are recorded with `retryable=true`. `--resume` uses that field so terminal
   entries do not run forever.
 - An unanticipated exception ends the entry as `error`, and its type is recorded
-  so a large run can be triaged. A parse, lookup, arithmetic, or type error
-  describes the entry's data or Alchemy's own code and will recur while both
-  stay the same, so it is reported as `deterministic_processing_error`. Anything
-  else—an `OSError`, a `MemoryError`, or most `RuntimeError` failures from a
-  CCP4 program—may describe the machine rather than the entry and is reported as
-  `unexpected_processing_error`. Known CCP4 diagnostics that identify fixed
+  so a large run can be triaged. A parse, lookup, or arithmetic error describes
+  the entry's data and will recur while it stays the same, so it is reported as
+  `deterministic_processing_error`. Known CCP4 diagnostics that identify fixed
   entry or compiled-tool limitations, such as MAPMASK's `maxsec` bound and FFT's
-  absence of acceptable reflections, are deterministic. The distinction is
+  absence of acceptable reflections, are deterministic too. Anything else is
+  reported as `unexpected_processing_error`: an `OSError`, a `MemoryError`, or
+  most `RuntimeError` failures from a CCP4 program may describe the machine
+  rather than the entry, and a `TypeError`, `AttributeError`, or
+  `AssertionError` is what a defect in Alchemy's own code raises. Because a
+  deterministic error is a terminal exclusion for a full-database run, those
+  defect-shaped types are deliberately kept recoverable so a regression fails
+  the run instead of silently removing entries from a new reference. The distinction is
   advisory for resume and does not change what `--resume` does: every `error`
   entry is retried either way because a resumed run may have been given a
   repaired input file or a re-downloaded mirror entry, and Alchemy does not
@@ -272,8 +276,8 @@ table, so a code cannot be added or renamed without updating this list.
 | `missing_input` | A coordinate or reflection file named on the command line, or expected in the mirror, was absent. |
 | `ccp4_tool_timeout` | A CCP4 program was killed at `--ccp4-timeout`. It reported nothing about the entry, so this is retryable. |
 | `mtzfix_validation_failure` | `mtzfix` failed its consistency re-test and no guarded twin normalization replaced the coefficients: the entry is not a PDB-REDO-declared twin, or it is one whose normalization was refused. |
-| `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError` or an unrecognized CCP4 failure. |
-| `deterministic_processing_error` | An exception that will recur identically on the same inputs and tool build, such as a parse or lookup error, MAPMASK's compiled `maxsec` limit, or FFT finding no acceptable reflections. Terminal for the current database snapshot, but still retried by `--resume` in case inputs or tools changed. |
+| `unexpected_processing_error` | An unanticipated exception whose type leaves a retry meaningful, such as an `OSError`, an unrecognized CCP4 failure, or a `TypeError` that more likely signals a defect in Alchemy than in the entry. |
+| `deterministic_processing_error` | An exception that describes the entry's data and will recur identically on the same inputs and tool build, such as a parse or lookup error, MAPMASK's compiled `maxsec` limit, or FFT finding no acceptable reflections. Terminal for the current database snapshot, but still retried by `--resume` in case inputs or tools changed. |
 | `metal_presence_indeterminate` | An atom's deposited element could not be trusted, so metal absence cannot be established and no site is analyzable. |
 | `bond_stage_failure` | The geometry stage raised after density analysis. The density rows are kept and the entry is `partial` with no assigned contacts, so its sites are density-only evidence. |
 | `cofactor_coordinate_join_failed` | An EDSTATS row for a catalog cofactor matched no coordinate residue. |

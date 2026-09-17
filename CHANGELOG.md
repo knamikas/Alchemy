@@ -69,6 +69,27 @@ confidence scores.
   structure is loaded, with the same summation the overfull-occupancy
   threshold is judged against, and the raw PDB fields and conversion
   provenance are read from the file in a single pass.
+- The `ambiguous_coordinate_residue_join` reason code and the
+  `multiple_coordinate_residues` coordinate-mapping status were retired when
+  the density-to-coordinate join became unambiguous. A `--resume` over a
+  manifest written before that change no longer treats a non-retryable
+  `partial` citing a retired reason code as terminal: the entry is retried,
+  since the current code may complete it. Partials citing only current codes
+  keep their stored verdict.
+- A `TypeError`, `AttributeError`, or `AssertionError` raised while
+  processing an entry is now reported as `unexpected_processing_error`
+  instead of `deterministic_processing_error`. Those are the types a code
+  defect raises, and a deterministic error is a terminal exclusion for a
+  full-database run, so classifying them as deterministic let a regression
+  silently drop entries from a new confidence reference while the run exited
+  successfully. Parse, lookup, and arithmetic errors, and the documented CCP4
+  limitations, remain deterministic.
+- Every status vocabulary written to a CSV column is now defined once in
+  `src/codes.py`, including the manifest's `refinement_state`, the density
+  context and crystallization data statuses, `score_exclusion_reason`, and
+  `donor_rule_override`, and the documentation tests check that every value
+  is named in the output schema and never re-typed as a string literal
+  elsewhere in the source. No output value changed.
 
 ### Tested software and platforms
 

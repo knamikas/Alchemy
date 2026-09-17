@@ -681,7 +681,7 @@ def run_density_analysis(
     reslo: float,
     reshi: float,
     env: Mapping[str, str] | None = None,
-    map_scope: str = "model-envelope",
+    map_scope: str = DensityMapScope.MODEL_ENVELOPE,
     keep_full_maps: bool = False,
     pdb_redo_is_twin: bool = False,
     tool_timeout_s: float = CCP4_TOOL_TIMEOUT_S,

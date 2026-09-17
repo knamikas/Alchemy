@@ -105,7 +105,16 @@ def _manual_entry(
     [
         (ValueError("no FWT column"), "deterministic_processing_error"),
         (KeyError("NR"), "deterministic_processing_error"),
-        (TypeError("bad shape"), "deterministic_processing_error"),
+        (IndexError("truncated record"), "deterministic_processing_error"),
+        # The exception types a code defect raises stay recoverable: a
+        # deterministic error is a terminal exclusion for database completion,
+        # and a regression must never silently drop entries from a reference.
+        (TypeError("bad shape"), "unexpected_processing_error"),
+        (
+            AttributeError("'NoneType' has no attribute 'pos'"),
+            "unexpected_processing_error",
+        ),
+        (AssertionError("site count"), "unexpected_processing_error"),
         (
             density.Ccp4EntryLimitationError("MAPMASK maxsec"),
             "deterministic_processing_error",

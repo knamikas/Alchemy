@@ -22,7 +22,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 
 from analysis_config import MAX_ANALYZED_METAL_SITES
-from codes import EntryStatus, ReasonCode
+from codes import EntryStatus, ReasonCode, SelectedSiteStatus
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver.layout import OutputLayout
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS, OutputTargets
@@ -35,6 +35,11 @@ _CsvRow = dict[str | None, str | list[str] | None]
 #: Accepted spellings of a manifest boolean, as written now and by older builds.
 _TRUE_TEXT = ("true", "1", "yes")
 _FALSE_TEXT = ("false", "0", "no")
+
+#: Every reason code this build can write. A partial row citing a code that is
+#: no longer here was written by an older build whose exclusion the current
+#: code may not reproduce, so the row cannot vouch for its entry.
+_KNOWN_REASON_CODES = frozenset(code.value for code in ReasonCode)
 
 #: The statistics columns that identify one selected metal site.
 _SITE_KEY_COLUMNS = (
@@ -89,11 +94,15 @@ class _ManifestRow:
         """Whether the row protects its entry: ok, or a partial no retry can improve.
 
         A blank or malformed ``retryable`` leaves a partial unprotected, so a
-        row an older or interrupted build could not vouch for is retried.
+        row an older or interrupted build could not vouch for is retried. So
+        does a partial whose reason codes include one this build no longer
+        emits: the stored ``retryable`` verdict was made by code that has
+        since changed, and the current code may complete the entry.
         """
         return self.status == EntryStatus.OK or (
             self.status == EntryStatus.PARTIAL
             and self.text("retryable").strip().lower() in _FALSE_TEXT
+            and self.reason_codes <= _KNOWN_REASON_CODES
         )
 
     @property
@@ -278,7 +287,10 @@ def _count_selected_sites(
     selected_stats: Counter[str] = Counter()
     selected_sites: set[tuple[str, tuple[str, ...]]] = set()
     for pdb_id, row in _rows_for_ids(stats_path, terminal_ids):
-        if _csv_text(row, "selected_metal_site_status").strip() != "selected":
+        if (
+            _csv_text(row, "selected_metal_site_status").strip()
+            != SelectedSiteStatus.SELECTED
+        ):
             continue
         site = tuple(_csv_text(row, column).strip() for column in _SITE_KEY_COLUMNS)
         if not all(site) or (pdb_id, site) in selected_sites:

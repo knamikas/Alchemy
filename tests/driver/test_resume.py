@@ -98,6 +98,40 @@ class TestLoadDone:
         )
         assert _manifest_ids(path) == set()
 
+    def test_a_partial_citing_a_retired_reason_code_is_retried(
+        self, tmp_path: Path
+    ) -> None:
+        """A terminal partial from an older build cannot vouch for its entry.
+
+        The stored ``retryable=false`` was decided by code that no longer
+        emits the reason it cites, so the current code may complete the
+        entry; the same row with a live reason code stays protected.
+        """
+        path = write_manifest(
+            tmp_path / "manifest.csv",
+            [
+                {
+                    "pdbID": "1old",
+                    "status": "partial",
+                    "retryable": "False",
+                    "reason_codes": "ambiguous_coordinate_residue_join",
+                },
+                {
+                    "pdbID": "1mix",
+                    "status": "partial",
+                    "retryable": "False",
+                    "reason_codes": "invalid_occupancy|ambiguous_coordinate_residue_join",
+                },
+                {
+                    "pdbID": "1new",
+                    "status": "partial",
+                    "retryable": "False",
+                    "reason_codes": "invalid_occupancy",
+                },
+            ],
+        )
+        assert _manifest_ids(path) == {"1new"}
+
     def test_ids_are_normalized_to_lowercase(self, tmp_path: Path) -> None:
         """Manifest IDs join against the driver's lowercased selection list."""
         path = write_manifest(

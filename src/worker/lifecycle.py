@@ -19,7 +19,7 @@ from dataclasses import replace
 from multiprocessing.queues import Queue, SimpleQueue
 from typing import Literal
 
-from codes import EntryStatus, ReasonCode, WarningCode
+from codes import EntryStatus, ReasonCode, RefinementState, WarningCode
 from crystallization_conditions import extract_crystallization_context
 from density_analysis import Ccp4EntryLimitationError, elapsed_s
 from inputs import MissingInputError
@@ -74,16 +74,20 @@ __all__ = [
 
 logger = logger_for(__name__)
 
-# Classify failures likely to recur on identical inputs. Resume still retries
-# errors because the inputs or software may have changed.
+# Classify failures that describe the entry's data and so recur on identical
+# inputs: a value that will not parse, a column or key the input lacks, an
+# arithmetic impossibility, or a documented CCP4 limitation. Resume still
+# retries them because the inputs or software may have changed.
+#
+# ``TypeError``, ``AttributeError``, and ``AssertionError`` are deliberately
+# absent. They are what a code defect raises, and a deterministic error is a
+# terminal exclusion for database completion (see ``BatchTally``), so listing
+# them would let a regression silently drop entries from a reference.
 DETERMINISTIC_PROCESSING_ERRORS = (
     ArithmeticError,
-    AssertionError,
-    AttributeError,
     Ccp4EntryLimitationError,
     LookupError,
     NotImplementedError,
-    TypeError,
     ValueError,
 )
 
@@ -140,7 +144,9 @@ def initial_result(
             analysis_config_id=cfg.analysis_config_id,
         ),
         pdb_redo=PdbRedoProvenance(
-            refinement_state="manual" if manual_inputs else "final"
+            refinement_state=(
+                RefinementState.MANUAL if manual_inputs else RefinementState.FINAL
+            )
         ),
     )
 

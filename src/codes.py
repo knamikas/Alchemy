@@ -1,4 +1,13 @@
-"""Shared status, reason, and provenance values for serialized outputs."""
+"""Shared status, reason, and provenance values for serialized outputs.
+
+Every vocabulary written to a CSV column lives here so producers, resume, and
+the documentation tests read one definition. Because these are ``StrEnum``
+classes, a member compares equal to its string, and therefore to a member of
+another vocabulary that happens to spell the same value. Such overlaps are
+allowed only where the two vocabularies genuinely mean the same thing, and each
+one is declared in ``SHARED_VALUES`` so an accidental new overlap fails the
+documentation tests rather than passing a comparison against the wrong enum.
+"""
 
 from enum import StrEnum
 
@@ -10,6 +19,18 @@ class EntryStatus(StrEnum):
     PARTIAL = "partial"
     SKIP = "skip"
     ERROR = "error"
+
+
+class RefinementState(StrEnum):
+    """Which refinement the analyzed reflections and metadata describe.
+
+    Written to the manifest's ``refinement_state``.
+    """
+
+    #: Coordinates and reflections were supplied on the command line.
+    MANUAL = "manual"
+    #: The entry's final PDB-REDO refinement.
+    FINAL = "final"
 
 
 class RunMode(StrEnum):
@@ -123,9 +144,12 @@ class ReasonCode(StrEnum):
     #: about the entry, so unlike a failure exit this is worth retrying.
     CCP4_TOOL_TIMEOUT = "ccp4_tool_timeout"
     MTZFIX_VALIDATION_FAILURE = "mtzfix_validation_failure"
-    #: An unanticipated exception whose type leaves a retry meaningful.
+    #: An unanticipated exception whose type leaves a retry meaningful. This
+    #: includes the exception types a code defect typically raises, so a
+    #: regression can never become a terminal exclusion.
     UNEXPECTED_PROCESSING_ERROR = "unexpected_processing_error"
-    #: An exception expected to recur on identical inputs; resume may retry it.
+    #: An exception that describes the entry's data and will recur on identical
+    #: inputs; terminal for database completion, though resume may retry it.
     DETERMINISTIC_PROCESSING_ERROR = "deterministic_processing_error"
     # Cohort membership: the entry was processed but deliberately excluded.
     #: An atom's element could not be trusted, so metal absence cannot be
@@ -210,18 +234,50 @@ class WarningCode(StrEnum):
 
 
 class CoordinateMappingStatus(StrEnum):
-    """How an EDSTATS residue row joined to the analyzed coordinates."""
+    """How an EDSTATS residue row joined to the analyzed coordinates.
+
+    Also written to confidence-input rows, which add the case where a bonded
+    site had no density row to join at all.
+    """
 
     MATCHED = "matched"
     RESIDUE_NOT_FOUND = "coordinate_residue_not_found"
+    #: A confidence-input row built from bond rows alone.
+    DENSITY_ROW_UNAVAILABLE = "density_row_unavailable"
 
 
 class SelectedSiteStatus(StrEnum):
-    """Whether a density row belongs to a selected metal site."""
+    """Whether a density row belongs to a selected metal site.
+
+    Also written to confidence-input rows, which add two cases for selected
+    sites that could not be joined to a density row.
+    """
 
     SELECTED = "selected"
     #: A catalog cofactor row whose residue holds no selected metal.
     NO_SELECTED_METAL = "no_selected_metal"
+    #: A site with bond rows but no density row; identified from the bonds.
+    SELECTED_WITHOUT_DENSITY_ROW = "selected_without_density_row"
+    #: A site the manifest counts as selected but no output row identifies.
+    SELECTED_SITE_UNRESOLVED = "selected_site_unresolved"
+
+
+class DensityContextStatus(StrEnum):
+    """Whether an entry's non-target density aggregates were computed."""
+
+    AVAILABLE = "available"
+    NOT_COMPUTED = "not_computed"
+
+
+class CrystallizationDataStatus(StrEnum):
+    """Whether crystallization conditions could be read for an entry."""
+
+    AVAILABLE = "available"
+    #: The source held no condition record.
+    NOT_REPORTED = "not_reported"
+    UNPARSEABLE = "unparseable"
+    #: No source could be consulted.
+    INPUT_UNAVAILABLE = "input_unavailable"
 
 
 class DensityMapScope(StrEnum):
@@ -241,7 +297,12 @@ class DensityMapScope(StrEnum):
 
 
 class ConfidenceLevel(StrEnum):
-    """Verdict on one site or one evidence component."""
+    """Verdict on one site or one evidence component.
+
+    Deliberately upper-case, unlike every other vocabulary here: a site-level
+    verdict is a different claim from a lower-case ``GeometryStatus`` or
+    ``MultiDonorStatus`` and must never compare equal to one.
+    """
 
     PASS = "PASS"
     REVIEW = "REVIEW"
@@ -298,7 +359,7 @@ class EligibilityReason(StrEnum):
     """Why a candidate received its eligibility status.
 
     The two distance reasons embed ``FIRST_SPHERE_TOLERANCE`` from
-    ``coordination.analysis``, which asserts the values agree at import.
+    ``coordination.policy``, which asserts the values agree at import.
     """
 
     DISTANCE_WITHIN_TOLERANCE = "distance_within_target_plus_0.75"
@@ -334,6 +395,25 @@ class CoordinationStatus(StrEnum):
     UNASSIGNED = "unassigned"
 
 
+class DonorRuleOverride(StrEnum):
+    """Why a donor forbidden by the inference rule was admitted anyway.
+
+    Written to ``donor_rule_override``; blank when no override applied.
+    """
+
+    #: A source declaration named the contact, inside a supported residue class.
+    DECLARED_CONNECTION = "declared_connection"
+
+
+class ScoreExclusionReason(StrEnum):
+    """Why an assigned contact contributes no geometry evidence.
+
+    Written to ``score_exclusion_reason``; blank when the contact is scored.
+    """
+
+    ZSCORE_UNAVAILABLE = "zscore_unavailable"
+
+
 class NeighborClass(StrEnum):
     """Coarse chemical class of a contact's donor residue."""
 
@@ -341,3 +421,23 @@ class NeighborClass(StrEnum):
     NUCLEOTIDE = "nucleotide"
     AMINO_ACID = "amino_acid"
     OTHER = "other"
+
+
+#: Values two or more vocabularies spell identically on purpose, each mapped to
+#: the names of the enums that share it. A comparison between members of two
+#: listed enums is meaningful; any overlap absent from this table is a defect.
+#: Case-only differences (``ConfidenceLevel.SUSPECT`` versus
+#: ``GeometryStatus.SUSPECT``) are not overlaps: the strings differ, so the
+#: members never compare equal, and the test that checks this table also
+#: confirms no lower-case vocabulary ever spells an upper-case value.
+SHARED_VALUES: dict[str, frozenset[str]] = {
+    "valid": frozenset({"OccupancyStatus", "ElementStatus"}),
+    "missing": frozenset({"OccupancyStatus", "ElementStatus", "ReferenceKind"}),
+    "suspect": frozenset({"GeometryStatus", "MultiDonorStatus"}),
+    "available": frozenset({"DensityContextStatus", "CrystallizationDataStatus"}),
+    "density_only": frozenset({"EvidenceBasis", "ConfidenceInputStatus"}),
+    "geometry_only": frozenset({"EvidenceBasis", "ConfidenceInputStatus"}),
+    "no_assessable_evidence": frozenset({"EvidenceBasis", "VerdictReason"}),
+    "other": frozenset({"ParentType", "NeighborClass"}),
+    "manual": frozenset({"RunMode", "RefinementState"}),
+}

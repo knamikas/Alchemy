@@ -182,7 +182,7 @@ class BatchTally:
 
     def __init__(self) -> None:
         """Start every count at zero."""
-        self.counts = {"ok": 0, "partial": 0, "skip": 0, "error": 0}
+        self.counts: dict[str, int] = dict.fromkeys(EntryStatus, 0)
         self.no_metals = 0
         self.metal_site_limit_exceeded = 0
         self.retryable_partials = 0
@@ -230,7 +230,11 @@ class BatchTally:
         incomplete = (
             self.recoverable_incompleteness()
             if database_run
-            else self.counts["error"] + self.counts["skip"] + self.retryable_partials
+            else (
+                self.counts[EntryStatus.ERROR]
+                + self.counts[EntryStatus.SKIP]
+                + self.retryable_partials
+            )
         )
         return batch_exit_code(incomplete)
 
@@ -239,7 +243,11 @@ class BatchTally:
 
         Only explicitly deterministic failures are terminal for database completion.
         """
-        return self.counts["skip"] + self.retryable_partials + self.recoverable_errors
+        return (
+            self.counts[EntryStatus.SKIP]
+            + self.retryable_partials
+            + self.recoverable_errors
+        )
 
 
 class _WorkerDeathWatch:

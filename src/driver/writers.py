@@ -14,6 +14,7 @@ from operator import attrgetter
 from typing import TYPE_CHECKING, Any, ClassVar, TextIO
 
 from analysis_config import ALTLOC_POLICY, MODEL_POLICY, SYMMETRY_POLICY
+from codes import DensityContextStatus
 from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from coordination.schema import (
     BOND_COLUMNS,
@@ -387,7 +388,7 @@ class OutputWriters:
         row.update(
             {
                 "pdbID": result.pdb_id,
-                "density_context_status": "not_computed",
+                "density_context_status": DensityContextStatus.NOT_COMPUTED,
             }
         )
         if result.density_context_row:

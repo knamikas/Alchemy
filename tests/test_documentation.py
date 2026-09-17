@@ -10,12 +10,15 @@ import subprocess
 import sys
 import tomllib
 import zipfile
+from collections.abc import Iterator, Sequence
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
 from helpers import REPO_ROOT, SRC_DIR
 
-from codes import ReasonCode, WarningCode
+import codes as codes_module
+from codes import SHARED_VALUES, ReasonCode, WarningCode
 from driver import confidence as driver_confidence, environment
 from driver.runlog import (
     ENTRY_DIAGNOSTIC_BASE_COLUMNS,
@@ -71,27 +74,97 @@ def test_every_warning_code_is_documented() -> None:
     assert not missing, f"warning codes absent from docs/operations.md: {missing}"
 
 
-def test_no_reason_code_is_emitted_outside_the_shared_vocabulary() -> None:
-    """Verify reason codes use shared constants so producer and resume logic agree."""
-    # Two words are both a reason code and an output column, and the column is
-    # legitimately written as a literal dict key. Excluding them costs coverage
-    # of those two codes rather than reporting correct code as a defect.
-    also_column_names = {code.value for code in ReasonCode} & set(STATS_COLUMNS)
-    known = {code.value for code in ReasonCode} - also_column_names
+def _vocabularies() -> dict[str, type[StrEnum]]:
+    """Every vocabulary ``codes.py`` defines, by class name."""
+    return {
+        name: candidate
+        for name, candidate in vars(codes_module).items()
+        if isinstance(candidate, type)
+        and issubclass(candidate, StrEnum)
+        and candidate is not StrEnum
+    }
+
+
+def _source_modules() -> Iterator[tuple[str, str]]:
+    """Each module under ``src/`` except the vocabulary itself, with its source."""
+    for root, _dirs, files in os.walk(SRC_DIR):
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            relative = os.path.relpath(path, SRC_DIR)
+            if name.endswith(".py") and relative != "codes.py":
+                yield relative, _read(path)
+
+
+def test_no_vocabulary_value_is_emitted_outside_codes_py() -> None:
+    """Verify producers use the shared members so a rename cannot leave one behind.
+
+    A value that is also an output column is legitimately written as a
+    literal dict key, so those are excluded; the cost is coverage of those
+    values, not a false report against correct code.
+    """
+    column_names: set[str] = set()
+    for columns in _all_output_columns():
+        column_names |= set(columns)
+    known = {
+        member.value for vocabulary in _vocabularies().values() for member in vocabulary
+    } - column_names
     offenders: list[str] = []
-    for module in (
-        "worker/lifecycle.py",
-        "coordination/analysis.py",
-        "coordination/site_summary.py",
-        "coordination/dpi.py",
-    ):
-        source = _read(os.path.join(SRC_DIR, module))
-        for literal in re.findall(r'"([a-z][a-z0-9_]{6,})"', source):
-            if literal in known:
+    for module, source in _source_modules():
+        for literal in re.findall(r'"([A-Za-z][A-Za-z0-9_ -]{5,})"', source):
+            if literal in known and (module, literal) not in _COINCIDENTAL_LITERALS:
                 offenders.append(f"{module}: {literal!r}")
     assert not offenders, (
-        "reason codes written as string literals rather than ReasonCode members: "
-        f"{sorted(offenders)}"
+        "vocabulary values written as string literals rather than codes.py "
+        f"members: {sorted(offenders)}"
+    )
+
+
+def test_every_published_vocabulary_value_is_documented() -> None:
+    """Verify every value a CSV column can hold is named in the output prose.
+
+    A consumer reads the documentation, not ``codes.py``; a value the prose
+    never mentions is one they will misclassify.
+    """
+    prose = _output_prose()
+    missing = sorted(
+        f"{name}.{member.name} ({member.value!r})"
+        for name, vocabulary in _vocabularies().items()
+        if name not in _INTERNAL_VOCABULARIES
+        for member in vocabulary
+        # Either backticked alone or as the value of a ``column=value`` pair.
+        if f"`{member.value}`" not in prose and f"={member.value}`" not in prose
+    )
+    assert not missing, f"vocabulary values absent from the output prose: {missing}"
+
+
+def test_values_shared_between_vocabularies_are_declared() -> None:
+    """Verify no two vocabularies spell the same value except where declared.
+
+    ``StrEnum`` members compare equal to their strings, so an undeclared
+    overlap lets a comparison against the wrong enum pass silently until the
+    two vocabularies diverge. ``ConfidenceLevel`` is the one upper-case
+    vocabulary; keeping it unique means its case is the only thing separating
+    it from the lower-case statuses, which the module documents on purpose.
+    """
+    owners: dict[str, set[str]] = {}
+    upper_case = set()
+    for name, vocabulary in _vocabularies().items():
+        for member in vocabulary:
+            owners.setdefault(member.value, set()).add(name)
+            if member.value != member.value.lower():
+                upper_case.add(name)
+    observed = {
+        value: frozenset(names) for value, names in owners.items() if len(names) > 1
+    }
+    assert observed == SHARED_VALUES, (
+        "vocabulary overlaps differ from codes.SHARED_VALUES: "
+        f"undeclared={sorted(set(observed) - set(SHARED_VALUES))}, "
+        f"stale={sorted(set(SHARED_VALUES) - set(observed))}, "
+        f"changed={sorted(v for v in observed if v in SHARED_VALUES and observed[v] != SHARED_VALUES[v])}"
+    )
+    assert upper_case == {"ConfidenceLevel", "CandidateSource"}, (
+        "only ConfidenceLevel (and CandidateSource's LINK record name) may "
+        f"carry upper-case values; found {sorted(upper_case)}"
     )
 
 
@@ -436,6 +509,24 @@ def test_every_cli_flag_appears_in_the_prose() -> None:
     )
 
 
+# Vocabularies never written to a CSV column, so the output prose need not
+# enumerate their values. ``RunMode`` is recorded in the run report;
+# ``ElementStatus`` decides whether a PDB element symbol is trusted and is
+# consumed inside the structure model.
+_INTERNAL_VOCABULARIES = frozenset(("RunMode", "ElementStatus"))
+
+# Literals that spell a vocabulary value by coincidence in a module where the
+# word means something else: threshold names in the reference metadata, one
+# member of the ``ConfidenceMode`` type alias, and a worker-selection detail
+# in the run log. Each is (module, literal).
+_COINCIDENTAL_LITERALS = frozenset(
+    (
+        ("confidence_score/schema.py", "suspect"),
+        ("driver/confidence.py", "database"),
+        ("driver/pool.py", "explicit"),
+    )
+)
+
 # Backticked snake_case words in the prose that name something other than an
 # output field or a status code: a formula symbol, an mmCIF item, a function,
 # and the informational subset of ``ok``. Listed so the check below can be
@@ -454,34 +545,16 @@ _NON_FIELD_TERMS = frozenset(
 )
 
 
-def test_every_field_name_in_the_prose_still_exists() -> None:
-    """Verify documented output fields and status codes still exist."""
-    from enum import StrEnum
-
-    import codes as codes_module
-    from confidence_score import (
-        ANALYSIS_COLUMNS,
-        CONFIDENCE_INPUT_COLUMNS,
-        CONFIDENCE_INPUT_STATUSES,
-        EVIDENCE_BASES,
-        REFERENCE_METADATA_FIELDS,
-        VERDICT_REASONS,
-    )
+def _all_output_columns() -> tuple[Sequence[str], ...]:
+    """Every column sequence a run's CSV outputs declare."""
+    from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
-    from crystallization_conditions import (
-        CONDITION_COLUMNS,
-        CRYSTALLIZATION_DATA_STATUSES,
-        SUMMARY_COLUMNS,
-    )
+    from crystallization_conditions import CONDITION_COLUMNS, SUMMARY_COLUMNS
     from driver.review_queue import REVIEW_CONTEXT_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
-    from edstats_statistics import (
-        DENSITY_CONTEXT_COLUMNS,
-        DENSITY_CONTEXT_STATUSES,
-    )
+    from edstats_statistics import DENSITY_CONTEXT_COLUMNS
 
-    known: set[str] = set()
-    for columns in (
+    return (
         MANIFEST_COLUMNS,
         STATS_COLUMNS,
         BOND_COLUMNS,
@@ -495,20 +568,19 @@ def test_every_field_name_in_the_prose_still_exists() -> None:
         ENTRY_DIAGNOSTIC_BASE_COLUMNS,
         PREFERRED_TIMING_COLUMNS,
         ENTRY_DIAGNOSTIC_TRAILING_COLUMNS,
-    ):
+    )
+
+
+def test_every_field_name_in_the_prose_still_exists() -> None:
+    """Verify documented output fields and status codes still exist."""
+    from confidence_score import REFERENCE_METADATA_FIELDS
+
+    known: set[str] = set()
+    for columns in _all_output_columns():
         known |= set(columns)
-    known |= CONFIDENCE_INPUT_STATUSES | REFERENCE_METADATA_FIELDS
-    known |= EVIDENCE_BASES | VERDICT_REASONS
-    known |= CRYSTALLIZATION_DATA_STATUSES
-    known |= DENSITY_CONTEXT_STATUSES
-    for name in dir(codes_module):
-        candidate = getattr(codes_module, name)
-        if (
-            isinstance(candidate, type)
-            and issubclass(candidate, StrEnum)
-            and candidate is not StrEnum
-        ):
-            known |= {member.value for member in candidate}
+    known |= REFERENCE_METADATA_FIELDS
+    for vocabulary in _vocabularies().values():
+        known |= {member.value for member in vocabulary}
 
     cited = {
         term
