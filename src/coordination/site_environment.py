@@ -15,7 +15,6 @@ from statistics import median
 import gemmi
 
 from codes import ParentType
-from coordination.candidates import AtomKey
 from coordination.policy import (
     NEARBY_METAL_RADIUS,
     SEARCH_EPSILON,
@@ -26,6 +25,7 @@ from coordination.schema import metal_site_identifier
 from reference_data import cluster_ids, heme_ids
 from structure_analysis import (
     NAN,
+    AtomKey,
     AtomSite,
     StructureContext,
     count_deposited_ni,
@@ -93,6 +93,18 @@ class MetalSpecialPosition:
         )
 
 
+def _note_failure(
+    messages: list[str] | None, exc: Exception, site_id: str = ""
+) -> None:
+    """Record why a special-position evaluation could not be completed."""
+    if messages is None:
+        return
+    scope = f" for {site_id}" if site_id else ""
+    messages.append(
+        f"special position evaluation failed{scope}: {type(exc).__name__}: {exc}"
+    )
+
+
 def metal_proximity_summaries(
     pdb_id: str, metals: Sequence[AtomSite]
 ) -> dict[AtomKey, MetalProximity]:
@@ -101,48 +113,47 @@ def metal_proximity_summaries(
     ``metals`` is the canonical analyzed-model selection, which already omits
     explicitly zero-occupancy sites. Non-finite coordinates remain in the result
     with unavailable proximity fields so their site rows keep a fixed schema.
+    The nearest neighbor is chosen in one pass over the other searchable metals,
+    ordered by ``(distance, source_key)`` so equidistant neighbors resolve to the
+    lowest source key. A lone searchable metal reports blank nearest fields with
+    a count of zero, which is a measurement rather than a failed search.
     """
-    summaries: dict[AtomKey, MetalProximity] = {
-        metal.source_key: MetalProximity.unavailable() for metal in metals
-    }
+    summaries: dict[AtomKey, MetalProximity] = {}
     spatial = [metal for metal in metals if metal.coordinates_valid]
-    for metal in spatial:
-        neighbors = sorted(
-            (
-                (
-                    position_distance(metal.xyz, neighbor.xyz),
-                    neighbor.source_key,
-                    neighbor,
-                )
-                for neighbor in spatial
-                if neighbor.source_key != metal.source_key
+    for metal in metals:
+        if not metal.coordinates_valid:
+            summaries[metal.source_key] = MetalProximity.unavailable()
+            continue
+        nearest: AtomSite | None = None
+        nearest_distance = NAN
+        count_within_6a = 0
+        for neighbor in spatial:
+            if neighbor.source_key == metal.source_key:
+                continue
+            distance = position_distance(metal.xyz, neighbor.xyz)
+            if distance <= NEARBY_METAL_RADIUS + SEARCH_EPSILON:
+                count_within_6a += 1
+            if nearest is None or (distance, neighbor.source_key) < (
+                nearest_distance,
+                nearest.source_key,
+            ):
+                nearest = neighbor
+                nearest_distance = distance
+        summaries[metal.source_key] = MetalProximity(
+            nearest_distance=NAN if nearest is None else round(nearest_distance, 3),
+            nearest_element="" if nearest is None else nearest.element,
+            nearest_site_id=(
+                "" if nearest is None else metal_site_identifier(pdb_id, nearest)
             ),
-            key=lambda item: (item[0], item[1]),
+            count_within_6a=count_within_6a,
         )
-        count_within_6a = sum(
-            distance <= NEARBY_METAL_RADIUS + SEARCH_EPSILON
-            for distance, _, _ in neighbors
-        )
-        if neighbors:
-            distance, _, nearest = neighbors[0]
-            summaries[metal.source_key] = MetalProximity(
-                nearest_distance=round(distance, 3),
-                nearest_element=nearest.element,
-                nearest_site_id=metal_site_identifier(pdb_id, nearest),
-                count_within_6a=count_within_6a,
-            )
-        else:
-            summaries[metal.source_key] = MetalProximity(
-                nearest_distance=NAN,
-                nearest_element="",
-                nearest_site_id="",
-                count_within_6a=count_within_6a,
-            )
     return summaries
 
 
 def metal_special_position_summaries(
-    structure: StructureContext, metals: Sequence[AtomSite]
+    structure: StructureContext,
+    metals: Sequence[AtomSite],
+    messages: list[str] | None = None,
 ) -> dict[AtomKey, MetalSpecialPosition]:
     """Report crystallographic site symmetry and its occupancy expectation.
 
@@ -150,6 +161,17 @@ def metal_special_position_summaries(
     strict-NCS transforms, which are also present in ``structure.cell`` after
     ``setup_cell_images()``, from being mistaken for crystallographic site
     symmetry.
+
+    A site symmetry order that does not divide the space-group operation count
+    is crystallographically impossible: it comes from a metal modeled slightly
+    off an axis, where the deduplication cutoff merges only some of the images
+    that meet there. Such a site keeps ``special_position=True``, which the
+    coincident image directly observed, and blanks the order, the expected
+    occupancy, and the occupancy agreement, none of which can be trusted.
+
+    ``messages`` collects the entry-level messages of a caller; when it is
+    given, a symmetry evaluation that raises appends the failure to it instead
+    of being indistinguishable from an entry with no special positions.
     """
     summaries: dict[AtomKey, MetalSpecialPosition] = {
         metal.source_key: MetalSpecialPosition.unavailable() for metal in metals
@@ -173,7 +195,8 @@ def metal_special_position_summaries(
         )
         crystallographic_structure.spacegroup_hm = spacegroup.xhm()
         crystallographic_structure.setup_cell_images()
-    except Exception:
+    except Exception as exc:
+        _note_failure(messages, exc)
         return summaries
 
     for metal in metals:
@@ -185,9 +208,19 @@ def metal_special_position_summaries(
                     metal.pos, SPECIAL_POSITION_DEDUP_CUTOFF
                 )
             )
-        except Exception:
+        except Exception as exc:
+            _note_failure(messages, exc, metal_site_identifier(structure.pdb_id, metal))
             continue
         site_symmetry_order = coincident_nonidentity_images + 1
+        operation_count = structure.symmetry.crystallographic_operation_count
+        if operation_count > 0 and operation_count % site_symmetry_order != 0:
+            summaries[metal.source_key] = MetalSpecialPosition(
+                special_position=True,
+                site_symmetry_order=NAN,
+                expected_occupancy=NAN,
+                occupancy_matches_site_symmetry="",
+            )
+            continue
         expected_occupancy = 1.0 / site_symmetry_order
         occupancy_matches: bool | str = ""
         if metal.occupancy_valid:
@@ -207,7 +240,12 @@ def metal_special_position_summaries(
 
 
 def entry_nonwater_median_b_iso(structure: StructureContext) -> float:
-    """Median B for canonical, non-water, non-H modeled atoms in this entry."""
+    """Median B for canonical, non-water, non-H modeled atoms in this entry.
+
+    Atoms with a valid occupancy of exactly zero are modeled absence and are
+    excluded, as are atoms whose B factor is not finite. An entry with no
+    remaining atom has no median and reports it as unavailable.
+    """
     values = [
         atom.b_iso
         for atom in structure.contact_atoms
@@ -224,10 +262,13 @@ def parent_type(structure: StructureContext, metal: AtomSite) -> ParentType:
 
     ``metal`` comes from ``metal_atoms(METAL_ELEMENTS)``, so its element is a
     metal by construction and only the component identity needs deciding.
+    ``AtomSite.residue_name`` arrives already whitespace-stripped and
+    upper-cased, which is how the catalogued component identifiers are keyed.
     """
-    if metal.residue_name in cluster_ids():
+    residue_name = metal.residue_name
+    if residue_name in cluster_ids():
         return ParentType.CLUSTER
-    if metal.residue_name in heme_ids():
+    if residue_name in heme_ids():
         return ParentType.HEME
     residue = structure.residue_for_atom(metal)
     if residue.chemical_atom_site_count == 1:
