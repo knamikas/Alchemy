@@ -2,9 +2,17 @@
 
 Raw thresholds determine verdicts. Frozen database distributions provide
 independent empirical rankings for later runs.
+
+Unlike the stage packages, which export nothing and are imported by submodule,
+this package re-exports its public surface here because the driver, the tests,
+and the documentation checks consume it as one API. ``__all__`` is therefore a
+published contract rather than a convenience. Submodule imports remain
+acceptable for helpers outside that contract, such as
+``confidence_score.schema.parse_csv_bool``, and for the command line, which
+lives in ``confidence_score.cli`` so that importing a constant does not pull in
+``argparse``.
 """
 
-from confidence_score.cli import main as main
 from confidence_score.prepare import (
     complete_confidence_site_count as complete_confidence_site_count,
     prepare_confidence_inputs as prepare_confidence_inputs,
@@ -50,7 +58,6 @@ from confidence_score.scoring import (
     ConfidenceReference as ConfidenceReference,
     SiteVerdict as SiteVerdict,
     classify_site as classify_site,
-    component_level as component_level,
     density_level as density_level,
     geometry_level as geometry_level,
     score_site as score_site,
@@ -87,12 +94,10 @@ __all__ = [
     "classify_site",
     "classify_without_reference",
     "complete_confidence_site_count",
-    "component_level",
     "density_level",
     "finalize_database_confidence",
     "geometry_level",
     "load_reference",
-    "main",
     "prepare_confidence_inputs",
     "prepare_result_confidence_inputs",
     "score_against_reference",

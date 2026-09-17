@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from helpers import approx
 
 import confidence_score
+import confidence_score.cli
 
 _StrPath = str | os.PathLike[str]
 
@@ -139,7 +140,7 @@ def frozen_reference(
     reference_dir = os.path.join(directory, "confidence_reference")
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = confidence_score.main(
+        code = confidence_score.cli.main(
             [
                 "finalize",
                 "--input",

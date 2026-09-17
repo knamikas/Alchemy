@@ -1,6 +1,7 @@
 """Standalone ``finalize`` and ``score`` subcommands for prepared inputs."""
 
 import argparse
+import csv
 import sys
 from collections.abc import Sequence
 
@@ -13,7 +14,7 @@ from confidence_score.reference import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m confidence_score",
+        prog="PYTHONPATH=src python3 -m confidence_score",
         description="Finalize or apply Alchemy confidence scores.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
@@ -65,13 +66,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"finalized {total} rows ({scored} scored; database cohort "
                 f"{cohort}) to {args.output}"
             )
-        else:
+        elif args.command == "score":
             reference = load_reference(args.reference_dir)
             total, scored = score_file_against_reference(
                 args.input, args.output, reference
             )
             print(f"wrote {total} rows ({scored} scored) to {args.output}")
-    except (OSError, ValueError) as exc:
+        else:  # pragma: no cover - the parser rejects unknown subcommands
+            raise AssertionError(f"unhandled confidence command: {args.command}")
+    except (OSError, ValueError, csv.Error) as exc:
         print(f"confidence {args.command} failed: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -404,7 +404,11 @@ reproducibility using already compact confidence-input CSVs; neither command
 reconstructs inputs by rescanning `metal_sites_all.csv` or
 `metal_bonds_all.csv`. Recovery finalization should pass `--manifest` when the
 completed manifest is available so the rebuilt reference retains entry counts,
-artifact hashes, and software provenance.
+artifact hashes, and software provenance. Neither subcommand regenerates
+`review_queue_all.csv`, which only the driver's finalization rebuilds from the
+completed confidence and summary files. A recovery finalization over an
+existing output directory therefore leaves the previous triage view in place;
+rerun the driver with `--resume` to rebuild it, or treat it as stale.
 
 ## DPI and occupancy validation
 

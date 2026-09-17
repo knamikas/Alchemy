@@ -19,7 +19,7 @@ from helpers import approx
 import analysis_config
 import confidence_score as cs
 import reference_data
-from confidence_score import schema as confidence_schema
+from confidence_score import cli as cs_cli, schema as confidence_schema
 from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
 
@@ -820,7 +820,7 @@ def test_main_finalize_and_score_commands(tmp_path: Path) -> None:
     reference_dir = tmp_path / "reference"
     finalized = tmp_path / "finalized.csv"
     assert (
-        cs.main(
+        cs_cli.main(
             [
                 "finalize",
                 "--input",
@@ -835,7 +835,7 @@ def test_main_finalize_and_score_commands(tmp_path: Path) -> None:
     )
     rescored = tmp_path / "rescored.csv"
     assert (
-        cs.main(
+        cs_cli.main(
             [
                 "score",
                 "--input",
@@ -1059,7 +1059,7 @@ def test_main_reports_invalid_reference(
     reference_dir = tmp_path / "reference"
     reference_dir.mkdir()
     assert (
-        cs.main(
+        cs_cli.main(
             [
                 "score",
                 "--input",
@@ -1388,6 +1388,137 @@ def test_reference_from_counts_matches_the_direct_constructor() -> None:
     assert from_counts.density.counts == direct.density.counts
     assert from_counts.geometry.values == direct.geometry.values
     assert from_counts.geometry.counts == direct.geometry.counts
+
+
+def _write_manifest(path: Path, analysis_config_id: str = ANALYSIS_CONFIG_ID) -> str:
+    """Write a one-entry completed run manifest for CLI provenance tests."""
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "pdbID",
+                "status",
+                "no_metals",
+                "metal_site_limit_exceeded",
+                "n_metals",
+                "analysis_config_id",
+                "alchemy_version",
+                "alchemy_commit",
+                "gemmi_version",
+                "ccp4_version",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "pdbID": "1abc",
+                "status": "ok",
+                "no_metals": "false",
+                "metal_site_limit_exceeded": "false",
+                "n_metals": "1",
+                "analysis_config_id": analysis_config_id,
+                "alchemy_version": "1.0",
+                "alchemy_commit": "abc",
+                "gemmi_version": "0.7",
+                "ccp4_version": "9",
+            }
+        )
+    return str(path)
+
+
+def test_main_finalize_with_a_manifest_records_cohort_provenance(
+    tmp_path: Path,
+) -> None:
+    """``--manifest`` is the documented recovery path, so exercise it end to end."""
+    input_path = _write_input_csv(tmp_path / "inputs.csv", [_input_row()])
+    manifest_path = _write_manifest(tmp_path / "manifest.csv")
+    reference_dir = tmp_path / "reference"
+    assert (
+        cs_cli.main(
+            [
+                "finalize",
+                "--input",
+                input_path,
+                "--output",
+                str(tmp_path / "scores.csv"),
+                "--reference-dir",
+                str(reference_dir),
+                "--manifest",
+                manifest_path,
+            ]
+        )
+        == 0
+    )
+    metadata = json.loads(
+        (reference_dir / cs.REFERENCE_METADATA_FILE).read_text(encoding="utf-8")
+    )
+    assert metadata["source_manifest_file"] == "manifest.csv"
+    assert (
+        metadata["source_manifest_sha256"]
+        == hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()
+    )
+    assert metadata["source_entry_count"] == 1
+    assert metadata["manifest_status_counts"] == {"ok": 1}
+    assert metadata["software_versions"]["alchemy_version"] == ["1.0"]
+    assert metadata["analysis_config_id"] == ANALYSIS_CONFIG_ID
+
+
+def test_main_rejects_a_manifest_from_another_analysis_configuration(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A manifest from different settings must not be recorded as this cohort."""
+    input_path = _write_input_csv(tmp_path / "inputs.csv", [_input_row()])
+    manifest_path = _write_manifest(
+        tmp_path / "manifest.csv", analysis_config_id="alchemy-config-other"
+    )
+    reference_dir = tmp_path / "reference"
+    assert (
+        cs_cli.main(
+            [
+                "finalize",
+                "--input",
+                input_path,
+                "--output",
+                str(tmp_path / "scores.csv"),
+                "--reference-dir",
+                str(reference_dir),
+                "--manifest",
+                manifest_path,
+            ]
+        )
+        == 1
+    )
+    assert (
+        "source manifest analysis configuration identity is incompatible"
+        in capsys.readouterr().err
+    )
+
+
+def test_main_reports_an_oversized_csv_field_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``csv.Error`` is not a ``ValueError``, so the handler must name it."""
+    row = _input_row(context_warning_reasons="x" * (csv.field_size_limit() + 1))
+    input_path = tmp_path / "inputs.csv"
+    with open(input_path, "w", newline="", encoding="utf-8") as handle:
+        handle.write(",".join(cs.CONFIDENCE_INPUT_COLUMNS) + "\n")
+        handle.write(",".join(row[column] for column in cs.CONFIDENCE_INPUT_COLUMNS))
+        handle.write("\n")
+    assert (
+        cs_cli.main(
+            [
+                "finalize",
+                "--input",
+                str(input_path),
+                "--output",
+                str(tmp_path / "scores.csv"),
+                "--reference-dir",
+                str(tmp_path / "reference"),
+            ]
+        )
+        == 1
+    )
+    assert "confidence finalize failed:" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
