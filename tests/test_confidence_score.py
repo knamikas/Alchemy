@@ -19,6 +19,7 @@ from helpers import approx
 import analysis_config
 import confidence_score as cs
 import reference_data
+from confidence_score import schema as confidence_schema
 from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
 
@@ -1100,3 +1101,157 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> Non
     assert published["geometry_statistic"] == "rms_finite_score_eligible_zbond"
     assert published["overall_rule"] == "any_suspect_or_review_plus_review"
     assert published["support_score_method"] == ("reverse_average_rank_empirical_cdf")
+@pytest.mark.parametrize(
+    ("value", "decimal_places", "expected"),
+    [
+        # Zero decimal places must not strip an integer's own zeros.
+        (100.0, 0, "100"),
+        (0.0, 0, "0"),
+        (100.0, 6, "100"),
+        (2.0, 6, "2"),
+        (1.5, 6, "1.5"),
+        (123.456000, 6, "123.456"),
+        (0.1234567, 6, "0.123457"),
+        (1e-9, 6, "0"),
+        # Negative zero keeps its sign; the published rows were written with it.
+        (-0.0, 6, "-0"),
+        (-0.0, 0, "-0"),
+        (math.nan, 6, ""),
+        (math.inf, 6, ""),
+        (-math.inf, 6, ""),
+    ],
+)
+def test_format_decimal_strips_only_fractional_zeros(
+    value: float, decimal_places: int, expected: str
+) -> None:
+    assert confidence_schema.format_decimal(value, decimal_places) == expected
+
+
+def test_format_decimal_defaults_to_the_published_score_precision() -> None:
+    assert confidence_schema.format_decimal(0.1234567) == "0.123457"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        ("True", True),
+        ("YES", True),
+        ("  yes  ", True),
+        (True, True),
+        (False, False),
+        ("", False),
+        (None, False),
+        # Unrecognized spellings read as false rather than raising.
+        (1.0, False),
+        ("1.0", False),
+        (1, True),
+        ("no", False),
+        ("garbage", False),
+    ],
+)
+def test_parse_csv_bool_reads_only_the_written_spellings(
+    value: object, expected: bool
+) -> None:
+    assert confidence_schema.parse_csv_bool(value) is expected
+
+
+def test_canonical_values_round_to_their_serialized_precision() -> None:
+    assert cs.canonical_support_score(1.23456749) == float("1.234567")
+    assert cs.canonical_support_score(100.0) == 100.0
+    assert cs.canonical_metric(0.1234567890123456) == float("0.123456789012")
+    assert cs.canonical_metric(3.0) == 3.0
+
+
+def test_canonical_values_pass_non_finite_input_through() -> None:
+    assert math.isnan(cs.canonical_support_score(math.nan))
+    assert math.isnan(cs.canonical_metric(math.nan))
+    assert cs.canonical_support_score(math.inf) == math.inf
+    assert cs.canonical_metric(-math.inf) == -math.inf
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "expected"),
+    [
+        ("density_saturated", "True", "true"),
+        ("density_saturated", "FALSE", "false"),
+        ("context_warning", "  True  ", "true"),
+        ("density_is_shared", True, "true"),
+        ("density_is_shared", False, "false"),
+        # A non-boolean column is left to ``scientific_csv_value``.
+        ("metal_resname", "True", "True"),
+        ("rszd", math.nan, ""),
+        ("rszd", 1.5, 1.5),
+        # Text the boolean columns never carry is passed through unchanged.
+        ("density_saturated", "maybe", "maybe"),
+    ],
+)
+def test_confidence_csv_value_only_lowercases_boolean_columns(
+    column: str, value: object, expected: object
+) -> None:
+    assert confidence_schema.confidence_csv_value(column, value) == expected
+
+
+def test_site_key_uses_the_modern_scheme_when_the_site_id_is_present() -> None:
+    row = {
+        "pdbID": "1abc",
+        "metal_site_id": " site-1 ",
+        "metal_model_index": "1",
+        "metal_atom_index": "7",
+    }
+    assert confidence_schema.site_key(row) == ("1abc", "site-1")
+
+
+def test_site_key_falls_back_to_the_legacy_index_columns() -> None:
+    row = {
+        "pdbID": "1abc",
+        "metal_site_id": "",
+        "metal_model_index": "1",
+        "metal_chain_index": "2",
+        "metal_residue_index": "3",
+        "metal_atom_index": "4",
+    }
+    assert confidence_schema.site_key(row) == ("1abc", "1", "2", "3", "4")
+
+
+def test_site_key_of_a_row_without_identity_columns_is_all_blank() -> None:
+    assert confidence_schema.site_key({}) == ("", "", "", "", "")
+
+
+def test_require_columns_names_every_missing_column() -> None:
+    with pytest.raises(ValueError) as excinfo:
+        confidence_schema.require_columns(
+            ["pdbID", "rszd"], ["pdbID", "rszd_abs", "geometry_rms_zbond"], "test table"
+        )
+    message = str(excinfo.value)
+    assert message.startswith("test table is missing required columns: ")
+    assert "rszd_abs, geometry_rms_zbond" in message
+
+
+def test_require_columns_accepts_a_complete_header() -> None:
+    confidence_schema.require_columns(["pdbID", "rszd"], ["pdbID"], "t")
+
+
+def test_require_columns_treats_a_missing_header_as_missing_everything() -> None:
+    with pytest.raises(ValueError, match="t is missing required columns: pdbID"):
+        confidence_schema.require_columns(None, ["pdbID"], "t")
+
+
+@pytest.mark.parametrize(
+    ("rszd_abs", "expected"),
+    [
+        (99.9, True),
+        (100.0, True),
+        (99.8, False),
+        (0.0, False),
+        (math.nan, False),
+        (math.inf, False),
+    ],
+)
+def test_is_density_saturated_covers_the_edstats_ceiling(
+    rszd_abs: float, expected: bool
+) -> None:
+    assert confidence_schema.is_density_saturated(rszd_abs) is expected
+
+

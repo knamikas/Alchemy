@@ -39,7 +39,12 @@ def _scoring_metadata() -> dict[str, Any]:
     Include reference_data_id because changed reference tables change the metrics.
     """
     return {
-        **SCORING_POLICY_METADATA,
+        # The nested threshold mappings are read-only proxies in the schema;
+        # json.dumps cannot serialize those, so copy them into plain dicts.
+        **{
+            key: dict(value) if isinstance(value, Mapping) else value
+            for key, value in SCORING_POLICY_METADATA.items()
+        },
         "reference_data_id": reference_data_id(),
         "analysis_config_id": analysis_config_id(reference_data_id=reference_data_id()),
     }

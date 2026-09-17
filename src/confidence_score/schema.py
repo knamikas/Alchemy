@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Any
 
 from analysis_config import MAX_ANALYZED_METAL_SITES
-from codes import ConfidenceInputStatus, EvidenceBasis, VerdictReason
+from codes import ConfidenceInputStatus
 from output_rows import scientific_csv_value
 
 #: Policy-and-provenance file of a frozen reference directory. It is also the
@@ -136,12 +136,6 @@ ANALYSIS_COLUMNS = (
 CONFIDENCE_INPUT_STATUSES = frozenset(ConfidenceInputStatus)
 
 
-EVIDENCE_BASES = frozenset(EvidenceBasis)
-
-
-VERDICT_REASONS = frozenset(VerdictReason)
-
-
 INPUT_STATUS_POLICY = "independent_component_availability_v1"
 
 
@@ -160,21 +154,32 @@ SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
         "cohort_weighting": COHORT_WEIGHTING,
         "score_decimal_places": SCORE_DECIMAL_PLACES,
         "metric_decimal_places": METRIC_DECIMAL_PLACES,
-        "density_thresholds": {
-            "review": DENSITY_REVIEW_THRESHOLD,
-            "suspect": DENSITY_SUSPECT_THRESHOLD,
-        },
+        # The "review"/"suspect" keys spell confidence levels by coincidence,
+        # which is why tests/test_documentation.py allowlists this module in
+        # ``_COINCIDENTAL_LITERALS``.
+        "density_thresholds": MappingProxyType(
+            {
+                "review": DENSITY_REVIEW_THRESHOLD,
+                "suspect": DENSITY_SUSPECT_THRESHOLD,
+            }
+        ),
         "density_saturation_value": EDSTATS_SATURATION_MAGNITUDE,
         "density_saturation_policy": "suspect_with_zero_support",
-        "geometry_thresholds": {
-            "review": GEOMETRY_REVIEW_THRESHOLD,
-            "suspect": GEOMETRY_SUSPECT_THRESHOLD,
-        },
+        "geometry_thresholds": MappingProxyType(
+            {
+                "review": GEOMETRY_REVIEW_THRESHOLD,
+                "suspect": GEOMETRY_SUSPECT_THRESHOLD,
+            }
+        ),
         "support_score_method": "reverse_average_rank_empirical_cdf",
         "geometry_statistic": "rms_finite_score_eligible_zbond",
         "overall_rule": "any_suspect_or_review_plus_review",
         "coverage_policy": "annotation_only_v1",
         "input_status_policy": INPUT_STATUS_POLICY,
+        #: Redundant with ``analysis_config_id``, which already covers the
+        #: site cap, but part of the hashed scoring contract: dropping it
+        #: would change the reference identity digest and invalidate every
+        #: published reference, so it stays.
         "maximum_entry_metal_sites": MAX_ANALYZED_METAL_SITES,
     }
 )
@@ -184,7 +189,10 @@ SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
 REFERENCE_IDENTITY_FIELDS = ("reference_data_id", "analysis_config_id")
 
 #: Every metadata key the scoring contract covers.
-SCORING_METADATA_FIELDS = (*SCORING_POLICY_METADATA, *REFERENCE_IDENTITY_FIELDS)
+SCORING_METADATA_FIELDS = (
+    *SCORING_POLICY_METADATA.keys(),
+    *REFERENCE_IDENTITY_FIELDS,
+)
 
 #: Metadata keys that describe one particular cohort: its identity, sizes,
 #: input and manifest hashes, and the software that produced it.
@@ -228,22 +236,57 @@ def require_columns(
 
 
 def site_key(row: Mapping[str, Any]) -> tuple[str, ...]:
-    """Return the tuple that identifies a row's metal site across output tables."""
+    """Return the tuple that identifies a row's metal site across output tables.
+
+    The scheme is chosen per row: a populated ``metal_site_id`` selects
+    ``SITE_KEY_COLUMNS``, and anything else falls back to the index columns
+    rows carried before that column existed. Callers that join two tables on
+    this key therefore rely on every row of both tables using the same scheme
+    (all rows carry ``metal_site_id`` or none do); a mixture produces keys of
+    two different shapes that can never match. A row with none of the identity
+    columns yields an all-blank key rather than an error.
+    """
     site_id = str(row.get("metal_site_id", "")).strip()
     columns = SITE_KEY_COLUMNS if site_id else LEGACY_SITE_KEY_COLUMNS
     return tuple(str(row.get(column, "")).strip() for column in columns)
 
 
 def parse_csv_bool(value: object) -> bool:
-    """Return whether a serialized flag reads as true (``1``, ``true``, ``yes``)."""
+    """Return whether a serialized flag reads as true (``1``, ``true``, ``yes``).
+
+    Every other text reads as false, numbers such as ``1.0`` and outright junk
+    included. That is deliberate: this reads back flags this code wrote, and is
+    not validation. A caller that must reject malformed input checks it first.
+    """
     return str(value).strip().lower() in {"1", "true", "yes"}
 
 
-def format_decimal(value: float, decimal_places: int = 6) -> str:
-    """Format a confidence number without trailing zeros; blank non-finite values."""
+def format_decimal(value: float, decimal_places: int = SCORE_DECIMAL_PLACES) -> str:
+    """Format a confidence number without trailing zeros; blank non-finite values.
+
+    Negative zero keeps its sign (``-0.0`` formats as ``"-0"``); that is
+    retained deliberately, because the published rows were written with it.
+    """
     if not math.isfinite(value):
         return ""
-    return f"{value:.{decimal_places}f}".rstrip("0").rstrip(".")
+    text = f"{value:.{decimal_places}f}"
+    # Only a fractional part has zeros to strip: stripping "100" formatted with
+    # no decimal places would leave "1".
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
+def is_density_saturated(rszd_abs: float) -> bool:
+    """Return whether an absolute RSZD is at the EDSTATS saturation ceiling.
+
+    EDSTATS prints ``EDSTATS_SATURATION_MAGNITUDE`` when its fixed-width field
+    saturates, so no larger magnitude is produced in practice; the check is
+    non-strict so any value at or beyond the ceiling is treated the same way.
+    Both the ``density_saturated`` input column and the zero-support scoring
+    rule use this one predicate (docs/method.md, "Confidence scoring").
+    """
+    return math.isfinite(rszd_abs) and rszd_abs >= EDSTATS_SATURATION_MAGNITUDE
 
 
 def canonical_support_score(value: float) -> float:
@@ -257,10 +300,15 @@ def canonical_metric(value: float) -> float:
 
 
 def confidence_csv_value(column: str, value: object) -> object:
-    """Serialize one confidence cell, canonicalizing boolean columns to lowercase."""
+    """Serialize one confidence cell for a confidence CSV row.
+
+    A ``true``/``false`` spelling in one of the boolean columns is lowercased,
+    so those flags read the same however they were captured. Everything else,
+    including real booleans and non-boolean columns, is left to
+    ``scientific_csv_value``.
+    """
     if column in CONFIDENCE_BOOLEAN_COLUMNS and isinstance(value, str):
         normalized = value.strip().lower()
         if normalized in {"true", "false"}:
             return normalized
     return scientific_csv_value(value)
-
