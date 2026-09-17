@@ -545,51 +545,18 @@ def _image_values(image: ContactImage) -> dict[str, Any]:
     }
 
 
-def stats_extra_values(
-    pdb_id: str,
-    structure: StructureContext,
-    metal: AtomSite | None = None,
-    summary: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Return fixed per-site values appended to an EDSTATS row."""
-    summary = summary or {}
-    residue = structure.residue_for_atom(metal) if metal is not None else None
-    values: dict[str, Any] = {
-        "metal_site_id": metal_site_identifier(pdb_id, metal) if metal else "",
+def structure_extra_values(structure: StructureContext) -> dict[str, Any]:
+    """Return the structure-level values appended to every EDSTATS row.
+
+    They are the same for each row of an entry, so a caller appending many rows
+    computes them once and hands them to ``stats_extra_values``.
+    """
+    return {
         "model_policy": structure.model_policy,
         "input_model_count": structure.input_model_count,
         "model_analyzed": structure.model_analyzed,
         "model_id": structure.analyzed_model_id,
         "multi_model_structure": structure.multi_model_structure,
-        "metal_model_index": metal.model_index if metal else "",
-        "metal_chain_index": metal.output_chain_index if metal else "",
-        "metal_residue_index": metal.output_residue_index if metal else "",
-        "metal_atom_index": metal.atom_index if metal else "",
-        "metal_resname": metal.residue_name if metal else "",
-        "metal_chain": metal.chain_id if metal else "",
-        "metal_resnum": metal.resnum if metal else "",
-        "metal_atom": metal.atom_name if metal else "",
-        "metal_element": metal.element if metal else "",
-        "metal_icode": metal.insertion_code if metal else "",
-        "metal_altloc": metal.altloc if metal else "",
-        "metal_occupancy": metal.occupancy if metal else NAN,
-        "metal_occupancy_valid": metal.occupancy_valid if metal else "",
-        "metal_occupancy_status": metal.occupancy_status if metal else "",
-        "metal_coordinates_valid": metal.coordinates_valid if metal else "",
-        "metal_x": round(metal.x, 6) if metal else NAN,
-        "metal_y": round(metal.y, 6) if metal else NAN,
-        "metal_z": round(metal.z, 6) if metal else NAN,
-        "metal_b_iso": round(metal.b_iso, 3) if metal else NAN,
-        "metal_conformer_mean_occupancy": (
-            residue.selected_conformer_mean_occupancy if residue else NAN
-        ),
-        "metal_altloc_options": residue.altloc_options if residue else "",
-        "alternative_conformers_present": (
-            residue.alternative_conformers_present if residue else ""
-        ),
-        "altloc_selection_fallback": (
-            residue.altloc_selection_fallback if residue else ""
-        ),
         "symmetry_search_available": structure.symmetry.search_available,
         "symmetry_search_failure_reason": structure.symmetry.search_failure_reason,
         "strict_ncs_operation_count": structure.symmetry.strict_ncs_operation_count,
@@ -623,11 +590,65 @@ def stats_extra_values(
         ),
         "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
     }
+
+
+def stats_extra_values(
+    pdb_id: str,
+    structure: StructureContext,
+    metal: AtomSite | None = None,
+    summary: Mapping[str, Any] | None = None,
+    structure_values: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return fixed per-site values appended to an EDSTATS row.
+
+    ``structure_values`` is ``structure_extra_values(structure)``; a caller
+    appending many rows of one entry passes it so the structure-level share is
+    computed once rather than per row.
+    """
+    summary = summary or {}
+    residue = structure.residue_for_atom(metal) if metal is not None else None
+    values: dict[str, Any] = {
+        "metal_site_id": metal_site_identifier(pdb_id, metal) if metal else "",
+        "metal_model_index": metal.model_index if metal else "",
+        "metal_chain_index": metal.output_chain_index if metal else "",
+        "metal_residue_index": metal.output_residue_index if metal else "",
+        "metal_atom_index": metal.atom_index if metal else "",
+        "metal_resname": metal.residue_name if metal else "",
+        "metal_chain": metal.chain_id if metal else "",
+        "metal_resnum": metal.resnum if metal else "",
+        "metal_atom": metal.atom_name if metal else "",
+        "metal_element": metal.element if metal else "",
+        "metal_icode": metal.insertion_code if metal else "",
+        "metal_altloc": metal.altloc if metal else "",
+        "metal_occupancy": metal.occupancy if metal else NAN,
+        "metal_occupancy_valid": metal.occupancy_valid if metal else "",
+        "metal_occupancy_status": metal.occupancy_status if metal else "",
+        "metal_coordinates_valid": metal.coordinates_valid if metal else "",
+        "metal_x": round(metal.x, 6) if metal else NAN,
+        "metal_y": round(metal.y, 6) if metal else NAN,
+        "metal_z": round(metal.z, 6) if metal else NAN,
+        "metal_b_iso": round(metal.b_iso, 3) if metal else NAN,
+        "metal_conformer_mean_occupancy": (
+            residue.selected_conformer_mean_occupancy if residue else NAN
+        ),
+        "metal_altloc_options": residue.altloc_options if residue else "",
+        "alternative_conformers_present": (
+            residue.alternative_conformers_present if residue else ""
+        ),
+        "altloc_selection_fallback": (
+            residue.altloc_selection_fallback if residue else ""
+        ),
+    }
+    values.update(
+        structure_extra_values(structure)
+        if structure_values is None
+        else structure_values
+    )
     # Summary values win over anything computed above. The site summary is a
     # ``coordination.site_summary.SiteSummary`` (its key set is checked against
     # these columns at import) plus the density-context columns the worker adds;
-    # neither overlaps the structure-level fields computed here, so the
-    # ``update`` never replaces one of them. The ``setdefault`` blanks the
+    # neither overlaps the per-site or structure-level fields computed here, so
+    # the ``update`` never replaces one of them. The ``setdefault`` blanks the
     # summary columns only for a density row that joined no metal site.
     for column in STATS_EXTRA_COLUMNS:
         values.setdefault(column, summary.get(column, ""))

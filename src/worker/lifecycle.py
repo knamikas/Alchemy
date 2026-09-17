@@ -21,7 +21,7 @@ from typing import Literal
 
 from codes import EntryStatus, ReasonCode, RefinementState, WarningCode
 from crystallization_conditions import extract_crystallization_context
-from density_analysis import Ccp4EntryLimitationError, elapsed_s
+from density_analysis import elapsed_s
 from inputs import MissingInputError
 from run_logging import configure_worker_logging, logger_for, truncate
 from scratch import ENTRY_SCRATCH, create_owned_scratch_directory
@@ -41,6 +41,7 @@ from worker.resolve import (
     resolve_entry_dir,
 )
 from worker.stages import (
+    DETERMINISTIC_PROCESSING_ERRORS,
     IDENTIFICATION_REASON_MESSAGES,
     MAX_MANIFEST_STATUS_DETAIL_CHARS,
     METALS_SET,
@@ -73,24 +74,6 @@ __all__ = [
 ]
 
 logger = logger_for(__name__)
-
-# Classify failures that describe the entry's data and so recur on identical
-# inputs: a value that will not parse, a column or key the input lacks, an
-# arithmetic impossibility, or a documented CCP4 limitation. Resume still
-# retries them because the inputs or software may have changed.
-#
-# ``TypeError``, ``AttributeError``, and ``AssertionError`` are deliberately
-# absent. They are what a code defect raises, and a deterministic error is a
-# terminal exclusion for database completion (see ``BatchTally``), so listing
-# them would let a regression silently drop entries from a reference.
-DETERMINISTIC_PROCESSING_ERRORS = (
-    ArithmeticError,
-    Ccp4EntryLimitationError,
-    LookupError,
-    NotImplementedError,
-    ValueError,
-)
-
 
 worker_config: WorkerConfig | None = None
 _inflight_queue: SimpleQueue[InflightEvent] | None = None
@@ -164,8 +147,9 @@ def retryable_for(status: EntryStatus, reason_codes: Iterable[str]) -> bool:
     A completed entry is terminal. Skips and errors are always retried, since a
     resume may read repaired inputs or tools. A partial entry is retried only
     when the failed stage said nothing about the entry: a CCP4 timeout or a
-    bond-stage exception. Every other partial reason describes the entry itself
-    and would recur on the same inputs.
+    bond-stage exception (a data error there ends the entry as an error
+    instead). Every other partial reason describes the entry itself and would
+    recur on the same inputs.
     """
     if status == EntryStatus.OK:
         return False
@@ -360,6 +344,9 @@ def _process_entry(pdb_id: str) -> EntryResult:
             return result
         density = run_density_stage(pdb_id, cfg, inputs, structure)
         _apply_density_outcome(result, density)
+        if density.error is not None:
+            # The map timings and provenance are on the result; now classify.
+            raise density.error
         identification_codes = identification_reason_codes(density.rows)
         bond = run_bond_stage(
             pdb_id,

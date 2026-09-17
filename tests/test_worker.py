@@ -474,6 +474,8 @@ def test_non_finite_selected_metal_is_partial_without_bond_analysis(
     assert result.n_metals == 1
     assert "non_finite_coordinates" in result.warning_codes
     assert "non_finite_metal_coordinates" in result.reason_codes
+    # The same helper names the sites whether or not the geometry stage ran.
+    assert "non-finite coordinates: ZN/B/1/ZN" in result.status_detail
 
 
 def test_an_unanticipated_failure_logs_its_traceback(
@@ -577,6 +579,52 @@ def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
     assert result.n_bonds is None
     assert result.n_candidates is None
     assert result.retryable is True
+
+
+@pytest.mark.parametrize(
+    "exception, status, reason_codes",
+    [
+        (RuntimeError("geometry unavailable"), "partial", ["bond_stage_failure"]),
+        (
+            ValueError("crystallographic operation count is unavailable"),
+            "error",
+            ["deterministic_processing_error"],
+        ),
+        (
+            KeyError("_atom_site.label_asym_id"),
+            "error",
+            ["deterministic_processing_error"],
+        ),
+    ],
+)
+def test_a_bond_stage_data_error_is_classified_like_any_other_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exception: Exception,
+    status: str,
+    reason_codes: list[str],
+) -> None:
+    """The bond stage absorbs only exceptions that say nothing about the entry.
+
+    ``bond_stage_failure`` is retried on every resume. A parse or lookup error
+    in the geometry stage recurs on identical inputs, so it must end the entry
+    as a deterministic error, exactly as it would from any other stage, rather
+    than being retried forever as a partial.
+    """
+    monkeypatch.setattr(stages, "extract_metal_statistics", _empty_metal_statistics)
+
+    def fail_bond_analysis(*_args: Any, **_kwargs: Any) -> None:
+        raise exception
+
+    def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
+        return TestDensityResultReachesTheResult.density_result()
+
+    monkeypatch.setattr(stages, "run_bond_analysis", fail_bond_analysis)
+    result = _manual_entry(tmp_path, monkeypatch, density_stage, bonds=True)
+
+    assert result.status == status
+    assert result.reason_codes == reason_codes
+    assert f"{type(exception).__name__}: " in result.status_detail
 
 
 def test_an_already_capped_detail_still_admits_appended_messages() -> None:
@@ -791,6 +839,34 @@ class TestDensityResultReachesTheResult:
 
         assert result.timings["edstats_s"] == 12.5
         assert "density_total_s" in result.timings
+
+    def test_a_statistics_error_after_the_maps_keeps_their_cost_on_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The maps were calculated before the EDSTATS table failed to parse.
+
+        The entry ends as a deterministic error, like the same exception from
+        any other stage, but the run log must still attribute the minutes the
+        maps cost and the manifest must still name the map scope produced.
+        """
+
+        def fail_extraction(*_args: Any, **_kwargs: Any) -> EdstatsExtraction:
+            raise ValueError("EDSTATS columns are not in the standard order")
+
+        def density_stage(*_args: Any, **_kwargs: Any) -> density.DensityResult:
+            return self.density_result(timings={"fft_s": 40.0, "edstats_s": 12.5})
+
+        monkeypatch.setattr(stages, "extract_metal_statistics", fail_extraction)
+        result = _manual_entry(tmp_path, monkeypatch, density_stage)
+
+        assert result.status == "error"
+        assert result.reason_codes == ["deterministic_processing_error"]
+        assert result.status_detail.startswith("ValueError: EDSTATS columns")
+        assert result.timings["fft_s"] == 40.0
+        assert result.timings["edstats_s"] == 12.5
+        assert {"statistics_extraction_s", "density_total_s"} <= result.timings.keys()
+        assert result.density.density_map_scope_used == "model-envelope"
+        assert result.density.density_full_map_bytes == 8192
 
     def test_a_normalized_twin_entry_is_flagged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

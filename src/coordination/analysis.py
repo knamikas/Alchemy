@@ -297,6 +297,29 @@ def _note_unsupported_pairs(
     metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
 
 
+def record_non_finite_metals(
+    metadata: BondAnalysisMetadata, non_finite_metals: Sequence[AtomSite]
+) -> None:
+    """Record selected metals whose coordinates are NaN or infinite.
+
+    No distance-based evidence can be collected for these sites, so the entry
+    is partial whether or not the geometry stage runs; the worker records them
+    through this same function under ``--no-bonds``.
+    """
+    if not non_finite_metals:
+        return
+    metadata.partial_reason_codes.append(ReasonCode.NON_FINITE_METAL_COORDINATES)
+    metadata.messages.append(
+        "geometry unavailable for selected metal site(s) with non-finite "
+        "coordinates: "
+        + ", ".join(
+            f"{metal.residue_name}/{metal.chain_id or '_'}/{metal.resnum}/"
+            f"{metal.atom_name}"
+            for metal in non_finite_metals
+        )
+    )
+
+
 def run_bond_analysis(
     pdb_id: str,
     pdb_path: str,
@@ -332,17 +355,7 @@ def run_bond_analysis(
     declared_by_metal = _declared_candidates_by_metal(
         structure, connection_path or pdb_path, spatial_metals, metadata
     )
-    if non_finite_metals:
-        metadata.partial_reason_codes.append(ReasonCode.NON_FINITE_METAL_COORDINATES)
-        metadata.messages.append(
-            "geometry unavailable for selected metal site(s) with non-finite "
-            "coordinates: "
-            + ", ".join(
-                f"{metal.residue_name}/{metal.chain_id or '_'}/{metal.resnum}/"
-                f"{metal.atom_name}"
-                for metal in non_finite_metals
-            )
-        )
+    record_non_finite_metals(metadata, non_finite_metals)
     entry = _entry_context(
         pdb_id, structure, metals_in_model, stats_rows, header, dpi_inputs, metadata
     )

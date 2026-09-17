@@ -26,15 +26,17 @@ from codes import (
 from coordination.analysis import (
     BondAnalysisMetadata,
     BondAnalysisResult,
+    record_non_finite_metals,
     run_bond_analysis,
 )
 from coordination.dpi import DpiInputs
 from coordination.schema import (
     STATS_EXTRA_COLUMNS,
-    check_row_schema,
     stats_extra_values,
+    structure_extra_values,
 )
 from density_analysis import (
+    Ccp4EntryLimitationError,
     Ccp4ToolTimeoutError,
     MtzfixValidationError,
     elapsed_s,
@@ -68,6 +70,27 @@ MAX_MANIFEST_STATUS_DETAIL_CHARS = 300
 
 TIMEOUT_LOG_DIRNAME = "ccp4_timeout_logs"
 
+# Classify failures that describe the entry's data and so recur on identical
+# inputs: a value that will not parse, a column or key the input lacks, an
+# arithmetic impossibility, or a documented CCP4 limitation. Resume still
+# retries them because the inputs or software may have changed.
+#
+# ``TypeError``, ``AttributeError``, and ``AssertionError`` are deliberately
+# absent. They are what a code defect raises, and a deterministic error is a
+# terminal exclusion for database completion (see ``BatchTally``), so listing
+# them would let a regression silently drop entries from a reference.
+#
+# The bond stage consults this tuple too: it absorbs other exceptions into a
+# retryable partial outcome but lets these end the entry, so a data error is
+# classified the same way whichever stage raised it.
+DETERMINISTIC_PROCESSING_ERRORS = (
+    ArithmeticError,
+    Ccp4EntryLimitationError,
+    LookupError,
+    NotImplementedError,
+    ValueError,
+)
+
 CodeT = TypeVar("CodeT", bound=str)
 
 
@@ -85,7 +108,10 @@ class DensityOutcome:
     """What the density stage produced, or why it could not.
 
     Stages return an outcome instead of editing the entry result themselves;
-    the worker folds each one in, in stage order.
+    the worker folds each one in, in stage order. A handled failure sets
+    ``reason_code``; an exception raised after the maps were calculated is
+    carried in ``error`` so the worker can record what the maps cost before
+    it re-raises.
     """
 
     rows: list[MetalStatsRow] = field(default_factory=list[MetalStatsRow])
@@ -97,10 +123,13 @@ class DensityOutcome:
     warning_codes: list[str] = field(default_factory=list[str])
     density_context_row: dict[str, Any] = field(default_factory=dict[str, Any])
     provenance: DensityProvenance = field(default_factory=DensityProvenance)
+    #: An exception from statistics extraction, for the worker to re-raise
+    #: once the map timings and provenance are on the entry result.
+    error: Exception | None = None
 
     @property
     def failed(self) -> bool:
-        """Whether density is unavailable for this entry."""
+        """Whether density is unavailable for this entry by a handled reason."""
         return bool(self.reason_code)
 
 
@@ -196,7 +225,7 @@ def _preserve_timeout_log(
     Return an empty string if no log can be copied. Diagnostic failures must not
     change the entry outcome.
     """
-    source = getattr(timeout, "log_path", "")
+    source = timeout.log_path
     if not source or not os.path.isfile(source):
         return ""
     try:
@@ -220,7 +249,9 @@ def run_density_stage(
     """Calculate the maps, run EDSTATS, and extract this entry's statistics.
 
     A handled failure leaves ``rows`` and ``header`` empty and records the
-    reason on the outcome.
+    reason on the outcome. An exception from statistics extraction is returned
+    on the outcome rather than raised, so the timings and provenance of the
+    maps it followed are not lost with it.
     """
     outcome = DensityOutcome()
     density_started = time.monotonic()
@@ -267,16 +298,22 @@ def run_density_stage(
                 WarningCode.TWIN_REFMAC_COEFFICIENTS_NORMALIZED
             )
         statistics_started = time.monotonic()
-        extraction = extract_metal_statistics(
-            pdb_id, res.stats_out, METALS_SET, cfg.cofactors, structure=structure
-        )
-        outcome.rows = extraction.rows
-        outcome.header = extraction.header
-        outcome.density_context_row = extraction.density_context_row
-        outcome.warning_codes = merged_codes(
-            outcome.warning_codes, extraction.warning_codes
-        )
-        outcome.timings["statistics_extraction_s"] = elapsed_s(statistics_started)
+        try:
+            extraction = extract_metal_statistics(
+                pdb_id, res.stats_out, METALS_SET, cfg.cofactors, structure=structure
+            )
+        except Exception as exc:
+            # The maps were paid for; the worker records their cost, then raises.
+            outcome.error = exc
+        else:
+            outcome.rows = extraction.rows
+            outcome.header = extraction.header
+            outcome.density_context_row = extraction.density_context_row
+            outcome.warning_codes = merged_codes(
+                outcome.warning_codes, extraction.warning_codes
+            )
+        finally:
+            outcome.timings["statistics_extraction_s"] = elapsed_s(statistics_started)
     finally:
         outcome.timings["density_total_s"] = elapsed_s(density_started)
     return outcome
@@ -325,7 +362,9 @@ def run_bond_stage(
     ``selected_metals`` is the structure's canonical metal selection, computed
     once by the caller. A bond-stage failure must not lose the EDSTATS rows
     already computed, so it is recorded on the outcome and the empty analysis
-    is returned instead.
+    is returned instead. A ``DETERMINISTIC_PROCESSING_ERRORS`` exception is the
+    exception: it describes the entry's data, so it propagates and ends the
+    entry exactly as it would from any other stage.
     """
     analysis = BondAnalysisResult(
         bond_rows=[],
@@ -339,17 +378,11 @@ def run_bond_stage(
     )
     outcome = BondOutcome(analysis)
     if not cfg.bonds:
-        non_finite_metals = [
-            metal for metal in selected_metals if not metal.coordinates_valid
-        ]
-        if non_finite_metals:
-            analysis.metadata.partial_reason_codes.append(
-                ReasonCode.NON_FINITE_METAL_COORDINATES
-            )
-            analysis.metadata.messages.append(
-                "geometry unavailable for selected metal site(s) with "
-                "non-finite coordinates"
-            )
+        # Coordinate validation is not disabled together with bond output.
+        record_non_finite_metals(
+            analysis.metadata,
+            [metal for metal in selected_metals if not metal.coordinates_valid],
+        )
         return outcome
 
     bond_started = time.monotonic()
@@ -368,6 +401,8 @@ def run_bond_stage(
             structure=structure,
             connection_path=inputs.source_coordinate_path,
         )
+    except DETERMINISTIC_PROCESSING_ERRORS:
+        raise
     except Exception as e:
         outcome.status_detail = truncate(
             f"bond: {type(e).__name__}: {e}", MAX_MANIFEST_STATUS_DETAIL_CHARS
@@ -385,6 +420,7 @@ def append_site_fields(
     structure: StructureContext,
 ) -> None:
     """Extend each EDSTATS row with its per-site contact and provenance values."""
+    structure_values = structure_extra_values(structure)
     for index, row in enumerate(rows):
         summary = dict(site_summaries.get(row.site_key, {}))
         summary["density_observation_id"] = row.density_observation_id
@@ -396,9 +432,9 @@ def append_site_fields(
         coverage = summary.get("geometry_coverage_image_inclusive", NAN)
         if isinstance(coverage, float) and not math.isfinite(coverage):
             coverage = summary.get("geometry_coverage_explicit", NAN)
-        extra = stats_extra_values(row.pdb_id, structure, row.site, summary)
-        if index == 0:
-            check_row_schema(extra, STATS_EXTRA_COLUMNS, "metal_sites_all.csv")
+        extra = stats_extra_values(
+            row.pdb_id, structure, row.site, summary, structure_values
+        )
         rows[index] = row.with_fields(
             (
                 *row.fields,
