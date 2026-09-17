@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import helpers
 import pytest
@@ -42,7 +42,7 @@ from structure_analysis import (
 class _PairRow(schema._CsvRow):
     """A two-column row used to exercise ``_CsvRow`` without a published schema."""
 
-    columns = ("left", "right")
+    columns: ClassVar[tuple[str, ...]] = ("left", "right")
     schema_name = "pair.csv"
 
 
