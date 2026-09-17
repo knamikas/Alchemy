@@ -601,6 +601,9 @@ def test_documented_thresholds_match_the_constants() -> None:
     from coordination.policy import (
         CANDIDATE_SEARCH_RADIUS,
         FIRST_SPHERE_TOLERANCE,
+        NEARBY_METAL_RADIUS,
+        SPECIAL_POSITION_DEDUP_CUTOFF,
+        SPECIAL_POSITION_OCCUPANCY_TOLERANCE,
         ZSCORE_OUTLIER_CUTOFF,
     )
     from density_analysis import (
@@ -615,6 +618,13 @@ def test_documented_thresholds_match_the_constants() -> None:
         ("broad candidate search radius", CANDIDATE_SEARCH_RADIUS, "4 Å"),
         ("z-score outlier cutoff", ZSCORE_OUTLIER_CUTOFF, ">= 6"),
         ("first-sphere tolerance", FIRST_SPHERE_TOLERANCE, "0.75"),
+        ("nearby-metal radius", NEARBY_METAL_RADIUS, "6 Å"),
+        ("special-position cutoff", SPECIAL_POSITION_DEDUP_CUTOFF, "0.8 Å"),
+        (
+            "special-position occupancy tolerance",
+            SPECIAL_POSITION_OCCUPANCY_TOLERANCE,
+            "0.015",
+        ),
         ("model-envelope border", MODEL_ENVELOPE_BORDER_ANGSTROM, "10 Angstrom"),
         ("per-program CCP4 budget", CCP4_TOOL_TIMEOUT_S, "900"),
         ("per-worker memory budget", AUTO_WORKER_MEMORY_BYTES, "2 GiB"),
@@ -633,6 +643,11 @@ def test_documented_thresholds_match_the_constants() -> None:
         6.0,
         0.75,
     )
+    assert (
+        NEARBY_METAL_RADIUS,
+        SPECIAL_POSITION_DEDUP_CUTOFF,
+        SPECIAL_POSITION_OCCUPANCY_TOLERANCE,
+    ) == (6.0, 0.8, 0.015)
     assert (MODEL_ENVELOPE_BORDER_ANGSTROM, CCP4_TOOL_TIMEOUT_S) == (10, 15 * 60)
     assert AUTO_WORKER_MEMORY_BYTES == 2 * 1024**3
     assert OVERFULL_OCCUPANCY_NI_FRACTION == 0.002
