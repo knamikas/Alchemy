@@ -90,7 +90,8 @@ def _source_modules() -> Iterator[tuple[str, str]]:
     for root, _dirs, files in os.walk(SRC_DIR):
         for name in sorted(files):
             path = os.path.join(root, name)
-            relative = os.path.relpath(path, SRC_DIR)
+            # Match the POSIX module names in _COINCIDENTAL_LITERALS on Windows too.
+            relative = Path(path).relative_to(SRC_DIR).as_posix()
             if name.endswith(".py") and relative != "codes.py":
                 yield relative, _read(path)
 
