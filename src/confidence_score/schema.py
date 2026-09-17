@@ -1,6 +1,5 @@
 """Column vocabularies, thresholds, and value helpers for confidence outputs."""
 
-import csv
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
@@ -8,7 +7,7 @@ from typing import Any
 
 from analysis_config import MAX_ANALYZED_METAL_SITES
 from codes import ConfidenceInputStatus, EvidenceBasis, VerdictReason
-from output_rows import finite_float as finite_float, scientific_csv_value
+from output_rows import scientific_csv_value
 
 #: Policy-and-provenance file of a frozen reference directory. It is also the
 #: completion marker: finalization removes it before rebuilding
@@ -265,13 +264,3 @@ def confidence_csv_value(column: str, value: object) -> object:
             return normalized
     return scientific_csv_value(value)
 
-
-def read_csv_table(
-    path: str, label: str
-) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
-    """Read a CSV file into its header tuple and row dictionaries."""
-    with open(path, newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise ValueError(f"{label} has no CSV header")
-        return tuple(reader.fieldnames), list(reader)

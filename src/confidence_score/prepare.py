@@ -1,9 +1,7 @@
 """Derive compact confidence inputs from site and bond evidence."""
 
-import csv
 import math
-import os
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -20,62 +18,12 @@ from confidence_score.schema import (
     EDSTATS_SATURATION_MAGNITUDE,
     IDENTITY_COLUMNS,
     METRIC_DECIMAL_PLACES,
-    finite_float,
     format_decimal,
     parse_csv_bool,
-    require_columns,
     site_key,
 )
-from output_rows import MetalStatsRow
-from reference_data import cofactor_ids, sha256
-
-
-def manifest_provenance(path: str) -> dict[str, Any]:
-    """Summarize a completed run manifest as reference cohort provenance."""
-    with open(path, newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        require_columns(reader.fieldnames, ("analysis_config_id",), "source manifest")
-        rows = list(reader)
-
-    manifest_config_ids = [row.get("analysis_config_id", "").strip() for row in rows]
-    analysis_config_ids = set(manifest_config_ids)
-    if (
-        not manifest_config_ids
-        or "" in analysis_config_ids
-        or len(analysis_config_ids) != 1
-    ):
-        raise ValueError(
-            "source manifest must contain exactly one analysis configuration identity"
-        )
-
-    status_counts = Counter(row.get("status", "") for row in rows)
-    software_columns = (
-        "alchemy_version",
-        "alchemy_commit",
-        "gemmi_version",
-        "ccp4_version",
-    )
-    software = {
-        column: sorted({row.get(column, "") for row in rows if row.get(column, "")})
-        for column in software_columns
-    }
-    return {
-        "source_manifest_file": os.path.basename(path),
-        "source_manifest_sha256": sha256(path),
-        "source_entry_count": len(rows),
-        "manifest_status_counts": dict(sorted(status_counts.items())),
-        "no_metals_entry_count": sum(
-            parse_csv_bool(row.get("no_metals", "")) for row in rows
-        ),
-        "metal_site_limit_exceeded_entry_count": sum(
-            parse_csv_bool(row.get("metal_site_limit_exceeded", "")) for row in rows
-        ),
-        "metal_bearing_entry_count": sum(
-            (finite_float(row.get("n_metals", "")) > 0) for row in rows
-        ),
-        "software_versions": software,
-        "analysis_config_id": next(iter(analysis_config_ids)),
-    }
+from output_rows import MetalStatsRow, finite_float
+from reference_data import cofactor_ids
 
 
 def _bond_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
