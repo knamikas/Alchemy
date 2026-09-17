@@ -6,6 +6,7 @@ reject missing or extra fields before output projection can lose information.
 
 import hashlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from functools import cache
 from typing import Any, ClassVar
 
 from typing_extensions import override
@@ -14,7 +15,7 @@ from codes import CoordinationStatus
 from coordination.contact_record import Candidate
 from coordination.donor_chemistry import neighbor_class
 from coordination.policy import ZSCORE_OUTLIER_CUTOFF
-from output_rows import CsvValue
+from output_rows import CsvValue, blank_if_unmeasured
 from structure_analysis import (
     NAN,
     AtomSite,
@@ -193,6 +194,7 @@ CANDIDATE_COLUMNS = [
 
 
 # Appended after the dynamic EDSTATS header in metal_sites_all.csv.
+STATS_SCHEMA_NAME = "metal_sites_all.csv"
 STATS_EXTRA_COLUMNS = [
     "metal_site_id",
     "model_policy",
@@ -311,8 +313,17 @@ STATS_EXTRA_COLUMNS = [
 
 
 def check_row_schema(row: Mapping[str, Any], columns: Iterable[str], name: str) -> None:
-    """Reject rows with missing or extra fields relative to the CSV schema."""
-    expected = set(columns)
+    """Reject rows with missing or extra fields relative to the CSV schema.
+
+    The row is compared against the column names as a set, so a list that spells
+    one name twice would accept a row missing another field and write a
+    duplicated column; reject such a list outright.
+    """
+    names = tuple(columns)
+    expected = set(names)
+    if len(expected) != len(names):
+        repeated = sorted({column for column in names if names.count(column) > 1})
+        raise RuntimeError(f"{name} column list repeats: " + ", ".join(repeated))
     if set(row) == expected:
         return
     details: list[str] = []
@@ -325,6 +336,22 @@ def check_row_schema(row: Mapping[str, Any], columns: Iterable[str], name: str) 
     raise RuntimeError(
         f"{name} row does not match its column schema: " + "; ".join(details)
     )
+
+
+def _merge_row_fields(*parts: Mapping[str, Any]) -> dict[str, Any]:
+    """Merge the field groups of one row, rejecting a field two groups produce.
+
+    The builders below assemble a row from several helper dicts. Splatting them
+    into one literal lets a field grown by two helpers be silently overwritten
+    by whichever comes last; merging here raises instead.
+    """
+    merged: dict[str, Any] = {}
+    for part in parts:
+        for key, value in part.items():
+            if key in merged:
+                raise RuntimeError(f"two row field groups both produce {key}")
+            merged[key] = value
+    return merged
 
 
 class _CsvRow(Mapping[str, Any]):
@@ -409,7 +436,14 @@ def contact_identifier(pdb_id: str, metal: AtomSite, contact: Candidate) -> str:
     return f"{metal_site_identifier(pdb_id, metal)}:c{digest}"
 
 
-def _bonded_to(is_water: bool = False) -> str:
+def _bonded_to(is_water: bool) -> str:
+    """Return the legacy ``bonded_to`` flag for one donor atom.
+
+    The column predates ``neighbor_class`` and holds only two values: ``HOH``
+    for a modeled water donor and ``P`` for every other donor, including
+    nucleotides and ligands despite the name. Classify donors by
+    ``neighbor_class``; this column is published for compatibility.
+    """
     return "HOH" if is_water else "P"
 
 
@@ -435,19 +469,17 @@ def _connection_output_values(candidate: Candidate) -> dict[str, str | bool]:
             )
         ),
         "coordination_source": (
-            joined(record["source"] for record in records)
+            joined(record.source for record in records)
             if records
             else ("proximity_rule" if inferred else "")
         ),
         "declared_connection": bool(records),
-        "connection_id": joined(record["connection_id"] for record in records),
-        "connection_type": joined(record["connection_type"] for record in records),
-        "connection_link_id": joined(
-            record["connection_link_id"] for record in records
-        ),
-        "connection_asu": joined(record["connection_asu"] for record in records),
+        "connection_id": joined(record.connection_id for record in records),
+        "connection_type": joined(record.connection_type for record in records),
+        "connection_link_id": joined(record.connection_link_id for record in records),
+        "connection_asu": joined(record.connection_asu for record in records),
         "connection_reported_distance": joined(
-            record["connection_reported_distance"] for record in records
+            record.connection_reported_distance for record in records
         ),
     }
 
@@ -592,6 +624,40 @@ def structure_extra_values(structure: StructureContext) -> dict[str, Any]:
     }
 
 
+#: The density-context columns of ``STATS_EXTRA_COLUMNS``. They describe the
+#: EDSTATS observation the row was built from and the outcome of joining it to a
+#: coordinate site, so only the worker can supply them: it copies them onto the
+#: site summary it passes to ``stats_extra_values``.
+DENSITY_ROW_STATS_EXTRA_COLUMNS: frozenset[str] = frozenset(
+    {
+        "density_observation_id",
+        "density_scope",
+        "density_shared_site_count",
+        "density_is_shared",
+        "coordinate_mapping_status",
+        "selected_metal_site_status",
+    }
+)
+
+
+@cache
+def _summary_supplied_columns() -> frozenset[str]:
+    """Return the columns ``stats_extra_values`` takes from its ``summary``.
+
+    These are the only columns that may be absent from the summary and blanked:
+    the site summary's own share plus the density-context columns above. Every
+    other column is produced by this module, so a producer key that is
+    misspelled or dropped raises instead of blanking that column for every row
+    of the database.
+
+    ``coordination.site_summary`` imports this module, so the import below is
+    deferred to call time; the result never changes, hence the cache.
+    """
+    from coordination.site_summary import SUMMARY_OWNED_STATS_EXTRA_COLUMNS
+
+    return SUMMARY_OWNED_STATS_EXTRA_COLUMNS | DENSITY_ROW_STATS_EXTRA_COLUMNS
+
+
 def stats_extra_values(
     pdb_id: str,
     structure: StructureContext,
@@ -604,57 +670,62 @@ def stats_extra_values(
     ``structure_values`` is ``structure_extra_values(structure)``; a caller
     appending many rows of one entry passes it so the structure-level share is
     computed once rather than per row.
+
+    ``metal`` is ``None`` for a density row that joined no metal site: its
+    metal columns are then blank, and the caller's summary reports why.
+
+    The per-site, structure-level, and summary shares are disjoint and together
+    cover ``STATS_EXTRA_COLUMNS`` exactly; the merge rejects an overlap and the
+    schema check rejects a missing or unknown column.
     """
     summary = summary or {}
     residue = structure.residue_for_atom(metal) if metal is not None else None
-    values: dict[str, Any] = {
-        "metal_site_id": metal_site_identifier(pdb_id, metal) if metal else "",
-        "metal_model_index": metal.model_index if metal else "",
-        "metal_chain_index": metal.output_chain_index if metal else "",
-        "metal_residue_index": metal.output_residue_index if metal else "",
-        "metal_atom_index": metal.atom_index if metal else "",
-        "metal_resname": metal.residue_name if metal else "",
-        "metal_chain": metal.chain_id if metal else "",
-        "metal_resnum": metal.resnum if metal else "",
-        "metal_atom": metal.atom_name if metal else "",
-        "metal_element": metal.element if metal else "",
-        "metal_icode": metal.insertion_code if metal else "",
-        "metal_altloc": metal.altloc if metal else "",
-        "metal_occupancy": metal.occupancy if metal else NAN,
-        "metal_occupancy_valid": metal.occupancy_valid if metal else "",
-        "metal_occupancy_status": metal.occupancy_status if metal else "",
-        "metal_coordinates_valid": metal.coordinates_valid if metal else "",
-        "metal_x": round(metal.x, 6) if metal else NAN,
-        "metal_y": round(metal.y, 6) if metal else NAN,
-        "metal_z": round(metal.z, 6) if metal else NAN,
-        "metal_b_iso": round(metal.b_iso, 3) if metal else NAN,
-        "metal_conformer_mean_occupancy": (
-            residue.selected_conformer_mean_occupancy if residue else NAN
+    site_values: dict[str, Any] = {
+        "metal_site_id": (
+            metal_site_identifier(pdb_id, metal) if metal is not None else ""
         ),
-        "metal_altloc_options": residue.altloc_options if residue else "",
+        "metal_model_index": metal.model_index if metal is not None else "",
+        "metal_chain_index": metal.output_chain_index if metal is not None else "",
+        "metal_residue_index": metal.output_residue_index if metal is not None else "",
+        "metal_atom_index": metal.atom_index if metal is not None else "",
+        "metal_resname": metal.residue_name if metal is not None else "",
+        "metal_chain": metal.chain_id if metal is not None else "",
+        "metal_resnum": metal.resnum if metal is not None else "",
+        "metal_atom": metal.atom_name if metal is not None else "",
+        "metal_element": metal.element if metal is not None else "",
+        "metal_icode": metal.insertion_code if metal is not None else "",
+        "metal_altloc": metal.altloc if metal is not None else "",
+        "metal_occupancy": metal.occupancy if metal is not None else NAN,
+        "metal_occupancy_valid": metal.occupancy_valid if metal is not None else "",
+        "metal_occupancy_status": metal.occupancy_status if metal is not None else "",
+        "metal_coordinates_valid": metal.coordinates_valid if metal is not None else "",
+        "metal_x": round(metal.x, 6) if metal is not None else NAN,
+        "metal_y": round(metal.y, 6) if metal is not None else NAN,
+        "metal_z": round(metal.z, 6) if metal is not None else NAN,
+        "metal_b_iso": round(metal.b_iso, 3) if metal is not None else NAN,
+        "metal_conformer_mean_occupancy": (
+            residue.selected_conformer_mean_occupancy if residue is not None else NAN
+        ),
+        "metal_altloc_options": residue.altloc_options if residue is not None else "",
         "alternative_conformers_present": (
-            residue.alternative_conformers_present if residue else ""
+            residue.alternative_conformers_present if residue is not None else ""
         ),
         "altloc_selection_fallback": (
-            residue.altloc_selection_fallback if residue else ""
+            residue.altloc_selection_fallback if residue is not None else ""
         ),
     }
-    values.update(
-        structure_extra_values(structure)
-        if structure_values is None
-        else structure_values
+    values = _merge_row_fields(
+        site_values,
+        (
+            structure_extra_values(structure)
+            if structure_values is None
+            else structure_values
+        ),
+        # Blank only where the summary itself is silent: a caller that passes
+        # none, or a density row that joined no metal site.
+        {column: summary.get(column, "") for column in _summary_supplied_columns()},
     )
-    # Summary values win over anything computed above. The site summary is a
-    # ``coordination.site_summary.SiteSummary`` (its key set is checked against
-    # these columns at import) plus the density-context columns the worker adds;
-    # neither overlaps the per-site or structure-level fields computed here, so
-    # the ``update`` never replaces one of them. The ``setdefault`` blanks the
-    # summary columns only for a density row that joined no metal site.
-    for column in STATS_EXTRA_COLUMNS:
-        values.setdefault(column, summary.get(column, ""))
-    values.update(
-        {key: value for key, value in summary.items() if key in STATS_EXTRA_COLUMNS}
-    )
+    check_row_schema(values, STATS_EXTRA_COLUMNS, STATS_SCHEMA_NAME)
     return values
 
 
@@ -677,49 +748,57 @@ def bond_row(
     geometry = contact.geometry()
     multi_donor = contact.multi_donor()
     return BondRow(
-        {
-            "pdbID": pdb_id,
-            "metal_site_id": metal_site_identifier(pdb_id, metal),
-            "contact_id": contact_identifier(pdb_id, metal, contact),
-            **_metal_values(metal),
-            **_conformer_values("metal", metal, metal_residue),
-            **_neighbor_values(neighbor),
-            **_conformer_values("neighbor", neighbor, neighbor_residue),
-            "distance": geometry.distance,
-            **_connection_output_values(contact),
-            **_donor_output_values(contact),
-            **_context_warning_values(context_reasons),
-            "literature_distance": geometry.literature_distance,
-            "literature_stdev": geometry.literature_stdev,
-            "zscore": geometry.zscore,
-            "dpi": dpi,
-            "resolution": resolution,
-            "sigma_mag": mag,
-            "sigma_neg": neg,
-            "sigma_pos": pos,
-            "parent_type": parent_type,
-            "bonded_to": _bonded_to(neighbor.is_water),
-            "model_id": structure.analyzed_model_id,
-            "alternative_conformers_present": (
-                metal_residue.alternative_conformers_present
-                or neighbor_residue.alternative_conformers_present
-            ),
-            "altloc_selection_fallback": (
-                metal_residue.altloc_selection_fallback
-                or neighbor_residue.altloc_selection_fallback
-            ),
-            "reference_covered": geometry.reference_covered,
-            "geometry_outlier": geometry.outlier,
-            "geometry_consistent": geometry.consistent,
-            "multi_donor_detected": multi_donor.detected,
-            "multi_donor_contact_count": multi_donor.contact_count,
-            "multi_donor_geometry_status": multi_donor.geometry_status,
-            "multi_donor_contains_suspect_bond": multi_donor.contains_suspect_bond,
-            "score_eligible": multi_donor.score_eligible,
-            "score_exclusion_reason": multi_donor.score_exclusion_reason,
-            "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
-            **_image_values(contact.image),
-        }
+        _merge_row_fields(
+            {
+                "pdbID": pdb_id,
+                "metal_site_id": metal_site_identifier(pdb_id, metal),
+                "contact_id": contact_identifier(pdb_id, metal, contact),
+            },
+            _metal_values(metal),
+            _conformer_values("metal", metal, metal_residue),
+            _neighbor_values(neighbor),
+            _conformer_values("neighbor", neighbor, neighbor_residue),
+            {"distance": geometry.distance},
+            _connection_output_values(contact),
+            _donor_output_values(contact),
+            _context_warning_values(context_reasons),
+            {
+                "literature_distance": geometry.literature_distance,
+                "literature_stdev": geometry.literature_stdev,
+                "zscore": geometry.zscore,
+                "dpi": dpi,
+                "resolution": resolution,
+                "sigma_mag": mag,
+                "sigma_neg": neg,
+                "sigma_pos": pos,
+                "parent_type": parent_type,
+                "bonded_to": _bonded_to(neighbor.is_water),
+                "model_id": structure.analyzed_model_id,
+                "alternative_conformers_present": (
+                    metal_residue.alternative_conformers_present
+                    or neighbor_residue.alternative_conformers_present
+                ),
+                "altloc_selection_fallback": (
+                    metal_residue.altloc_selection_fallback
+                    or neighbor_residue.altloc_selection_fallback
+                ),
+                "reference_covered": geometry.reference_covered,
+                # ``None`` is the unassessed verdict; it is published as a
+                # blank cell rather than as ``false``.
+                "geometry_outlier": blank_if_unmeasured(geometry.outlier),
+                "geometry_consistent": blank_if_unmeasured(geometry.consistent),
+                "multi_donor_detected": multi_donor.detected,
+                "multi_donor_contact_count": multi_donor.contact_count,
+                "multi_donor_geometry_status": multi_donor.geometry_status,
+                "multi_donor_contains_suspect_bond": (
+                    multi_donor.contains_suspect_bond
+                ),
+                "score_eligible": geometry.score_eligible,
+                "score_exclusion_reason": geometry.score_exclusion_reason,
+                "zscore_outlier_cutoff": ZSCORE_OUTLIER_CUTOFF,
+            },
+            _image_values(contact.image),
+        )
     )
 
 
@@ -735,28 +814,30 @@ def candidate_row(
     """Return one discovered or declared candidate as a candidate CSV row."""
     eligibility = candidate.eligibility()
     return CandidateRow(
-        {
-            "pdbID": pdb_id,
-            "metal_site_id": metal_site_identifier(pdb_id, metal),
-            "contact_id": contact_identifier(pdb_id, metal, candidate),
-            "assigned_as_bond": assigned_as_bond,
-            "candidate_source": "|".join(sorted(candidate.candidate_sources)),
-            "eligibility_status": eligibility.status,
-            "eligibility_reason": eligibility.reason,
-            "first_sphere_eligible": eligibility.first_sphere_eligible,
-            "candidate_distance": round(candidate.image.distance, 3),
-            "assignment_target": eligibility.assignment_target,
-            "assignment_tolerance": eligibility.assignment_tolerance,
-            "first_sphere_cutoff": eligibility.first_sphere_cutoff,
-            "assignment_reference_kind": eligibility.assignment_reference_kind,
-            "assignment_reference": eligibility.assignment_reference,
-            "inferred_contact_eligible": eligibility.inferred_contact_eligible,
-            **_donor_output_values(candidate),
-            **_context_warning_values(context_reasons),
-            **_connection_output_values(candidate),
-            **_metal_values(metal),
-            "model_id": structure.analyzed_model_id,
-            **_neighbor_values(candidate.neighbor),
-            **_image_values(candidate.image),
-        }
+        _merge_row_fields(
+            {
+                "pdbID": pdb_id,
+                "metal_site_id": metal_site_identifier(pdb_id, metal),
+                "contact_id": contact_identifier(pdb_id, metal, candidate),
+                "assigned_as_bond": assigned_as_bond,
+                "candidate_source": "|".join(sorted(candidate.candidate_sources)),
+                "eligibility_status": eligibility.status,
+                "eligibility_reason": eligibility.reason,
+                "first_sphere_eligible": eligibility.first_sphere_eligible,
+                "candidate_distance": round(candidate.image.distance, 3),
+                "assignment_target": eligibility.assignment_target,
+                "assignment_tolerance": eligibility.assignment_tolerance,
+                "first_sphere_cutoff": eligibility.first_sphere_cutoff,
+                "assignment_reference_kind": eligibility.assignment_reference_kind,
+                "assignment_reference": eligibility.assignment_reference,
+                "inferred_contact_eligible": eligibility.inferred_contact_eligible,
+            },
+            _donor_output_values(candidate),
+            _context_warning_values(context_reasons),
+            _connection_output_values(candidate),
+            _metal_values(metal),
+            {"model_id": structure.analyzed_model_id},
+            _neighbor_values(candidate.neighbor),
+            _image_values(candidate.image),
+        )
     )

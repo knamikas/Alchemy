@@ -19,6 +19,7 @@ from coordination.donor_chemistry import AA, DONOR_ELEMENTS
 from metal_elements import METAL_ELEMENTS, UNAMBIGUOUS_METAL_COMPONENT_IDS
 from structure_analysis import (
     NAN,
+    AtomKey,
     AtomSite,
     ContactImage,
     StructureContext,
@@ -39,10 +40,6 @@ class PartnerLocator(Protocol):
         ...
 
 
-#: Identity of one selected metal atom, as ``AtomSite.source_key`` reports it.
-_MetalKey = tuple[int, int, int, int]
-
-
 def connection_source(path: str | None) -> CandidateSource:
     """Infer declaration provenance from the source coordinate format."""
     lower = str(path or "").lower()
@@ -59,24 +56,40 @@ def _enum_name(value: object) -> str:
     return str(getattr(value, "name", value)).lower()
 
 
-def analysis_chain_names(connection_path: str) -> dict[str, str]:
+def analysis_chain_names(
+    connection_path: str, declared_structure: gemmi.Structure | None = None
+) -> dict[str, str]:
     """Map source chain names onto the analysis model's chain names.
 
     Replaying Gemmi's ``setup_entities`` and ``shorten_chain_names`` recovers
     the conversion mapping. A source PDB is extracted textually and keeps its
     chain names, so its mapping is empty.
+
+    Pass ``declared_structure`` when the caller already parsed
+    ``connection_path``; the replay then runs on a clone instead of parsing the
+    file a second time. The mapping is positional, so a replay that does not
+    return the chains it was given cannot be aligned and yields an empty map.
     """
     if connection_source(connection_path) != CandidateSource.STRUCT_CONN:
         return {}
-    copy = gemmi.read_structure(connection_path)
-    if len(copy) == 0:
+    parsed = (
+        gemmi.read_structure(connection_path)
+        if declared_structure is None
+        else declared_structure
+    )
+    if len(parsed) == 0:
         return {}
-    source_names = [str(chain.name) for chain in copy[0]]
+    source_names = [str(chain.name) for chain in parsed[0]]
+    copy = parsed.clone()
     copy.setup_entities()
     copy.shorten_chain_names()
+    try:
+        renamed = list(zip(source_names, copy[0], strict=True))
+    except ValueError:
+        return {}
     return {
         source: str(chain.name)
-        for source, chain in zip(source_names, copy[0], strict=False)
+        for source, chain in renamed
         if source != str(chain.name)
     }
 
@@ -117,6 +130,13 @@ def analysis_atom_for_partner(
     named = [site for site in matches[0].source_atoms if site.atom_name == atom_name]
     if altloc:
         named = [site for site in named if site.altloc == altloc]
+    elif len(named) > 1:
+        # A declaration naming no conformer names the residue, not one of its
+        # alternates, so answer with the conformer per-residue selection chose.
+        # Taking the deposition-order-first alternate instead would report a
+        # conformer substitution the declaration never asked for.
+        selected = matches[0].selected_altloc
+        named = [site for site in named if site.altloc == selected] or named
     return named[0] if named else None
 
 
@@ -216,8 +236,13 @@ def resolve_declared_partners(
     """Resolve both declared partners to selected-conformer atoms.
 
     Check declaration identifiers for metal evidence before find_cra can fail,
-    then refine that evidence using resolved atom elements. Return lookup failures
-    in failure_exception_name.
+    then widen that evidence with the elements of the atoms that resolved: a
+    resolved metal adds evidence, never removes it. Return lookup failures in
+    failure_exception_name.
+
+    Only the source-model lookup is guarded: a failure there is a property of
+    the declaration, while an exception from the analysis-side resolution below
+    is a bug that must not be relabelled as an unresolvable declaration.
     """
     addresses = (connection.partner1, connection.partner2)
     declares_metal = any(
@@ -227,39 +252,39 @@ def resolve_declared_partners(
         source_cras = [
             source_model.find_cra(address, ignore_segment=True) for address in addresses
         ]
-        declares_metal = declares_metal or any(
-            declared_partner_is_metal(address, cra)
-            for address, cra in zip(addresses, source_cras, strict=False)
-        )
-        atoms: list[AtomSite | None] = []
-        deselected = False
-        substituted = False
-        for cra in source_cras:
-            declared_atom = analysis_atom_for_partner(structure, cra, chain_names)
-            selected_atom = selected_conformer_atom(structure, declared_atom)
-            if declared_atom is not None:
-                if selected_atom is None:
-                    deselected = True
-                elif selected_atom is not declared_atom:
-                    substituted = True
-            atoms.append(selected_atom)
     except Exception as exc:
         return _PartnerResolution(
             (None, None), declares_metal, False, False, type(exc).__name__
         )
+    declares_metal = declares_metal or any(
+        declared_partner_is_metal(address, cra)
+        for address, cra in zip(addresses, source_cras, strict=True)
+    )
+    atoms: list[AtomSite | None] = []
+    deselected = False
+    substituted = False
+    for cra in source_cras:
+        declared_atom = analysis_atom_for_partner(structure, cra, chain_names)
+        selected_atom = selected_conformer_atom(structure, declared_atom)
+        if declared_atom is not None:
+            if selected_atom is None:
+                deselected = True
+            elif selected_atom is not declared_atom:
+                substituted = True
+        atoms.append(selected_atom)
     first, second = atoms
     return _PartnerResolution((first, second), declares_metal, deselected, substituted)
 
 
 def _is_selected_metal(
-    atom: AtomSite | None, selected_metal_keys: Set[_MetalKey]
+    atom: AtomSite | None, selected_metal_keys: Set[AtomKey]
 ) -> bool:
     """Whether a resolved partner is one of the metal sites under analysis."""
     return atom is not None and atom.source_key in selected_metal_keys
 
 
 def _metal_and_neighbor(
-    first: AtomSite, second: AtomSite, selected_metal_keys: Set[_MetalKey]
+    first: AtomSite, second: AtomSite, selected_metal_keys: Set[AtomKey]
 ) -> tuple[AtomSite, AtomSite] | None:
     """Order two resolved partners as ``(metal, neighbor)``.
 
@@ -273,6 +298,18 @@ def _metal_and_neighbor(
     return (first, second) if first_is_metal else (second, first)
 
 
+class DeclaredCandidate(NamedTuple):
+    """One resolved declaration: the metal it names and the donor candidate.
+
+    The metal travels beside the candidate rather than on it: only this
+    resolution path knows which metal a declaration was resolved against, and
+    ``coordination.analysis`` only needs it to group the candidates by site.
+    """
+
+    metal: AtomSite
+    candidate: Candidate
+
+
 def _declared_connection_record(
     connection: gemmi.Connection, connection_id: str, source: CandidateSource
 ) -> DeclaredConnectionRecord:
@@ -280,14 +317,14 @@ def _declared_connection_record(
     reported_distance = float(connection.reported_distance)
     if not math.isfinite(reported_distance) or reported_distance <= 0:
         reported_distance = NAN
-    return {
-        "source": source,
-        "connection_id": connection_id,
-        "connection_type": _enum_name(connection.type),
-        "connection_link_id": str(connection.link_id).strip(),
-        "connection_asu": _enum_name(connection.asu),
-        "connection_reported_distance": reported_distance,
-    }
+    return DeclaredConnectionRecord(
+        source=source,
+        connection_id=connection_id,
+        connection_type=_enum_name(connection.type),
+        connection_link_id=str(connection.link_id).strip(),
+        connection_asu=_enum_name(connection.asu),
+        connection_reported_distance=reported_distance,
+    )
 
 
 def declared_candidate_for_connection(
@@ -296,47 +333,67 @@ def declared_candidate_for_connection(
     connection_id: str,
     source: CandidateSource,
     resolved: _PartnerResolution,
-    selected_metal_keys: Set[_MetalKey],
-) -> tuple[Candidate | None, list[str], list[str]]:
-    """Return a candidate, issues, and warnings for one resolved declaration.
+    selected_metal_keys: Set[AtomKey],
+) -> tuple[DeclaredCandidate | None, list[str], list[str]]:
+    """Return a resolved candidate, issues, and warnings for one declaration.
 
     Return candidate=None for unmeasurable contacts. Report unresolved metal
     declarations as issues and ignore declarations unrelated to metals.
+
+    Warning codes are entry-level, so a code is only returned when this
+    declaration leaves a trace the reader can attach it to -- a candidate, or
+    an issue. A declaration that is discarded silently, such as the
+    intra-cofactor links a deposition writes between a cluster's own atoms,
+    returns none. Per code:
+
+    * ``DECLARED_CONNECTION_ZERO_OCCUPANCY_PARTNER`` and
+      ``DECLARED_DONOR_OUTSIDE_SUPPORTED_CLASSES`` describe the candidate that
+      was produced, so they are returned only alongside one.
+    * ``DECLARED_DONOR_ELEMENT_UNSUPPORTED`` describes the declaration itself:
+      the deposition declared a metal contact to an element that is never a
+      donor. No candidate can carry it, so it is returned on its early exit.
+    * ``DECLARED_CONNECTION_CONFORMER_SUBSTITUTED`` records how the
+      declaration was resolved, so it accompanies a candidate and also the
+      issues raised for a declaration that resolution could not complete.
     """
     issues: list[str] = []
-    warnings: list[str] = []
     if resolved.failure_exception_name:
         if resolved.declares_metal:
             issues.append(
                 f"{source} {connection_id} resolution failed: "
                 f"{resolved.failure_exception_name}"
             )
-        return None, issues, warnings
-    if resolved.conformer_deselected:
-        if resolved.declares_metal:
-            issues.append(
-                f"{source} {connection_id} partner names a conformer whose "
-                f"selected alternative has no matching atom"
-            )
-        return None, issues, warnings
+        return None, issues, []
 
     first, second = resolved.atoms
     connection_involves_metal = resolved.declares_metal or any(
         _is_selected_metal(atom, selected_metal_keys) for atom in resolved.atoms
     )
-    if resolved.conformer_substituted and connection_involves_metal:
-        warnings.append(WarningCode.DECLARED_CONNECTION_CONFORMER_SUBSTITUTED)
+    substituted: list[str] = (
+        [WarningCode.DECLARED_CONNECTION_CONFORMER_SUBSTITUTED]
+        if resolved.conformer_substituted and connection_involves_metal
+        else []
+    )
+    if resolved.conformer_deselected:
+        if not resolved.declares_metal:
+            return None, [], []
+        issues.append(
+            f"{source} {connection_id} partner names a conformer whose "
+            f"selected alternative has no matching atom"
+        )
+        return None, issues, substituted
     if first is None or second is None:
-        if connection_involves_metal:
-            issues.append(
-                f"{source} {connection_id} neither partner resolved"
-                if first is None and second is None
-                else f"{source} {connection_id} partner unresolved"
-            )
-        return None, issues, warnings
+        if not connection_involves_metal:
+            return None, [], []
+        issues.append(
+            f"{source} {connection_id} neither partner resolved"
+            if first is None and second is None
+            else f"{source} {connection_id} partner unresolved"
+        )
+        return None, issues, substituted
     pair = _metal_and_neighbor(first, second, selected_metal_keys)
     if pair is None:
-        return None, issues, warnings
+        return None, [], []
 
     metal, neighbor = pair
     if not (metal.coordinates_valid and neighbor.coordinates_valid):
@@ -344,13 +401,13 @@ def declared_candidate_for_connection(
             f"{source} {connection_id} geometry unavailable: "
             "partner has non-finite coordinates"
         )
-        return None, issues, warnings
+        return None, issues, substituted
+    if neighbor.element not in DONOR_ELEMENTS:
+        return None, [], [WarningCode.DECLARED_DONOR_ELEMENT_UNSUPPORTED]
+    residue = structure.residue_for_atom(neighbor)
+    warnings = list(substituted)
     if neighbor.occupancy_valid and neighbor.occupancy == 0.0:
         warnings.append(WarningCode.DECLARED_CONNECTION_ZERO_OCCUPANCY_PARTNER)
-    residue = structure.residue_for_atom(neighbor)
-    if neighbor.element not in DONOR_ELEMENTS:
-        warnings.append(WarningCode.DECLARED_DONOR_ELEMENT_UNSUPPORTED)
-        return None, issues, warnings
     # Keep unsupported donor classes as candidates with measured distances.
     # They cannot be scored or promoted to bond rows without a reference.
     donor_class_supported = bool(residue.is_water or residue.residue_name in AA)
@@ -362,12 +419,11 @@ def declared_candidate_for_connection(
         issues.append(
             f"{source} {connection_id} geometry unresolved: {type(exc).__name__}: {exc}"
         )
-        return None, issues, warnings
+        return None, issues, substituted
     if neighbor.residue_key == metal.residue_key and not image.symmetry_contact:
-        return None, issues, warnings
+        return None, [], []
 
     candidate = Candidate(
-        metal=metal,
         neighbor=neighbor,
         image=image,
         candidate_sources={source},
@@ -376,38 +432,48 @@ def declared_candidate_for_connection(
         ],
         donor_class_supported=donor_class_supported,
     )
-    return candidate, issues, warnings
+    return DeclaredCandidate(metal, candidate), issues, warnings
 
 
 def collect_declared_candidates(
     structure: StructureContext,
     connection_path: str | None,
     metals: Sequence[AtomSite],
-) -> tuple[list[Candidate], list[str], list[str]]:
+) -> tuple[list[DeclaredCandidate], list[str], list[str]]:
     """Resolve source ``struct_conn``/``LINK`` claims to analysis atoms.
 
     Partners are matched by author identity -- chain, sequence number,
     insertion code, component, atom name, altloc -- and re-pointed onto their
-    residue's selected conformer.
+    residue's selected conformer. Each resolved candidate is returned paired
+    with the metal site it was resolved against, in declaration order.
     """
     if not connection_path:
         return [], [], []
     source = connection_source(connection_path)
     try:
         declared_structure = gemmi.read_structure(connection_path)
+        if len(declared_structure) == 0:
+            return [], [f"{source} contains no coordinate model"], []
+        # Inside the guard: replaying the conversion is Gemmi work too, and a
+        # failure there must degrade this entry to a declaration issue rather
+        # than escape and fail the whole bond stage.
+        chain_names = analysis_chain_names(connection_path, declared_structure)
     except Exception as exc:
         return [], [f"{source} parse failed: {type(exc).__name__}: {exc}"], []
-    if len(declared_structure) == 0:
-        return [], [f"{source} contains no coordinate model"], []
 
     source_model = declared_structure[0]
-    chain_names = analysis_chain_names(connection_path)
     selected_metal_keys = {metal.source_key for metal in metals}
-    candidates: list[Candidate] = []
+    candidates: list[DeclaredCandidate] = []
     issues: list[str] = []
     warnings: list[str] = []
+    connection_ids: set[str] = set()
     for index, connection in enumerate(declared_structure.connections, start=1):
         connection_id = str(connection.name).strip() or f"{source}_{index}"
+        # Candidate merging keys declarations on (source, connection_id), so a
+        # deposition that repeats an id would collapse distinct records.
+        while connection_id in connection_ids:
+            connection_id = f"{connection_id}_{index}"
+        connection_ids.add(connection_id)
         resolved = resolve_declared_partners(
             structure, source_model, connection, chain_names
         )

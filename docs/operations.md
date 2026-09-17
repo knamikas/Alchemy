@@ -303,6 +303,13 @@ table, so a code cannot be added or renamed without updating this list.
 the entry's status. The vocabulary is `WarningCode` in `src/codes.py`, and
 `tests/test_documentation.py` fails if a member is missing from this table.
 
+The `declared_connection_*` and `declared_donor_*` codes are published only
+when the declaration they describe left a trace the reader can attach them to:
+a contact candidate, or an entry issue raised because the declaration could not
+be resolved. A declaration that is discarded silently, such as the
+intra-cofactor `LINK` records a deposition writes between a cluster's own
+atoms, raises no code at all.
+
 | Code | Meaning |
 | --- | --- |
 | `cofactor_catalog_fallback` | Density was retained for a selected metal inside a multi-atom component absent from the bundled cofactor catalog; no structural class is inferred for it. |
@@ -321,7 +328,7 @@ the entry's status. The vocabulary is `WarningCode` in `src/codes.py`, and
 | `legacy_pdb_identifiers_packed` | Converting mmCIF to PDB had to rename or repack chain or residue identifiers into the fixed-width PDB namespace. The source identifiers are restored from `REMARK 950` records and reported in the outputs. |
 | `edstats_grid_point_count_overflow` | EDSTATS printed `****` because an `NPm`, `NPs`, or `NPa` grid-point count exceeded its fixed-width field. That count is recorded as unavailable; every other density metric remains usable. |
 | `twin_refmac_coefficients_normalized` | The guarded twin path rewrote Refmac's twinned map coefficients for EDSTATS after `mtzfix` validation failed. |
-| `declared_connection_conformer_substituted` | A `_struct_conn` or `LINK` record named an alternate conformer that per-residue selection did not choose, so it was re-pointed onto the chosen one. |
+| `declared_connection_conformer_substituted` | A `_struct_conn` or `LINK` record named an alternate conformer that per-residue selection did not choose, so it was re-pointed onto the chosen one. A record that names no altloc already points at the selected conformer, so it never raises this code. |
 | `declared_connection_zero_occupancy_partner` | A declared connection resolves to an atom with valid zero occupancy. It remains candidate evidence but cannot become a bond. |
 | `declared_donor_element_unsupported` | A declared partner atom is not nitrogen, oxygen, or sulfur, so the declaration was not turned into a contact candidate. |
 | `declared_donor_outside_supported_classes` | A declared donor belongs to a residue class with no bundled reference, so it stays a candidate and is never z-scored or promoted to a bond. |

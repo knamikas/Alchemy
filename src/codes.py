@@ -82,13 +82,22 @@ class MultiDonorStatus(StrEnum):
 
 
 class ContactScope(StrEnum):
-    """Which crystallographic operation produced a contact's donor image."""
+    """Which crystallographic operation produced a contact's donor image.
+
+    The first four are per-contact scopes, written to ``contact_scope``; every
+    contact carries one. ``NONE`` is the site-level summary's addition to the
+    same vocabulary, and no contact ever holds it.
+    """
 
     #: The donor is in the deposited asymmetric unit; no operation applied.
     EXPLICIT = "explicit"
     CRYSTALLOGRAPHIC = "crystallographic"
     STRICT_NCS = "strict_ncs"
     STRICT_NCS_AND_CRYSTALLOGRAPHIC = "strict_ncs_and_crystallographic"
+    #: Site level only: the generated-image search ran and no generated
+    #: contact came of it. ``generated_contact_scope`` is blank instead when
+    #: the search could not run, which is a different claim.
+    NONE = "none"
 
 
 class CandidateSource(StrEnum):
@@ -403,6 +412,27 @@ class DonorRuleOverride(StrEnum):
 
     #: A source declaration named the contact, inside a supported residue class.
     DECLARED_CONNECTION = "declared_connection"
+
+
+class InferredDonorRule(StrEnum):
+    """Which donor-atom rule decided whether geometry alone may infer a donor.
+
+    Written to ``inferred_donor_rule`` on every bond and candidate row.
+    ``eligibility._inferred_donor_rule`` is the sole producer.
+    """
+
+    #: The oxygen of a modeled water.
+    WATER_OXYGEN = "water_oxygen"
+    #: The backbone carbonyl oxygen of an amino acid.
+    BACKBONE_CARBONYL_OXYGEN = "backbone_carbonyl_oxygen"
+    #: A side-chain atom this residue's typical donor list names.
+    TYPICAL_SIDECHAIN_DONOR = "typical_sidechain_donor"
+    #: The amine nitrogen of a modeled polymer N terminus.
+    N_TERMINAL_NITROGEN = "n_terminal_nitrogen"
+    #: A carboxylate oxygen of a modeled polymer C terminus.
+    C_TERMINAL_OXYGEN = "c_terminal_oxygen"
+    #: No rule admits this atom, so geometry alone may not infer a donor.
+    OUTSIDE_TYPICAL_DONOR_LIST = "outside_typical_donor_list"
 
 
 class ScoreExclusionReason(StrEnum):

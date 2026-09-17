@@ -4,6 +4,14 @@ The donor rule says whether an atom may be inferred as a donor from geometry
 alone; the distance rule compares the observed distance with the literature
 target plus ``FIRST_SPHERE_TOLERANCE``. Declared connections may join the
 contact set without passing the donor rule, but never with zero occupancy.
+
+Every first-sphere cutoff is clamped to ``CANDIDATE_SEARCH_RADIUS`` so a sphere
+can never reach past the radius its candidates were discovered within. With the
+bundled reference table the clamp never binds: the widest target is 2.82 A
+(K-O), and 2.82 + 0.75 stays inside the 4.0 A search radius. It guards a future
+reference row instead, and ``tests/coordination/test_eligibility_review.py``
+asserts the invariant so a wider row cannot silently define a sphere larger than
+the search that populates it.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from codes import (
     DonorRuleOverride,
     EligibilityReason,
     EligibilityStatus,
+    InferredDonorRule,
     ReferenceKind,
 )
 from coordination.candidates import deduplicate_special_position_contacts
@@ -36,9 +45,19 @@ from structure_analysis import NAN, AtomSite, StructureContext
 
 
 def bonding_key(neighbor: AtomSite, metal_element: str) -> tuple[str, str, str]:
-    """Exact (residue, atom, metal) key matching metal_distances_info.txt columns."""
+    """Exact (residue, atom, metal) key matching metal_distances_info.txt columns.
+
+    ``AtomSite.residue_name`` is already whitespace-stripped and upper-cased by
+    ``ResidueIdentity``, so this key and the donor rule cannot disagree about
+    which residue a padded or lower-case deposited name describes.
+    """
     name = neighbor.atom_name.strip()
-    if neighbor.is_water:
+    residue_name = neighbor.residue_name
+    if neighbor.is_water and neighbor.element == "O":
+        # Only a water oxygen is the bundled metal-water donor. Any other atom
+        # modeled inside an HOH residue -- which a source LINK can name -- falls
+        # through to the element fallback or the missing-reference path rather
+        # than borrowing the water-oxygen target.
         return ("HOH", "O", metal_element)
     if name in N_TERMINAL_DONOR_ATOMS:
         # No terminal-amine reference is bundled; use the element fallback for eligibility.
@@ -49,14 +68,20 @@ def bonding_key(neighbor: AtomSite, metal_element: str) -> tuple[str, str, str]:
     if name == "O":
         return ("CA", "O", metal_element)  # backbone carbonyl O is keyed "CA"
     if name.startswith("O"):
-        return (neighbor.residue_name, "O", metal_element)
-    return (neighbor.residue_name, neighbor.element, metal_element)
+        return (residue_name, "O", metal_element)
+    return (residue_name, neighbor.element, metal_element)
 
 
 def first_sphere_rule(
     metal: AtomSite, neighbor: AtomSite
 ) -> tuple[float, float, ReferenceKind, str]:
-    """Return target, cutoff, and provenance for proximity eligibility."""
+    """Return target, cutoff, and provenance for proximity eligibility.
+
+    The cutoff is ``target + FIRST_SPHERE_TOLERANCE`` clamped to
+    ``CANDIDATE_SEARCH_RADIUS``; with the bundled table the clamp never binds
+    (see the module docstring). A metal-donor pair no reference covers is
+    reported as a NaN target and cutoff with ``ReferenceKind.MISSING``.
+    """
     exact_key = bonding_key(neighbor, metal.element)
     literature = literature_distances().get(exact_key)
     target: float | None
@@ -72,6 +97,8 @@ def first_sphere_rule(
             return NAN, NAN, ReferenceKind.MISSING, ""
         reference_kind = ReferenceKind.ELEMENT_FALLBACK
         reference_key = ("*", neighbor.element, metal.element)
+    # Clamped so a reference target wider than the search radius cannot define
+    # a sphere the candidate search never populates.
     cutoff = min(CANDIDATE_SEARCH_RADIUS, target + FIRST_SPHERE_TOLERANCE)
     return target, cutoff, reference_kind, ":".join(reference_key)
 
@@ -79,38 +106,32 @@ def first_sphere_rule(
 def _polymer_terminal_position(
     structure: StructureContext, atom: AtomSite
 ) -> tuple[bool, bool]:
-    """Return ``(is_n_terminal, is_c_terminal)`` for a polymer residue."""
+    """Return ``(is_n_terminal, is_c_terminal)`` for a polymer residue.
+
+    A cached ``source_polymer_position`` answers directly. Otherwise the
+    position is read from the coordinates through
+    ``StructureContext.modeled_polymer``, and only when the modeled residues of
+    the atom's subchain reproduce the entity's ``full_sequence`` exactly: with a
+    gap or an unmodeled terminus, the first and last modeled residues are not
+    the real termini, so no terminal donor is granted.
+
+    Gemmi raises ``AttributeError``, ``IndexError`` or ``TypeError`` when the
+    entities, subchains or indices of a structure do not line up. Those are
+    swallowed as "position unknown", which can only ever withhold the terminal
+    donor rules, never grant them.
+    """
     selected = structure.residue_for_atom(atom)
     if selected.source_polymer_position:
         position = selected.source_polymer_position
         return position in ("N", "NC"), position in ("C", "NC")
     try:
-        chain = structure.model[atom.chain_index]
-        residue = chain[atom.residue_index]
+        residue = structure.model[atom.chain_index][atom.residue_index]
         if residue.entity_type != gemmi.EntityType.Polymer:
             return False, False
-        indices = [
-            index
-            for index, current in enumerate(chain)
-            if (
-                current.entity_type == gemmi.EntityType.Polymer
-                and current.subchain == residue.subchain
-            )
-        ]
-        if not indices:
+        modeled = structure.modeled_polymer(atom.chain_index, str(residue.subchain))
+        if modeled is None or not modeled.complete:
             return False, False
-        full_sequence = next(
-            (
-                tuple(str(name) for name in entity.full_sequence)
-                for entity in structure.structure.entities
-                if str(residue.subchain) in {str(value) for value in entity.subchains}
-                and entity.full_sequence
-            ),
-            (),
-        )
-        modeled_sequence = tuple(str(chain[index].name) for index in indices)
-        if not full_sequence or modeled_sequence != full_sequence:
-            return False, False
+        indices = modeled.residue_indices
         return atom.residue_index == indices[0], atom.residue_index == indices[-1]
     except (AttributeError, IndexError, TypeError):
         return False, False
@@ -118,31 +139,31 @@ def _polymer_terminal_position(
 
 def _inferred_donor_rule(
     structure: StructureContext, atom: AtomSite
-) -> tuple[bool, str]:
+) -> tuple[bool, InferredDonorRule]:
     """Return whether ``atom`` is a typical geometry-inferable donor and why."""
     residue = structure.residue_for_atom(atom)
     atom_name = atom.atom_name.strip().upper()
-    residue_name = residue.residue_name.upper()
+    residue_name = residue.residue_name
     if residue.is_water:
         if atom.element == "O":
-            return True, "water_oxygen"
-        return False, "outside_typical_donor_list"
+            return True, InferredDonorRule.WATER_OXYGEN
+        return False, InferredDonorRule.OUTSIDE_TYPICAL_DONOR_LIST
     if residue_name not in INFERRED_DONOR_ATOMS:
-        return False, "outside_typical_donor_list"
+        return False, InferredDonorRule.OUTSIDE_TYPICAL_DONOR_LIST
     if atom_name in INFERRED_DONOR_ATOMS[residue_name]:
         return (
             True,
-            "backbone_carbonyl_oxygen"
+            InferredDonorRule.BACKBONE_CARBONYL_OXYGEN
             if atom_name == "O"
-            else "typical_sidechain_donor",
+            else InferredDonorRule.TYPICAL_SIDECHAIN_DONOR,
         )
 
     is_n_terminal, is_c_terminal = _polymer_terminal_position(structure, atom)
     if is_n_terminal and atom_name in N_TERMINAL_DONOR_ATOMS:
-        return True, "n_terminal_nitrogen"
+        return True, InferredDonorRule.N_TERMINAL_NITROGEN
     if is_c_terminal and atom_name in C_TERMINAL_DONOR_ATOMS:
-        return True, "c_terminal_oxygen"
-    return False, "outside_typical_donor_list"
+        return True, InferredDonorRule.C_TERMINAL_OXYGEN
+    return False, InferredDonorRule.OUTSIDE_TYPICAL_DONOR_LIST
 
 
 def annotate_donor_policy(
@@ -170,7 +191,12 @@ def annotate_donor_policy(
 
 
 def _candidate_has_zero_occupancy(candidate: Candidate, metal: AtomSite) -> bool:
-    """Whether either endpoint is explicitly modeled with zero occupancy."""
+    """Whether either endpoint is explicitly modeled with zero occupancy.
+
+    The verdict is recorded once as ``EligibilityStatus.ZERO_OCCUPANCY``; later
+    stages read that status rather than recomputing it. The metal half is
+    defensive: ``coordination.analysis`` never analyses a zero-occupancy metal.
+    """
     return any(
         atom.occupancy_valid and atom.occupancy == 0.0
         for atom in (metal, candidate.neighbor)
@@ -181,9 +207,13 @@ def _eligibility_for(candidate: Candidate, metal: AtomSite) -> EligibilityResult
     """Classify one candidate against the first-sphere distance rule.
 
     A zero-occupancy endpoint is never eligible. Without a reference the
-    candidate is unassignable when a typical or declared donor would have
-    needed one, and simply non-typical otherwise. With a reference, distance
-    decides sphere membership and the donor rule decides inference.
+    candidate is unassignable when a typical donor, or a declaration inside a
+    donor class Alchemy can assess, would have needed one, and simply
+    non-typical otherwise. A declaration in an unsupported donor class is never
+    promoted to a contact by ``current_contacts_from_candidates``, so it must
+    not report missing assignment evidence for a row that could not have used
+    it. With a reference, distance decides sphere membership and the donor rule
+    decides inference.
     """
     target, cutoff, reference_kind, reference_key = first_sphere_rule(
         metal, candidate.neighbor
@@ -197,7 +227,8 @@ def _eligibility_for(candidate: Candidate, metal: AtomSite) -> EligibilityResult
         reason = EligibilityReason.ZERO_OCCUPANCY_ATOM
     elif not math.isfinite(cutoff):
         # ``first_sphere_rule`` reports a missing reference as NaN target and cutoff.
-        if donor_allowed or declared:
+        # Mirrors the promotion filter in ``current_contacts_from_candidates``.
+        if donor_allowed or (declared and candidate.donor_class_supported):
             status = EligibilityStatus.MISSING_ASSIGNMENT_REFERENCE
             reason = EligibilityReason.NO_ASSIGNMENT_REFERENCE
         else:
@@ -236,6 +267,11 @@ def _identify_first_sphere_candidates(
     Also returns the metal-donor pairs no reference covers, which the caller
     reports as incomplete assignment evidence. Passing the distance rule does
     not by itself establish a chemically assigned bond.
+
+    The returned list is deliberately not deduplicated:
+    ``current_contacts_from_candidates`` collapses near-coincident images once,
+    over the inferred and the declared contacts together, so a declared image
+    can merge its provenance into the eligible image it duplicates.
     """
     eligible: list[Candidate] = []
     unsupported_pairs: set[tuple[str, str]] = set()
@@ -246,7 +282,7 @@ def _identify_first_sphere_candidates(
             unsupported_pairs.add((metal.element, candidate.neighbor.element))
         if eligibility.inferred_contact_eligible:
             eligible.append(candidate)
-    return (deduplicate_special_position_contacts(eligible), unsupported_pairs)
+    return (eligible, unsupported_pairs)
 
 
 def current_contacts_from_candidates(
@@ -255,7 +291,12 @@ def current_contacts_from_candidates(
     """Return typical inferred and explicitly declared contacts.
 
     Every candidate receives its eligibility result as a side effect; the
-    returned pairs are the metal-donor elements no reference covers.
+    returned pairs are the metal-donor elements no reference covers. A declared
+    candidate joins the contacts only inside a donor class Alchemy can assess
+    and with non-zero occupancy, both read back from the recorded eligibility.
+
+    Near-coincident special-position images are collapsed once, here, over the
+    inferred and declared contacts together.
     """
     eligible, unsupported_pairs = _identify_first_sphere_candidates(candidates, metal)
     declared_not_inferred = [
@@ -264,7 +305,7 @@ def current_contacts_from_candidates(
         if candidate.declared_connections
         and not candidate.eligibility().inferred_contact_eligible
         and candidate.donor_class_supported
-        and not _candidate_has_zero_occupancy(candidate, metal)
+        and candidate.eligibility().status is not EligibilityStatus.ZERO_OCCUPANCY
     ]
     return (
         deduplicate_special_position_contacts(eligible + declared_not_inferred),

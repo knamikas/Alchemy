@@ -13,13 +13,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
 
 import gemmi
 
 from codes import ReasonCode
 from coordination.candidates import (
-    AtomKey as AtomKey,
     collect_proximal_candidates,
     merge_candidates,
 )
@@ -56,7 +54,7 @@ from coordination.site_summary import (
 )
 from metal_elements import METAL_ELEMENTS
 from output_rows import MetalStatsRow
-from structure_analysis import AtomSite, StructureContext, load_structure
+from structure_analysis import AtomKey as AtomKey, AtomSite, StructureContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +200,20 @@ class BondAnalysisMetadata:
     warning_codes: list[str]
     messages: list[str]
 
+    @classmethod
+    def for_structure(cls, structure: StructureContext) -> BondAnalysisMetadata:
+        """Seed empty metadata carrying the structure's load-time warnings.
+
+        Every coordination run starts from the warnings ``load_structure``
+        recorded, whether or not the geometry stage runs, so the worker seeds
+        its ``--no-bonds`` metadata the same way.
+        """
+        return cls(
+            partial_reason_codes=[],
+            warning_codes=list(structure.warning_codes),
+            messages=[],
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class BondAnalysisResult:
@@ -211,6 +223,18 @@ class BondAnalysisResult:
     candidate_rows: list[CandidateRow]
     site_summaries: dict[AtomKey, SiteSummary]
     metadata: BondAnalysisMetadata
+
+
+# Diagnostic messages reach the manifest through a capped status detail, so
+# per-site enumerations name a few examples and count the rest.
+_MESSAGE_ENUMERATION_LIMIT = 5
+
+
+def _capped_enumeration(items: Sequence[str]) -> str:
+    """Join ``items`` for a message, naming at most a few and counting the rest."""
+    preview = ", ".join(items[:_MESSAGE_ENUMERATION_LIMIT])
+    remainder = len(items) - _MESSAGE_ENUMERATION_LIMIT
+    return f"{preview} (and {remainder} more)" if remainder > 0 else preview
 
 
 def _declared_candidates_by_metal(
@@ -227,15 +251,17 @@ def _declared_candidates_by_metal(
         metadata.partial_reason_codes.append(
             ReasonCode.DECLARED_CONNECTION_RESOLUTION_INCOMPLETE
         )
-        metadata.messages.extend(declared_issues)
+        unique_issues = list(dict.fromkeys(declared_issues))
+        metadata.messages.extend(unique_issues[:_MESSAGE_ENUMERATION_LIMIT])
+        remainder = len(unique_issues) - _MESSAGE_ENUMERATION_LIMIT
+        if remainder > 0:
+            metadata.messages.append(
+                f"(and {remainder} more unresolved declared connection(s))"
+            )
     metadata.warning_codes.extend(declared_warnings)
     declared_by_metal: dict[AtomKey, list[Candidate]] = {}
-    for candidate in declared_candidates:
-        # Every declaration-derived candidate carries the metal it was resolved
-        # against; only proximity discovery leaves the field unset.
-        declared_by_metal.setdefault(
-            cast(AtomSite, candidate.metal).source_key, []
-        ).append(candidate)
+    for metal, candidate in declared_candidates:
+        declared_by_metal.setdefault(metal.source_key, []).append(candidate)
     return declared_by_metal
 
 
@@ -253,19 +279,29 @@ def _entry_context(
     if dpi_components.reason_code:
         metadata.partial_reason_codes.append(dpi_components.reason_code)
         metadata.messages.append(f"DPI unavailable: {dpi_components.reason_code}")
-    if not structure.symmetry.search_available:
-        metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
-        metadata.messages.append(
-            "symmetry search unavailable: "
-            + (structure.symmetry.search_failure_reason or "unknown reason")
-        )
-    image_search = None
+    image_search: gemmi.NeighborSearch | None = None
     if structure.symmetry.search_available:
         image_search = structure.make_neighbor_search(
             CANDIDATE_SEARCH_RADIUS + SEARCH_EPSILON,
             include_symmetry=True,
             positive_occupancy_only=True,
         )
+    else:
+        metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
+        metadata.messages.append(
+            "symmetry search unavailable: "
+            + (structure.symmetry.search_failure_reason or "unknown reason")
+        )
+    # Appended last so that the entry-level limitations above stay ahead of the
+    # per-metal ones. A failure here leaves the site symmetry of at least one
+    # metal unknown, which is the same partial result as an unavailable
+    # symmetry search; ``run_bond_analysis`` deduplicates the code afterwards.
+    reported_messages = len(metadata.messages)
+    metal_special_positions = metal_special_position_summaries(
+        structure, metals, metadata.messages
+    )
+    if len(metadata.messages) > reported_messages:
+        metadata.partial_reason_codes.append(ReasonCode.SYMMETRY_SEARCH_UNAVAILABLE)
     return _EntryContext(
         pdb_id=pdb_id,
         structure=structure,
@@ -279,7 +315,7 @@ def _entry_context(
         density_z_scores=DensityZScoreIndex.from_stats_rows(stats_rows, header),
         model_statistics=EntryModelStatistics.from_structure(structure),
         metal_proximity=metal_proximity_summaries(pdb_id, metals),
-        metal_special_positions=metal_special_position_summaries(structure, metals),
+        metal_special_positions=metal_special_positions,
     )
 
 
@@ -290,9 +326,11 @@ def _note_unsupported_pairs(
     if not unsupported_pairs:
         return
     metadata.partial_reason_codes.append(ReasonCode.MISSING_FIRST_SPHERE_REFERENCE)
-    pairs = ", ".join(
-        f"{metal_element}-{donor_element}"
-        for metal_element, donor_element in sorted(unsupported_pairs)
+    pairs = _capped_enumeration(
+        [
+            f"{metal_element}-{donor_element}"
+            for metal_element, donor_element in sorted(unsupported_pairs)
+        ]
     )
     metadata.messages.append(f"first-sphere reference unavailable for {pairs}")
 
@@ -312,10 +350,12 @@ def record_non_finite_metals(
     metadata.messages.append(
         "geometry unavailable for selected metal site(s) with non-finite "
         "coordinates: "
-        + ", ".join(
-            f"{metal.residue_name}/{metal.chain_id or '_'}/{metal.resnum}/"
-            f"{metal.atom_name}"
-            for metal in non_finite_metals
+        + _capped_enumeration(
+            [
+                f"{metal.residue_name}/{metal.chain_id or '_'}/{metal.resnum}/"
+                f"{metal.atom_name}"
+                for metal in non_finite_metals
+            ]
         )
     )
 
@@ -326,7 +366,7 @@ def run_bond_analysis(
     stats_rows: Sequence[MetalStatsRow],
     header: Sequence[str] | None,
     dpi_inputs: DpiInputs,
-    structure: StructureContext | None = None,
+    structure: StructureContext,
     connection_path: str | None = None,
 ) -> BondAnalysisResult:
     """Return contact rows, candidate rows, site summaries, and metadata.
@@ -335,34 +375,37 @@ def run_bond_analysis(
     ``struct_conn``/``LINK`` declarations, which are evaluated even outside the
     4 A discovery radius. Image-inclusive results are primary wherever symmetry
     metadata is available.
-    """
-    if structure is None:
-        structure = load_structure(pdb_id, pdb_path)
 
+    ``structure`` is the already-loaded ``pdb_path``. Declarations are read
+    from ``connection_path`` when the caller has a separate deposited file to
+    read them from, and from ``pdb_path`` itself otherwise, so an analysis file
+    that carries its own ``struct_conn``/``LINK`` records is its own
+    declaration source.
+
+    Entry-level limitations are recorded before per-site ones so the capped
+    manifest status detail keeps them.
+    """
     metals_in_model = structure.metal_atoms(METAL_ELEMENTS, canonical=True)
     spatial_metals = [metal for metal in metals_in_model if metal.coordinates_valid]
     non_finite_metals = [
         metal for metal in metals_in_model if not metal.coordinates_valid
     ]
-    metadata = BondAnalysisMetadata(
-        partial_reason_codes=[],
-        warning_codes=list(structure.warning_codes),
-        messages=[],
-    )
+    metadata = BondAnalysisMetadata.for_structure(structure)
     if not metals_in_model:
         return BondAnalysisResult([], [], {}, metadata)
 
+    entry = _entry_context(
+        pdb_id, structure, metals_in_model, stats_rows, header, dpi_inputs, metadata
+    )
     declared_by_metal = _declared_candidates_by_metal(
         structure, connection_path or pdb_path, spatial_metals, metadata
     )
     record_non_finite_metals(metadata, non_finite_metals)
-    entry = _entry_context(
-        pdb_id, structure, metals_in_model, stats_rows, header, dpi_inputs, metadata
-    )
 
     rows: list[BondRow] = []
     candidate_rows: list[CandidateRow] = []
     summaries: dict[AtomKey, SiteSummary] = {}
+    unsupported_pairs: set[tuple[str, str]] = set()
     for metal in metals_in_model:
         if not metal.coordinates_valid:
             summaries[metal.source_key] = unassessable_site_summary(
@@ -377,11 +420,13 @@ def run_bond_analysis(
         site_result = _analyze_metal_site(
             entry, metal, declared_by_metal.get(metal.source_key, ())
         )
-        _note_unsupported_pairs(metadata, site_result.unsupported_pairs)
+        unsupported_pairs.update(site_result.unsupported_pairs)
         rows.extend(site_result.bond_rows)
         candidate_rows.extend(site_result.candidate_rows)
         summaries[metal.source_key] = site_result.summary
 
+    # One entry-level fact: the pairs of every site are reported together.
+    _note_unsupported_pairs(metadata, unsupported_pairs)
     metadata.partial_reason_codes = list(dict.fromkeys(metadata.partial_reason_codes))
     metadata.warning_codes = list(dict.fromkeys(metadata.warning_codes))
     metadata.messages = list(dict.fromkeys(metadata.messages))

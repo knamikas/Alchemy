@@ -209,7 +209,7 @@ The concrete metric columns are:
 | `geometry_outlier_count_explicit`, `geometry_outlier_count_image_inclusive` | Outlier counts under the two search scopes. |
 | `geometry_coverage_explicit`, `geometry_coverage_image_inclusive` | Reference coverage under the two search scopes. |
 | `explicit_geometry_status`, `image_inclusive_geometry_status` | Site classification under each search scope: `plausible` when contacts were scored and none was an outlier, `suspect` when at least one scored contact is an outlier, or `insufficient data` when no contact could be scored. |
-| `generated_contact_scope` | Which generated-image sources contribute contacts: `crystallographic`, `strict_ncs`, or `strict_ncs_and_crystallographic`; blank when no generated contact exists. |
+| `generated_contact_scope` | Which generated-image sources contribute contacts: `crystallographic`, `strict_ncs`, or `strict_ncs_and_crystallographic`; `none` when the generated-image search ran and no generated contact came of it. Blank is reserved for the search being unavailable, which is the different claim that nobody looked. |
 | `geometry_classification_changes_with_generated_images` | Whether generated contacts change the site classification. |
 | `coordination_depends_on_crystallographic_symmetry`, `coordination_depends_on_strict_ncs` | Whether each generated-image source contributes to reported coordination. |
 | `geometry_not_assessed_reason` | Pipe-separated reasons geometry could not be assessed. |
@@ -221,7 +221,7 @@ The concrete metric columns are:
 | --- | --- |
 | `symmetry_search_available`, `symmetry_search_failure_reason` | Whether generated-image search completed and why it did not. |
 | `occupancy_validation_failed`, `missing_occupancy_count`, `invalid_occupancy_count` | Entry-level occupancy parsing and validation results. The counts cover every deposited record, hydrogen included; validation fails only for defects on atoms that enter `Ni`. |
-| `overfull_occupancy_site_count`, `overfull_occupancy_excess`, `metal_overfull_occupancy` | Alternate-conformer occupancy excess and whether it affects this metal site. |
+| `overfull_occupancy_site_count`, `overfull_occupancy_excess`, `metal_overfull_occupancy` | Alternate-conformer occupancy excess and whether it affects this metal site. `metal_overfull_occupancy` is blank when any deposited record of the metal's own chemical site carries an unusable occupancy, since the excess over that site cannot then be measured; `False` says the records were read and do not exceed one. |
 | `defaulted_occupancy_atom_count`, `zero_occupancy_atom_count` | Counts of defaulted and explicitly absent atoms. |
 | `duplicate_atom_records_present`, `duplicate_atom_record_count`, `duplicate_atom_coordinate_conflict_count`, `malformed_duplicate_atom_name_count` | Duplicate-coordinate-record diagnostics. |
 | `raw_occupancy_mapping_failed`, `raw_occupancy_mapping_failure_reason` | Whether raw occupancy records could be mapped to parsed atoms. |
@@ -243,15 +243,15 @@ Grain: one assigned inferred or source-declared metal–donor contact. Every
 | `distance` | Measured metal–donor distance. |
 | `coordination_status`, `coordination_source`, `declared_connection` | Whether assignment came from a declaration (`declared`) or inference (`inferred`) and its source. |
 | `connection_id`, `connection_type`, `connection_link_id`, `connection_asu`, `connection_reported_distance` | Pipe-aligned source-declaration records; blank for inference-only contacts. |
-| `inferred_donor_allowed`, `inferred_donor_rule`, `donor_rule_override` | Donor-chemistry decision and any declaration override. The override is `declared_connection` when a source declaration admitted a donor the inference rule forbids, and blank otherwise. |
+| `inferred_donor_allowed`, `inferred_donor_rule`, `donor_rule_override` | Donor-chemistry decision and any declaration override. The rule names which donor-atom rule decided it: `water_oxygen` for the oxygen of a modeled water, `backbone_carbonyl_oxygen` for an amino-acid backbone carbonyl, `typical_sidechain_donor` for a side-chain atom on the residue's typical donor list, `n_terminal_nitrogen` or `c_terminal_oxygen` for a modeled polymer terminus, and `outside_typical_donor_list` when no rule admits the atom. The override is `declared_connection` when a source declaration admitted a donor the inference rule forbids, and blank otherwise. |
 | `context_warning`, `context_warning_reasons` | Non-scoring warning and pipe-separated reasons. |
 | `literature_distance`, `literature_stdev`, `reference_covered` | Reference mean, spread, and coverage status. |
 | `zscore`, `zscore_outlier_cutoff`, `geometry_outlier`, `geometry_consistent` | DPI-aware distance score, threshold, and classification. |
 | `dpi`, `resolution`, `sigma_mag`, `sigma_neg`, `sigma_pos` | Precision and site-density inputs used for analysis. |
-| `parent_type`, `bonded_to`, `neighbor_class` | Cofactor/protein context and broad donor class. `parent_type` is the structural class of the component carrying the metal: `cluster`, `heme`, `ion`, or `other`. `neighbor_class` is `water`, `nucleotide`, `amino_acid`, or `other`. |
+| `parent_type`, `bonded_to`, `neighbor_class` | Cofactor/protein context and broad donor class. `parent_type` is the structural class of the component carrying the metal: `cluster`, `heme`, `ion`, or `other`. `neighbor_class` is `water`, `nucleotide`, `amino_acid`, or `other`. `bonded_to` is a legacy two-value flag that predates `neighbor_class`: `HOH` when the donor atom is a modeled water and `P` for every other donor, including nucleotide and ligand donors despite the name. Classify donors with `neighbor_class`. |
 | `model_id`, `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Selected model and unambiguous metal location. |
 | `neighbor_model_index`, `neighbor_chain_index`, `neighbor_residue_index`, `neighbor_atom_index` | Unambiguous deposited donor location. |
-| `metal_occupancy`, `metal_occupancy_valid`, `metal_occupancy_status`, `metal_conformer_mean_occupancy`, `metal_altloc_options`, `metal_altloc_selection_fallback` | Metal occupancy and conformer provenance. The status takes the values listed for `metal_occupancy_status` in `metal_statistics_all.csv`. |
+| `metal_occupancy`, `metal_occupancy_valid`, `metal_occupancy_status`, `metal_conformer_mean_occupancy`, `metal_altloc_options`, `metal_altloc_selection_fallback` | Metal occupancy and conformer provenance. The status takes the values listed for `metal_occupancy_status` in `metal_sites_all.csv`. |
 | `neighbor_occupancy`, `neighbor_occupancy_valid`, `neighbor_occupancy_status`, `neighbor_conformer_mean_occupancy`, `neighbor_altloc_options`, `neighbor_altloc_selection_fallback` | Donor occupancy and conformer provenance. |
 | `alternative_conformers_present`, `altloc_selection_fallback` | Combined metal/donor conformer flags. |
 | `multi_donor_detected`, `multi_donor_contact_count`, `multi_donor_geometry_status`, `multi_donor_contains_suspect_bond` | Chelating-residue grouping and geometry. The status is `single_donor` when the residue contributes one contact, and otherwise `consistent` when every contact in the group was scored without an outlier, `suspect` when any was an outlier, or `indeterminate` when some contact could not be scored and none was an outlier. |
@@ -277,7 +277,7 @@ declaration. Candidate discovery does not itself assign a bond.
 | `candidate_distance` | Measured metal–candidate distance. |
 | `assignment_target`, `assignment_tolerance`, `first_sphere_cutoff` | Reference target, fixed tolerance, and resulting assignment cutoff. |
 | `assignment_reference_kind`, `assignment_reference` | Cutoff reference and its identity: `exact` for a residue-specific literature entry, `element_fallback` when the donor element's generic entry was used, or `missing` when no entry exists. |
-| `inferred_contact_eligible`, `inferred_donor_allowed`, `inferred_donor_rule`, `donor_rule_override` | Final inference eligibility, chemical donor policy, and declaration override. |
+| `inferred_contact_eligible`, `inferred_donor_allowed`, `inferred_donor_rule`, `donor_rule_override` | Final inference eligibility, chemical donor policy, and declaration override. The rule takes the values listed for `inferred_donor_rule` in `metal_bonds_all.csv`. |
 | `context_warning`, `context_warning_reasons` | Non-scoring warning and pipe-separated reasons. |
 | `coordination_status`, `coordination_source`, `declared_connection` | Candidate-level declaration or inference provenance (`declared`, `inferred`, or `unassigned`); use `assigned_as_bond`, not this status, for bond membership. |
 | `connection_id`, `connection_type`, `connection_link_id`, `connection_asu`, `connection_reported_distance` | Pipe-aligned source-declaration records. |

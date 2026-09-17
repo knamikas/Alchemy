@@ -18,9 +18,19 @@ import coordinate_conversion
 import coordination.dpi as dpi_module
 import coordination.schema as coordination_schema
 import reference_data
-from codes import EligibilityReason, EligibilityStatus, EntryStatus, ReferenceKind
+from codes import (
+    EligibilityReason,
+    EligibilityStatus,
+    EntryStatus,
+    InferredDonorRule,
+    ReferenceKind,
+)
 from coordination import donor_chemistry, policy
-from coordination.contact_record import Candidate
+from coordination.contact_record import (
+    Candidate,
+    DonorPolicy,
+    EligibilityResult,
+)
 from coordination.eligibility import first_sphere_rule
 from coordination.geometry import annotate_contacts, zscore
 from coordination.policy import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
@@ -350,11 +360,34 @@ def _contact(neighbor: AtomSite, *, distance: float = 0.0) -> Candidate:
         symmetry_operation="1_555",
         translation=(0, 0, 0),
     )
-    return Candidate(
+    candidate = Candidate(
         neighbor=neighbor,
         image=image,
         candidate_sources={codes.CandidateSource.PROXIMITY_4A},
     )
+    # ``set_geometry`` requires the eligibility stage to have run, so give the
+    # candidate the inert verdicts the real pipeline would have attached.
+    candidate.set_donor_policy(
+        DonorPolicy(
+            inferred_allowed=True,
+            rule=InferredDonorRule.WATER_OXYGEN,
+            override="",
+        )
+    )
+    candidate.set_eligibility(
+        EligibilityResult(
+            status=EligibilityStatus.FIRST_SPHERE_ELIGIBLE,
+            reason=EligibilityReason.DISTANCE_WITHIN_TOLERANCE,
+            first_sphere_eligible=True,
+            inferred_contact_eligible=True,
+            assignment_target=2.09,
+            assignment_tolerance=FIRST_SPHERE_TOLERANCE,
+            first_sphere_cutoff=2.09 + FIRST_SPHERE_TOLERANCE,
+            assignment_reference_kind=ReferenceKind.EXACT,
+            assignment_reference="ZN-HOH-O",
+        )
+    )
+    return candidate
 
 
 def _only(rows: Sequence[Mapping[str, Any]], atom_name: str) -> Mapping[str, Any]:
@@ -1039,7 +1072,9 @@ def test_zscore_is_nan_when_the_denominator_vanishes() -> None:
     [
         (2.870, 6.0, True),  # exactly at the cutoff -> outlier
         (2.869, 5.9923, False),  # one thousandth inside -> consistent
-        (1.310, -6.0, True),  # the negative boundary is symmetric
+        # The negative boundary is symmetric; the literal 1.310 evaluates two
+        # ulps inside it, so build the distance from the denominator instead.
+        (2.09 - 6 * 0.13, -6.0, True),
         (1.311, -5.9923, False),
     ],
 )

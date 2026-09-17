@@ -369,11 +369,7 @@ def run_bond_stage(
         bond_rows=[],
         candidate_rows=[],
         site_summaries={},
-        metadata=BondAnalysisMetadata(
-            partial_reason_codes=[],
-            warning_codes=list(structure.warning_codes),
-            messages=[],
-        ),
+        metadata=BondAnalysisMetadata.for_structure(structure),
     )
     outcome = BondOutcome(analysis)
     if not cfg.bonds:

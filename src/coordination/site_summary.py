@@ -8,7 +8,7 @@ site, and fills the remaining columns from the structure and the metal.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from statistics import median
 from typing import TypedDict
@@ -29,7 +29,7 @@ from coordination.site_environment import (
     MetalProximity,
     MetalSpecialPosition,
 )
-from structure_analysis import NAN, AtomSite, StructureContext
+from structure_analysis import NAN, AtomSite, ContactImage, StructureContext
 
 
 class SiteSummary(TypedDict):
@@ -76,7 +76,7 @@ class SiteSummary(TypedDict):
     geometry_classification_changes_with_generated_images: bool | str
     coordination_depends_on_crystallographic_symmetry: bool | str
     coordination_depends_on_strict_ncs: bool | str
-    metal_overfull_occupancy: bool
+    metal_overfull_occupancy: bool | str
     geometry_not_assessed_reason: str
     context_warning: bool
     context_warning_reasons: str
@@ -137,10 +137,15 @@ class _ScopeSummary:
     """Contact counts and the geometry verdict for one search scope.
 
     Counts are integers when the scope was assessed and NaN when it was not;
-    ``status`` is then blank instead of a ``GeometryStatus``.
+    ``status`` is then blank instead of a ``GeometryStatus``. ``coverage`` is
+    the one exception: it is NaN both for a scope that was never searched and
+    for an assessed scope with no contact to divide by, so it cannot be read
+    as a record of whether the scope was assessed.
     """
 
-    candidate_count: int | float
+    #: Contacts assigned in this scope; published as
+    #: ``candidate_contact_count``.
+    contact_count: int | float
     reference_covered_count: int | float
     outlier_count: int | float
     consistent_count: int | float
@@ -159,7 +164,7 @@ class _ScopeSummary:
     def unavailable(cls) -> _ScopeSummary:
         """The summary of a scope that could not be searched."""
         return cls(
-            candidate_count=NAN,
+            contact_count=NAN,
             reference_covered_count=NAN,
             outlier_count=NAN,
             consistent_count=NAN,
@@ -213,6 +218,20 @@ def _donor_b_factors(metal: AtomSite, contacts: Sequence[Candidate]) -> _DonorBF
     )
 
 
+def _image_count(
+    contacts: Sequence[Candidate] | None,
+    predicate: Callable[[ContactImage], bool],
+) -> int | float:
+    """Count the image contacts ``predicate`` accepts.
+
+    ``None`` is the unavailable symmetry search, which counts nothing: every
+    generated-image count is then NaN rather than zero.
+    """
+    if contacts is None:
+        return NAN
+    return sum(predicate(contact.image) for contact in contacts)
+
+
 def _scope_summary(contacts: Sequence[Candidate]) -> _ScopeSummary:
     """Count the assessed contacts of one scope and classify its geometry."""
     candidate = len(contacts)
@@ -221,29 +240,28 @@ def _scope_summary(contacts: Sequence[Candidate]) -> _ScopeSummary:
     covered = sum(geometry.reference_covered for geometry in geometries)
     outlier = sum(geometry.outlier is True for geometry in geometries)
     consistent = sum(geometry.consistent is True for geometry in geometries)
-    score_eligible = sum(result.score_eligible for result in multi_donor)
+    score_eligible = sum(geometry.score_eligible for geometry in geometries)
     score_excluded = candidate - score_eligible
     scored_outlier = sum(
-        result.score_eligible and geometry.outlier is True
-        for result, geometry in zip(multi_donor, geometries, strict=False)
+        geometry.score_eligible and geometry.outlier is True for geometry in geometries
     )
     scored_consistent = sum(
-        result.score_eligible and geometry.consistent is True
-        for result, geometry in zip(multi_donor, geometries, strict=False)
+        geometry.score_eligible and geometry.consistent is True
+        for geometry in geometries
     )
     multi_donor_groups = {
         residue_image_key(contact)
-        for contact, result in zip(contacts, multi_donor, strict=False)
+        for contact, result in zip(contacts, multi_donor, strict=True)
         if result.detected
     }
     suspect_multi_donor_groups = {
         residue_image_key(contact)
-        for contact, result in zip(contacts, multi_donor, strict=False)
+        for contact, result in zip(contacts, multi_donor, strict=True)
         if result.geometry_status == MultiDonorStatus.SUSPECT
     }
     indeterminate_multi_donor_groups = {
         residue_image_key(contact)
-        for contact, result in zip(contacts, multi_donor, strict=False)
+        for contact, result in zip(contacts, multi_donor, strict=True)
         if result.geometry_status == MultiDonorStatus.INDETERMINATE
     }
     multi_donor_contacts = sum(result.detected for result in multi_donor)
@@ -256,7 +274,7 @@ def _scope_summary(contacts: Sequence[Candidate]) -> _ScopeSummary:
         status = GeometryStatus.PLAUSIBLE
     coverage = round(covered / candidate, 4) if candidate else NAN
     return _ScopeSummary(
-        candidate_count=candidate,
+        contact_count=candidate,
         reference_covered_count=covered,
         outlier_count=outlier,
         consistent_count=consistent,
@@ -278,7 +296,20 @@ def context_warning_reasons(
     include_proximal: bool = False,
     multi_donor: MultiDonorResult | None = None,
 ) -> list[str]:
-    """Return the contextual warnings that apply to one candidate contact."""
+    """Return the contextual warnings that apply to one candidate contact.
+
+    ``include_proximal`` also reports a non-typical donor that is outside the
+    first sphere, which suits a candidate row but not an assigned contact.
+
+    ``multi_donor`` is this candidate's evaluated multi-donor result and the
+    only source of ``suspect_multi_donor_group``. ``None`` means the group was
+    not evaluated for this row, and the reason is then silently omitted rather
+    than reported as absent: a caller holding the result must pass it, or the
+    column understates the site and the confidence scoring fed from it does
+    too. The candidate rows are the one correct ``None``, because the
+    multi-donor stage annotates only the contacts that were assigned, so an
+    unassigned candidate has no result to pass.
+    """
     reasons: list[str] = []
     policy = candidate.donor_policy()
     eligibility = candidate.eligibility()
@@ -293,7 +324,9 @@ def context_warning_reasons(
             reasons.append("non_typical_proximal_candidate")
     if multi_donor is not None and multi_donor.contains_suspect_bond:
         reasons.append("suspect_multi_donor_group")
-    return list(dict.fromkeys(reasons))
+    # Each branch above appends at most one reason, so there is nothing to
+    # deduplicate here; ``_site_context`` pools several candidates and does.
+    return reasons
 
 
 def _site_context(
@@ -340,6 +373,29 @@ _GENERATED_SCOPES: dict[tuple[bool, bool], tuple[ContactScope, bool, bool]] = {
 }
 
 
+def _metal_overfull_occupancy(
+    metal: AtomSite, structure: StructureContext
+) -> bool | str:
+    """Whether this metal's own alternate occupancies sum above one.
+
+    The entry-wide survey can only answer that for a chemical site whose every
+    deposited record carries a usable occupancy: without one the sum is
+    unknown, and the site is absent from ``overfull_site_keys`` because it was
+    never judged, not because it was judged and found sound. Such a site is
+    reported blank; ``False`` stays a positive statement that the deposited
+    occupancies were read and do not exceed one.
+    """
+    identity = metal.chemical_site_identity
+    alternates = [
+        atom
+        for atom in structure.residue_for_atom(metal).source_atoms
+        if atom.chemical_site_identity == identity
+    ]
+    if not all(atom.occupancy_valid for atom in alternates):
+        return ""
+    return identity in structure.occupancy.overfull_site_keys
+
+
 def site_summary(
     metal: AtomSite,
     structure: StructureContext,
@@ -376,31 +432,17 @@ def site_summary(
     ni = model_statistics.occupancy_weighted_atom_count
     deposited_ni = model_statistics.deposited_occupancy_weighted_atom_count
     # Report overfull occupancy on the metal itself, separately from entry-wide warnings.
-    metal_overfull = (
-        metal.chemical_site_identity in structure.occupancy.overfull_site_keys
+    metal_overfull = _metal_overfull_occupancy(metal, structure)
+    symmetry_count = _image_count(image_contacts, lambda image: image.symmetry_contact)
+    crystallographic_count = _image_count(
+        image_contacts, lambda image: image.crystallographic_contact
     )
-    symmetry_count = (
-        sum(contact.image.symmetry_contact for contact in image_contacts)
-        if image_contacts is not None
-        else NAN
+    strict_ncs_count = _image_count(
+        image_contacts, lambda image: image.strict_ncs_contact
     )
-    crystallographic_count = (
-        sum(contact.image.crystallographic_contact for contact in image_contacts)
-        if image_contacts is not None
-        else NAN
-    )
-    strict_ncs_count = (
-        sum(contact.image.strict_ncs_contact for contact in image_contacts)
-        if image_contacts is not None
-        else NAN
-    )
-    combined_count = (
-        sum(
-            contact.image.crystallographic_contact and contact.image.strict_ncs_contact
-            for contact in image_contacts
-        )
-        if image_contacts is not None
-        else NAN
+    combined_count = _image_count(
+        image_contacts,
+        lambda image: image.crystallographic_contact and image.strict_ncs_contact,
     )
     # Blank means symmetry was not assessed; False means it was assessed and absent.
     changed: str | bool
@@ -419,7 +461,7 @@ def site_summary(
                 bool(strict_ncs_count),
             ]
             if symmetry_count
-            else ("none", False, False)
+            else (ContactScope.NONE, False, False)
         )
 
     if geometry_not_assessed_reason is None:
@@ -443,7 +485,7 @@ def site_summary(
             round(deposited_ni, 6) if math.isfinite(deposited_ni) else NAN
         ),
         dpi_unavailable_reason=dpi_components.reason_code,
-        candidate_contact_count=primary.candidate_count,
+        candidate_contact_count=primary.contact_count,
         reference_covered_contact_count=primary.reference_covered_count,
         geometry_outlier_contact_count=primary.outlier_count,
         geometry_consistent_contact_count=primary.consistent_count,
@@ -459,9 +501,9 @@ def site_summary(
         indeterminate_multi_donor_residue_group_count=(
             primary.indeterminate_multi_donor_group_count
         ),
-        explicit_contact_count=explicit.candidate_count,
+        explicit_contact_count=explicit.contact_count,
         symmetry_contact_count=symmetry_count,
-        image_inclusive_contact_count=image_inclusive.candidate_count,
+        image_inclusive_contact_count=image_inclusive.contact_count,
         crystallographic_contact_count=crystallographic_count,
         strict_ncs_contact_count=strict_ncs_count,
         combined_ncs_crystallographic_contact_count=combined_count,

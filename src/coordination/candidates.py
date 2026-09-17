@@ -8,7 +8,6 @@ are decided later by ``coordination.eligibility`` and ``coordination.geometry``.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import replace
 
 import gemmi
 
@@ -18,21 +17,21 @@ from coordination.donor_chemistry import AA, DONOR_ELEMENTS
 from coordination.policy import (
     CANDIDATE_ACCEPT_EPSILON,
     CANDIDATE_SEARCH_RADIUS,
+    SAME_IMAGE_TOLERANCE,
     SEARCH_EPSILON,
     SPECIAL_POSITION_DEDUP_CUTOFF,
 )
 from structure_analysis import (
+    AtomKey,
     AtomSite,
     ContactImage,
     StructureContext,
     position_distance,
 )
 
-#: One deposited atom record, as ``AtomSite.source_key`` reports it.
-AtomKey = tuple[int, int, int, int]
-
 #: What makes two candidate records the same atom image around one metal.
-_CandidateIdentity = tuple[AtomKey, str, tuple[int, int, int], tuple[float, ...]]
+#: The position is compared separately, with ``SAME_IMAGE_TOLERANCE``.
+_CandidateIdentity = tuple[AtomKey, str, tuple[int, int, int]]
 
 
 def _contact_sort_key(
@@ -48,20 +47,6 @@ def _contact_sort_key(
         contact.image.translation,
         contact.image.position,
     )
-
-
-def _merge_candidate_provenance(target: Candidate, source: Candidate) -> None:
-    """Add discovery and declaration provenance without duplicating records."""
-    target.candidate_sources.update(source.candidate_sources)
-    known_connections = {
-        (record["source"], record["connection_id"])
-        for record in target.declared_connections
-    }
-    for record in source.declared_connections:
-        connection_key = (record["source"], record["connection_id"])
-        if connection_key not in known_connections:
-            target.declared_connections.append(record)
-            known_connections.add(connection_key)
 
 
 def _special_position_preference(
@@ -87,6 +72,14 @@ def deduplicate_special_position_contacts(
 ) -> list[Candidate]:
     """Collapse near-coincident images of each deposited source atom.
 
+    Merges in place: the returned records are the caller's own ``Candidate``
+    objects, and a collapsed image adds its provenance to the retained one by
+    mutating it. That is deliberate, and the opposite of ``merge_candidates``,
+    which copies: this function runs after the eligibility stage has annotated
+    each candidate, and a copy would drop those annotations. The merge goes
+    through ``Candidate.merge_provenance_after_annotation``, which carries the
+    argument for why a merge this late cannot change a recorded verdict.
+
     Sorting each source-atom group before the spatial comparison makes the
     result independent of Gemmi's NeighborSearch mark order.
     """
@@ -95,11 +88,9 @@ def deduplicate_special_position_contacts(
         by_source.setdefault(candidate.neighbor.source_key, []).append(candidate)
 
     contacts: list[Candidate] = []
-    for source_key in sorted(by_source):
+    for group in by_source.values():
         retained: list[Candidate] = []
-        for candidate in sorted(
-            by_source[source_key], key=_special_position_preference
-        ):
+        for candidate in sorted(group, key=_special_position_preference):
             duplicate = next(
                 (
                     current
@@ -113,7 +104,7 @@ def deduplicate_special_position_contacts(
                 None,
             )
             if duplicate is not None:
-                _merge_candidate_provenance(duplicate, candidate)
+                duplicate.merge_provenance_after_annotation(candidate)
                 continue
             retained.append(candidate)
         contacts.extend(retained)
@@ -131,6 +122,10 @@ def collect_proximal_candidates(
 
     Discovery only: no literature target, no first-sphere tolerance, no
     assignment. That happens in ``coordination.eligibility``.
+
+    ``search`` must come from ``StructureContext.make_neighbor_search``, which
+    already excludes non-finite coordinates and, with
+    ``positive_occupancy_only``, zero-occupancy atoms.
     """
     if not metal.coordinates_valid:
         return []
@@ -142,11 +137,7 @@ def collect_proximal_candidates(
         neighbor = structure.atom_for_mark(mark)
         if neighbor is None:
             continue
-        if not neighbor.coordinates_valid:
-            continue
         if neighbor.element not in DONOR_ELEMENTS:
-            continue
-        if not (neighbor.occupancy_valid and neighbor.occupancy > 0.0):
             continue
         residue = structure.residue_for_atom(neighbor)
         if not (residue.is_water or residue.residue_name in AA):
@@ -186,31 +177,55 @@ def collect_proximal_candidates(
 
 
 def _candidate_identity(candidate: Candidate) -> _CandidateIdentity:
-    """Identity of one atom image, tolerant of floating-point image noise."""
+    """Group key for one atom image: everything but its computed position."""
     return (
         candidate.neighbor.source_key,
         candidate.image.symmetry_operation,
         candidate.image.translation,
-        tuple(round(value, 5) for value in candidate.image.position),
     )
 
 
 def merge_candidates(*candidate_groups: Iterable[Candidate]) -> list[Candidate]:
-    """Merge proximity and declaration provenance for the same atom image."""
-    merged: dict[_CandidateIdentity, Candidate] = {}
+    """Merge proximity and declaration provenance for the same atom image.
+
+    Copies: the returned records are new ``Candidate`` objects and the
+    caller's inputs are left untouched, unlike
+    ``deduplicate_special_position_contacts``, which merges in place. The copy
+    goes through ``Candidate.with_provenance``, which cannot carry the
+    ``init=False`` stage results over and so raises rather than dropping them:
+    this must run before the donor-policy, eligibility, geometry, and
+    multi-donor stages annotate anything.
+
+    Within one group key, positions are compared with
+    ``SAME_IMAGE_TOLERANCE`` rather than matched exactly, and the first
+    candidate seen is the one retained.
+    """
+    merged: dict[_CandidateIdentity, list[Candidate]] = {}
     for candidates in candidate_groups:
         for candidate in candidates:
-            key = _candidate_identity(candidate)
-            existing = merged.get(key)
+            group = merged.setdefault(_candidate_identity(candidate), [])
+            existing = next(
+                (
+                    current
+                    for current in group
+                    if position_distance(
+                        current.image.position,
+                        candidate.image.position,
+                    )
+                    <= SAME_IMAGE_TOLERANCE
+                ),
+                None,
+            )
             if existing is None:
                 # Copy provenance collections because merging appends to them.
-                merged[key] = replace(
-                    candidate,
-                    candidate_sources=set(candidate.candidate_sources),
-                    declared_connections=list(candidate.declared_connections),
+                group.append(
+                    candidate.with_provenance(
+                        candidate_sources=set(candidate.candidate_sources),
+                        declared_connections=list(candidate.declared_connections),
+                    )
                 )
                 continue
-            _merge_candidate_provenance(existing, candidate)
-    result = list(merged.values())
+            existing.add_provenance(candidate)
+    result = [candidate for group in merged.values() for candidate in group]
     result.sort(key=_contact_sort_key)
     return result
