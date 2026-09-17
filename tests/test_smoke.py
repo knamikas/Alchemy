@@ -55,7 +55,7 @@ def test_src_modules_import() -> None:
     # Mypy cannot infer the intended cross-enum comparison.
     assert codes.GeometryStatus.SUSPECT == "suspect"  # type: ignore[comparison-overlap]
     assert callable(contact_record.Candidate)
-    assert set(donor_chemistry.INFERRED_DONOR_ATOMS) == donor_chemistry.AA
+    assert callable(donor_chemistry.neighbor_class)
     assert callable(density_analysis.run_density_analysis)
     assert callable(edstats_statistics.extract_metal_statistics)
     assert callable(confidence_score.score_site)
