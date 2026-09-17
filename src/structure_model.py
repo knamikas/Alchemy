@@ -291,12 +291,18 @@ class ResidueSelection(_ResidueIdentityAccess):
     source_atoms: tuple[AtomSite, ...]
     contact_atoms: tuple[AtomSite, ...]
     selected_altloc: str
+    #: Mean valid occupancy of the atoms carrying ``selected_altloc``; without
+    #: alternates that is every blank atom. ``None`` when none is valid.
     selected_conformer_mean_occupancy: float | None
     altloc_options: str
+    #: More than one altloc label was deposited, so a choice was made.
     alternative_conformers_present: bool
+    #: No conformer could be ranked, so the lowest label was chosen.
     altloc_selection_fallback: bool
-    selected_over_blank_duplicate_count: int
+    #: Extra records sharing an atom name among the selected atoms, including
+    #: blank records superseded by the selected conformer.
     malformed_duplicate_atom_name_count: int
+    #: Distinct atom sites with a validated element, alternates collapsed.
     chemical_atom_site_count: int
 
     @property

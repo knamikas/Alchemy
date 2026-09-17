@@ -251,6 +251,56 @@ def test_select_residue_falls_back_when_no_conformer_has_valid_occupancy() -> No
     assert {atom.altloc for atom in selection.contact_atoms} == {"A"}
 
 
+def test_select_residue_treats_a_lone_altloc_label_as_no_alternative() -> None:
+    """A side chain deposited only as altloc A offers nothing to choose from."""
+    atoms = [
+        _site("CA", occupancy=1.0, source_order=0),
+        _site("CB", altloc="A", occupancy=5.0, source_order=1),
+        _site("CG", altloc="A", occupancy=5.0, source_order=2),
+    ]
+    selection = conformer_selection.select_residue(atoms)
+
+    assert selection.selected_altloc == "A"
+    assert selection.alternative_conformers_present is False
+    assert selection.altloc_selection_fallback is False
+    assert selection.selected_conformer_mean_occupancy is None
+    assert _altloc_option_map(selection) == {"A": "NA"}
+    assert [(atom.atom_name, atom.altloc) for atom in selection.contact_atoms] == [
+        ("CA", ""),
+        ("CB", "A"),
+        ("CG", "A"),
+    ]
+
+
+def test_select_residue_reports_the_selected_conformer_mean_only() -> None:
+    """The mean covers the atoms carrying the selected label, not shared ones."""
+    atoms = [
+        _site("N", occupancy=1.0, source_order=0),
+        _site("NE2", altloc="A", occupancy=0.3, source_order=1),
+        _site("NE2", altloc="B", occupancy=0.7, source_order=2),
+    ]
+    selection = conformer_selection.select_residue(atoms)
+
+    assert selection.selected_conformer_mean_occupancy == approx(0.7)
+
+
+def test_select_residue_counts_chemical_sites_with_a_validated_element_only() -> None:
+    """A duplicate record with an unknown element must not make an ion a cluster."""
+    atoms = [
+        _site("ZN", element="ZN", occupancy=1.0, source_order=0),
+        _site("ZN", element="X", element_known=False, occupancy=1.0, source_order=1),
+    ]
+    selection = conformer_selection.select_residue(atoms)
+
+    assert selection.chemical_atom_site_count == 1
+    assert len(selection.source_atoms) == 2
+
+
+def test_select_residue_rejects_an_empty_residue() -> None:
+    with pytest.raises(ValueError, match="at least one atom"):
+        conformer_selection.select_residue([])
+
+
 def test_select_residue_prefers_a_selected_conformer_over_a_blank_duplicate() -> None:
     atoms = [
         _site("NE2", altloc="", occupancy=1.0, source_order=0),
@@ -261,7 +311,20 @@ def test_select_residue_prefers_a_selected_conformer_over_a_blank_duplicate() ->
 
     contact = _contact(selection, "NE2")
     assert contact.altloc == "B"
-    assert selection.selected_over_blank_duplicate_count == 1
+    assert selection.malformed_duplicate_atom_name_count == 1
+
+
+def test_select_residue_counts_every_shadowed_blank_duplicate() -> None:
+    """Two blank records under a selected named atom are two extra records."""
+    atoms = [
+        _site("NE2", altloc="", occupancy=1.0, source_order=0),
+        _site("NE2", altloc="", occupancy=1.0, source_order=1),
+        _site("NE2", altloc="B", occupancy=0.6, source_order=2),
+    ]
+    selection = conformer_selection.select_residue(atoms)
+
+    assert _contact(selection, "NE2").altloc == "B"
+    assert selection.malformed_duplicate_atom_name_count == 2
 
 
 def test_select_residue_resolves_repeated_atom_names_by_occupancy() -> None:

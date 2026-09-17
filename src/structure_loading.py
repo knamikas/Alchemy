@@ -467,9 +467,7 @@ def prepare_atom_inventory(
         atom for residue in residues for atom in residue.contact_atoms
     )
     malformed_names = sum(
-        residue.malformed_duplicate_atom_name_count
-        + residue.selected_over_blank_duplicate_count
-        for residue in residues
+        residue.malformed_duplicate_atom_name_count for residue in residues
     )
     unknown_count = sum(not atom.element_known for atom in source_atoms)
     non_finite_count = sum(not atom.coordinates_valid for atom in source_atoms)

@@ -123,7 +123,8 @@ density statistics from different models are never combined.
 
 Alternative conformations are selected coherently per residue. Blank-altloc
 atoms are shared, while the named conformer with the highest mean valid atomic
-occupancy is selected (ties are resolved by altloc label). This avoids creating
+occupancy is selected (means within 1e-12 are a tie, resolved by the lowest
+altloc label). This avoids creating
 an artificial residue by choosing A/B alternatives independently for each atom.
 Every neighboring residue is considered independently, and the selected and
 available alternatives are recorded.
