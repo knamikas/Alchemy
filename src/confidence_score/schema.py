@@ -15,11 +15,6 @@ from output_rows import scientific_csv_value
 REFERENCE_METADATA_FILE = "metadata.json"
 #: Per-component ``value``/``count`` table beside the metadata file.
 REFERENCE_DISTRIBUTION_FILE = "component_distributions.csv"
-#: Identity of the raw-threshold and verdict-matrix policy; written to every
-#: row as ``score_policy_version`` and compared on reference load.
-CONFIDENCE_METHOD_VERSION = "three_level_rms_2026_v1"
-#: Layout version of the confidence input and analysis columns.
-CONFIDENCE_SCHEMA_VERSION = 3
 #: Each assessable metal site counts once in its component cohort; the ranks
 #: are site-weighted, not structure-weighted (docs/output-schema.md).
 COHORT_WEIGHTING = "per_metal_site"
@@ -124,8 +119,7 @@ ANALYSIS_COLUMNS = (
     "alchemy_score",
     "evidence_basis",
     "verdict_reason",
-    "score_policy_version",
-    "confidence_reference_version",
+    "confidence_reference_id",
     "confidence_cohort_id",
     "confidence_cohort_size",
     "density_reference_size",
@@ -136,7 +130,7 @@ ANALYSIS_COLUMNS = (
 CONFIDENCE_INPUT_STATUSES = frozenset(ConfidenceInputStatus)
 
 
-INPUT_STATUS_POLICY = "independent_component_availability_v1"
+INPUT_STATUS_POLICY = "independent_component_availability"
 
 
 CONFIDENCE_BOOLEAN_COLUMNS = frozenset(
@@ -149,8 +143,6 @@ CONFIDENCE_BOOLEAN_COLUMNS = frozenset(
 #: module adds the two bundled-data identity fields when it writes them.
 SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
     {
-        "confidence_method_version": CONFIDENCE_METHOD_VERSION,
-        "confidence_schema_version": CONFIDENCE_SCHEMA_VERSION,
         "cohort_weighting": COHORT_WEIGHTING,
         "score_decimal_places": SCORE_DECIMAL_PLACES,
         "metric_decimal_places": METRIC_DECIMAL_PLACES,
@@ -174,12 +166,9 @@ SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
         "support_score_method": "reverse_average_rank_empirical_cdf",
         "geometry_statistic": "rms_finite_score_eligible_zbond",
         "overall_rule": "any_suspect_or_review_plus_review",
-        "coverage_policy": "annotation_only_v1",
+        "coverage_policy": "annotation_only",
         "input_status_policy": INPUT_STATUS_POLICY,
-        #: Redundant with ``analysis_config_id``, which already covers the
-        #: site cap, but part of the hashed scoring contract: dropping it
-        #: would change the reference identity digest and invalidate every
-        #: published reference, so it stays.
+        # Record the cohort site cap explicitly as well as in its analysis identity.
         "maximum_entry_metal_sites": MAX_ANALYZED_METAL_SITES,
     }
 )

@@ -78,7 +78,7 @@ whether the output is complete enough for your analysis.
 | `n_metals`, `n_bonds`, `n_candidates` | Selected coordinate sites, assigned contacts, and candidate rows. Blank bond or candidate counts mean bond analysis was disabled or the entry failed before it could run; `0` means it ran and found no rows, or that the entry ended early with nothing to analyze (`no_metals=true` or `metal_site_limit_exceeded=true`). |
 | `runtime_s` | Total entry runtime in seconds. |
 | `reason_codes`, `warning_codes`, `status_detail` | Pipe-separated outcome reasons, non-status warnings, and a bounded human-readable explanation. |
-| `alchemy_version`, `alchemy_commit`, `gemmi_version`, `ccp4_version` | Software provenance. |
+| `alchemy_version`, `gemmi_version`, `ccp4_version` | Software provenance. |
 | `reference_data_id`, `analysis_config_id` | Bundled-reference identity and analysis-policy identity used for compatibility checks. |
 | `refinement_state`, `pdb_redo_is_twin`, `pdb_redo_version`, `pdb_redo_date` | PDB-REDO refinement and source provenance. `refinement_state` is `final` for a PDB-REDO entry and `manual` for coordinates and reflections supplied on the command line. |
 | `source_coordinate_format`, `analysis_coordinate_format`, `coordinate_conversion_performed`, `source_coordinate_path` | Source-coordinate identity and any conversion performed for analysis. |
@@ -402,8 +402,7 @@ preserved as the leading block, followed by these analysis columns:
 | `alchemy_score` | Minimum available component support score for ranking only. It does not define `alchemy_level`. |
 | `evidence_basis` | `density_and_geometry`, `density_only`, `geometry_only`, or `no_assessable_evidence`. |
 | `verdict_reason` | Machine-readable decision route: `no_assessable_evidence`, `density_and_geometry_suspect`, `density_suspect`, `geometry_suspect`, `review_plus_review`, `density_review`, `geometry_review`, or `all_available_components_pass`. |
-| `score_policy_version` | Version of the raw-threshold and verdict-matrix policy. |
-| `confidence_reference_version` | Identity of the compatible pair of frozen component distributions; blank for classification-only output. |
+| `confidence_reference_id` | Identity of the compatible pair of frozen component distributions; blank for classification-only output. |
 | `confidence_cohort_id` | Identity of the exact confidence-input artifact that produced the reference cohort. |
 | `confidence_cohort_size` | Number of site rows in the frozen input cohort. |
 | `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution. |
@@ -448,8 +447,7 @@ failed finalization cannot leave an older reference looking current.
 
 ### `metadata.json`
 
-The scoring contract is recorded by `confidence_method_version`,
-`confidence_schema_version`, `score_decimal_places`, `metric_decimal_places`,
+The scoring contract is recorded by `score_decimal_places`, `metric_decimal_places`,
 `density_thresholds`, `density_saturation_value`, `density_saturation_policy`,
 `geometry_thresholds`, `geometry_statistic`, `overall_rule`,
 `support_score_method`, `coverage_policy`, `input_status_policy`,
@@ -457,6 +455,10 @@ The scoring contract is recorded by `confidence_method_version`,
 `analysis_config_id` additionally binds the model, alternate-conformer,
 symmetry, cohort-limit, and bundled-reference policies. Alchemy refuses to load
 a reference whose contract differs from the running code.
+
+Compatibility is checked against these explicit settings, required columns,
+and content-derived identities. Internal schema and method version numbers are
+not emitted or required. Software versions remain recorded as provenance.
 
 The distributions are described by `reference_id`, `distribution_file`,
 `density_distinct_value_count`, `geometry_distinct_value_count`,

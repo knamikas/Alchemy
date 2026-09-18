@@ -89,7 +89,6 @@ def _manual_entry(
             "cif_file": None,
             "data_json": None,
         },
-        alchemy_commit="test",
         gemmi_version="test",
         ccp4_version="test",
         **cfg_overrides,

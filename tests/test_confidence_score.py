@@ -24,11 +24,11 @@ from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
 
 
-def test_bundled_reference_matches_the_archived_manuscript_bytes() -> None:
+def test_bundled_reference_matches_its_pinned_checksums() -> None:
     directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
     expected = {
         "component_distributions.csv": "92ca1c704db005172eee9111d1e0d7cad907d736bf20e7b54c160814a1314b4e",
-        "metadata.json": "b62ceaf812d4512c77740290d5b7dcf9d986df1d385d711e6492c4e0ba9c0b4e",
+        "metadata.json": "61cfa6c758e8a48ce7e081f6fdc2f997f37fa10aaca920531f70ea6bdec8013c",
     }
     for filename, digest in expected.items():
         assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == digest
@@ -39,16 +39,24 @@ def test_bundled_reference_loads_under_runtime_verification() -> None:
 
     ``reference_id`` is a digest over the scoring policy and every parsed
     distribution value and count, so this proves the bundled distributions,
-    metadata, and current code agree, not only that the bytes are unchanged.
+    metadata, and current code agree, not only that the checksums match.
     """
     directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
     reference = cs.load_reference(str(directory))
-    assert reference.reference_id == "alchemy-confidence-8ba6808c816791ffbb87"
+    assert reference.reference_id == "alchemy-confidence-eb792a9fda5ce16dd016"
     assert reference.metadata["cohort_id"] == "alchemy-cohort-2e97cf013eefa9d8e0b4"
     assert reference.metadata["input_row_count"] == 330978
     assert reference.metadata["input_entry_count"] == 76954
     assert reference.density_reference_size == 330887
     assert reference.geometry_reference_size == 275870
+    assert {key for key in reference.metadata if "version" in key} == {
+        "software_versions"
+    }
+    assert dict(reference.metadata["software_versions"]) == {
+        "alchemy_version": ["1.0.0"],
+        "ccp4_version": ["ccp4-9"],
+        "gemmi_version": ["0.7.5"],
+    }
 
 
 STATS_ID_COLUMNS = ["pdbID", "category"]
@@ -353,7 +361,7 @@ def test_classification_without_reference_keeps_levels_and_blanks_rankings() -> 
     assert scored["density_score"] == ""
     assert scored["geometry_score"] == ""
     assert scored["alchemy_score"] == ""
-    assert scored["confidence_reference_version"] == ""
+    assert scored["confidence_reference_id"] == ""
 
 
 def test_geometry_summary_uses_rms_of_every_finite_score_eligible_contact() -> None:
@@ -635,9 +643,7 @@ def test_finalize_builds_independent_component_cohorts_and_scores_every_basis(
     assert by_id["4ddd"]["evidence_basis"] == "density_only"
     assert by_id["5eee"]["alchemy_level"] == "INCOMPLETE"
     assert by_id["5eee"]["alchemy_score"] == ""
-    assert {row["score_policy_version"] for row in output} == {
-        cs.CONFIDENCE_METHOD_VERSION
-    }
+    assert not any("version" in column for column in columns)
 
 
 def test_small_runs_use_the_frozen_reference_only(tmp_path: Path) -> None:
@@ -725,7 +731,6 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
                 "n_metals",
                 "analysis_config_id",
                 "alchemy_version",
-                "alchemy_commit",
                 "gemmi_version",
                 "ccp4_version",
             ],
@@ -739,7 +744,6 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
                 "metal_site_limit_exceeded": "false",
                 "n_metals": "1",
                 "alchemy_version": "1.0",
-                "alchemy_commit": "abc",
                 "gemmi_version": "0.7",
                 "ccp4_version": "9",
                 "analysis_config_id": ANALYSIS_CONFIG_ID,
@@ -761,7 +765,11 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
     assert metadata["input_entry_count"] == 1
     assert metadata["scorable_entry_count"] == 1
     assert metadata["source_entry_count"] == 1
-    assert metadata["software_versions"]["alchemy_version"] == ["1.0"]
+    assert metadata["software_versions"] == {
+        "alchemy_version": ["1.0"],
+        "gemmi_version": ["0.7"],
+        "ccp4_version": ["9"],
+    }
     assert metadata["analysis_config_id"] == ANALYSIS_CONFIG_ID
 
 
@@ -795,19 +803,19 @@ def test_validate_scored_reference_checks_reference_and_cohort_ids(
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["confidence_reference_version", "confidence_cohort_id"],
+            fieldnames=["confidence_reference_id", "confidence_cohort_id"],
         )
         writer.writeheader()
         writer.writerow(
             {
-                "confidence_reference_version": reference.reference_id,
+                "confidence_reference_id": reference.reference_id,
                 "confidence_cohort_id": reference.cohort_id,
             }
         )
     cs.validate_scored_reference(str(path), reference)
 
     path.write_text(
-        "confidence_reference_version,confidence_cohort_id\n"
+        "confidence_reference_id,confidence_cohort_id\n"
         "alchemy-confidence-other,alchemy-cohort-test\n",
         encoding="utf-8",
     )
@@ -856,6 +864,8 @@ def test_reference_metadata_field_vocabulary_covers_emitted_metadata(
 ) -> None:
     reference = cs.write_reference(str(tmp_path), {1.0: 1}, {0.5: 1}, 1)
     assert set(reference.metadata) <= cs.REFERENCE_METADATA_FIELDS
+    assert not any("version" in key for key in reference.metadata)
+    assert cs.load_reference(str(tmp_path)).reference_id == reference.reference_id
     # The scoring contract is every field the loader compares, and nothing
     # written is left out of either vocabulary.
     assert set(cs.SCORING_METADATA_FIELDS) <= set(reference.metadata)
@@ -1403,7 +1413,6 @@ def _write_manifest(path: Path, analysis_config_id: str = ANALYSIS_CONFIG_ID) ->
                 "n_metals",
                 "analysis_config_id",
                 "alchemy_version",
-                "alchemy_commit",
                 "gemmi_version",
                 "ccp4_version",
             ],
@@ -1418,7 +1427,6 @@ def _write_manifest(path: Path, analysis_config_id: str = ANALYSIS_CONFIG_ID) ->
                 "n_metals": "1",
                 "analysis_config_id": analysis_config_id,
                 "alchemy_version": "1.0",
-                "alchemy_commit": "abc",
                 "gemmi_version": "0.7",
                 "ccp4_version": "9",
             }
@@ -1846,5 +1854,5 @@ def test_the_two_in_memory_entry_points_share_one_scoring_path() -> None:
     assert ranked["verdict_reason"] == unranked["verdict_reason"]
     assert ranked["alchemy_score"] != ""
     assert unranked["alchemy_score"] == ""
-    assert unranked["confidence_reference_version"] == ""
+    assert unranked["confidence_reference_id"] == ""
     assert row == _input_row(), "scoring must not edit the row it was handed"

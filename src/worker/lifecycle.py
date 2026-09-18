@@ -119,7 +119,6 @@ def initial_result(
     return EntryResult(
         pdb_id=pdb_id,
         software=SoftwareProvenance(
-            alchemy_commit=cfg.alchemy_commit,
             gemmi_version=cfg.gemmi_version,
             ccp4_version=cfg.ccp4_version,
             reference_data_id=cfg.reference_data_id,

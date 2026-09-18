@@ -321,7 +321,6 @@ def worker_config_from_args(
         log_level=worker_level(args.log_level, args.log_file),
         allow_download=bool(args.id or args.id_file),
         manual_inputs=manual_inputs,
-        alchemy_commit=environment.alchemy_commit(),
         gemmi_version=environment.gemmi_version(),
         ccp4_version=environment.ccp4_version(env),
         reference_data_id=identity.reference_data_id,
@@ -336,7 +335,6 @@ def record_run_provenance(
     """Record the software, reference data, and confidence mode the run used."""
     run_log.details.update(
         alchemy_version=environment.ALCHEMY_VERSION,
-        alchemy_commit=cfg.alchemy_commit,
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
         confidence_mode=plan.mode or "disabled",

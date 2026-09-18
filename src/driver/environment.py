@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from collections.abc import Mapping
 
 from _version import __version__
@@ -19,14 +18,10 @@ from driver.ccp4_setup import (
     verify_ccp4,
 )
 from driver.errors import DriverError
-from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import logger_for
 
 ALCHEMY_VERSION = __version__
-# If checking the Git commit takes too long, record it as unknown
-# and continue the analysis.
-PROVENANCE_COMMAND_TIMEOUT_S = 1
 
 logger = logger_for(__name__)
 
@@ -104,37 +99,6 @@ def resolve_ccp4_environment(args: RunConfig) -> dict[str, str]:
         return _resolve_ccp4_environment(args)
     except Ccp4SetupError as exc:
         raise DriverError(str(exc)) from None
-
-
-def _git_output(*arguments: str) -> str | None:
-    """Return a git command's stdout, or None when it fails or times out."""
-    try:
-        completed = subprocess.run(
-            ["git", *arguments],
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=PROVENANCE_COMMAND_TIMEOUT_S,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return completed.stdout.strip()
-
-
-def alchemy_commit() -> str:
-    """Return the abbreviated source commit with a worktree-state marker.
-
-    ``+dirty`` marks tracked changes. A commit whose worktree state could not
-    be determined in time keeps its hash and is marked ``+unknown-state``.
-    """
-    commit = _git_output("rev-parse", "--short=12", "HEAD")
-    if not commit:
-        return "unknown"
-    status = _git_output("status", "--porcelain", "--untracked-files=no")
-    if status is None:
-        return commit + "+unknown-state"
-    return commit + ("+dirty" if status else "")
 
 
 def gemmi_version() -> str:

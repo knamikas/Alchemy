@@ -1,12 +1,10 @@
 {
-  "analysis_config_id": "alchemy-analysis-config-a0b84cce3e1c3c230cbb",
+  "analysis_config_id": "alchemy-analysis-config-c316fa94d61d0c724a59",
   "cohort_id": "alchemy-cohort-2e97cf013eefa9d8e0b4",
   "cohort_weighting": "per_metal_site",
   "confidence_inputs_file": "confidence_inputs_all.csv",
   "confidence_inputs_sha256": "2e97cf013eefa9d8e0b4b0df949041a714f9770bdb050d52c56df24d957fa786",
-  "confidence_method_version": "three_level_rms_2026_v1",
-  "confidence_schema_version": 3,
-  "coverage_policy": "annotation_only_v1",
+  "coverage_policy": "annotation_only",
   "density_distinct_value_count": 382,
   "density_reference_size": 330887,
   "density_saturation_policy": "suspect_with_zero_support",
@@ -31,7 +29,7 @@
     "geometry_only": 71,
     "unscorable": 20
   },
-  "input_status_policy": "independent_component_availability_v1",
+  "input_status_policy": "independent_component_availability",
   "manifest_status_counts": {
     "error": 12,
     "ok": 181072,
@@ -44,15 +42,10 @@
   "no_metals_entry_count": 116850,
   "overall_rule": "any_suspect_or_review_plus_review",
   "reference_data_id": "53538d4273b0",
-  "reference_id": "alchemy-confidence-8ba6808c816791ffbb87",
+  "reference_id": "alchemy-confidence-eb792a9fda5ce16dd016",
   "scorable_entry_count": 76942,
   "score_decimal_places": 6,
   "software_versions": {
-    "alchemy_commit": [
-      "67a2a8dfb781+dirty",
-      "d2bfdcdae0db",
-      "unknown"
-    ],
     "alchemy_version": [
       "1.0.0"
     ],

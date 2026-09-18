@@ -22,6 +22,7 @@ def test_execution_choices_are_not_part_of_the_payload() -> None:
     payload = analysis_config.analysis_config_payload(reference_data_id="reference-a")
     assert "bonds_enabled" not in payload
     assert "density_map_scope" not in payload
+    assert not any("version" in key for key in payload)
 
 
 def test_reference_data_changes_the_identity() -> None:

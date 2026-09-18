@@ -12,7 +12,7 @@ is verified differently. Its `reference_id` is a digest over the scoring policy
 and every distribution value and count, and the loader recomputes it from the
 file on every load, alongside the size, distinct-value, and policy fields in
 `metadata.json`. A changed distribution or an incompatible policy is rejected
-before any site is scored. The archived byte checksums are pinned by the test
+before any site is scored. The bundled file checksums are pinned by the test
 suite rather than by the loader, because the same loader also reads references
 that database runs build under their own output directory.
 

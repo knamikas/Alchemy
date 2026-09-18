@@ -96,7 +96,6 @@ class TestInitialResult:
     def test_carries_run_provenance_from_the_config(self) -> None:
         result = lifecycle.initial_result("109m", CFG, None)
         assert result.software.alchemy_version == environment.ALCHEMY_VERSION
-        assert result.software.alchemy_commit == CFG.alchemy_commit
         assert result.software.gemmi_version == CFG.gemmi_version
         assert result.software.ccp4_version == CFG.ccp4_version
 

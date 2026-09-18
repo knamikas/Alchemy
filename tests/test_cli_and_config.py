@@ -481,14 +481,10 @@ def test_windows_ccp4_setup_output_is_authoritative(
     assert env["PATH"] == r"C:\CCP4\bin"
 
 
-def test_the_three_timeout_budgets_are_distinct_and_ordered() -> None:
+def test_setup_and_tool_timeout_budgets_are_distinct_and_ordered() -> None:
     """Each class of subprocess gets a budget matched to its own work."""
-    assert (
-        environment.PROVENANCE_COMMAND_TIMEOUT_S
-        < ccp4_setup.SETUP_SHELL_TIMEOUT_S
-        < density.CCP4_TOOL_TIMEOUT_S
-    )
-    # The July 2026 database runs peaked at EDSTATS 185.7 s and FFT 54.2 s.
+    assert ccp4_setup.SETUP_SHELL_TIMEOUT_S < density.CCP4_TOOL_TIMEOUT_S
+    # Allow at least fourfold headroom over a 186-second processing job.
     assert density.CCP4_TOOL_TIMEOUT_S >= 4 * 186
 
 
@@ -515,24 +511,6 @@ def test_a_hanging_setup_script_aborts_the_run(
     message = str(excinfo.value)
     assert str(ccp4_setup.SETUP_SHELL_TIMEOUT_S) in message
     assert "stops the run" in message
-
-
-def test_a_hanging_git_probe_costs_the_commit_hash_not_the_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify failed Git provenance probes report unknown without failing the run."""
-    calls: list[float | None] = []
-
-    def fake_run(cmd: Sequence[str], **kwargs: Any) -> NoReturn:
-        timeout = kwargs.get("timeout")
-        calls.append(timeout)
-        assert timeout is not None, "provenance probes must be bounded"
-        raise subprocess.TimeoutExpired(cmd, float(timeout))
-
-    monkeypatch.setattr("driver.environment.subprocess.run", fake_run)
-
-    assert environment.alchemy_commit() == "unknown"
-    assert calls and set(calls) == {environment.PROVENANCE_COMMAND_TIMEOUT_S}
 
 
 def test_ccp4_timeout_accepts_a_custom_budget_and_rejects_nonsense() -> None:

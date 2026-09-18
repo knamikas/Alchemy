@@ -172,7 +172,7 @@ def assert_policy_was_applied(
             f"{row['pdbID']} {row['metal_resname']}"
             f"{row['metal_resnum']}/{row['metal_atom']}"
         )
-        assert row["confidence_reference_version"] == metadata["reference_id"], where
+        assert row["confidence_reference_id"] == metadata["reference_id"], where
         assert int(row["confidence_cohort_size"]) == metadata["input_row_count"], where
         rszd = float(row["rszd_abs"]) if row["rszd_abs"] else math.nan
         rms = (

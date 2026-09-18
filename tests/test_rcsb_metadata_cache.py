@@ -108,7 +108,6 @@ def test_cache_files_are_sharded_compact_key_sorted_json(
     payload = json.loads(text)
     assert text == json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     assert set(payload) == {
-        "schema_version",
         "pdb_id",
         "metadata_source",
         "retrieved_at_utc",
@@ -121,10 +120,33 @@ def test_cache_files_are_sharded_compact_key_sorted_json(
     assert read_cache_payload(str(cache), "2DEF") == payload
 
 
-def test_invalid_cache_is_a_safe_offline_miss(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"pdb_id": "2def"},
+        {"entry_available": "yes"},
+        {"conditions": "invalid"},
+        {"conditions": ["invalid"]},
+        {"metadata_source": None},
+        {"retrieved_at_utc": 123},
+        {"entry_revision_date": None},
+    ],
+)
+def test_invalid_cache_is_a_safe_offline_miss(
+    tmp_path: Path, invalid_fields: dict[str, Any]
+) -> None:
     cache_file = tmp_path / "metadata" / "ab" / "1abc.json"
     cache_file.parent.mkdir(parents=True)
-    cache_file.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
+    payload = {
+        "pdb_id": "1abc",
+        "entry_available": True,
+        "conditions": [],
+        "metadata_source": "rcsb_data_api",
+        "retrieved_at_utc": "2026-09-18T12:00:00+00:00",
+        "entry_revision_date": "2024-03-20",
+        **invalid_fields,
+    }
+    cache_file.write_text(json.dumps(payload), encoding="utf-8")
 
     assert read_cache_payload(str(cache_file.parents[1]), "1abc") is None
     assert (

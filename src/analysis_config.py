@@ -7,8 +7,6 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-ANALYSIS_CONFIG_SCHEMA_VERSION = 1
-
 MODEL_POLICY = "first"
 ALTLOC_POLICY = "highest-mean-occupancy-residue-conformer"
 SYMMETRY_POLICY = (
@@ -30,7 +28,6 @@ def analysis_config_payload(*, reference_data_id: str) -> dict[str, Any]:
     if not reference_data_id:
         raise ValueError("reference data identity is required for analysis identity")
     return {
-        "schema_version": ANALYSIS_CONFIG_SCHEMA_VERSION,
         "model_policy": MODEL_POLICY,
         "altloc_policy": ALTLOC_POLICY,
         "symmetry_contact_policy": SYMMETRY_POLICY,

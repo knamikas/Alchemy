@@ -54,7 +54,6 @@ class WorkerConfig:
     log_level: int
     allow_download: bool
     manual_inputs: ManualInputs | None
-    alchemy_commit: str
     gemmi_version: str
     ccp4_version: str
     reference_data_id: str
@@ -66,7 +65,6 @@ class WorkerConfig:
 class SoftwareProvenance:
     """The software and reference data every entry of a run was analyzed with."""
 
-    alchemy_commit: str
     gemmi_version: str
     ccp4_version: str
     reference_data_id: str

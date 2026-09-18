@@ -108,7 +108,6 @@ def _reference_cfg(
         output_dir=output_dir,
         cofactors=cofactor_catalog.cofactor_ids(),
         manual_inputs=manual_inputs,
-        alchemy_commit=environment.alchemy_commit(),
         gemmi_version=environment.gemmi_version(),
         ccp4_version=environment.ccp4_version(env),
         reference_data_id=reference_data.reference_data_id(),
@@ -337,7 +336,6 @@ def test_worker_death_result_is_a_complete_retryable_manifest_row(
     assert result.bond_rows == []
     assert result.candidate_rows == []
     assert "4321" in result.status_detail and "1abc" in result.status_detail
-    assert result.software.alchemy_commit == cfg.alchemy_commit
     assert result.software.gemmi_version == cfg.gemmi_version
     assert result.software.ccp4_version == cfg.ccp4_version
 

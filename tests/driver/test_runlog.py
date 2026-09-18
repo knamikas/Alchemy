@@ -140,7 +140,6 @@ class TestRunLog:
         run_log = self._log(tmp_path, [])
         run_log.details.update(
             alchemy_version="1.2.3",
-            alchemy_commit="deadbeef1234",
             gemmi_version="0.7.3",
             ccp4_version="9.0",
             reference_data_id="test-reference",
@@ -166,7 +165,9 @@ class TestRunLog:
 
         text = Path(run_log.write(0)).read_text(encoding="utf-8")
 
-        assert "Alchemy commit: deadbeef1234" in text
+        assert "Alchemy version: 1.2.3" in text
+        assert "Gemmi version: 0.7.3" in text
+        assert "CCP4 version: 9.0" in text
         assert "Maximum selected metal sites per entry: 100" in text
         assert "Status counts: ok=1 partial=1 skip=0 error=0" in text
         assert "Policy exclusions above 100 metal sites: 1" in text

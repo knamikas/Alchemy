@@ -20,7 +20,6 @@ from typing import Any, NamedTuple, TextIO
 from analysis_config import analysis_config_id
 from confidence_score.schema import (
     ANALYSIS_COLUMNS,
-    CONFIDENCE_METHOD_VERSION,
     METRIC_DECIMAL_PLACES,
     REFERENCE_DISTRIBUTION_FILE,
     REFERENCE_METADATA_FILE,
@@ -379,8 +378,7 @@ def _score_prepared_row(
             "density_score": _format_support_score(verdict.density_score),
             "geometry_score": _format_support_score(verdict.geometry_score),
             "alchemy_score": _format_support_score(verdict.alchemy_score),
-            "score_policy_version": CONFIDENCE_METHOD_VERSION,
-            "confidence_reference_version": reference.reference_id if reference else "",
+            "confidence_reference_id": reference.reference_id if reference else "",
             "confidence_cohort_id": reference.cohort_id if reference else "",
             "confidence_cohort_size": reference.cohort_size if reference else "",
             "density_reference_size": (
@@ -464,7 +462,6 @@ def manifest_provenance(path: str) -> dict[str, Any]:
     status_counts = Counter(row.get("status", "") for row in rows)
     software_columns = (
         "alchemy_version",
-        "alchemy_commit",
         "gemmi_version",
         "ccp4_version",
     )
@@ -615,7 +612,7 @@ def validate_scored_reference(path: str, reference: ConfidenceReference) -> None
     """Refuse resume output containing rows from another frozen reference."""
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        required = {"confidence_reference_version", "confidence_cohort_id"}
+        required = {"confidence_reference_id", "confidence_cohort_id"}
         if not required.issubset(reader.fieldnames or ()):
             raise ValueError(
                 "existing confidence output has no reference or cohort identifier"
@@ -623,7 +620,7 @@ def validate_scored_reference(path: str, reference: ConfidenceReference) -> None
         identifiers: set[str] = set()
         cohort_identifiers: set[str] = set()
         for row in reader:
-            identifier = (row.get("confidence_reference_version") or "").strip()
+            identifier = (row.get("confidence_reference_id") or "").strip()
             cohort_id = (row.get("confidence_cohort_id") or "").strip()
             if not identifier or not cohort_id:
                 raise ValueError(

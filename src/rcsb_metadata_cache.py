@@ -27,7 +27,6 @@ RCSB_REQUEST_ATTEMPTS = 3
 RCSB_REQUEST_TIMEOUT_S = 60
 #: Exponential back-off base between attempts, in seconds.
 RCSB_RETRY_BACKOFF_BASE_S = 2
-RCSB_CACHE_SCHEMA_VERSION = 1
 RCSB_BATCH_SIZE = 200
 RCSB_GRAPHQL_QUERY = """
 query CrystallizationConditions($ids: [String!]!) {
@@ -80,8 +79,6 @@ def _validated_cache_payload(pdb_id: str, value: object) -> dict[str, Any] | Non
     if not isinstance(value, dict):
         return None
     payload = cast("dict[str, Any]", value)
-    if payload.get("schema_version") != RCSB_CACHE_SCHEMA_VERSION:
-        return None
     if str(payload.get("pdb_id", "")).lower() != pdb_id:
         return None
     if not isinstance(payload.get("entry_available"), bool):
@@ -99,7 +96,7 @@ def _validated_cache_payload(pdb_id: str, value: object) -> dict[str, Any] | Non
 def read_cache_payload(cache_root: str, pdb_id: str) -> dict[str, Any] | None:
     """Return the validated cached payload for one entry, or ``None`` on a miss.
 
-    Any unreadable, malformed, or differently versioned file is a miss.
+    Any unreadable or malformed file, or one naming another entry, is a miss.
     """
     pdb_id = pdb_id.strip().lower()
     path = _cache_path(cache_root, pdb_id)
@@ -247,7 +244,6 @@ def _payloads_from_graphql(
         ]
         payloads.append(
             {
-                "schema_version": RCSB_CACHE_SCHEMA_VERSION,
                 "pdb_id": pdb_id,
                 "metadata_source": "rcsb_data_api",
                 "retrieved_at_utc": retrieved_at_utc,

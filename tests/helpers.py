@@ -69,7 +69,6 @@ approx = cast(_PytestApi, pytest).approx
 
 # Placeholder provenance every synthetic worker result carries.
 PLACEHOLDER_PROVENANCE: Mapping[str, str] = {
-    "alchemy_commit": "abc123def456",
     "gemmi_version": "0.7.5",
     "ccp4_version": "9.0",
     "reference_data_id": "0123456789ab",

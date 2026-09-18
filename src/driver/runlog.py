@@ -73,7 +73,6 @@ ENTRY_DIAGNOSTIC_TRAILING_COLUMNS = (
 
 PROVENANCE_DETAIL_KEYS = (
     "alchemy_version",
-    "alchemy_commit",
     "gemmi_version",
     "ccp4_version",
     "reference_data_id",
@@ -507,7 +506,6 @@ class RunLog:
         )
         provenance_labels = {
             "alchemy_version": "Alchemy version",
-            "alchemy_commit": "Alchemy commit",
             "gemmi_version": "Gemmi version",
             "ccp4_version": "CCP4 version",
             "reference_data_id": "Reference data ID",
