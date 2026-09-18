@@ -1,128 +1,16 @@
-"""Load and validate bundled reference data from src/data.
-
-Load lazily so callers can handle failures. Cache immutable results for reuse.
-"""
+"""Verify and identify the combined bundled catalog and distance references."""
 
 import hashlib
-import json
-import math
 import os
 from collections.abc import Mapping
 from functools import cache
 from types import MappingProxyType
-from typing import NamedTuple
 
-from codes import ParentType
+from coordination.metal_distances import distances
+from metallocofactors import catalog
+from reference_integrity import sha256, verify_checksum
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-
-COFACTOR_CATALOG_PATH = os.path.join(DATA_DIR, "metallocofactors_id.txt")
-DONOR_DISTANCE_PATH = os.path.join(DATA_DIR, "metal_distances_info.txt")
-
-# Sidecar paths and checksum keys written by the reference-data maintenance tools.
-CHECKSUM_SIDECARS = {
-    COFACTOR_CATALOG_PATH: (
-        os.path.join(DATA_DIR, "metallocofactors_id.meta.json"),
-        "catalog_sha256",
-    ),
-    DONOR_DISTANCE_PATH: (
-        os.path.join(DATA_DIR, "metal_distances_info.meta.json"),
-        "distance_table_sha256",
-    ),
-}
-
-
-class ReferenceDataError(RuntimeError):
-    """Bundled reference data is missing, unreadable, or inconsistent with its metadata."""
-
-
-def sha256(path: str) -> str:
-    """Return the hexadecimal SHA-256 digest of a file."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(65536), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _verify_checksum(path: str) -> None:
-    """Verify a bundled file against its recorded checksum.
-
-    Custom paths are not checked. The checksum establishes file identity, not
-    the scientific validity of its contents.
-    """
-    sidecar = CHECKSUM_SIDECARS.get(path)
-    if sidecar is None:
-        return
-    sidecar_path, key = sidecar
-    try:
-        with open(sidecar_path, encoding="utf-8") as handle:
-            recorded = json.load(handle).get(key)
-    except OSError as exc:
-        raise ReferenceDataError(
-            f"{os.path.basename(path)} has no metadata sidecar at "
-            f"{sidecar_path}; bundled reference data must be verifiable"
-        ) from exc
-    except ValueError as exc:
-        raise ReferenceDataError(
-            f"{os.path.basename(sidecar_path)} is not readable JSON"
-        ) from exc
-    if not recorded:
-        raise ReferenceDataError(f"{os.path.basename(sidecar_path)} records no {key}")
-    actual = sha256(path)
-    if actual != recorded:
-        raise ReferenceDataError(
-            f"{os.path.basename(path)} does not match the checksum recorded in "
-            f"{os.path.basename(sidecar_path)} (expected {recorded}, found "
-            f"{actual}). Rebuild the file with its tool, or re-stamp the "
-            "sidecar if the edit was deliberate."
-        )
-
-
-class CofactorCatalog(NamedTuple):
-    """The bundled metallocofactor catalog, split by structural class."""
-
-    #: Every component id Alchemy treats as a metal-containing cofactor.
-    ids: frozenset[str]
-    #: Components whose metals sit in an iron-sulfur-style cluster.
-    cluster: frozenset[str]
-    #: Components whose metals sit in a heme-style macrocycle.
-    heme: frozenset[str]
-
-
-def _parse_cofactor_catalog(path: str) -> CofactorCatalog:
-    """Return the catalog's id, cluster, and heme sets from one pass.
-
-    Tab-separated ``id<TAB>formula<TAB>structural_class``, written by
-    ``tools/build_metallocofactor_catalog.py``. The classes tag each metal's
-    environment in ``parent_type``, where ``cluster`` takes precedence over
-    ``heme`` for a component carrying both.
-    """
-    ids: set[str] = set()
-    cluster: set[str] = set()
-    heme: set[str] = set()
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            fields = line.rstrip("\n").split("\t")
-            component_id = fields[0].strip()
-            if not component_id:
-                continue
-            ids.add(component_id)
-            if len(fields) < 3:
-                continue
-            structural_class = fields[2].strip()
-            if structural_class == ParentType.CLUSTER:
-                cluster.add(component_id)
-            elif structural_class == ParentType.HEME:
-                heme.add(component_id)
-    if not ids:
-        raise ValueError("bundled metallocofactor catalog is empty")
-    if not cluster or not heme:
-        raise ValueError(
-            f"{os.path.basename(path)} carries no structural classes; rebuild "
-            "it with tools/build_metallocofactor_catalog.py"
-        )
-    return CofactorCatalog(frozenset(ids), frozenset(cluster), frozenset(heme))
+CHECKSUM_SIDECARS = {**catalog.CHECKSUM_SIDECARS, **distances.CHECKSUM_SIDECARS}
 
 
 @cache
@@ -140,116 +28,10 @@ def reference_data_id() -> str:
     digest = hashlib.sha256()
     for name in sorted(checksums):
         digest.update(f"{name}:{checksums[name]}\n".encode())
-    # Match the manifest's 12-character commit abbreviation; this is not authentication.
+    # A compact reference identity for provenance, not authentication.
     return digest.hexdigest()[:12]
 
 
 def _verified_sha256(path: str) -> str:
-    _verify_checksum(path)
+    verify_checksum(path, CHECKSUM_SIDECARS)
     return sha256(path)
-
-
-@cache
-def catalog(path: str = COFACTOR_CATALOG_PATH) -> CofactorCatalog:
-    """Load and cache the verified metallocofactor catalog."""
-    _verify_checksum(path)
-    return _parse_cofactor_catalog(path)
-
-
-def cofactor_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
-    """Every component id Alchemy treats as a metal-containing cofactor."""
-    return catalog(path).ids
-
-
-def cluster_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
-    """Components whose metals sit in an iron-sulfur-style cluster."""
-    return catalog(path).cluster
-
-
-def heme_ids(path: str = COFACTOR_CATALOG_PATH) -> frozenset[str]:
-    """Components whose metals sit in a heme-style macrocycle."""
-    return catalog(path).heme
-
-
-# Skipped by name rather than by failing to parse, which is what lets every
-# other unparseable line be an error.
-DISTANCE_TABLE_HEADER = ("residue", "atom", "metal", "avg_bond_dist", "st_dev")
-
-
-def load_literature(
-    path: str,
-) -> dict[tuple[str, str, str], tuple[float, float]]:
-    """Load literature distances as {(residue, atom, metal): (mean, stdev)}.
-
-    The five columns are residue, atom, metal, mean distance, and standard
-    deviation. In the residue column, CA means backbone carbonyl; in the metal
-    column, CA means calcium. See _bonding_key.
-
-    Reject malformed rows so damaged data cannot appear as missing references.
-    """
-    lit: dict[tuple[str, str, str], tuple[float, float]] = {}
-    first_line_by_key: dict[tuple[str, str, str], int] = {}
-    with open(path, encoding="utf-8") as f:
-        for number, line in enumerate(f, start=1):
-            parts = line.split()
-            if not parts or parts[0].startswith("#"):
-                continue
-            if tuple(parts) == DISTANCE_TABLE_HEADER:
-                continue
-            if len(parts) != 5:
-                # Reject extra fields as well as missing ones to detect damaged rows.
-                raise ValueError(
-                    f"{os.path.basename(path)} line {number} has "
-                    f"{len(parts)} fields, expected 5: {line.strip()!r}"
-                )
-            try:
-                mu, stdev = float(parts[3]), float(parts[4])
-            except ValueError as exc:
-                raise ValueError(
-                    f"{os.path.basename(path)} line {number} has non-numeric "
-                    f"distance columns: {line.strip()!r}"
-                ) from exc
-            if not (math.isfinite(mu) and math.isfinite(stdev)):
-                raise ValueError(
-                    f"{os.path.basename(path)} line {number} has non-finite "
-                    f"distance columns: {line.strip()!r}"
-                )
-            if mu <= 0.0 or stdev <= 0.0:
-                raise ValueError(
-                    f"{os.path.basename(path)} line {number} has non-positive "
-                    f"distance columns: {line.strip()!r}"
-                )
-            key = (parts[0], parts[1], parts[2])
-            if key in lit:
-                first_line = first_line_by_key[key]
-                raise ValueError(
-                    f"{os.path.basename(path)} line {number} duplicates "
-                    f"reference key {' '.join(key)!r} first defined on line "
-                    f"{first_line}"
-                )
-            lit[key] = (mu, stdev)
-            first_line_by_key[key] = number
-    if not lit:
-        raise ValueError(f"{os.path.basename(path)} carries no reference distances")
-    return lit
-
-
-@cache
-def literature_distances(
-    path: str = DONOR_DISTANCE_PATH,
-) -> Mapping[tuple[str, str, str], tuple[float, float]]:
-    """``{(residue, atom, metal): (mu, stdev)}`` from the literature table."""
-    _verify_checksum(path)
-    return MappingProxyType(load_literature(path))
-
-
-@cache
-def first_sphere_targets(
-    path: str = DONOR_DISTANCE_PATH,
-) -> Mapping[tuple[str, str], float]:
-    """``{(metal_element, donor_element): longest reference distance}``."""
-    targets: dict[tuple[str, str], float] = {}
-    for (_, donor, metal_element), (target, _) in literature_distances(path).items():
-        key = (metal_element, donor)
-        targets[key] = max(target, targets.get(key, -math.inf))
-    return MappingProxyType(targets)

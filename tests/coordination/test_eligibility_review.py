@@ -13,7 +13,6 @@ from pathlib import Path
 import helpers
 from helpers import AtomSpec, StructureBuilder, approx
 
-import reference_data
 from codes import (
     CandidateSource,
     ContactScope,
@@ -29,6 +28,7 @@ from coordination.eligibility import (
     current_contacts_from_candidates,
     first_sphere_rule,
 )
+from coordination.metal_distances import distances as distance_reference
 from coordination.policy import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
 from structure_analysis import (
     AtomSite,
@@ -130,7 +130,7 @@ def test_no_reference_target_defines_a_sphere_wider_than_the_candidate_search() 
     past the radius the candidate search covers, so contacts inside the sphere
     would never be discovered. Widest bundled target: K-O at 2.82 A.
     """
-    targets = reference_data.first_sphere_targets()
+    targets = distance_reference.first_sphere_targets()
     assert targets, "the bundled reference table defines no first-sphere targets"
     over_radius = sorted(
         f"{metal}-{donor}: {target}"
@@ -146,7 +146,7 @@ def test_no_reference_target_defines_a_sphere_wider_than_the_candidate_search() 
         for (residue, donor, metal), (
             mu,
             _sd,
-        ) in reference_data.literature_distances().items()
+        ) in distance_reference.literature_distances().items()
         if mu + FIRST_SPHERE_TOLERANCE > CANDIDATE_SEARCH_RADIUS
     )
     assert exact == []
@@ -170,7 +170,7 @@ def test_a_non_oxygen_atom_in_a_water_residue_gets_no_water_oxygen_reference() -
     target, cutoff, kind, key = first_sphere_rule(metal, nitrogen)
     assert kind is ReferenceKind.ELEMENT_FALLBACK
     assert key == "*:N:ZN"
-    assert target == approx(reference_data.first_sphere_targets()[("ZN", "N")])
+    assert target == approx(distance_reference.first_sphere_targets()[("ZN", "N")])
     assert target != approx(water_target)
     assert cutoff == approx(target + FIRST_SPHERE_TOLERANCE)
 
@@ -231,10 +231,10 @@ def test_a_declared_non_oxygen_water_atom_is_published_without_an_exact_referenc
     assert candidate["assignment_reference_kind"] == ReferenceKind.ELEMENT_FALLBACK
     assert candidate["assignment_reference"] == "*:N:ZN"
     assert candidate["assignment_target"] == approx(
-        reference_data.first_sphere_targets()[("ZN", "N")]
+        distance_reference.first_sphere_targets()[("ZN", "N")]
     )
     assert candidate["assignment_target"] != approx(
-        reference_data.literature_distances()[("HOH", "O", "ZN")][0]
+        distance_reference.literature_distances()[("HOH", "O", "ZN")][0]
     )
     assert candidate["inferred_donor_allowed"] is False
     assert candidate["donor_rule_override"] == DonorRuleOverride.DECLARED_CONNECTION

@@ -22,12 +22,14 @@ from confidence_score import (
     score_against_reference,
     validate_scored_reference,
 )
+from confidence_score.reference import (
+    DEFAULT_CONFIDENCE_REFERENCE_DIR as DEFAULT_CONFIDENCE_REFERENCE_DIR,
+)
 from driver.errors import DriverError
 from driver.layout import OutputLayout
 from driver.review_queue import write_review_queue
 from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS
-from paths import REPO_DIR
 from run_config import RunConfig
 from run_logging import logger_for
 from worker.contracts import EntryResult
@@ -36,11 +38,6 @@ if TYPE_CHECKING:
     from driver.dispatch import BatchTally
 
 logger = logger_for(__name__)
-
-
-DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
-    REPO_DIR, "src", "data", "confidence_reference"
-)
 
 
 def resolve_confidence_reference_dir(

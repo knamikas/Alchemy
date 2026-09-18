@@ -24,7 +24,7 @@ sites. Run Alchemy from a source checkout using the
 ### Manuscript confidence reference
 
 The reference in
-[`src/data/confidence_reference/`](src/data/confidence_reference/README.md)
+[`src/confidence_score/confidence_reference/`](src/confidence_score/confidence_reference/)
 is copied unchanged from the finalized August 17, 2026
 [manuscript dataset](https://doi.org/10.5281/zenodo.22032936). Its cohort contains
 330,978 sites from 76,954 entries, and its reference ID is

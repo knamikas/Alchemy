@@ -174,7 +174,7 @@ N. A declaration can still establish such an atom as a declared bond;
 
 Inferring a contact and scoring one are separate questions. The
 geometry-inference donor table governs inference; scoring additionally requires
-a literature reference distance in `src/data/metal_distances_info.txt`, and that
+a literature reference distance in `src/coordination/metal_distances/metal_distances_info.txt`, and that
 reference does not cover every donor Alchemy will infer:
 
 - **Only ten metals have reference rows.** The table covers NA, MG, K, CA, MN,
@@ -378,7 +378,7 @@ input statuses, and software provenance. `context_warning` is carried into the
 result as an interpretive annotation and does not change a level or score.
 
 Alchemy includes the frozen
-[manuscript confidence reference](../src/data/confidence_reference/README.md)
+[manuscript confidence reference](../src/confidence_score/confidence_reference/)
 from the August 17, 2026 dataset: 330,978 sites, with 330,887 density
 observations and 275,870 geometry observations. A fresh clone uses this
 reference to provide empirical rankings for available evidence alongside the
@@ -389,7 +389,7 @@ bundled files.
 For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
 the reference produced under the current output directory's
 `confidence_reference/`, then in the repository's
-`src/data/confidence_reference/`. `--confidence-reference-dir` selects an
+`src/confidence_score/confidence_reference/`. `--confidence-reference-dir` selects an
 explicit copy instead. Alchemy loads that reference once, derives each new
 site's compact inputs while its normal result is still in memory, and writes
 `confidence_scores_all.csv` directly. These runs are compared with the frozen

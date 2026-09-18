@@ -38,7 +38,12 @@ from confidence_score.scoring import (
     score_site,
 )
 from output_rows import finite_float
-from reference_data import reference_data_id, sha256
+from reference_data import reference_data_id
+from reference_integrity import sha256
+
+DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "confidence_reference"
+)
 
 #: The header every component distribution file carries.
 DISTRIBUTION_COLUMNS = ("component", "value", "count")

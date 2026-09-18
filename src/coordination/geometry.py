@@ -16,8 +16,8 @@ from collections.abc import Iterable
 from codes import MultiDonorStatus, ScoreExclusionReason
 from coordination.contact_record import Candidate, GeometryResult, MultiDonorResult
 from coordination.eligibility import bonding_key
+from coordination.metal_distances.distances import literature_distances
 from coordination.policy import ZSCORE_OUTLIER_CUTOFF
-from reference_data import literature_distances
 from structure_analysis import NAN
 
 #: What makes two contacts share one donor-residue image around one metal: the

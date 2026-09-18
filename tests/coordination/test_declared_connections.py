@@ -23,9 +23,9 @@ import pytest
 from helpers import AtomRef, AtomSpec, ResidueSpec, StructureBuilder, approx
 
 import coordinate_conversion as conversion
-import reference_data
 from codes import CandidateSource
 from coordination import declared_connections
+from coordination.metal_distances import distances as distance_reference
 from pdb_remarks import RESNAME_LAYOUT
 from structure_analysis import ResidueSelection, StructureContext, load_structure
 
@@ -1273,7 +1273,7 @@ def test_declared_contact_outside_first_sphere_keeps_measured_geometry(
     )
 
     (row,) = result.rows_for("NE2")
-    mu, sigma = reference_data.literature_distances()[("HIS", "N", "ZN")]
+    mu, sigma = distance_reference.literature_distances()[("HIS", "N", "ZN")]
     assert (row["literature_distance"], row["literature_stdev"]) == (mu, sigma)
     assert math.isfinite(row["dpi"]) and row["dpi"] > 0
     expected = (3.90 - mu) / math.sqrt(row["dpi"] ** 2 + sigma**2)

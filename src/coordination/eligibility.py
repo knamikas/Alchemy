@@ -35,12 +35,15 @@ from coordination.donor_chemistry import (
     INFERRED_DONOR_ATOMS,
     N_TERMINAL_DONOR_ATOMS,
 )
+from coordination.metal_distances.distances import (
+    first_sphere_targets,
+    literature_distances,
+)
 from coordination.policy import (
     CANDIDATE_SEARCH_RADIUS,
     FIRST_SPHERE_TOLERANCE,
     SEARCH_EPSILON,
 )
-from reference_data import first_sphere_targets, literature_distances
 from structure_analysis import NAN, AtomSite, StructureContext
 
 

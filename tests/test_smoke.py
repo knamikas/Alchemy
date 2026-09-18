@@ -68,12 +68,12 @@ def test_src_modules_import() -> None:
 
 
 def test_src_dir_fixture_points_at_the_modules(
-    src_dir: str, repo_root: str, data_dir: str
+    src_dir: str, repo_root: str, metal_distances_dir: str
 ) -> None:
     """The path fixtures address the real checkout, not a copy or a stale root."""
     assert os.path.isfile(os.path.join(src_dir, "coordination", "analysis.py"))
     assert os.path.dirname(src_dir) == repo_root
-    assert os.path.isfile(os.path.join(data_dir, "metal_distances_info.txt"))
+    assert os.path.isfile(os.path.join(metal_distances_dir, "metal_distances_info.txt"))
 
 
 def test_root_launcher_works_outside_the_repository(

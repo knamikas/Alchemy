@@ -25,8 +25,8 @@ from confidence_score.schema import (
     parse_csv_bool,
     site_key,
 )
+from metallocofactors.catalog import cofactor_ids
 from output_rows import MetalStatsRow, finite_float
-from reference_data import cofactor_ids
 
 #: ``metal_atom_index`` of a placeholder row, prefixed to the site's one-based
 #: position among the entry's unresolved sites. A placeholder names a site the

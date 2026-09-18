@@ -35,7 +35,7 @@ import cli
 import confidence_score
 import crystallization_conditions
 import inputs
-import reference_data
+from coordination.metal_distances import distances as distance_reference
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver import review_queue, runlog
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
@@ -335,8 +335,8 @@ def log_paths(output_dir: _StrPath) -> list[str]:
 def literature_reference(
     residue: str, atom_element: str, metal: str
 ) -> tuple[float, float]:
-    """(mu, sigma) for one row of ``src/data/metal_distances_info.txt``."""
-    return reference_data.literature_distances()[(residue, atom_element, metal)]
+    """(mu, sigma) for one row of ``src/coordination/metal_distances/metal_distances_info.txt``."""
+    return distance_reference.literature_distances()[(residue, atom_element, metal)]
 
 
 @dataclass

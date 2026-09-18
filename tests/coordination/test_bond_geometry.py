@@ -17,7 +17,6 @@ import codes
 import coordinate_conversion
 import coordination.dpi as dpi_module
 import coordination.schema as coordination_schema
-import reference_data
 from codes import (
     EligibilityReason,
     EligibilityStatus,
@@ -33,6 +32,7 @@ from coordination.contact_record import (
 )
 from coordination.eligibility import first_sphere_rule
 from coordination.geometry import annotate_contacts, zscore
+from coordination.metal_distances import distances as distance_reference
 from coordination.policy import CANDIDATE_SEARCH_RADIUS, FIRST_SPHERE_TOLERANCE
 from metal_elements import METAL_ELEMENTS
 from structure_analysis import (
@@ -479,7 +479,7 @@ def test_backbone_carbonyl_oxygen_is_a_donor_for_every_residue(
     assert row["neighbor_class"] == "amino_acid"
     assert row["bonded_to"] == "P"
     assert row["literature_distance"] == approx(
-        reference_data.literature_distances()[("CA", "O", "ZN")][0]
+        distance_reference.literature_distances()[("CA", "O", "ZN")][0]
     )
 
 
@@ -815,7 +815,7 @@ def test_first_sphere_cutoff_is_the_exact_target_plus_the_harding_tolerance(
     neighbor = helpers.atom_site(
         element, residue_name=residue, atom_name=atom, is_water=is_water
     )
-    mu = reference_data.literature_distances()[expected_key][0]
+    mu = distance_reference.literature_distances()[expected_key][0]
 
     target, cutoff, kind, key = first_sphere_rule(metal_site, neighbor)
 
@@ -839,7 +839,10 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     neighbor = helpers.atom_site("O", residue_name="ASN", atom_name="OD1")
     widest_zn_o = max(
         mu
-        for (_, atom, metal), (mu, _sd) in reference_data.literature_distances().items()
+        for (_, atom, metal), (
+            mu,
+            _sd,
+        ) in distance_reference.literature_distances().items()
         if metal == "ZN" and atom == "O"
     )
 
@@ -849,7 +852,7 @@ def test_missing_exact_reference_falls_back_to_the_largest_same_element_target()
     assert key == "*:O:ZN"
     assert target == approx(widest_zn_o)
     assert cutoff == approx(widest_zn_o + 0.75)
-    exact_asp = reference_data.literature_distances()[("ASP", "O", "ZN")][0]
+    exact_asp = distance_reference.literature_distances()[("ASP", "O", "ZN")][0]
     assert cutoff > exact_asp + 0.75
 
 
@@ -861,9 +864,9 @@ def test_first_sphere_targets_index_is_the_maximum_per_metal_and_donor_element()
     for (_residue, atom, metal), (
         mu,
         _sd,
-    ) in reference_data.literature_distances().items():
+    ) in distance_reference.literature_distances().items():
         expected[(metal, atom)] = max(mu, expected.get((metal, atom), -math.inf))
-    assert reference_data.first_sphere_targets() == expected
+    assert distance_reference.first_sphere_targets() == expected
 
 
 def test_a_metal_donor_pair_with_no_reference_is_never_inferred(tmp_path: Path) -> None:
@@ -1148,7 +1151,7 @@ def test_end_to_end_zscore_uses_the_row_dpi_and_the_bundled_reference(
 
     assert metadata.partial_reason_codes == []
     row = _only(rows, "OD1")
-    mu, sigma = reference_data.literature_distances()[("ASP", "O", "ZN")]
+    mu, sigma = distance_reference.literature_distances()[("ASP", "O", "ZN")]
     assert (mu, sigma) == (1.99, 0.05)
     assert row["literature_distance"] == approx(mu)
     assert row["literature_stdev"] == approx(sigma)
@@ -1433,7 +1436,7 @@ def test_the_bond_row_dpi_is_the_hand_computed_value(tmp_path: Path) -> None:
     assert row["dpi"] == approx(0.048, abs=DPI_ROUNDING)
     assert row["resolution"] == approx(1.90)
 
-    mu, sigma = reference_data.literature_distances()[("HOH", "O", "ZN")]
+    mu, sigma = distance_reference.literature_distances()[("HOH", "O", "ZN")]
     assert (mu, sigma) == (2.09, 0.05)
     expected = round((2.20 - mu) / math.sqrt(0.048**2 + sigma**2), 4)
     assert expected == approx(1.5871, abs=1e-4)

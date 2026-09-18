@@ -22,7 +22,7 @@ from coordination.policy import (
     SPECIAL_POSITION_OCCUPANCY_TOLERANCE,
 )
 from coordination.schema import metal_site_identifier
-from reference_data import cluster_ids, heme_ids
+from metallocofactors.catalog import cluster_ids, heme_ids
 from structure_analysis import (
     NAN,
     AtomKey,

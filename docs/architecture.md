@@ -27,9 +27,12 @@ Inputs come from the mirror, downloaded cache, or manual files.
 [rcsb_metadata_cache.py](../src/rcsb_metadata_cache.py) warms the original-PDB
 metadata cache before workers start, and
 [crystallization_conditions.py](../src/crystallization_conditions.py) reads it
-for crystallization context. `reference_data.py` and `src/data/` provide the
-cofactor catalog and distance table used in batch preparation, metal
-identification, and coordination analysis. Identification and coordination share
+for crystallization context. `metallocofactors/catalog.py` and
+`coordination/metal_distances/distances.py` load the adjacent cofactor catalog
+and distance table used in batch preparation, metal identification, and
+coordination analysis. `reference_integrity.py` supplies shared checksum
+validation, and `reference_data.py` combines the references into one identity.
+Identification and coordination share
 the loaded structure context; confidence scoring uses a frozen reference when
 applicable.
 
@@ -148,7 +151,10 @@ metadata. Its collaborators have distinct responsibilities:
 | [donor_chemistry.py](../src/coordination/donor_chemistry.py) | Determine which donor chemistries permit inferred contacts. |
 | [dpi.py](../src/coordination/dpi.py) | Calculate coordinate-precision components used in geometry assessment. |
 | [contact_record.py](../src/coordination/contact_record.py) | Carry candidate provenance, eligibility, geometry, and multi-donor assessments. |
-| [reference_data.py](../src/reference_data.py) | Load and verify reference distances and cofactor classifications. |
+| [reference_data.py](../src/reference_data.py) | Verify combined reference checksums and compute their reproducibility identity. |
+| [reference_integrity.py](../src/reference_integrity.py) | Shared file hashing and metadata-sidecar verification. |
+| [metallocofactors/catalog.py](../src/metallocofactors/catalog.py) | Load and cache cofactor classifications from the adjacent catalog. |
+| [coordination/metal_distances/distances.py](../src/coordination/metal_distances/distances.py) | Load and cache literature distances and first-sphere targets from the adjacent table. |
 | [edstats_statistics.py](../src/edstats_statistics.py) | Validate the EDSTATS residue table, join its rows to coordinate residues, and aggregate the density-context row; contact analysis builds its per-site density z-score index from those rows. |
 | [schema.py](../src/coordination/schema.py) | Define contact/site output columns and serialize their values. |
 
@@ -230,7 +236,11 @@ stages.
 rebuilds the bundled cofactor catalog;
 [stamp_distance_table.py](../tools/stamp_distance_table.py) updates or checks
 distance-table metadata. Normal runs verify and read their committed artifacts
-through `reference_data.py`. See [reference-data maintenance](maintenance.md)
+through `metallocofactors/catalog.py` and
+`coordination/metal_distances/distances.py`. The confidence loader in
+`confidence_score/reference.py` uses the bundled `confidence_reference/`
+directory beside it when no output-directory reference or explicit override
+is selected. See [reference-data maintenance](maintenance.md)
 before changing those artifacts.
 
 The `confidence_score` package also exposes standalone `finalize` and `score`

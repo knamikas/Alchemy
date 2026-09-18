@@ -7,7 +7,7 @@ z-score. Alchemy verifies both files against their checksums when a run first
 reads them, and every manifest row records the `reference_data_id` that they
 compose.
 
-The bundled [confidence reference](../src/data/confidence_reference/README.md)
+The bundled [confidence reference](../src/confidence_score/confidence_reference/)
 is verified differently. Its `reference_id` is a digest over the scoring policy
 and every distribution value and count, and the loader recomputes it from the
 file on every load, alongside the size, distinct-value, and policy fields in
@@ -18,7 +18,7 @@ that database runs build under their own output directory.
 
 ## Cofactor reference maintenance
 
-Normal analysis always loads the fixed catalog bundled in `src/data`. It never
+Normal analysis always loads the fixed catalog bundled in `src/metallocofactors/`. It never
 checks the catalog's age, accesses the network, selects a user cache, or
 rebuilds the catalog.
 
@@ -43,13 +43,13 @@ list or classification rules change.
 
 ## Reference data
 
-- `src/data/metallocofactors_id.txt` — fixed bundled catalog of metal-containing
+- `src/metallocofactors/metallocofactors_id.txt` — fixed bundled catalog of metal-containing
   Chemical Component Dictionary components used by every analysis run. Each
   tab-separated row carries the component ID, its formula, and the structural
   class (cluster, heme, or other) that the analysis reports for it.
-- `src/data/metallocofactors_id.meta.json` — generation metadata for the
+- `src/metallocofactors/metallocofactors_id.meta.json` — generation metadata for the
   committed cofactor list.
-- `src/data/metal_distances_info.txt` — reference metal-ligand distances and
+- `src/coordination/metal_distances/metal_distances_info.txt` — reference metal-ligand distances and
   standard deviations, keyed by donor residue, donor element, and metal. Values
   are from Harding (2006),
   [Acta Cryst. D62, 678-682](https://doi.org/10.1107/S0907444906014594), except
@@ -59,7 +59,7 @@ list or classification rules change.
   for the donors that this file does and doesn't cover. The format has one
   important distinction: column 1 `CA` is the backbone-carbonyl pseudo residue,
   while column 3 `CA` is calcium.
-- `src/data/metal_distances_info.meta.json` — checksum, row count, and citations
+- `src/coordination/metal_distances/metal_distances_info.meta.json` — checksum, row count, and citations
   for the distance table, written by `tools/stamp_distance_table.py`.
 
 Both bundled files are verified against their sidecars when they are first read,

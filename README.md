@@ -64,7 +64,7 @@ sites.
 
 5. Open `output/confidence_scores_all.csv` for classifications and numerical
    support scores. A fresh checkout automatically uses the bundled
-   [manuscript confidence reference](src/data/confidence_reference/README.md),
+   [manuscript confidence reference](src/confidence_score/confidence_reference/),
    built from 330,978 sites. No reference download or extra option is needed.
    Missing density or geometry evidence can still leave its component score
    blank.

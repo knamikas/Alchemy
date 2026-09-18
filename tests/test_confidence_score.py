@@ -25,7 +25,7 @@ from output_rows import MetalStatsRow
 
 
 def test_bundled_reference_matches_the_archived_manuscript_bytes() -> None:
-    directory = Path(helpers.SRC_DIR) / "data" / "confidence_reference"
+    directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
     expected = {
         "component_distributions.csv": "92ca1c704db005172eee9111d1e0d7cad907d736bf20e7b54c160814a1314b4e",
         "metadata.json": "b62ceaf812d4512c77740290d5b7dcf9d986df1d385d711e6492c4e0ba9c0b4e",
@@ -41,7 +41,7 @@ def test_bundled_reference_loads_under_runtime_verification() -> None:
     distribution value and count, so this proves the bundled distributions,
     metadata, and current code agree, not only that the bytes are unchanged.
     """
-    directory = Path(helpers.SRC_DIR) / "data" / "confidence_reference"
+    directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
     reference = cs.load_reference(str(directory))
     assert reference.reference_id == "alchemy-confidence-8ba6808c816791ffbb87"
     assert reference.metadata["cohort_id"] == "alchemy-cohort-2e97cf013eefa9d8e0b4"

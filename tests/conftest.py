@@ -235,9 +235,9 @@ def src_dir() -> str:
 
 
 @pytest.fixture(scope="session")
-def data_dir() -> str:
-    """Absolute path of ``src/data/`` (bundled literature and catalog files)."""
-    return os.path.join(SRC_DIR, "data")
+def metal_distances_dir() -> str:
+    """Absolute path of the bundled metal-distance references."""
+    return os.path.join(SRC_DIR, "coordination", "metal_distances")
 
 
 @pytest.fixture

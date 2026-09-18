@@ -40,6 +40,7 @@ from driver import (
     writers,
 )
 from driver.writers import MANIFEST_COLUMNS
+from metallocofactors import catalog as cofactor_catalog
 from worker import contracts, lifecycle
 from worker.contracts import InflightEvent
 
@@ -105,7 +106,7 @@ def _reference_cfg(
         pdb_redo_cache=os.path.join(output_dir, "cache"),
         env=env,
         output_dir=output_dir,
-        cofactors=reference_data.cofactor_ids(),
+        cofactors=cofactor_catalog.cofactor_ids(),
         manual_inputs=manual_inputs,
         alchemy_commit=environment.alchemy_commit(),
         gemmi_version=environment.gemmi_version(),

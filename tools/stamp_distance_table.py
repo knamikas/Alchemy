@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Record the distance table's checksum, row count, and source citations.
 
-Run after editing src/data/metal_distances_info.txt. Use --check to verify
-the existing metadata without rewriting it.
+Run after editing src/coordination/metal_distances/metal_distances_info.txt.
+Use --check to verify the existing metadata without rewriting it.
 """
 
 import argparse
@@ -17,12 +17,12 @@ SOURCE_DIR = os.path.join(REPO_ROOT, "src")
 if SOURCE_DIR not in sys.path:
     sys.path.insert(0, SOURCE_DIR)
 
-from reference_data import (  # noqa: E402
+from coordination.metal_distances.distances import (  # noqa: E402
     CHECKSUM_SIDECARS,
     DONOR_DISTANCE_PATH,
     load_literature,
-    sha256,
 )
+from reference_integrity import sha256  # noqa: E402
 
 # The runtime loader owns the bundled path and the sidecar key it verifies.
 TABLE_PATH = DONOR_DISTANCE_PATH
@@ -73,7 +73,7 @@ def build_metadata(path: str, generated: str) -> dict[str, object]:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line options for stamping or checking the sidecar."""
     parser = argparse.ArgumentParser(
-        description="Record what src/data/metal_distances_info.txt currently is."
+        description="Record what src/coordination/metal_distances/metal_distances_info.txt currently is."
     )
     parser.add_argument(
         "--check",

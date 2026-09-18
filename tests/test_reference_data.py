@@ -16,8 +16,11 @@ import pytest
 from helpers import SRC_DIR, STANDARD_AMINO_ACIDS, approx
 
 import reference_data
+import reference_integrity
 from coordination import policy
+from coordination.metal_distances import distances as distance_reference
 from metal_elements import METAL_ELEMENTS
+from metallocofactors import catalog as cofactor_catalog
 
 _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
     "coordination.analysis",
@@ -26,6 +29,9 @@ _MUST_NOT_READ_AT_IMPORT: tuple[str, ...] = (
     "coordination.site_environment",
     "edstats_statistics",
     "reference_data",
+    "reference_integrity",
+    "metallocofactors.catalog",
+    "coordination.metal_distances.distances",
 )
 
 
@@ -34,14 +40,14 @@ class _CacheClearable(Protocol):
 
 
 def _clear_reference_data_caches() -> None:
-    """Drop every memoized read in ``reference_data``."""
+    """Drop memoized reads in the loaders and combined reference identity."""
     cached: _CacheClearable
     for cached in (
         reference_data.reference_data_checksums,
         reference_data.reference_data_id,
-        reference_data.catalog,
-        reference_data.literature_distances,
-        reference_data.first_sphere_targets,
+        cofactor_catalog.catalog,
+        distance_reference.literature_distances,
+        distance_reference.first_sphere_targets,
     ):
         cached.cache_clear()
 
@@ -104,7 +110,7 @@ def test_a_malformed_catalog_raises_from_the_call_not_the_import(
     """
     path = _catalog(tmp_path, ["ABC\t'C1'\t", "DEF\t'C2'\t"])
     with pytest.raises(ValueError, match="no structural classes"):
-        reference_data.cofactor_ids(path)
+        cofactor_catalog.cofactor_ids(path)
 
 
 def test_ids_and_classes_come_from_one_pass_over_one_file(tmp_path: Path) -> None:
@@ -113,11 +119,11 @@ def test_ids_and_classes_come_from_one_pass_over_one_file(tmp_path: Path) -> Non
         tmp_path,
         ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme", "ZN\t'Zn'\t"],
     )
-    assert reference_data.cofactor_ids(path) == {"SF4", "HEM", "ZN"}
-    assert reference_data.cluster_ids(path) == {"SF4"}
-    assert reference_data.heme_ids(path) == {"HEM"}
-    assert reference_data.cluster_ids(path) <= reference_data.cofactor_ids(path)
-    assert reference_data.heme_ids(path) <= reference_data.cofactor_ids(path)
+    assert cofactor_catalog.cofactor_ids(path) == {"SF4", "HEM", "ZN"}
+    assert cofactor_catalog.cluster_ids(path) == {"SF4"}
+    assert cofactor_catalog.heme_ids(path) == {"HEM"}
+    assert cofactor_catalog.cluster_ids(path) <= cofactor_catalog.cofactor_ids(path)
+    assert cofactor_catalog.heme_ids(path) <= cofactor_catalog.cofactor_ids(path)
 
 
 def test_a_short_row_is_a_component_but_never_a_classification(tmp_path: Path) -> None:
@@ -129,9 +135,9 @@ def test_a_short_row_is_a_component_but_never_a_classification(tmp_path: Path) -
         tmp_path,
         ["SF4\t'Fe4 S4'\tcluster", "HEM\t'C34'\theme", "OLD\t'C2'", "BARE"],
     )
-    assert reference_data.cofactor_ids(path) == {"SF4", "HEM", "OLD", "BARE"}
-    assert reference_data.cluster_ids(path) == {"SF4"}
-    assert reference_data.heme_ids(path) == {"HEM"}
+    assert cofactor_catalog.cofactor_ids(path) == {"SF4", "HEM", "OLD", "BARE"}
+    assert cofactor_catalog.cluster_ids(path) == {"SF4"}
+    assert cofactor_catalog.heme_ids(path) == {"HEM"}
 
 
 @pytest.mark.parametrize(
@@ -143,13 +149,13 @@ def test_every_accessor_rejects_the_same_bad_catalog(
     """One set of rules, so a catalog cannot be valid to one caller only."""
     path = _catalog(tmp_path, ["ABC\t'C1'\t"])
     with pytest.raises(ValueError):
-        getattr(reference_data, accessor)(path)
+        getattr(cofactor_catalog, accessor)(path)
 
 
 def test_an_empty_catalog_is_named_as_empty(tmp_path: Path) -> None:
     """The two failures stay distinguishable: empty is not unclassified."""
     with pytest.raises(ValueError, match="catalog is empty"):
-        reference_data.cofactor_ids(_catalog(tmp_path, ["", "   "]))
+        cofactor_catalog.cofactor_ids(_catalog(tmp_path, ["", "   "]))
 
 
 def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path: Path) -> None:
@@ -158,16 +164,16 @@ def test_the_loaded_data_cannot_be_edited_by_one_caller(tmp_path: Path) -> None:
     These objects are process-wide, so a mutable one would let a single caller
     change what every later z-score is measured against.
     """
-    assert isinstance(reference_data.cofactor_ids(), frozenset)
-    assert isinstance(reference_data.cluster_ids(), frozenset)
-    assert isinstance(reference_data.heme_ids(), frozenset)
-    assert isinstance(reference_data.literature_distances(), MappingProxyType)
-    assert isinstance(reference_data.first_sphere_targets(), MappingProxyType)
+    assert isinstance(cofactor_catalog.cofactor_ids(), frozenset)
+    assert isinstance(cofactor_catalog.cluster_ids(), frozenset)
+    assert isinstance(cofactor_catalog.heme_ids(), frozenset)
+    assert isinstance(distance_reference.literature_distances(), MappingProxyType)
+    assert isinstance(distance_reference.first_sphere_targets(), MappingProxyType)
 
     # Bound through ``Any``: mypy rejects assignment into a MappingProxyType
     # outright, and what is under test is that it also fails at runtime.
-    distances: Any = reference_data.literature_distances()
-    targets: Any = reference_data.first_sphere_targets()
+    distances: Any = distance_reference.literature_distances()
+    targets: Any = distance_reference.first_sphere_targets()
     with pytest.raises(TypeError):
         distances[("HIS", "N", "ZN")] = (0.0, 0.0)
     with pytest.raises(TypeError):
@@ -192,9 +198,9 @@ def test_a_file_is_read_once_however_many_callers_ask(
 
     monkeypatch.setattr("builtins.open", counting_open)
     for _ in range(3):
-        reference_data.cofactor_ids(path)
-        reference_data.cluster_ids(path)
-        reference_data.heme_ids(path)
+        cofactor_catalog.cofactor_ids(path)
+        cofactor_catalog.cluster_ids(path)
+        cofactor_catalog.heme_ids(path)
     assert reads.count(path) == 1
 
 
@@ -204,10 +210,10 @@ def test_first_sphere_targets_is_the_longest_distance_per_metal_and_donor() -> N
     for (_residue, donor, metal), (
         mu,
         _stdev,
-    ) in reference_data.literature_distances().items():
+    ) in distance_reference.literature_distances().items():
         key = (metal, donor)
         expected[key] = max(mu, expected.get(key, float("-inf")))
-    assert dict(reference_data.first_sphere_targets()) == expected
+    assert dict(distance_reference.first_sphere_targets()) == expected
 
 
 def test_building_the_targets_leaves_nothing_in_the_module_namespace() -> None:
@@ -217,7 +223,7 @@ def test_building_the_targets_leaves_nothing_in_the_module_namespace() -> None:
     leaked = [
         name
         for name in ("donor", "metal_element", "target", "key")
-        if hasattr(reference_data, name) or hasattr(coordination_eligibility, name)
+        if hasattr(distance_reference, name) or hasattr(coordination_eligibility, name)
     ]
     assert not leaked, f"loop variables left in a module namespace: {leaked}"
 
@@ -231,7 +237,7 @@ def test_both_bundled_files_match_their_recorded_checksums() -> None:
     for path, (sidecar, key) in reference_data.CHECKSUM_SIDECARS.items():
         with open(sidecar, encoding="utf-8") as handle:
             recorded = json.load(handle)[key]
-        assert reference_data.sha256(path) == recorded, (
+        assert reference_integrity.sha256(path) == recorded, (
             f"{os.path.basename(path)} does not match {os.path.basename(sidecar)}; "
             "rebuild it with its tool or re-stamp the sidecar"
         )
@@ -245,16 +251,18 @@ def test_an_edited_bundled_file_is_refused_at_load(
     accessor: Callable[[str], object]
     cached: _CacheClearable
     if target == "catalog":
-        path = reference_data.COFACTOR_CATALOG_PATH
-        accessor = reference_data.cofactor_ids
-        cached = reference_data.catalog
+        path = cofactor_catalog.COFACTOR_CATALOG_PATH
+        accessor = cofactor_catalog.cofactor_ids
+        cached = cofactor_catalog.catalog
+        sidecars = cofactor_catalog.CHECKSUM_SIDECARS
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
         edited = text + "ZZZ\tZn\tcluster\n"
     else:
-        path = reference_data.DONOR_DISTANCE_PATH
-        accessor = reference_data.literature_distances
-        cached = reference_data.literature_distances
+        path = distance_reference.DONOR_DISTANCE_PATH
+        accessor = distance_reference.literature_distances
+        cached = distance_reference.literature_distances
+        sidecars = distance_reference.CHECKSUM_SIDECARS
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
         edited = text.replace("HOH O ZN 2.09", "HOH O ZN 2.50")
@@ -264,11 +272,11 @@ def test_an_edited_bundled_file_is_refused_at_load(
     copied.write_text(edited, encoding="utf-8")
     # The copy keeps the original's sidecar, which is what a hand-edited
     # checkout looks like.
-    sidecar = reference_data.CHECKSUM_SIDECARS[path]
-    monkeypatch.setitem(reference_data.CHECKSUM_SIDECARS, str(copied), sidecar)
+    sidecar = sidecars[path]
+    monkeypatch.setitem(sidecars, str(copied), sidecar)
     cached.cache_clear()
 
-    with pytest.raises(reference_data.ReferenceDataError, match="does not match"):
+    with pytest.raises(reference_integrity.ReferenceDataError, match="does not match"):
         accessor(str(copied))
 
 
@@ -277,7 +285,7 @@ def test_a_caller_supplied_file_is_not_checksummed(tmp_path: Path) -> None:
     catalog = tmp_path / "mine.txt"
     catalog.write_text("ABC\tZn\tcluster\nDEF\tFe\theme\n", encoding="utf-8")
 
-    assert reference_data.cofactor_ids(str(catalog)) == frozenset({"ABC", "DEF"})
+    assert cofactor_catalog.cofactor_ids(str(catalog)) == frozenset({"ABC", "DEF"})
 
 
 def test_a_missing_sidecar_is_an_error_for_a_bundled_file(
@@ -287,14 +295,16 @@ def test_a_missing_sidecar_is_an_error_for_a_bundled_file(
     catalog = tmp_path / "catalog.txt"
     catalog.write_text("ABC\tZn\tcluster\nDEF\tFe\theme\n", encoding="utf-8")
     monkeypatch.setitem(
-        reference_data.CHECKSUM_SIDECARS,
+        cofactor_catalog.CHECKSUM_SIDECARS,
         str(catalog),
         (str(tmp_path / "gone.meta.json"), "catalog_sha256"),
     )
-    reference_data.catalog.cache_clear()
+    cofactor_catalog.catalog.cache_clear()
 
-    with pytest.raises(reference_data.ReferenceDataError, match="no metadata sidecar"):
-        reference_data.cofactor_ids(str(catalog))
+    with pytest.raises(
+        reference_integrity.ReferenceDataError, match="no metadata sidecar"
+    ):
+        cofactor_catalog.cofactor_ids(str(catalog))
 
 
 @pytest.mark.parametrize(
@@ -317,7 +327,7 @@ def test_a_damaged_distance_row_fails_the_parse(
     table.write_text(f"HOH O ZN 2.09 0.11\n{row}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        reference_data.load_literature(str(table))
+        distance_reference.load_literature(str(table))
 
 
 @pytest.mark.parametrize(
@@ -338,7 +348,7 @@ def test_distance_values_must_be_finite_and_positive(
     table.write_text(f"HOH O ZN {mu} {stdev}\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        reference_data.load_literature(str(table))
+        distance_reference.load_literature(str(table))
 
 
 def test_duplicate_reference_keys_are_rejected(tmp_path: Path) -> None:
@@ -346,7 +356,7 @@ def test_duplicate_reference_keys_are_rejected(tmp_path: Path) -> None:
     table.write_text("HOH O ZN 2.09 0.11\nHOH O ZN 2.10 0.12\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"line 2 duplicates.*first defined on line 1"):
-        reference_data.load_literature(str(table))
+        distance_reference.load_literature(str(table))
 
 
 def test_the_table_header_is_skipped_by_name() -> None:
@@ -354,15 +364,17 @@ def test_the_table_header_is_skipped_by_name() -> None:
 
     Skipping it by name allows every other unparseable line to remain an error.
     """
-    assert reference_data.DISTANCE_TABLE_HEADER == (
+    assert distance_reference.DISTANCE_TABLE_HEADER == (
         "residue",
         "atom",
         "metal",
         "avg_bond_dist",
         "st_dev",
     )
-    with open(reference_data.DONOR_DISTANCE_PATH, encoding="utf-8") as handle:
-        assert tuple(handle.readline().split()) == reference_data.DISTANCE_TABLE_HEADER
+    with open(distance_reference.DONOR_DISTANCE_PATH, encoding="utf-8") as handle:
+        assert (
+            tuple(handle.readline().split()) == distance_reference.DISTANCE_TABLE_HEADER
+        )
 
 
 def test_a_table_with_no_distances_is_named_as_empty(tmp_path: Path) -> None:
@@ -371,7 +383,7 @@ def test_a_table_with_no_distances_is_named_as_empty(tmp_path: Path) -> None:
     table.write_text("# only a comment\n\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="no reference distances"):
-        reference_data.load_literature(str(table))
+        distance_reference.load_literature(str(table))
 
 
 def _stub_reference_data(
@@ -390,7 +402,7 @@ def _stub_reference_data(
         data.write_text(text, encoding="utf-8")
         sidecar = tmp_path / f"{name}.meta.json"
         sidecar.write_text(
-            json.dumps({key: reference_data.sha256(str(data))}), encoding="utf-8"
+            json.dumps({key: reference_integrity.sha256(str(data))}), encoding="utf-8"
         )
         paths[str(data)] = (str(sidecar), key)
     monkeypatch.setattr(reference_data, "CHECKSUM_SIDECARS", paths)
@@ -449,14 +461,15 @@ def test_the_identity_verifies_before_it_reports(
     reference_data.reference_data_checksums.cache_clear()
     reference_data.reference_data_id.cache_clear()
 
-    with pytest.raises(reference_data.ReferenceDataError, match="does not match"):
+    with pytest.raises(reference_integrity.ReferenceDataError, match="does not match"):
         reference_data.reference_data_id()
 
 
 def test_the_bundled_identity_is_short_and_hexadecimal() -> None:
-    """It sits beside ``alchemy_commit`` in the manifest and reads like one."""
+    """The manifest records a compact, stable reference-data digest."""
     identity = reference_data.reference_data_id()
 
+    assert identity == "53538d4273b0"
     assert len(identity) == 12
     assert set(identity) <= set("0123456789abcdef")
     assert set(reference_data.reference_data_checksums()) == {
@@ -500,7 +513,9 @@ def test_the_unambiguous_ids_still_cover_the_metals_that_matter() -> None:
 
 # The bundled distance table itself, read by a strict parser independent of
 # ``load_literature`` so the comparison against it is not a tautology.
-_REFERENCE_TABLE = os.path.join(SRC_DIR, "data", "metal_distances_info.txt")
+_REFERENCE_TABLE = os.path.join(
+    SRC_DIR, "coordination", "metal_distances", "metal_distances_info.txt"
+)
 
 # ``CA`` here is the backbone-carbonyl pseudo residue ``bonding_key`` maps
 # every main-chain ``O`` onto, not calcium.
@@ -537,7 +552,7 @@ def _parse_reference_table(
 ) -> list[tuple[int, str, str, str, float, float]]:
     """Parse metal_distances_info.txt strictly, skipping nothing.
 
-    ``reference_data.load_literature`` drops any line whose numeric columns do
+    ``distance_reference.load_literature`` drops any line whose numeric columns do
     not parse; copying that rule would make the comparison against
     ``literature_distances()`` a tautology.
     """
@@ -596,12 +611,14 @@ def test_reference_table_holds_exactly_the_expected_rows_and_keys() -> None:
     ):
         assert key in keys, f"{key} is missing from {_REFERENCE_TABLE}"
 
-    assert len(reference_data.literature_distances()) == _EXPECTED_REFERENCE_ROW_COUNT
-    assert set(reference_data.literature_distances()) == keys
+    assert (
+        len(distance_reference.literature_distances()) == _EXPECTED_REFERENCE_ROW_COUNT
+    )
+    assert set(distance_reference.literature_distances()) == keys
     assert {
         (residue, atom, metal): (mu, stdev)
         for _lineno, residue, atom, metal, mu, stdev in records
-    } == reference_data.literature_distances()
+    } == distance_reference.literature_distances()
 
 
 @pytest.mark.parametrize(
@@ -629,7 +646,7 @@ def test_the_strict_parser_rejects_a_corrupted_row(
         _parse_reference_table(str(damaged))
 
     with pytest.raises(ValueError, match="metal_distances_info.txt line"):
-        reference_data.load_literature(str(damaged))
+        distance_reference.load_literature(str(damaged))
 
 
 def test_reference_table_has_no_duplicate_keys() -> None:
@@ -648,8 +665,8 @@ def test_reference_table_has_no_duplicate_keys() -> None:
         seen[key] = lineno
 
     assert duplicates == []
-    assert len(records) == len(reference_data.literature_distances())
-    assert set(seen) == set(reference_data.literature_distances())
+    assert len(records) == len(distance_reference.literature_distances())
+    assert set(seen) == set(distance_reference.literature_distances())
 
 
 def test_reference_table_values_are_physically_plausible() -> None:
@@ -675,7 +692,7 @@ def test_reference_table_values_are_physically_plausible() -> None:
         (residue, atom, metal): (mu, stdev)
         for _lineno, residue, atom, metal, mu, stdev in records
     }
-    assert parsed == reference_data.literature_distances()
+    assert parsed == distance_reference.literature_distances()
 
 
 def test_reference_table_is_internally_consistent_by_donor_element() -> None:
@@ -690,7 +707,7 @@ def test_reference_table_is_internally_consistent_by_donor_element() -> None:
     for (_residue, atom, metal), (
         mu,
         _sd,
-    ) in reference_data.literature_distances().items():
+    ) in distance_reference.literature_distances().items():
         by_metal[metal][atom].append(mu)
 
     assert set(by_metal) >= {"ZN", "CA", "MG", "K", "NA", "FE", "CU", "MN", "CO", "NI"}
@@ -706,7 +723,7 @@ def test_reference_table_is_internally_consistent_by_donor_element() -> None:
             )
         # Water is the commonest first-sphere donor in the PDB, so every metal
         # must define it.
-        assert ("HOH", "O", metal) in reference_data.literature_distances()
+        assert ("HOH", "O", metal) in distance_reference.literature_distances()
 
 
 def test_reference_table_ranks_ions_by_size() -> None:
@@ -716,11 +733,13 @@ def test_reference_table_ranks_ions_by_size() -> None:
     the per-row range checks let through.
     """
     water = {
-        metal: reference_data.literature_distances()[("HOH", "O", metal)][0]
+        metal: distance_reference.literature_distances()[("HOH", "O", metal)][0]
         for metal in ("K", "NA", "CA", "MN", "ZN", "MG")
     }
     assert (
         water["K"] > water["NA"] > water["CA"] > water["MN"] > water["ZN"] > water["MG"]
     )
     assert water["ZN"] == approx(2.09)
-    assert reference_data.literature_distances()[("HIS", "N", "ZN")][0] == approx(2.03)
+    assert distance_reference.literature_distances()[("HIS", "N", "ZN")][0] == approx(
+        2.03
+    )

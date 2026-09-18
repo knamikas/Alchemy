@@ -17,6 +17,9 @@ import gemmi
 import pytest
 from helpers import REPO_ROOT
 
+import reference_integrity
+from metallocofactors import catalog as cofactor_catalog
+
 
 def _load_tool(filename: str, module_name: str) -> ModuleType:
     """Import one ``tools/`` script by path.
@@ -395,12 +398,10 @@ def test_rebuild_from_a_local_ccd_writes_a_loader_verifiable_catalog(
 ) -> None:
     """The offline build path: classify, write atomically, stamp, and report.
 
-    The result is read back through ``reference_data`` and through the tool's
+    The result is read back through ``metallocofactors.catalog`` and through the tool's
     own ``--status`` view, so the checksum key and file names agree with the
     runtime loader rather than merely with each other.
     """
-    import reference_data
-
     ccd = _ccd_document(tmp_path / "components.cif", _canonical_ccd())
     output_dir = tmp_path / "data"
 
@@ -414,13 +415,13 @@ def test_rebuild_from_a_local_ccd_writes_a_loader_verifiable_catalog(
     classes = {row[0]: row[2] for row in rows}
     assert classes["XYZ"] == ""
     assert {k: v for k, v in classes.items() if v} == catalog.CANONICAL_CLASSES
-    assert metadata[catalog.CATALOG_HASH_KEY] == reference_data.sha256(
+    assert metadata[catalog.CATALOG_HASH_KEY] == reference_integrity.sha256(
         str(catalog_path)
     )
     assert metadata["counts"]["catalog_entries"] == len(rows)
     assert metadata["counts"]["skipped_ions"] == 1
 
-    ids, clusters, hemes = reference_data.catalog(str(catalog_path))
+    ids, clusters, hemes = cofactor_catalog.catalog(str(catalog_path))
     assert "XYZ" in ids and "ZN" not in ids
     assert clusters == {
         k for k, v in catalog.CANONICAL_CLASSES.items() if v == "cluster"
@@ -436,8 +437,6 @@ def test_a_compressed_ccd_records_both_checksums(tmp_path: Path) -> None:
     """The archive the wwPDB serves is gzip; both digests go into the sidecar."""
     import gzip
 
-    import reference_data
-
     plain = _ccd_document(tmp_path / "components.cif", _canonical_ccd())
     compressed = tmp_path / "components.cif.gz"
     with open(plain, "rb") as source, gzip.open(compressed, "wb") as target:
@@ -445,8 +444,10 @@ def test_a_compressed_ccd_records_both_checksums(tmp_path: Path) -> None:
 
     metadata = catalog.rebuild_catalog(str(tmp_path / "data"), ccd_path=str(compressed))
 
-    assert metadata["ccd_compressed_sha256"] == reference_data.sha256(str(compressed))
-    assert metadata["ccd_sha256"] == reference_data.sha256(plain)
+    assert metadata["ccd_compressed_sha256"] == reference_integrity.sha256(
+        str(compressed)
+    )
+    assert metadata["ccd_sha256"] == reference_integrity.sha256(plain)
 
 
 def test_rebuild_refuses_a_ccd_that_loses_a_canonical_cofactor(
@@ -511,7 +512,7 @@ def test_a_missing_sidecar_is_reported(
 
 
 def test_the_recorded_row_count_comes_from_the_loader(tmp_path: Path) -> None:
-    """The count must describe what ``reference_data`` accepts, not raw lines.
+    """The count must describe what the distance parser accepts, not raw lines.
 
     Counting lines would drift from the loader the moment a comment or blank
     line was added, and the sidecar is what the loader verifies itself against.

@@ -43,12 +43,12 @@ from driver.resume import (
 from driver.runlog import RunLog
 from driver.writers import OutputTargets, OutputWriters, manifest_row
 from edstats_statistics import DENSITY_CONTEXT_COLUMNS
+from metallocofactors.catalog import cofactor_ids
 from rcsb_metadata_cache import (
     CrystallizationMetadataError,
     prefetch_rcsb_crystallization_metadata,
 )
 from reference_data import (
-    cofactor_ids,
     reference_data_checksums,
     reference_data_id,
 )

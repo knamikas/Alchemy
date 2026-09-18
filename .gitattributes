@@ -1,7 +1,7 @@
 # These bundled reference files have byte-level SHA-256 sidecars. Keep their
 # checked-out representation identical on every supported platform.
-/src/data/metallocofactors_id.txt text eol=lf
-/src/data/metal_distances_info.txt text eol=lf
-# Preserve the archived manuscript reference byte for byte, including CSV CRLF.
-/src/data/confidence_reference/component_distributions.csv -text
-/src/data/confidence_reference/metadata.json -text
+/src/metallocofactors/metallocofactors_id.txt text eol=lf
+/src/coordination/metal_distances/metal_distances_info.txt text eol=lf
+# Preserve the bundled reference byte for byte, including CSV CRLF.
+/src/confidence_score/confidence_reference/component_distributions.csv -text
+/src/confidence_score/confidence_reference/metadata.json -text

@@ -27,16 +27,16 @@ if str(SOURCE_DIR) not in sys.path:
     sys.path.insert(0, str(SOURCE_DIR))
 
 from metal_elements import METAL_ELEMENTS  # noqa: E402
-from reference_data import (  # noqa: E402
+from metallocofactors.catalog import (  # noqa: E402
+    CATALOG_DIR,
     CHECKSUM_SIDECARS,
     COFACTOR_CATALOG_PATH,
-    DATA_DIR,
-    sha256,
 )
+from reference_integrity import sha256  # noqa: E402
 
 CCD_URL = "https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz"
 # The runtime loader owns the bundled paths and the sidecar key it verifies.
-DEFAULT_OUTPUT_DIR = Path(DATA_DIR)
+DEFAULT_OUTPUT_DIR = Path(CATALOG_DIR)
 CATALOG_FILENAME = os.path.basename(COFACTOR_CATALOG_PATH)
 _SIDECAR_PATH, CATALOG_HASH_KEY = CHECKSUM_SIDECARS[COFACTOR_CATALOG_PATH]
 METADATA_FILENAME = os.path.basename(_SIDECAR_PATH)
