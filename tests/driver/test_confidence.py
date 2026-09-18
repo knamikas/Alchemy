@@ -97,7 +97,7 @@ def test_fresh_targeted_run_automatically_uses_the_manuscript_reference(
 
     assert isinstance(plan, driver_confidence.ReferencePlan)
     assert plan.mode == "reference"
-    assert plan.reference.reference_id == "alchemy-confidence-eb792a9fda5ce16dd016"
+    assert plan.reference.reference_id == "alchemy-confidence-e79e6467783a2d513e45"
     assert plan.reference.cohort_size == 330978
     assert (
         run_log.details["confidence_reference_dir"]

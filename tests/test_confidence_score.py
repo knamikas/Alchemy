@@ -27,8 +27,8 @@ from output_rows import MetalStatsRow
 def test_bundled_reference_matches_its_pinned_checksums() -> None:
     directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
     expected = {
-        "component_distributions.csv": "92ca1c704db005172eee9111d1e0d7cad907d736bf20e7b54c160814a1314b4e",
-        "metadata.json": "61cfa6c758e8a48ce7e081f6fdc2f997f37fa10aaca920531f70ea6bdec8013c",
+        "component_distributions.csv": "bf472c735d2f89fd95d2f7ddd5f2aefdd2102f3f62402e082ea9bb0ce775236a",
+        "metadata.json": "19eefd13035384b0e1865f5c6a59615a3cc1fbf06fe2a21085017ee1d2165654",
     }
     for filename, digest in expected.items():
         assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == digest
@@ -43,7 +43,7 @@ def test_bundled_reference_loads_under_runtime_verification() -> None:
     """
     directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
     reference = cs.load_reference(str(directory))
-    assert reference.reference_id == "alchemy-confidence-eb792a9fda5ce16dd016"
+    assert reference.reference_id == "alchemy-confidence-e79e6467783a2d513e45"
     assert reference.metadata["cohort_id"] == "alchemy-cohort-2e97cf013eefa9d8e0b4"
     assert reference.metadata["input_row_count"] == 330978
     assert reference.metadata["input_entry_count"] == 76954
@@ -325,6 +325,96 @@ def test_empirical_support_is_reverse_average_rank_with_ties() -> None:
     assert reference.density.support_score(3.0) == approx(50.0)
     assert reference.density.support_score(4.0) == approx(25.0)
     assert reference.density.support_score(7.0) == approx(0.0)
+
+
+def test_reference_rounding_merges_counts_and_matches_new_measurements(
+    tmp_path: Path,
+) -> None:
+    cs.write_reference(
+        str(tmp_path),
+        {1.0001: 2, 1.0004: 3, 2.0: 5},
+        {0.9996: 2, 1.0001: 3, 1.0006: 5},
+        10,
+    )
+    reference = cs.load_reference(str(tmp_path))
+    assert reference.metadata["metric_decimal_places"] == 12
+    assert reference.metadata["reference_decimal_places"] == 3
+    assert reference.density.values == (1.0, 2.0)
+    assert reference.geometry.values == (1.0, 1.001)
+    assert reference.density.counts == reference.geometry.counts == (5, 5)
+    assert reference.density_reference_size == reference.geometry_reference_size == 10
+    verdict = cs.score_site(1.0002, 1.0003, reference)
+    assert verdict.density_score == verdict.geometry_score == approx(75.0)
+    assert reference.geometry.support_score(1.0008) == approx(25.0)
+    assert math.isnan(reference.geometry.support_score(-0.00001))
+
+
+@pytest.mark.parametrize(
+    ("density", "geometry", "expected"),
+    [
+        (2.99999, 0.99999, ("PASS", "PASS", "PASS")),
+        (5.99999, 0.99999, ("REVIEW", "PASS", "REVIEW")),
+        (2.99999, 1.99999, ("PASS", "REVIEW", "REVIEW")),
+        (5.99999, 1.99999, ("REVIEW", "REVIEW", "SUSPECT")),
+    ],
+)
+def test_ranking_rounding_does_not_move_classification_thresholds(
+    density: float, geometry: float, expected: tuple[str, str, str]
+) -> None:
+    verdict = cs.score_site(density, geometry, _reference())
+    assert (verdict.density_level, verdict.geometry_level, verdict.alchemy_level) == (
+        expected
+    )
+    rounded = cs.score_site(round(density, 3), round(geometry, 3), _reference())
+    assert verdict.density_score == rounded.density_score
+    assert verdict.geometry_score == rounded.geometry_score
+
+
+def test_finalization_preserves_raw_metrics_while_grouping_reference_values(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        _input_row(pdbID="1aaa", rszd_abs="2.99999", geometry_rms_zbond="0.99999"),
+        _input_row(pdbID="2bbb", rszd_abs="2.99998", geometry_rms_zbond="0.99998"),
+    ]
+    input_path = _write_input_csv(tmp_path / "inputs.csv", rows)
+    output_path = tmp_path / "scores.csv"
+    reference_dir = tmp_path / "reference"
+    cs.finalize_database_confidence(input_path, str(output_path), str(reference_dir))
+    reference = cs.load_reference(str(reference_dir))
+    assert reference.density.values == (3.0,)
+    assert reference.geometry.values == (1.0,)
+    assert reference.density.counts == reference.geometry.counts == (2,)
+    _, scored = _read_csv_rows(output_path)
+    for original, result in zip(rows, scored, strict=True):
+        assert result["rszd_abs"] == original["rszd_abs"]
+        assert result["geometry_rms_zbond"] == original["geometry_rms_zbond"]
+        assert result["alchemy_level"] == "PASS"
+        assert result["density_score"] == result["geometry_score"] == "50"
+
+
+def test_rounding_near_density_saturation_does_not_trigger_zero_support(
+    tmp_path: Path,
+) -> None:
+    reference = cs.write_reference(str(tmp_path), {99.9: 2}, {1.0: 2}, 2)
+    assert cs.score_site(99.89999, 1.0, reference).density_score == approx(50.0)
+    assert cs.score_site(99.9, 1.0, reference).density_score == 0.0
+
+
+@pytest.mark.parametrize(
+    ("counts", "message"),
+    [
+        ({-0.00001: 1, 0.0: 1}, "invalid value"),
+        ({1.00001: -1, 1.00002: 2}, "invalid count"),
+        ({1.00001: 0, 1.00002: 1}, "invalid count"),
+    ],
+)
+def test_reference_rounding_cannot_hide_invalid_observations(
+    tmp_path: Path, counts: dict[float, int], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        cs.write_reference(str(tmp_path), {}, counts, 2)
+    assert not (tmp_path / cs.REFERENCE_METADATA_FILE).exists()
 
 
 def test_overall_ranking_score_is_minimum_available_support() -> None:

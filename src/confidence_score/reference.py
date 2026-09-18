@@ -20,11 +20,11 @@ from typing import Any, NamedTuple, TextIO
 from analysis_config import analysis_config_id
 from confidence_score.schema import (
     ANALYSIS_COLUMNS,
-    METRIC_DECIMAL_PLACES,
+    REFERENCE_DECIMAL_PLACES,
     REFERENCE_DISTRIBUTION_FILE,
     REFERENCE_METADATA_FILE,
     SCORING_POLICY_METADATA,
-    canonical_metric,
+    canonical_reference_metric,
     canonical_support_score,
     confidence_csv_value,
     format_decimal,
@@ -103,15 +103,13 @@ def _reference_identifier(
 
 
 def _normalized_metric_counts(counts: Mapping[float, int]) -> Counter[float]:
-    """Round every metric to its published precision, merging the ties it creates.
-
-    Values and counts are not checked here: ``EmpiricalDistribution`` is the one
-    validator of a reference component, and every path builds one from this
-    mapping before anything is written or scored.
-    """
+    """Validate raw observations, then merge values at reference precision."""
+    # Validate before rounding and summing: neither a small negative metric nor
+    # an invalid count may become valid just because it merges with another row.
+    EmpiricalDistribution.from_counts(counts)
     normalized: Counter[float] = Counter()
     for value, count in counts.items():
-        normalized[canonical_metric(value)] += count
+        normalized[canonical_reference_metric(value)] += count
     return normalized
 
 
@@ -178,7 +176,7 @@ def write_reference(
                     writer.writerow(
                         (
                             component,
-                            format_decimal(value, METRIC_DECIMAL_PLACES),
+                            format_decimal(value, REFERENCE_DECIMAL_PLACES),
                             count,
                         )
                     )
@@ -544,9 +542,9 @@ def finalize_database_confidence(
                 # counted into the density distribution even though they are
                 # never ranked against it: they score a fixed 0. This is the
                 # published policy and is retained deliberately.
-                density_counts[rszd] += 1
+                density_counts[canonical_reference_metric(rszd)] += 1
             if math.isfinite(geometry_rms) and geometry_rms >= 0:
-                geometry_counts[geometry_rms] += 1
+                geometry_counts[canonical_reference_metric(geometry_rms)] += 1
             if (math.isfinite(rszd) or math.isfinite(geometry_rms)) and pdb_id:
                 scorable_entry_ids.add(pdb_id)
     inputs_sha256 = sha256(input_path)

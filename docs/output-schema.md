@@ -442,12 +442,18 @@ failed finalization cannot leave an older reference looking current.
 | Columns | Meaning |
 | --- | --- |
 | `component` | `density` or `geometry`. |
-| `value` | Raw absolute RSZD or site-level RMS Zbond value. |
+| `value` | Absolute RSZD or site-level RMS Zbond rounded to three decimal places for ranking. |
 | `count` | Assessable cohort sites with that component value. |
+
+Rows with the same rounded value are combined by summing their counts. New
+measurements use the same rounding when ranked against the distribution. Raw
+confidence inputs retain twelve decimal places, and classification thresholds
+use those raw values before ranking rounding.
 
 ### `metadata.json`
 
 The scoring contract is recorded by `score_decimal_places`, `metric_decimal_places`,
+`reference_decimal_places`,
 `density_thresholds`, `density_saturation_value`, `density_saturation_policy`,
 `geometry_thresholds`, `geometry_statistic`, `overall_rule`,
 `support_score_method`, `coverage_policy`, `input_status_policy`,

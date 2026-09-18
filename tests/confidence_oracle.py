@@ -79,6 +79,7 @@ def reverse_average_rank_support(
     cohort: Sequence[tuple[float, int]], value: float, tolerance: float = 1e-9
 ) -> float:
     """Reverse average-rank ECDF, computed independently of production code."""
+    value = round(value, 3)
     total = sum(count for _, count in cohort)
     below = sum(count for item, count in cohort if item < value - tolerance)
     equal = sum(count for item, count in cohort if abs(item - value) <= tolerance)

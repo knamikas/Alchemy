@@ -16,6 +16,12 @@ before any site is scored. The bundled file checksums are pinned by the test
 suite rather than by the loader, because the same loader also reads references
 that database runs build under their own output directory.
 
+The distribution CSV groups the original archived measurements at three decimal
+places, summing the counts of values that round together. The cohort and total
+observation counts are preserved. Metadata records this reference precision
+separately from raw measurement precision, and the reference ID is derived from
+the grouped distributions and their scoring settings.
+
 ## Cofactor reference maintenance
 
 Normal analysis always loads the fixed catalog bundled in `src/metallocofactors/`. It never

@@ -20,9 +20,10 @@ REFERENCE_DISTRIBUTION_FILE = "component_distributions.csv"
 COHORT_WEIGHTING = "per_metal_site"
 #: Decimal places published for the 0-100 support scores.
 SCORE_DECIMAL_PLACES = 6
-#: Decimal places for raw metrics (|RSZD|, RMS Zbond) both in the compact rows
-#: and when binning reference distribution values.
+#: Decimal places for raw metrics (|RSZD|, RMS Zbond) in compact input rows.
 METRIC_DECIMAL_PLACES = 12
+#: Decimal places used only to group reference values and rank new measurements.
+REFERENCE_DECIMAL_PLACES = 3
 #: Absolute RSZD (a dimensionless density Z score) at or above which the
 #: density component is REVIEW (docs/method.md, "Confidence scoring").
 DENSITY_REVIEW_THRESHOLD = 3.0
@@ -146,6 +147,7 @@ SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
         "cohort_weighting": COHORT_WEIGHTING,
         "score_decimal_places": SCORE_DECIMAL_PLACES,
         "metric_decimal_places": METRIC_DECIMAL_PLACES,
+        "reference_decimal_places": REFERENCE_DECIMAL_PLACES,
         # The "review"/"suspect" keys spell confidence levels by coincidence,
         # which is why tests/test_documentation.py allowlists this module in
         # ``_COINCIDENTAL_LITERALS``.
@@ -286,6 +288,11 @@ def canonical_support_score(value: float) -> float:
 def canonical_metric(value: float) -> float:
     """Round an input metric to its canonical serialized precision."""
     return float(f"{value:.{METRIC_DECIMAL_PLACES}f}")
+
+
+def canonical_reference_metric(value: float) -> float:
+    """Round a measurement for reference ranking without changing its raw value."""
+    return float(f"{value:.{REFERENCE_DECIMAL_PLACES}f}")
 
 
 def confidence_csv_value(column: str, value: object) -> object:

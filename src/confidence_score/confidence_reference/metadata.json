@@ -14,7 +14,7 @@
     "suspect": 6.0
   },
   "distribution_file": "component_distributions.csv",
-  "geometry_distinct_value_count": 247145,
+  "geometry_distinct_value_count": 8877,
   "geometry_reference_size": 275870,
   "geometry_statistic": "rms_finite_score_eligible_zbond",
   "geometry_thresholds": {
@@ -42,7 +42,8 @@
   "no_metals_entry_count": 116850,
   "overall_rule": "any_suspect_or_review_plus_review",
   "reference_data_id": "53538d4273b0",
-  "reference_id": "alchemy-confidence-eb792a9fda5ce16dd016",
+  "reference_decimal_places": 3,
+  "reference_id": "alchemy-confidence-e79e6467783a2d513e45",
   "scorable_entry_count": 76942,
   "score_decimal_places": 6,
   "software_versions": {

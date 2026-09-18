@@ -366,6 +366,11 @@ saturation magnitude of 99.9 (`density_saturated=true`) receives
 `density_score=0`, because saturated difference density is the strongest
 evidence the statistic can express and must not be ranked among ordinary values.
 The reference metadata records this as its density saturation policy.
+Reference values and ranking queries are rounded to three decimal places, with
+counts summed for reference values that round together. Equal rounded values
+share an average rank. Raw measurements retain twelve decimal places in the
+compact inputs; classification thresholds and density saturation are evaluated
+before ranking rounding, so grouping reference values cannot change a level.
 `alchemy_score` is their minimum using whichever scores are available. These
 numbers rank sites only: the raw measurements and decision matrix always define
 `alchemy_level`, including the REVIEW-plus-REVIEW escalation that no single

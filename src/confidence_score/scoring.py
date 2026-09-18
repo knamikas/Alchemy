@@ -13,6 +13,7 @@ from confidence_score.schema import (
     DENSITY_SUSPECT_THRESHOLD,
     GEOMETRY_REVIEW_THRESHOLD,
     GEOMETRY_SUSPECT_THRESHOLD,
+    canonical_reference_metric,
     is_density_saturated,
 )
 
@@ -202,15 +203,12 @@ class EmpiricalDistribution:
     def support_score(self, value: float) -> float:
         """Return reverse average-rank ECDF support; ordinary values rank high.
 
-        Ties are detected by exact equality, so the caller must pass a value
-        already rounded with ``schema.canonical_metric`` -- the rounding the
-        reference's own values went through. Every production path does, via
-        the canonicalized metrics written to the confidence input columns. An
-        unrounded value simply misses its tie group and is scored as if it fell
-        between two reference values.
+        Round the query to the reference's three-decimal precision before
+        matching ties. Classification uses the original metric separately.
         """
         if not math.isfinite(value) or value < 0 or not self.values:
             return math.nan
+        value = canonical_reference_metric(value)
         index = bisect.bisect_left(self.values, value)
         if index < len(self.values) and self.values[index] == value:
             below = self.cumulative_below[index]
