@@ -159,7 +159,7 @@ class EarlyOutcome:
     status_detail: str = ""
     no_metals: bool = False
     metal_site_limit_exceeded: bool = False
-    confidence_inputs_missing_reason: str = ""
+    score_inputs_missing_reason: str = ""
 
 
 def excluded_zero_occupancy_metals(
@@ -209,7 +209,7 @@ def early_outcome(
                 f"{unknown_count} atom(s) have missing or invalid element symbols",
                 MAX_MANIFEST_STATUS_DETAIL_CHARS,
             ),
-            confidence_inputs_missing_reason=ReasonCode.METAL_PRESENCE_INDETERMINATE,
+            score_inputs_missing_reason=ReasonCode.METAL_PRESENCE_INDETERMINATE,
         )
     return EarlyOutcome(
         status=EntryStatus.OK, n_metals=0, n_bonds=0, n_candidates=0, no_metals=True

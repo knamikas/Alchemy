@@ -1,4 +1,4 @@
-"""Build, persist, load, and apply frozen confidence references.
+"""Build, persist, load, and apply frozen score references.
 
 Two responsibilities live here, either side of the frozen reference. The
 reference lifecycle writes a cohort's component distributions and their policy
@@ -18,37 +18,37 @@ from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple, TextIO
 
 from analysis_config import analysis_config_id
-from confidence_score.schema import (
+from output_rows import finite_float
+from reference_data import reference_data_id
+from reference_integrity import sha256
+from score.schema import (
     ANALYSIS_COLUMNS,
     REFERENCE_DECIMAL_PLACES,
     REFERENCE_DISTRIBUTION_FILE,
     REFERENCE_METADATA_FILE,
     SCORING_POLICY_METADATA,
     canonical_reference_metric,
-    canonical_support_score,
-    confidence_csv_value,
+    canonical_score,
     format_decimal,
     parse_csv_bool,
     require_columns,
+    score_csv_value,
 )
-from confidence_score.scoring import (
-    ConfidenceReference,
+from score.scoring import (
     EmpiricalDistribution,
+    ScoreReference,
     score_site,
 )
-from output_rows import finite_float
-from reference_data import reference_data_id
-from reference_integrity import sha256
 
-DEFAULT_CONFIDENCE_REFERENCE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "confidence_reference"
+DEFAULT_SCORE_REFERENCE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "score_reference"
 )
 
 #: The header every component distribution file carries.
 DISTRIBUTION_COLUMNS = ("component", "value", "count")
 
 
-class FinalizedConfidence(NamedTuple):
+class FinalizedScore(NamedTuple):
     """What finalizing a database reference produced.
 
     ``rows`` and ``scored_rows`` describe the scoring pass: every input row
@@ -99,7 +99,7 @@ def _reference_identifier(
             digest.update(
                 f"{component},{repr(value)},{counts[value]}\n".encode("ascii")
             )
-    return "alchemy-confidence-" + digest.hexdigest()[:20]
+    return "alchemy-score-" + digest.hexdigest()[:20]
 
 
 def _normalized_metric_counts(counts: Mapping[float, int]) -> Counter[float]:
@@ -123,10 +123,10 @@ def _validated_input_row_count(value: object, minimum: int = 0) -> int:
     caller that has not yet built the distributions can check.
     """
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"confidence reference input row count is invalid: {value!r}")
+        raise ValueError(f"score reference input row count is invalid: {value!r}")
     if value < minimum:
         raise ValueError(
-            f"confidence reference input row count is invalid: {value} is fewer "
+            f"score reference input row count is invalid: {value} is fewer "
             f"than the {minimum} observation(s) it is said to cover"
         )
     return value
@@ -138,14 +138,14 @@ def write_reference(
     geometry_counts: Mapping[float, int],
     input_row_count: int,
     cohort_provenance: Mapping[str, Any] | None = None,
-) -> ConfidenceReference:
+) -> ScoreReference:
     """Write reusable component distributions and their policy metadata."""
     density_counts = _normalized_metric_counts(density_counts)
     geometry_counts = _normalized_metric_counts(geometry_counts)
     density = EmpiricalDistribution.from_counts(density_counts)
     geometry = EmpiricalDistribution.from_counts(geometry_counts)
     if not density.size and not geometry.size:
-        raise ValueError("cannot build a confidence reference with no evidence")
+        raise ValueError("cannot build a score reference with no evidence")
     # Validate everything the reference claims before a byte is written, so a
     # rejected build cannot leave a half-written reference directory behind.
     input_row_count = _validated_input_row_count(
@@ -216,7 +216,7 @@ def write_reference(
         with contextlib.suppress(OSError):
             os.unlink(metadata_tmp)
         raise
-    return ConfidenceReference(
+    return ScoreReference(
         density_values=density.values,
         density_counts=density.counts,
         geometry_values=geometry.values,
@@ -244,9 +244,7 @@ def _distribution_path(reference_dir: str, metadata: Mapping[str, Any]) -> str:
     """
     name = metadata.get("distribution_file", REFERENCE_DISTRIBUTION_FILE)
     if not isinstance(name, str) or not name or os.path.basename(name) != name:
-        raise ValueError(
-            f"confidence reference distribution file name is invalid: {name!r}"
-        )
+        raise ValueError(f"score reference distribution file name is invalid: {name!r}")
     return os.path.join(reference_dir, name)
 
 
@@ -258,10 +256,10 @@ def _distribution_counts(path: str) -> dict[str, Counter[float]]:
     about the values and counts themselves belongs to ``EmpiricalDistribution``,
     which the caller builds from what this returns.
     """
-    header, rows = _read_csv_table(path, "confidence reference distribution")
+    header, rows = _read_csv_table(path, "score reference distribution")
     if header != DISTRIBUTION_COLUMNS:
         raise ValueError(
-            "confidence reference distribution has invalid columns: "
+            "score reference distribution has invalid columns: "
             f"{path} has {', '.join(header)}"
         )
     counts: dict[str, Counter[float]] = {"density": Counter(), "geometry": Counter()}
@@ -271,7 +269,7 @@ def _distribution_counts(path: str) -> dict[str, Counter[float]]:
         component = row["component"]
         if component not in counts:
             raise ValueError(
-                "confidence reference contains an unknown component: "
+                "score reference contains an unknown component: "
                 f"{component!r} at {location}"
             )
         value = finite_float(row["value"])
@@ -279,35 +277,33 @@ def _distribution_counts(path: str) -> dict[str, Counter[float]]:
             count = int(row["count"])
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                "confidence reference contains a non-integer count: "
+                "score reference contains a non-integer count: "
                 f"{row['count']!r} for {component} {row['value']!r} at {location}"
             ) from exc
         if value in counts[component]:
             raise ValueError(
-                "confidence reference contains a duplicate value: "
+                "score reference contains a duplicate value: "
                 f"{row['value']!r} for {component} at {location}"
             )
         counts[component][value] = count
     return counts
 
 
-def load_reference(reference_dir: str) -> ConfidenceReference:
-    """Load and strictly validate a frozen database confidence reference."""
+def load_reference(reference_dir: str) -> ScoreReference:
+    """Load and strictly validate a frozen database score reference."""
     metadata_path = os.path.join(reference_dir, REFERENCE_METADATA_FILE)
     with open(metadata_path, encoding="utf-8") as handle:
         metadata = json.load(handle)
     if not isinstance(metadata, dict):
-        raise ValueError("confidence reference metadata is not a JSON object")
+        raise ValueError("score reference metadata is not a JSON object")
     expected = _scoring_metadata()
     # reference_data_id is checked separately below with a fuller explanation.
     for key in (key for key in expected if key != "reference_data_id"):
         if metadata.get(key) != expected[key]:
-            raise ValueError(
-                f"confidence reference {key} is incompatible with this code"
-            )
+            raise ValueError(f"score reference {key} is incompatible with this code")
     if metadata.get("reference_data_id") != expected["reference_data_id"]:
         raise ValueError(
-            "confidence reference was built against reference data "
+            "score reference was built against reference data "
             f"{metadata.get('reference_data_id') or 'nothing recorded'}, but "
             f"this run uses {expected['reference_data_id']}. Every score in it "
             "was measured against different reference distances; rebuild the "
@@ -315,14 +311,14 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
         )
     cohort_id = metadata.get("cohort_id")
     if not isinstance(cohort_id, str) or not cohort_id.startswith("alchemy-cohort-"):
-        raise ValueError("confidence reference has no valid cohort identifier")
-    inputs_sha256 = metadata.get("confidence_inputs_sha256")
+        raise ValueError("score reference has no valid cohort identifier")
+    inputs_sha256 = metadata.get("score_inputs_sha256")
     if inputs_sha256 is not None and (
         not isinstance(inputs_sha256, str)
         or len(inputs_sha256) != 64
         or cohort_id != "alchemy-cohort-" + inputs_sha256[:20]
     ):
-        raise ValueError("confidence reference cohort identifier does not match input")
+        raise ValueError("score reference cohort identifier does not match input")
     distribution_path = _distribution_path(reference_dir, metadata)
     component_counts = _distribution_counts(distribution_path)
     density_counts = component_counts["density"]
@@ -331,13 +327,11 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
     # loader's message, which says which metadata file it came from, is the one
     # an operator sees rather than the constructor's.
     _validated_input_row_count(metadata.get("input_row_count"))
-    reference = ConfidenceReference.from_counts(
-        density_counts, geometry_counts, metadata
-    )
+    reference = ScoreReference.from_counts(density_counts, geometry_counts, metadata)
     if metadata.get("reference_id") != _reference_identifier(
         density_counts, geometry_counts
     ):
-        raise ValueError("confidence reference identifier does not match data")
+        raise ValueError("score reference identifier does not match data")
     if reference.density_reference_size != metadata.get("density_reference_size"):
         raise ValueError("density reference size does not match metadata")
     if reference.geometry_reference_size != metadata.get("geometry_reference_size"):
@@ -357,13 +351,13 @@ def load_reference(reference_dir: str) -> ConfidenceReference:
     return reference
 
 
-def _format_support_score(score: float) -> str:
-    """Serialize a support score at its published precision; NaN becomes blank."""
-    return format_decimal(canonical_support_score(score))
+def _format_score(score: float) -> str:
+    """Serialize a score at its published precision; NaN becomes blank."""
+    return format_decimal(canonical_score(score))
 
 
 def _score_prepared_row(
-    row: Mapping[str, Any], reference: ConfidenceReference | None
+    row: Mapping[str, Any], reference: ScoreReference | None
 ) -> tuple[dict[str, Any], bool]:
     """Return one prepared row with its verdict, and whether it was ranked."""
     rszd = finite_float(row.get("rszd_abs", ""))
@@ -373,12 +367,12 @@ def _score_prepared_row(
     output.update(
         {
             **verdict.as_row(),
-            "density_score": _format_support_score(verdict.density_score),
-            "geometry_score": _format_support_score(verdict.geometry_score),
-            "alchemy_score": _format_support_score(verdict.alchemy_score),
-            "confidence_reference_id": reference.reference_id if reference else "",
-            "confidence_cohort_id": reference.cohort_id if reference else "",
-            "confidence_cohort_size": reference.cohort_size if reference else "",
+            "density_score": _format_score(verdict.density_score),
+            "geometry_score": _format_score(verdict.geometry_score),
+            "alchemy_score": _format_score(verdict.alchemy_score),
+            "score_reference_id": reference.reference_id if reference else "",
+            "score_cohort_id": reference.cohort_id if reference else "",
+            "score_cohort_size": reference.cohort_size if reference else "",
             "density_reference_size": (
                 reference.density_reference_size if reference else ""
             ),
@@ -391,7 +385,7 @@ def _score_prepared_row(
 
 
 def _score_rows(
-    rows: Sequence[Mapping[str, Any]], reference: ConfidenceReference | None
+    rows: Sequence[Mapping[str, Any]], reference: ScoreReference | None
 ) -> list[dict[str, Any]]:
     """Add a verdict to each prepared row, ranked against ``reference`` if given.
 
@@ -403,7 +397,7 @@ def _score_rows(
 
 
 def score_against_reference(
-    rows: Sequence[Mapping[str, Any]], reference: ConfidenceReference
+    rows: Sequence[Mapping[str, Any]], reference: ScoreReference
 ) -> list[dict[str, Any]]:
     """Score prepared rows against a frozen database reference."""
     return _score_rows(rows, reference)
@@ -430,12 +424,12 @@ def _validated_input_reader(
             "geometry_rms_zbond",
             "context_warning",
             "context_warning_reasons",
-            "confidence_inputs_status",
+            "score_inputs_status",
         ),
-        "confidence input CSV",
+        "score input CSV",
     )
     if any(column in input_columns for column in ANALYSIS_COLUMNS):
-        raise ValueError("confidence input CSV already contains analysis columns")
+        raise ValueError("score input CSV already contains analysis columns")
     return input_columns, reader
 
 
@@ -503,12 +497,12 @@ def _validated_manifest_summary(manifest_path: str) -> dict[str, Any]:
     return summary
 
 
-def finalize_database_confidence(
+def finalize_database_score(
     input_path: str,
     output_path: str,
     reference_dir: str,
     manifest_path: str | None = None,
-) -> FinalizedConfidence:
+) -> FinalizedScore:
     """Build the database reference and assign final values from compact rows."""
     # Metadata is the completion marker. Remove it before rebuilding so a
     # failed finalization cannot leave an older reference looking current.
@@ -534,7 +528,7 @@ def finalize_database_confidence(
             pdb_id = str(row.get("pdbID", "")).strip().lower()
             if pdb_id:
                 input_entry_ids.add(pdb_id)
-            input_status_counts[str(row.get("confidence_inputs_status", ""))] += 1
+            input_status_counts[str(row.get("score_inputs_status", ""))] += 1
             rszd = finite_float(row.get("rszd_abs", ""))
             geometry_rms = finite_float(row.get("geometry_rms_zbond", ""))
             if math.isfinite(rszd) and rszd >= 0:
@@ -550,8 +544,8 @@ def finalize_database_confidence(
     inputs_sha256 = sha256(input_path)
     provenance: dict[str, Any] = {
         "cohort_id": "alchemy-cohort-" + inputs_sha256[:20],
-        "confidence_inputs_file": os.path.basename(input_path),
-        "confidence_inputs_sha256": inputs_sha256,
+        "score_inputs_file": os.path.basename(input_path),
+        "score_inputs_sha256": inputs_sha256,
         "input_entry_count": len(input_entry_ids),
         "scorable_entry_count": len(scorable_entry_ids),
         "input_status_counts": dict(sorted(input_status_counts.items())),
@@ -566,11 +560,11 @@ def finalize_database_confidence(
         cohort_provenance=provenance,
     )
     total, scored = score_file_against_reference(input_path, output_path, reference)
-    return FinalizedConfidence(total, scored, reference.cohort_size)
+    return FinalizedScore(total, scored, reference.cohort_size)
 
 
 def score_file_against_reference(
-    input_path: str, output_path: str, reference: ConfidenceReference
+    input_path: str, output_path: str, reference: ScoreReference
 ) -> tuple[int, int]:
     """Score a compact input CSV against a loaded frozen reference."""
     output_tmp = output_path + ".tmp"
@@ -592,7 +586,7 @@ def score_file_against_reference(
                 output, row_scored = _score_prepared_row(row, reference)
                 writer.writerow(
                     {
-                        column: confidence_csv_value(column, value)
+                        column: score_csv_value(column, value)
                         for column, value in output.items()
                     }
                 )
@@ -606,31 +600,29 @@ def score_file_against_reference(
     return total, scored
 
 
-def validate_scored_reference(path: str, reference: ConfidenceReference) -> None:
+def validate_scored_reference(path: str, reference: ScoreReference) -> None:
     """Refuse resume output containing rows from another frozen reference."""
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        required = {"confidence_reference_id", "confidence_cohort_id"}
+        required = {"score_reference_id", "score_cohort_id"}
         if not required.issubset(reader.fieldnames or ()):
             raise ValueError(
-                "existing confidence output has no reference or cohort identifier"
+                "existing score output has no reference or cohort identifier"
             )
         identifiers: set[str] = set()
         cohort_identifiers: set[str] = set()
         for row in reader:
-            identifier = (row.get("confidence_reference_id") or "").strip()
-            cohort_id = (row.get("confidence_cohort_id") or "").strip()
+            identifier = (row.get("score_reference_id") or "").strip()
+            cohort_id = (row.get("score_cohort_id") or "").strip()
             if not identifier or not cohort_id:
                 raise ValueError(
-                    "existing confidence output has a blank reference or cohort "
+                    "existing score output has a blank reference or cohort "
                     "identifier "
                     f"at CSV row {reader.line_num}"
                 )
             identifiers.add(identifier)
             cohort_identifiers.add(cohort_id)
     if identifiers and identifiers != {reference.reference_id}:
-        raise ValueError(
-            "existing confidence output uses a different database reference"
-        )
+        raise ValueError("existing score output uses a different database reference")
     if cohort_identifiers and cohort_identifiers != {reference.cohort_id}:
-        raise ValueError("existing confidence output uses a different database cohort")
+        raise ValueError("existing score output uses a different database cohort")

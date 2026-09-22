@@ -15,12 +15,12 @@ import scratch
 from codes import EntryStatus
 from coordination import schema as coordination_schema
 from driver import (
-    confidence as driver_confidence,
     dispatch,
     layout as driver_layout,
     pool,
     resources,
     resume,
+    scoring as driver_scoring,
 )
 from driver.runlog import RunLog, RunSummary
 from driver.writers import (
@@ -577,10 +577,10 @@ class TestResumeStaging:
         self,
         output_dir: Path,
         *,
-        confidence_inputs: bool = False,
+        score_inputs: bool = False,
         scores: bool = False,
     ) -> OutputTargets:
-        """Create the always-written CSVs, plus any confidence ones, by name."""
+        """Create the always-written CSVs, plus any score ones, by name."""
         layout = driver_layout.OutputLayout(str(output_dir))
         targets = OutputTargets(
             manifest=layout.manifest,
@@ -590,8 +590,8 @@ class TestResumeStaging:
             crystallization_conditions=layout.crystallization_conditions,
             crystallization_summary=layout.crystallization_summary,
             density_context=layout.density_context,
-            confidence=layout.confidence_scores if scores else None,
-            confidence_inputs=layout.confidence_inputs if confidence_inputs else None,
+            score=layout.scores if scores else None,
+            score_inputs=layout.score_inputs if score_inputs else None,
         )
         for name, path in targets.present().items():
             with open(path, "w", newline="") as handle:
@@ -719,7 +719,7 @@ class TestResumeStaging:
                 cast(contracts.WorkerConfig, None),
                 1,
                 layout,
-                driver_confidence.ConfidencePlan(),
+                driver_scoring.ScorePlan(),
                 run_log,
                 resources.MemoryPlan(
                     [
@@ -756,17 +756,15 @@ class TestResumeStaging:
         tmp_path: Path,
         *,
         bonds: bool = True,
-        confidence: bool = False,
+        score: bool = False,
     ) -> RunSummary:
         """Run the halted-resume path and return the run-log summary."""
         args = run_config(bonds=bonds, output_dir=str(tmp_path))
         # Any enabled plan will do: the commit only asks whether one exists.
-        plan: driver_confidence.ConfidencePlan = (
-            driver_confidence.ClassificationPlan(
-                driver_layout.OutputLayout(str(tmp_path))
-            )
-            if confidence
-            else driver_confidence.ConfidencePlan()
+        plan: driver_scoring.ScorePlan = (
+            driver_scoring.ClassificationPlan(driver_layout.OutputLayout(str(tmp_path)))
+            if score
+            else driver_scoring.ScorePlan()
         )
         run_log = RunLog(args, "pytest")
         pool.commit_staged_entries(staging, args, plan, run_log, run_aborted=True)
@@ -908,39 +906,35 @@ class TestResumeStaging:
             "1cll": "old-1cll-manifest",
         }
 
-    def test_commit_replaces_confidence_rows_only_when_enabled(
-        self, tmp_path: Path
-    ) -> None:
-        targets = self._outputs(tmp_path, confidence_inputs=True)
-        before = self._bytes(targets, ("confidence_inputs",))
+    def test_commit_replaces_score_rows_only_when_enabled(self, tmp_path: Path) -> None:
+        targets = self._outputs(tmp_path, score_inputs=True)
+        before = self._bytes(targets, ("score_inputs",))
         staged_rows = {name: [["109m", "new"]] for name in targets.present()}
 
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, staged_rows)
             staging.replacement_ids.add("109m")
-            staging.commit(bonds_enabled=True, confidence_enabled=False)
+            staging.commit(bonds_enabled=True, score_enabled=False)
         finally:
             staging.discard()
-        assert self._bytes(targets, ("confidence_inputs",)) == before
+        assert self._bytes(targets, ("score_inputs",)) == before
 
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(staging, staged_rows)
             staging.replacement_ids.add("109m")
-            staging.commit(bonds_enabled=True, confidence_enabled=True)
+            staging.commit(bonds_enabled=True, score_enabled=True)
         finally:
             staging.discard()
-        assert self._values(targets, "confidence_inputs") == {
+        assert self._values(targets, "score_inputs") == {
             "109m": "new",
-            "1cll": "old-1cll-confidence_inputs",
+            "1cll": "old-1cll-score_inputs",
         }
 
-    def test_commit_replaces_every_enabled_confidence_output(
-        self, tmp_path: Path
-    ) -> None:
-        """Scored and input confidence rows participate in one staged commit."""
-        targets = self._outputs(tmp_path, confidence_inputs=True, scores=True)
+    def test_commit_replaces_every_enabled_score_output(self, tmp_path: Path) -> None:
+        """Scored and input score rows participate in one staged commit."""
+        targets = self._outputs(tmp_path, score_inputs=True, scores=True)
         staging = resume.ResumeStaging(str(tmp_path), targets)
         try:
             self._stage(
@@ -948,11 +942,11 @@ class TestResumeStaging:
                 {name: [["109m", f"new-{name}"]] for name in targets.present()},
             )
             staging.replacement_ids.add("109m")
-            staging.commit(bonds_enabled=True, confidence_enabled=True)
+            staging.commit(bonds_enabled=True, score_enabled=True)
         finally:
             staging.discard()
 
-        for name in OutputTargets.CONFIDENCE_OUTPUTS:
+        for name in OutputTargets.SCORE_OUTPUTS:
             assert self._values(targets, name) == {
                 "109m": f"new-{name}",
                 "1cll": f"old-1cll-{name}",

@@ -196,7 +196,7 @@ def _apply_early_outcome(result: EntryResult, outcome: EarlyOutcome) -> None:
     result.status_detail = outcome.status_detail
     result.no_metals = outcome.no_metals
     result.metal_site_limit_exceeded = outcome.metal_site_limit_exceeded
-    result.confidence_inputs_missing_reason = outcome.confidence_inputs_missing_reason
+    result.score_inputs_missing_reason = outcome.score_inputs_missing_reason
 
 
 def _apply_density_outcome(result: EntryResult, outcome: DensityOutcome) -> None:
@@ -208,7 +208,7 @@ def _apply_density_outcome(result: EntryResult, outcome: DensityOutcome) -> None
     if outcome.failed:
         result.reason_codes = merged_codes(result.reason_codes, [outcome.reason_code])
         result.status_detail = outcome.status_detail
-        result.confidence_inputs_missing_reason = outcome.reason_code
+        result.score_inputs_missing_reason = outcome.reason_code
 
 
 def _appended_detail(existing: str, messages: Sequence[str]) -> str:
@@ -239,7 +239,7 @@ def _appended_detail(existing: str, messages: Sequence[str]) -> str:
 def _apply_bond_outcome(result: EntryResult, outcome: BondOutcome) -> None:
     """Fold the bond stage into the entry result.
 
-    A density failure recorded earlier keeps its detail and its confidence
+    A density failure recorded earlier keeps its detail and its scoring
     reason; the bond failure is appended rather than written over it.
     """
     if outcome.failed:
@@ -249,8 +249,8 @@ def _apply_bond_outcome(result: EntryResult, outcome: BondOutcome) -> None:
         result.reason_codes = merged_codes(
             result.reason_codes, [ReasonCode.BOND_STAGE_FAILURE]
         )
-        if not result.confidence_inputs_missing_reason:
-            result.confidence_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
+        if not result.score_inputs_missing_reason:
+            result.score_inputs_missing_reason = ReasonCode.BOND_STAGE_FAILURE
     result.timings.update(outcome.timings)
 
 

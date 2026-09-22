@@ -37,7 +37,7 @@ class RunMode(StrEnum):
     """How a run chose its entries, as recorded in the run report.
 
     Only ``DATABASE`` -- an uncapped pass over a PDB-REDO mirror -- can build
-    a new confidence reference; every other mode scores against one.
+    a new score reference; every other mode scores against one.
     """
 
     MANUAL = "manual"
@@ -245,20 +245,20 @@ class WarningCode(StrEnum):
 class CoordinateMappingStatus(StrEnum):
     """How an EDSTATS residue row joined to the analyzed coordinates.
 
-    Also written to confidence-input rows, which add the case where a bonded
+    Also written to score-input rows, which add the case where a bonded
     site had no density row to join at all.
     """
 
     MATCHED = "matched"
     RESIDUE_NOT_FOUND = "coordinate_residue_not_found"
-    #: A confidence-input row built from bond rows alone.
+    #: A score-input row built from bond rows alone.
     DENSITY_ROW_UNAVAILABLE = "density_row_unavailable"
 
 
 class SelectedSiteStatus(StrEnum):
     """Whether a density row belongs to a selected metal site.
 
-    Also written to confidence-input rows, which add two cases for selected
+    Also written to score-input rows, which add two cases for selected
     sites that could not be joined to a density row.
     """
 
@@ -305,7 +305,7 @@ class DensityMapScope(StrEnum):
     FULL_EXTENT_FALLBACK = "full-extent-fallback"
 
 
-class ConfidenceLevel(StrEnum):
+class ScoreLevel(StrEnum):
     """Verdict on one site or one evidence component.
 
     Deliberately upper-case, unlike every other vocabulary here: a site-level
@@ -321,7 +321,7 @@ class ConfidenceLevel(StrEnum):
 
 
 class EvidenceBasis(StrEnum):
-    """Which evidence components contributed to a site's confidence level."""
+    """Which evidence components contributed to a site's classification level."""
 
     DENSITY_AND_GEOMETRY = "density_and_geometry"
     DENSITY_ONLY = "density_only"
@@ -343,8 +343,8 @@ class VerdictReason(StrEnum):
     ALL_AVAILABLE_COMPONENTS_PASS = "all_available_components_pass"
 
 
-class ConfidenceInputStatus(StrEnum):
-    """Which evidence components a prepared confidence-input row carries."""
+class ScoreInputStatus(StrEnum):
+    """Which evidence components a prepared score-input row carries."""
 
     COMPLETE = "complete"
     DENSITY_ONLY = "density_only"
@@ -352,10 +352,10 @@ class ConfidenceInputStatus(StrEnum):
     UNSCORABLE = "unscorable"
 
 
-class ConfidenceMissingReason(StrEnum):
-    """Why a prepared confidence-input row lacks part of its evidence.
+class ScoreMissingReason(StrEnum):
+    """Why a prepared score-input row lacks part of its evidence.
 
-    Written pipe-joined to ``confidence_inputs_missing_reasons``, which mixes
+    Written pipe-joined to ``score_inputs_missing_reasons``, which mixes
     this vocabulary with ``ReasonCode.NON_FINITE_METAL_COORDINATES``,
     ``CoordinateMappingStatus.DENSITY_ROW_UNAVAILABLE``, and whichever
     ``ReasonCode`` the entry's own failure recorded. A reader therefore
@@ -500,7 +500,7 @@ class NeighborClass(StrEnum):
 #: Values two or more vocabularies spell identically on purpose, each mapped to
 #: the names of the enums that share it. A comparison between members of two
 #: listed enums is meaningful; any overlap absent from this table is a defect.
-#: Case-only differences (``ConfidenceLevel.SUSPECT`` versus
+#: Case-only differences (``ScoreLevel.SUSPECT`` versus
 #: ``GeometryStatus.SUSPECT``) are not overlaps: the strings differ, so the
 #: members never compare equal, and the test that checks this table also
 #: confirms no lower-case vocabulary ever spells an upper-case value.
@@ -509,8 +509,8 @@ SHARED_VALUES: dict[str, frozenset[str]] = {
     "missing": frozenset({"OccupancyStatus", "ElementStatus", "ReferenceKind"}),
     "suspect": frozenset({"GeometryStatus", "MultiDonorStatus"}),
     "available": frozenset({"DensityContextStatus", "CrystallizationDataStatus"}),
-    "density_only": frozenset({"EvidenceBasis", "ConfidenceInputStatus"}),
-    "geometry_only": frozenset({"EvidenceBasis", "ConfidenceInputStatus"}),
+    "density_only": frozenset({"EvidenceBasis", "ScoreInputStatus"}),
+    "geometry_only": frozenset({"EvidenceBasis", "ScoreInputStatus"}),
     "no_assessable_evidence": frozenset({"EvidenceBasis", "VerdictReason"}),
     "other": frozenset({"ParentType", "NeighborClass"}),
     "manual": frozenset({"RunMode", "RefinementState"}),

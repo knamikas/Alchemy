@@ -2,12 +2,10 @@
   "analysis_config_id": "alchemy-analysis-config-c316fa94d61d0c724a59",
   "cohort_id": "alchemy-cohort-2e97cf013eefa9d8e0b4",
   "cohort_weighting": "per_metal_site",
-  "confidence_inputs_file": "confidence_inputs_all.csv",
-  "confidence_inputs_sha256": "2e97cf013eefa9d8e0b4b0df949041a714f9770bdb050d52c56df24d957fa786",
   "coverage_policy": "annotation_only",
   "density_distinct_value_count": 382,
   "density_reference_size": 330887,
-  "density_saturation_policy": "suspect_with_zero_support",
+  "density_saturation_policy": "suspect_with_zero_score",
   "density_saturation_value": 99.9,
   "density_thresholds": {
     "review": 3.0,
@@ -43,9 +41,12 @@
   "overall_rule": "any_suspect_or_review_plus_review",
   "reference_data_id": "53538d4273b0",
   "reference_decimal_places": 3,
-  "reference_id": "alchemy-confidence-e79e6467783a2d513e45",
+  "reference_id": "alchemy-score-bdb549a394158719db73",
   "scorable_entry_count": 76942,
   "score_decimal_places": 6,
+  "score_inputs_file": "confidence_inputs_all.csv",
+  "score_inputs_sha256": "2e97cf013eefa9d8e0b4b0df949041a714f9770bdb050d52c56df24d957fa786",
+  "score_method": "reverse_average_rank_empirical_cdf",
   "software_versions": {
     "alchemy_version": [
       "1.0.0"
@@ -59,6 +60,5 @@
   },
   "source_entry_count": 194419,
   "source_manifest_file": "manifest.csv",
-  "source_manifest_sha256": "91bc976a74dd9e7ebe2ba65b4eae1027930ce928251fd8ba8298e0c6632d5430",
-  "support_score_method": "reverse_average_rank_empirical_cdf"
+  "source_manifest_sha256": "91bc976a74dd9e7ebe2ba65b4eae1027930ce928251fd8ba8298e0c6632d5430"
 }

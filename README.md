@@ -62,17 +62,20 @@ sites.
    missing values, and joins, see
    [Interpret a result](docs/output-schema.md#interpret-a-result).
 
-5. Open `output/confidence_scores_all.csv` for classifications and numerical
-   support scores. A fresh checkout automatically uses the bundled
-   [manuscript confidence reference](src/confidence_score/confidence_reference/),
+5. Open `output/scores_all.csv` for classifications and the
+   **Alchemy score (0–100)**. Higher scores indicate more typical evidence
+   relative to the frozen reference cohort; lower scores indicate increasingly
+   unusual disagreement. The score is a relative ranking, not a probability
+   that the modeled metal assignment is correct. A fresh checkout uses the bundled
+   [manuscript score reference](src/score/score_reference/),
    built from 330,978 sites. No reference download or extra option is needed.
    Missing density or geometry evidence can still leave its component score
    blank.
 
-An explicit `--confidence-reference-dir` selects another reference. Otherwise,
-Alchemy uses a reference in `OUTPUT_DIR/confidence_reference/` if one exists,
-then the bundled manuscript reference. An uncapped full-database run builds its
-own reference under the output directory.
+An explicit `--score-reference-dir` selects another reference. Otherwise,
+Alchemy searches `OUTPUT_DIR/score_reference/`, then the bundled manuscript reference.
+An uncapped full-database run builds its own `score_reference/` under the output
+directory.
 
 The run also writes an immutable report under `output/logs/`. If the command
 doesn't complete, start with the entry's `reason_codes` and `status_detail` in
@@ -112,9 +115,9 @@ Alchemy writes results to `output/` by default:
   distribution for each processed entry.
 - `crystallization_conditions_all.csv` and `crystallization_summary_all.csv`
   record deposited experimental context.
-- `confidence_scores_all.csv` records site classifications. An uncapped database
-  run also writes `confidence_inputs_all.csv` and `confidence_reference/`.
-- `review_queue_all.csv` contains only `REVIEW` and `SUSPECT` confidence rows
+- `scores_all.csv` records site classifications. An uncapped database
+  run also writes `score_inputs_all.csv` and `score_reference/`.
+- `review_queue_all.csv` contains only `REVIEW` and `SUSPECT` score rows
   with their crystallization context. That context doesn't affect scoring.
 - `logs/alchemy_run_YYYYMMDD.log` and its matching `_entries.csv` file record
   the run configuration, summary, per-entry outcomes, timing, and resource
@@ -131,9 +134,9 @@ handling, see the [operations guide](docs/operations.md).
 - [Usage guide](docs/usage.md): Choose an input mode and configure the command.
 - [Architecture](docs/architecture.md): Follow execution, process boundaries,
   and module relationships. A rendered overview of the same lanes is in
-  [docs/workflow.png](docs/workflow.png).
+  [docs/workflow.svg](docs/workflow.svg).
 - [Method reference](docs/method.md): Understand each analysis stage, contact
-  assignment, reference coverage, and confidence classification.
+  assignment, reference coverage, and classification.
 - [Output schema](docs/output-schema.md): Interpret results and find the data
   dictionary for each output.
 - [Operations guide](docs/operations.md): Run batches, resume work, and diagnose

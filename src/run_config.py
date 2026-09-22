@@ -30,7 +30,7 @@ class RunConfig:
     log_dir: str | None
     log_file: str | None
     ccp4_timeout: int
-    confidence_reference_dir: str | None
+    score_reference_dir: str | None
     ccp4_setup: str | None
     configure_ccp4: str | None
     keep_intermediates: bool

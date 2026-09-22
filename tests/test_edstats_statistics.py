@@ -16,7 +16,7 @@ import helpers
 import pytest
 from helpers import AtomSpec, StructureBuilder, simple_metal_site
 
-import confidence_score
+import score
 from coordination.density_zscores import DensityZScoreIndex
 from driver.writers import STATS_COLUMNS
 from edstats_statistics import (
@@ -1069,10 +1069,8 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
     ] == [2.0, 8.0]
 
     stages.append_site_fields(rows, {}, duplicated)
-    confidence_inputs = confidence_score.prepare_result_confidence_inputs(
-        rows, [], STATS_COLUMNS
-    )
-    assert len(confidence_inputs) == 2
+    score_inputs = score.prepare_result_score_inputs(rows, [], STATS_COLUMNS)
+    assert len(score_inputs) == 2
     assert (
         len(
             {
@@ -1082,7 +1080,7 @@ def test_nr_maps_repeated_author_rows_one_to_one(tmp_path: Path) -> None:
                     row["metal_residue_index"],
                     row["metal_atom_index"],
                 )
-                for row in confidence_inputs
+                for row in score_inputs
             }
         )
         == 2

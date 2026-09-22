@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, TextIO
 
 from analysis_config import ALTLOC_POLICY, MODEL_POLICY, SYMMETRY_POLICY
 from codes import DensityContextStatus
-from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from coordination.schema import (
     BOND_COLUMNS,
     CANDIDATE_COLUMNS,
@@ -31,11 +30,12 @@ from crystallization_conditions import (
 from driver.layout import OutputLayout
 from edstats_statistics import DENSITY_CONTEXT_COLUMNS, EDSTATS_COLUMNS
 from output_rows import MetalStatsRow, blank_if_unmeasured, scientific_csv_value
+from score import SCORE_INPUT_COLUMNS
 from worker.contracts import EntryResult
 
 if TYPE_CHECKING:
     # The plan module reads this module's schemas; only the annotation crosses back.
-    from driver.confidence import ConfidencePlan
+    from driver.scoring import ScorePlan
 
 # Keep the published pdbID spelling for downstream readers and joins.
 MANIFEST_COLUMNS = [
@@ -169,8 +169,8 @@ class OutputTargets:
     crystallization_conditions: str
     crystallization_summary: str
     density_context: str
-    confidence: str | None = None
-    confidence_inputs: str | None = None
+    score: str | None = None
+    score_inputs: str | None = None
 
     #: Written only when bond analysis runs; ``--no-bonds`` leaves them closed.
     BOND_STAGE_OUTPUTS: ClassVar[tuple[str, ...]] = ("bonds", "candidates")
@@ -180,12 +180,12 @@ class OutputTargets:
         "crystallization_summary",
         "density_context",
     )
-    #: Present only when confidence analysis is on; merged only when enabled.
-    CONFIDENCE_OUTPUTS: ClassVar[tuple[str, ...]] = ("confidence", "confidence_inputs")
+    #: Present only when scoring is on; merged only when enabled.
+    SCORE_OUTPUTS: ClassVar[tuple[str, ...]] = ("score", "score_inputs")
 
     @classmethod
-    def from_layout(cls, layout: OutputLayout, plan: ConfidencePlan) -> OutputTargets:
-        """The files a run with this layout and confidence plan writes."""
+    def from_layout(cls, layout: OutputLayout, plan: ScorePlan) -> OutputTargets:
+        """The files a run with this layout and scoring plan writes."""
         return cls(
             manifest=layout.manifest,
             stats=layout.stats,
@@ -194,10 +194,8 @@ class OutputTargets:
             crystallization_conditions=layout.crystallization_conditions,
             crystallization_summary=layout.crystallization_summary,
             density_context=layout.density_context,
-            confidence=plan.stream_path,
-            confidence_inputs=(
-                layout.confidence_inputs if plan.synchronize_inputs else None
-            ),
+            score=plan.stream_path,
+            score_inputs=(layout.score_inputs if plan.synchronize_inputs else None),
         )
 
     def present(self) -> dict[str, str]:
@@ -268,39 +266,37 @@ class OutputWriters:
         self,
         handles: Mapping[str, TextIO],
         *,
-        confidence_columns: Sequence[str] | None = None,
+        score_columns: Sequence[str] | None = None,
     ) -> None:
         """Start one stream per open output and emit every header.
 
         ``handles`` is keyed by ``OutputTargets`` field name; the manifest and
         statistics outputs are always present, every other one is optional.
         """
-        confidence_handle = handles.get("confidence")
-        if confidence_handle is not None and confidence_columns is None:
-            raise ValueError("confidence columns are required with a confidence output")
-        if handles.get("confidence_inputs") is not None:
-            if confidence_handle is None:
-                raise ValueError(
-                    "confidence inputs synchronization requires scored output"
-                )
+        score_handle = handles.get("score")
+        if score_handle is not None and score_columns is None:
+            raise ValueError("score columns are required with a score output")
+        if handles.get("score_inputs") is not None:
+            if score_handle is None:
+                raise ValueError("score inputs synchronization requires scored output")
             # The inputs stream is projected from the scored rows, so check the
             # projection here rather than desynchronizing the two mid-batch.
-            if not set(CONFIDENCE_INPUT_COLUMNS) <= set(confidence_columns or ()):
+            if not set(SCORE_INPUT_COLUMNS) <= set(score_columns or ()):
                 raise ValueError(
-                    "confidence inputs synchronization requires the scored "
-                    "columns to include every confidence input column"
+                    "score inputs synchronization requires the scored "
+                    "columns to include every score input column"
                 )
         self._manifest = _CsvStream(handles["manifest"], MANIFEST_COLUMNS)
         self._stats = _CsvStream(handles["stats"], STATS_COLUMNS)
         self._bonds = _stream_if_open(handles, "bonds", BOND_COLUMNS)
         self._candidates = _stream_if_open(handles, "candidates", CANDIDATE_COLUMNS)
-        self._confidence = (
-            _CsvStream(confidence_handle, confidence_columns)
-            if confidence_handle is not None and confidence_columns is not None
+        self._score = (
+            _CsvStream(score_handle, score_columns)
+            if score_handle is not None and score_columns is not None
             else None
         )
-        self._confidence_inputs = _stream_if_open(
-            handles, "confidence_inputs", CONFIDENCE_INPUT_COLUMNS
+        self._score_inputs = _stream_if_open(
+            handles, "score_inputs", SCORE_INPUT_COLUMNS
         )
         self._crystallization_conditions = _stream_if_open(
             handles, "crystallization_conditions", CONDITION_COLUMNS
@@ -328,9 +324,9 @@ class OutputWriters:
         return _rows_written(self._candidates)
 
     @property
-    def n_confidence(self) -> int:
-        """Scored confidence rows written; zero while disabled."""
-        return _rows_written(self._confidence)
+    def n_score(self) -> int:
+        """Scored score rows written; zero while disabled."""
+        return _rows_written(self._score)
 
     @property
     def n_crystallization_conditions(self) -> int:
@@ -410,14 +406,14 @@ class OutputWriters:
             row.update(result.density_context_row)
         self._density_context.write_rows([row])
 
-    def write_confidence_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        """Write scored confidence rows and synchronized inputs when enabled."""
-        if self._confidence is None or not rows:
+    def write_score_rows(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        """Write scored score rows and synchronized inputs when enabled."""
+        if self._score is None or not rows:
             return
-        expected = set(self._confidence.columns)
+        expected = set(self._score.columns)
         for row in rows:
             if set(row) != expected:
-                raise RuntimeError("confidence row does not match its output schema")
-        self._confidence.write_rows(rows)
-        if self._confidence_inputs is not None:
-            self._confidence_inputs.write_rows(rows)
+                raise RuntimeError("score row does not match its output schema")
+        self._score.write_rows(rows)
+        if self._score_inputs is not None:
+            self._score_inputs.write_rows(rows)

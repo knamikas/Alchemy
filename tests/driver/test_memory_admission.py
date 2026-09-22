@@ -18,11 +18,11 @@ from helpers import entry_result
 import cli
 from codes import EntryStatus
 from driver import (
-    confidence as driver_confidence,
     dispatch,
     layout as driver_layout,
     pool,
     resources,
+    scoring as driver_scoring,
 )
 from driver.memory_admission import MemoryAdmission
 from driver.runlog import RunLog
@@ -300,7 +300,7 @@ def test_dispatcher_recovers_parallelism_after_pressure_without_losing_results(
             cast(WorkerConfig, None),
             4,
             driver_layout.OutputLayout(str(tmp_path)),
-            driver_confidence.ConfidencePlan(),
+            driver_scoring.ScorePlan(),
             log,
             resources.MemoryPlan(
                 [

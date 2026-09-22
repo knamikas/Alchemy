@@ -1,6 +1,6 @@
 """Write the review queue: REVIEW/SUSPECT sites joined to crystallization context.
 
-A derived triage view regenerated from the completed confidence scores and the
+A derived triage view regenerated from the completed scores and the
 crystallization summary. Nothing here feeds back into scoring.
 """
 
@@ -11,10 +11,10 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from codes import ConfidenceLevel, CrystallizationDataStatus
-from confidence_score.schema import parse_csv_bool
+from codes import CrystallizationDataStatus, ScoreLevel
 from crystallization_conditions import PROMISCUOUS_TRANSITION_METALS, SUMMARY_COLUMNS
 from output_rows import CsvValue, scientific_csv_value
+from score.schema import parse_csv_bool
 
 #: Summary columns copied onto every queued site; ``pdbID`` is already there.
 _SUMMARY_CONTEXT_COLUMNS = tuple(
@@ -26,7 +26,7 @@ REVIEW_CONTEXT_COLUMNS = (
     "crystallization_contains_different_promiscuous_transition_metal",
     "crystallization_context_flags",
 )
-_QUEUED_LEVELS = frozenset({ConfidenceLevel.REVIEW, ConfidenceLevel.SUSPECT})
+_QUEUED_LEVELS = frozenset({ScoreLevel.REVIEW, ScoreLevel.SUSPECT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,30 +130,28 @@ def _review_row(
 
 
 def write_review_queue(
-    confidence_scores_path: str,
+    scores_path: str,
     crystallization_summary_path: str,
     output_path: str,
-    confidence_columns: Sequence[str],
+    score_columns: Sequence[str],
 ) -> int:
     """Write REVIEW/SUSPECT sites joined to entry-level condition context.
 
     The header is always written; a missing scores file leaves an empty queue,
     and a scores file with a different schema raises ``ValueError``.
     """
-    output_columns = (*confidence_columns, *REVIEW_CONTEXT_COLUMNS)
+    output_columns = (*score_columns, *REVIEW_CONTEXT_COLUMNS)
     summaries = _read_summaries(crystallization_summary_path)
     count = 0
     with open(output_path, "w", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=output_columns)
         writer.writeheader()
-        if not os.path.isfile(confidence_scores_path):
+        if not os.path.isfile(scores_path):
             return 0
-        with open(confidence_scores_path, newline="", encoding="utf-8") as scores:
+        with open(scores_path, newline="", encoding="utf-8") as scores:
             reader = csv.DictReader(scores)
-            if reader.fieldnames != list(confidence_columns):
-                raise ValueError(
-                    "confidence score schema is incompatible with review queue"
-                )
+            if reader.fieldnames != list(score_columns):
+                raise ValueError("score schema is incompatible with review queue")
             for site in reader:
                 if site.get("alchemy_level") not in _QUEUED_LEVELS:
                     continue

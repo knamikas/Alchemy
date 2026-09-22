@@ -9,8 +9,8 @@ from typing import Any, TextIO
 import pytest
 from helpers import entry_result, read_csv
 
-import confidence_score
 import edstats_statistics
+import score
 from coordination import schema as coordination_schema
 from driver import resume
 from driver.writers import (
@@ -30,7 +30,7 @@ class TestOutputWriters:
         tmp_path: Path,
         bonds: bool = True,
         candidates: bool = True,
-        confidence: bool | None = None,
+        score: bool | None = None,
     ) -> dict[str, TextIO]:
         """Open output files keyed as ``OutputTargets`` names them."""
         wanted = {
@@ -38,7 +38,7 @@ class TestOutputWriters:
             "stats": True,
             "bonds": bonds,
             "candidates": candidates,
-            "confidence": bool(confidence),
+            "score": bool(score),
         }
         return {
             name: open(tmp_path / f"{name}.csv", "w", newline="")
@@ -277,26 +277,26 @@ class TestOutputWriters:
         assert "metal_contact_candidates_all.csv" in str(excinfo.value)
         assert "unexpected bogus" in str(excinfo.value)
 
-    def test_confidence_output_requires_its_columns(self, tmp_path: Path) -> None:
-        handles = self._handles(tmp_path, confidence=True)
+    def test_score_output_requires_its_columns(self, tmp_path: Path) -> None:
+        handles = self._handles(tmp_path, score=True)
         try:
             with pytest.raises(ValueError):
-                OutputWriters(handles, confidence_columns=None)
+                OutputWriters(handles, score_columns=None)
         finally:
             self._close(handles)
 
-    def test_confidence_inputs_require_scored_columns_to_cover_them(
+    def test_score_inputs_require_scored_columns_to_cover_them(
         self, tmp_path: Path
     ) -> None:
         """A projection gap must fail before the two streams desynchronize."""
-        columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)[:-1]
-        handles = self._handles(tmp_path, confidence=True)
-        inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
+        columns = list(score.SCORE_INPUT_COLUMNS)[:-1]
+        handles = self._handles(tmp_path, score=True)
+        inputs_handle = open(tmp_path / "score_inputs.csv", "w", newline="")
         try:
-            with pytest.raises(ValueError, match="every confidence input column"):
+            with pytest.raises(ValueError, match="every score input column"):
                 OutputWriters(
-                    {**handles, "confidence_inputs": inputs_handle},
-                    confidence_columns=columns,
+                    {**handles, "score_inputs": inputs_handle},
+                    score_columns=columns,
                 )
         finally:
             self._close(handles)
@@ -315,68 +315,66 @@ class TestOutputWriters:
             self._close(handles)
         assert read_csv(tmp_path / "manifest.csv") == [MANIFEST_COLUMNS]
 
-    def test_confidence_header_and_counts(self, tmp_path: Path) -> None:
-        columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-        handles = self._handles(tmp_path, confidence=True)
-        writers = OutputWriters(handles, confidence_columns=columns)
-        writers.write_confidence_rows([])
-        assert writers.n_confidence == 0
+    def test_score_header_and_counts(self, tmp_path: Path) -> None:
+        columns = list(score.SCORE_INPUT_COLUMNS)
+        handles = self._handles(tmp_path, score=True)
+        writers = OutputWriters(handles, score_columns=columns)
+        writers.write_score_rows([])
+        assert writers.n_score == 0
         first: dict[str, object] = dict.fromkeys(columns, "")
         first["context_warning"] = True
         first["rszd_abs"] = float("nan")
-        writers.write_confidence_rows([first, dict.fromkeys(columns, "")])
+        writers.write_score_rows([first, dict.fromkeys(columns, "")])
         self._close(handles)
-        rows = read_csv(tmp_path / "confidence.csv")
+        rows = read_csv(tmp_path / "score.csv")
         assert rows[0] == columns
-        assert writers.n_confidence == 2
+        assert writers.n_score == 2
         assert len(rows) == 3
         written = dict(zip(columns, rows[1], strict=True))
         assert written["context_warning"] == "true"
         assert written["rszd_abs"] == ""
 
-    def test_scored_confidence_stream_projects_synchronized_inputs(
+    def test_scored_score_stream_projects_synchronized_inputs(
         self, tmp_path: Path
     ) -> None:
         """A targeted scored resume updates its reusable input rows as well."""
         scored_columns = [
-            *confidence_score.CONFIDENCE_INPUT_COLUMNS,
-            *confidence_score.ANALYSIS_COLUMNS,
+            *score.SCORE_INPUT_COLUMNS,
+            *score.ANALYSIS_COLUMNS,
         ]
-        handles = self._handles(tmp_path, confidence=True)
-        inputs_handle = open(tmp_path / "confidence_inputs.csv", "w", newline="")
+        handles = self._handles(tmp_path, score=True)
+        inputs_handle = open(tmp_path / "score_inputs.csv", "w", newline="")
         try:
             writers = OutputWriters(
-                {**handles, "confidence_inputs": inputs_handle},
-                confidence_columns=scored_columns,
+                {**handles, "score_inputs": inputs_handle},
+                score_columns=scored_columns,
             )
             row = {column: f"value-{column}" for column in scored_columns}
-            writers.write_confidence_rows([row])
+            writers.write_score_rows([row])
         finally:
             self._close(handles)
             inputs_handle.close()
 
-        scored = read_csv(tmp_path / "confidence.csv")
-        inputs = read_csv(tmp_path / "confidence_inputs.csv")
+        scored = read_csv(tmp_path / "score.csv")
+        inputs = read_csv(tmp_path / "score_inputs.csv")
         assert scored[0] == scored_columns
-        assert inputs[0] == list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-        assert inputs[1] == [
-            row[column] for column in confidence_score.CONFIDENCE_INPUT_COLUMNS
-        ]
+        assert inputs[0] == list(score.SCORE_INPUT_COLUMNS)
+        assert inputs[1] == [row[column] for column in score.SCORE_INPUT_COLUMNS]
 
-    def test_confidence_row_schema_mismatch_is_rejected(self, tmp_path: Path) -> None:
-        columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-        handles = self._handles(tmp_path, confidence=True)
-        writers = OutputWriters(handles, confidence_columns=columns)
+    def test_score_row_schema_mismatch_is_rejected(self, tmp_path: Path) -> None:
+        columns = list(score.SCORE_INPUT_COLUMNS)
+        handles = self._handles(tmp_path, score=True)
+        writers = OutputWriters(handles, score_columns=columns)
         valid: dict[str, Any] = dict.fromkeys(columns, "")
         malformed = valid.copy()
         malformed.pop(columns[0])
         try:
             with pytest.raises(RuntimeError):
-                writers.write_confidence_rows([valid, malformed])
+                writers.write_score_rows([valid, malformed])
         finally:
             self._close(handles)
-        assert writers.n_confidence == 0
-        assert read_csv(tmp_path / "confidence.csv") == [columns]
+        assert writers.n_score == 0
+        assert read_csv(tmp_path / "score.csv") == [columns]
 
     def test_manifest_rows_round_trip_through_the_real_projection(
         self, tmp_path: Path

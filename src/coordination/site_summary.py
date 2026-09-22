@@ -124,7 +124,7 @@ class _DonorBFactors:
 
 @dataclass(frozen=True, slots=True)
 class _SiteContext:
-    """Coordination-relevant context of one site that changes no confidence."""
+    """Coordination-relevant context of one site that changes no score or classification."""
 
     warning: bool
     warning_reasons: str
@@ -305,7 +305,7 @@ def context_warning_reasons(
     only source of ``suspect_multi_donor_group``. ``None`` means the group was
     not evaluated for this row, and the reason is then silently omitted rather
     than reported as absent: a caller holding the result must pass it, or the
-    column understates the site and the confidence scoring fed from it does
+    column understates the site and the scoring fed from it does
     too. The candidate rows are the one correct ``None``, because the
     multi-donor stage annotates only the contacts that were assigned, so an
     unassigned candidate has no result to pass.
@@ -332,7 +332,7 @@ def context_warning_reasons(
 def _site_context(
     contacts: Sequence[Candidate], candidates: Sequence[Candidate]
 ) -> _SiteContext:
-    """Aggregate coordination-relevant context without changing confidence."""
+    """Aggregate coordination-relevant context without changing scores or classifications."""
     reasons: list[str] = []
     for contact in contacts:
         reasons.extend(

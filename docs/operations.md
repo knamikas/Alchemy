@@ -97,7 +97,7 @@ reference data, see [Reference-data maintenance](maintenance.md).
   completed run finds no metals, contacts, or proximal candidates.
 - Before appending on resume, Alchemy verifies that every terminal manifest
   entry is backed by the enabled output files and that its selected-statistics,
-  bond, candidate, and confidence row counts agree with the manifest. Duplicate
+  bond, candidate, and score row counts agree with the manifest. Duplicate
   complete manifest IDs and duplicate selected-site keys are refused. Rows
   written before an interrupted entry reached its manifest row remain eligible
   for staged replacement and do not invalidate the resume.
@@ -120,10 +120,10 @@ reference data, see [Reference-data maintenance](maintenance.md).
   The same staged replacement rules apply, so an interrupted or retryably failed
   attempt does not discard the previous terminal result. When a frozen reference
   scores a targeted resume inside an existing database output,
-  `confidence_scores_all.csv` and `confidence_inputs_all.csv` are replaced
+  `scores_all.csv` and `score_inputs_all.csv` are replaced
   together so their per-entry evidence cannot diverge. Crystallization condition
   and summary rows use the same staged per-entry replacement. The derived review
-  queue is regenerated from the completed confidence and summary files rather
+  queue is regenerated from the completed score and summary files rather
   than merged independently.
 - A fresh `--no-bonds` run removes pre-existing `metal_bonds_all.csv` and
   `metal_contact_candidates_all.csv` files before replacing the manifest and
@@ -141,7 +141,7 @@ reference data, see [Reference-data maintenance](maintenance.md).
   Every other entry, and any twin entry that fails a provenance, schema, or
   coefficient-identity check, is a terminal `partial` with
   `mtzfix_validation_failure`; coordinate-based bond analysis still runs, while
-  its metal sites remain explicitly unscorable by confidence because RSZD is
+  its metal sites remain explicitly unscorable for ranking because RSZD is
   unavailable.
 - After canonical model and conformer selection, structures with no recognized
   positive-occupancy metal sites and no unknown-element atoms finish with
@@ -162,15 +162,15 @@ reference data, see [Reference-data maintenance](maintenance.md).
   immediately after the same coordinate inspection, before `mtzfix`, either FFT,
   or `edstats`. Their manifest rows retain the detected `n_metals`, set
   `metal_site_limit_exceeded=true`, carry the matching reason code, and
-  contribute no site, bond, candidate, or confidence rows. This is a successful
+  contribute no site, bond, candidate, or score rows. This is a successful
   policy exclusion: metal-dense assemblies contain highly correlated sites that
   would otherwise dominate the standard database cohort and its runtime.
   Progress and completion summaries report the excluded-entry count separately.
 - Targeted and capped runs, and any run with `--no-bonds`, exit nonzero when any
   entry ends as `error`, `skip`, or a retryable `partial`. An uncapped database
-  run that builds a confidence reference treats explicitly deterministic
+  run that builds a score reference treats explicitly deterministic
   processing errors as documented terminal exclusions: when no missing,
-  interrupted, or otherwise retryable work remains, it finalizes the confidence
+  interrupted, or otherwise retryable work remains, it finalizes the score
   reference and exits successfully. Unknown and unexpected errors, worker
   deaths, skips, and retryable partials remain nonzero.
 - The exit code is `0` for a complete batch, `1` when entries remain incomplete
@@ -287,7 +287,7 @@ table, so a code cannot be added or renamed without updating this list.
 | `symmetry_search_unavailable` | The structure has no usable cell or space group, so only explicit contacts could be found. |
 | `missing_first_sphere_reference` | No bundled reference distance covers a donor class present at the site, so those contacts cannot be z-scored. |
 | `metal_site_limit_exceeded` | More than 100 selected canonical metal sites were detected, so the entry was intentionally excluded before CCP4 processing. `n_metals` retains the detected count for audit. |
-| `non_finite_metal_coordinates` | A selected metal has a NaN or infinite Cartesian coordinate, so its geometry and confidence are unscorable. Other valid sites in the entry are still analyzed. |
+| `non_finite_metal_coordinates` | A selected metal has a NaN or infinite Cartesian coordinate, so its geometry and score are unavailable. Other valid sites in the entry are still analyzed. |
 | `missing_dpi_metadata_source` | Manual input without `--data-json`: the reflection count has no source, which differs from a calculation that ran and failed. |
 | `invalid_dpi_metadata` | The reflection count or R-free in `--data-json` or PDB-REDO metadata was present but not numeric. |
 | `invalid_occupancy` | Deposited occupancies could not be read, or overfull alternates exceeded the tolerance, leaving `Ni` unusable. |

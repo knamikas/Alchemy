@@ -7,7 +7,7 @@ z-score. Alchemy verifies both files against their checksums when a run first
 reads them, and every manifest row records the `reference_data_id` that they
 compose.
 
-The bundled [confidence reference](../src/confidence_score/confidence_reference/)
+The bundled [score reference](../src/score/score_reference/)
 is verified differently. Its `reference_id` is a digest over the scoring policy
 and every distribution value and count, and the loader recomputes it from the
 file on every load, alongside the size, distinct-value, and policy fields in

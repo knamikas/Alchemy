@@ -1,6 +1,6 @@
 """Extract crystallization conditions from coordinate files and the RCSB cache.
 
-Conditions supply review context only; they do not affect confidence scores.
+Conditions supply review context only; they do not affect scores.
 The RCSB client and its on-disk cache live in ``rcsb_metadata_cache``.
 """
 

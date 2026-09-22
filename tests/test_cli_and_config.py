@@ -19,10 +19,10 @@ import pytest
 from helpers import resolved_ccp4_environment
 
 import cli
-import confidence_score
 import density_analysis as density
+import score
 import scratch
-from driver import ccp4_setup, confidence as driver_confidence, environment, errors
+from driver import ccp4_setup, environment, errors, scoring as driver_scoring
 from driver.layout import OutputLayout
 from driver.runlog import RunLog
 
@@ -239,41 +239,80 @@ def test_manual_mode_accepts_an_optional_single_id() -> None:
     assert args.id_file is None
 
 
-def test_confidence_reference_is_discovered_in_output_before_repo_default(
+def test_score_reference_is_discovered_in_output_before_repo_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output_dir = tmp_path / "output"
-    output_reference = output_dir / "confidence_reference"
+    output_reference = output_dir / "score_reference"
     output_reference.mkdir(parents=True)
-    (output_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
+    (output_reference / score.REFERENCE_METADATA_FILE).write_text("{}")
     repository_reference = tmp_path / "repository-reference"
     repository_reference.mkdir()
-    (repository_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
+    (repository_reference / score.REFERENCE_METADATA_FILE).write_text("{}")
     monkeypatch.setattr(
-        driver_confidence, "DEFAULT_CONFIDENCE_REFERENCE_DIR", str(repository_reference)
+        driver_scoring, "DEFAULT_SCORE_REFERENCE_DIR", str(repository_reference)
     )
 
-    selected, searched = driver_confidence.resolve_confidence_reference_dir(
+    selected, searched = driver_scoring.resolve_score_reference_dir(
         OutputLayout(str(output_dir))
     )
 
     assert selected == str(output_reference)
-    assert searched == (str(output_reference), str(repository_reference))
+    assert searched == (
+        str(output_dir / "score_reference"),
+        str(repository_reference),
+    )
 
 
-def test_explicit_confidence_reference_is_authoritative(tmp_path: Path) -> None:
+def test_explicit_score_reference_is_authoritative(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
-    automatic_reference = output_dir / "confidence_reference"
+    automatic_reference = output_dir / "score_reference"
     automatic_reference.mkdir(parents=True)
-    (automatic_reference / confidence_score.REFERENCE_METADATA_FILE).write_text("{}")
+    (automatic_reference / score.REFERENCE_METADATA_FILE).write_text("{}")
     explicit_reference = tmp_path / "explicit-reference"
 
-    selected, searched = driver_confidence.resolve_confidence_reference_dir(
+    selected, searched = driver_scoring.resolve_score_reference_dir(
         OutputLayout(str(output_dir)), str(explicit_reference)
     )
 
     assert selected is None
     assert searched == (str(explicit_reference),)
+
+
+def test_score_reference_option_selects_reference() -> None:
+    args = cli.parse_args(["--id", "9myr", "--score-reference-dir", "/tmp/reference"])
+    assert args.score_reference_dir == "/tmp/reference"
+
+
+def test_old_reference_option_is_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_args(["--id", "9myr", "--confidence-reference-dir", "/tmp/reference"])
+    assert exc.value.code == 2
+    assert (
+        "unrecognized arguments: --confidence-reference-dir" in capsys.readouterr().err
+    )
+
+
+def test_score_reference_lookup_ignores_old_directory_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout = OutputLayout(str(tmp_path / "output"))
+    bundled = tmp_path / "bundled" / "score_reference"
+    legacy_bundled = bundled.with_name("confidence_reference")
+    monkeypatch.setattr(driver_scoring, "DEFAULT_SCORE_REFERENCE_DIR", str(bundled))
+    candidates = [Path(layout.reference_dir), bundled]
+    for folder in [
+        *candidates,
+        tmp_path / "output" / "confidence_reference",
+        legacy_bundled,
+    ]:
+        folder.mkdir(parents=True)
+        (folder / score.REFERENCE_METADATA_FILE).write_text("{}")
+    for folder in candidates:
+        selected, _ = driver_scoring.resolve_score_reference_dir(layout)
+        assert selected == str(folder)
+        (folder / score.REFERENCE_METADATA_FILE).unlink()
+    assert driver_scoring.resolve_score_reference_dir(layout)[0] is None
 
 
 def test_saved_ccp4_setup_is_the_one_that_gets_loaded_back(tmp_path: Path) -> None:

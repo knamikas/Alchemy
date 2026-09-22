@@ -5,7 +5,7 @@ The driver warms the cache before workers start through
 ``read_cache_payload`` via ``crystallization_conditions``. One JSON file per
 entry holds the raw ``exptl_crystal_grow`` records with their provenance, so
 that interpretation can change without another download. Nothing here
-influences confidence scores.
+influences scores.
 """
 
 from __future__ import annotations

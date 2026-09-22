@@ -1,10 +1,10 @@
-"""An independent re-implementation of the confidence scoring policy.
+"""An independent re-implementation of the scoring policy.
 
-Integration tests cross-check ``src/confidence_score`` against this oracle, so
+Integration tests cross-check ``src/score`` against this oracle, so
 nothing here may import a threshold, rank, or decision rule from it; the raw
 thresholds are restated deliberately, and
 ``test_the_scoring_policy_under_test_is_the_shipped_one`` in
-``tests/test_confidence_score.py`` proves the two copies still agree. Only the
+``tests/test_score.py`` proves the two copies still agree. Only the
 column names, file names, and the ``finalize`` entry point come from
 production, because those are the interface under test.
 """
@@ -22,13 +22,13 @@ from collections.abc import Sequence
 
 from helpers import approx
 
-import confidence_score
-import confidence_score.cli
+import score
+import score.cli
 
 _StrPath = str | os.PathLike[str]
 
 # Independent threshold values; the shipped-policy test in
-# ``tests/test_confidence_score.py`` checks them against production.
+# ``tests/test_score.py`` checks them against production.
 DENSITY_THRESHOLDS = (3.0, 6.0)
 GEOMETRY_THRESHOLDS = (1.0, 2.0)
 
@@ -57,9 +57,7 @@ def frozen_cohort(
     reference_dir: _StrPath,
 ) -> dict[str, list[tuple[float, int]]]:
     """Read both raw component distributions from a published reference."""
-    path = os.path.join(
-        str(reference_dir), confidence_score.REFERENCE_DISTRIBUTION_FILE
-    )
+    path = os.path.join(str(reference_dir), score.REFERENCE_DISTRIBUTION_FILE)
     result: dict[str, list[tuple[float, int]]] = {"density": [], "geometry": []}
     with open(path, newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
@@ -69,13 +67,13 @@ def frozen_cohort(
 
 def reference_metadata(reference_dir: _StrPath) -> dict[str, object]:
     """The published policy metadata of a frozen reference directory."""
-    path = os.path.join(str(reference_dir), confidence_score.REFERENCE_METADATA_FILE)
+    path = os.path.join(str(reference_dir), score.REFERENCE_METADATA_FILE)
     with open(path, encoding="utf-8") as handle:
         metadata: dict[str, object] = json.load(handle)
     return metadata
 
 
-def reverse_average_rank_support(
+def reverse_average_rank_score(
     cohort: Sequence[tuple[float, int]], value: float, tolerance: float = 1e-9
 ) -> float:
     """Reverse average-rank ECDF, computed independently of production code."""
@@ -91,10 +89,10 @@ def frozen_reference(
     rszd_values: Sequence[float] = COHORT_RSZD,
     rms_zbond_values: Sequence[float] = COHORT_RMS_ZBOND,
 ) -> str:
-    """Publish a frozen confidence reference and return its directory.
+    """Publish a frozen score reference and return its directory.
 
     Built the way a real one is, through the documented
-    ``python -m confidence_score finalize`` entry point. Two rows carry no
+    ``python -m score finalize`` entry point. Two rows carry no
     assessable component, so component sizes and total input size cannot be
     confused.
     """
@@ -104,9 +102,7 @@ def frozen_reference(
     for index, (rszd, rms) in enumerate(
         itertools.product(rszd_values, rms_zbond_values)
     ):
-        row: dict[str, str] = dict.fromkeys(
-            confidence_score.CONFIDENCE_INPUT_COLUMNS, ""
-        )
+        row: dict[str, str] = dict.fromkeys(score.SCORE_INPUT_COLUMNS, "")
         row.update(
             pdbID=f"c{index:03d}",
             category="ion",
@@ -118,36 +114,36 @@ def frozen_reference(
             assigned_contact_count="4",
             reference_covered_contact_count="4",
             geometry_bond_count="4",
-            confidence_inputs_status="complete",
+            score_inputs_status="complete",
         )
         rows.append(row)
     for index in range(2):
-        row = dict.fromkeys(confidence_score.CONFIDENCE_INPUT_COLUMNS, "")
+        row = dict.fromkeys(score.SCORE_INPUT_COLUMNS, "")
         row.update(
             pdbID=f"u{index:03d}",
             selected_metal_site_status="selected",
-            confidence_inputs_status="unscorable",
-            confidence_inputs_missing_reasons="rszd_unavailable",
+            score_inputs_status="unscorable",
+            score_inputs_missing_reasons="rszd_unavailable",
         )
         rows.append(row)
 
-    inputs = os.path.join(directory, "confidence_inputs.csv")
+    inputs = os.path.join(directory, "score_inputs.csv")
     with open(inputs, "w", newline="", encoding="utf-8") as handle:
-        fieldnames: list[str] = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+        fieldnames: list[str] = list(score.SCORE_INPUT_COLUMNS)
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
-    reference_dir = os.path.join(directory, "confidence_reference")
+    reference_dir = os.path.join(directory, "score_reference")
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        code = confidence_score.cli.main(
+        code = score.cli.main(
             [
                 "finalize",
                 "--input",
                 inputs,
                 "--output",
-                os.path.join(directory, "confidence_scores.csv"),
+                os.path.join(directory, "scores.csv"),
                 "--reference-dir",
                 reference_dir,
             ]
@@ -173,8 +169,8 @@ def assert_policy_was_applied(
             f"{row['pdbID']} {row['metal_resname']}"
             f"{row['metal_resnum']}/{row['metal_atom']}"
         )
-        assert row["confidence_reference_id"] == metadata["reference_id"], where
-        assert int(row["confidence_cohort_size"]) == metadata["input_row_count"], where
+        assert row["score_reference_id"] == metadata["reference_id"], where
+        assert int(row["score_cohort_size"]) == metadata["input_row_count"], where
         rszd = float(row["rszd_abs"]) if row["rszd_abs"] else math.nan
         rms = (
             float(row["geometry_rms_zbond"]) if row["geometry_rms_zbond"] else math.nan
@@ -206,7 +202,7 @@ def assert_policy_was_applied(
             expected = (
                 0.0
                 if component == "density" and value >= 99.9
-                else reverse_average_rank_support(cohorts[component], value)
+                else reverse_average_rank_score(cohorts[component], value)
             )
             assert float(score_text) == approx(expected, abs=1e-6), where
             component_scores.append(expected)

@@ -6,7 +6,7 @@ sequence of standalone commands. The driver coordinates the batch, worker
 processes analyze individual entries, and the driver writes the combined
 outputs.
 
-This page maps execution and ownership; [workflow.png](workflow.png)
+This page maps execution and ownership; [workflow.svg](workflow.svg)
 renders the same lanes as one picture. For scientific rules, see the
 [method reference](method.md); for CSV fields, see the
 [output schema](output-schema.md); for retries and resource controls, see the
@@ -19,7 +19,7 @@ Each worker prepares inputs, loads the structure and crystallization context,
 checks whether metals can be analyzed, then runs density, identification, and
 coordination analysis in order. Entries without analyzable metals or above the
 site limit return early; `--no-bonds` skips coordination analysis. The driver
-collects results, prepares confidence scores, writes outputs, finalizes the
+collects results, prepares scores, writes outputs, finalizes the
 batch, builds the review queue, and writes the run report. Several entries can
 run concurrently, while the stages within each entry run in order.
 
@@ -33,7 +33,7 @@ and distance table used in batch preparation, metal identification, and
 coordination analysis. `reference_integrity.py` supplies shared checksum
 validation, and `reference_data.py` combines the references into one identity.
 Identification and coordination share
-the loaded structure context; confidence scoring uses a frozen reference when
+the loaded structure context; scoring uses a frozen reference when
 applicable.
 
 ### Startup and scheduling
@@ -44,9 +44,9 @@ applicable.
 2. [driver/pool.py](../src/driver/pool.py) orchestrates the batch. Its
    collaborators are [driver/layout.py](../src/driver/layout.py) for output
    paths, [driver/entries.py](../src/driver/entries.py) for entry selection,
-   [driver/confidence.py](../src/driver/confidence.py) for the confidence plan,
+   [driver/scoring.py](../src/driver/scoring.py) for the scoring plan,
    and [driver/report.py](../src/driver/report.py) for the batch summary and
-   confidence finalization. The pool loads the bundled cofactor catalog and
+   score finalization. The pool loads the bundled cofactor catalog and
    resolves the CCP4 environment through
    [driver/environment.py](../src/driver/environment.py), which also records the
    Alchemy, Gemmi, and CCP4 versions for provenance.
@@ -58,7 +58,7 @@ applicable.
    with exit code 1.
 3. The driver creates the output directory if needed, then acquires the
    output-directory lock before reading or writing any run output. It determines
-   the confidence mode, checks resume compatibility, and selects entries from
+   the scoring mode, checks resume compatibility, and selects entries from
    the requested input mode. Completed entries may be excluded by resume policy.
 4. Crystallization metadata is prefetched before expensive analysis. Manual
    input mode uses coordinate records and existing cache entries without
@@ -160,26 +160,26 @@ metadata. Its collaborators have distinct responsibilities:
 
 Proximity candidates and declared connections are merged before assessment.
 Candidate evidence is broader than assigned bonds. Geometry summaries feed both
-the metal-site output and downstream confidence preparation.
+the metal-site output and downstream score preparation.
 
-## Outputs, confidence, and recovery
+## Outputs, scoring, and recovery
 
 Workers return data to the driver; they do not append to the combined CSVs.
 [driver/writers.py](../src/driver/writers.py) writes site, bond, candidate,
-crystallization, density-context, and optional confidence rows. The manifest row
+crystallization, density-context, and optional score rows. The manifest row
 is written last as the entry's completion marker. Entries are collected as they
 finish, so output order is not guaranteed to match input order.
 
-[confidence_score/](../src/confidence_score/) runs in the driver and uses the
+[score/](../src/score/) runs in the driver and uses the
 returned site and bond evidence:
 
-| Run mode | Confidence behavior |
+| Run mode | Scoring behavior |
 | --- | --- |
 | Single entry, ID file, manual input, or capped run | Score each completed entry against an explicit, output-directory, or bundled frozen reference, in that search order. Without a reference, emit classifications without empirical rankings. |
-| Uncapped database run | Stream compact confidence inputs, then finalize scores and a reusable reference when the batch has no recoverable unfinished entries. |
-| `--no-bonds` | Skip contact analysis and disable confidence output. |
+| Uncapped database run | Stream compact score inputs, then finalize scores and a reusable reference when the batch has no recoverable unfinished entries. |
+| `--no-bonds` | Skip contact analysis and disable score output. |
 
-When confidence scores are available,
+When scores are available,
 [driver/review_queue.py](../src/driver/review_queue.py) builds the review queue
 by joining `REVIEW`/`SUSPECT` sites to the crystallization summary.
 Crystallization metadata does not participate in scoring.
@@ -237,15 +237,15 @@ rebuilds the bundled cofactor catalog;
 [stamp_distance_table.py](../tools/stamp_distance_table.py) updates or checks
 distance-table metadata. Normal runs verify and read their committed artifacts
 through `metallocofactors/catalog.py` and
-`coordination/metal_distances/distances.py`. The confidence loader in
-`confidence_score/reference.py` uses the bundled `confidence_reference/`
+`coordination/metal_distances/distances.py`. The score reference loader in
+`score/reference.py` uses the bundled `score_reference/`
 directory beside it when no output-directory reference or explicit override
 is selected. See [reference-data maintenance](maintenance.md)
 before changing those artifacts.
 
-The `confidence_score` package also exposes standalone `finalize` and `score`
-subcommands for prepared confidence-input files, run as
-`PYTHONPATH=src python3 -m confidence_score`. Its modules separate the column
+The `score` package also exposes standalone `finalize` and `score`
+subcommands for prepared score-input files, run as
+`PYTHONPATH=src python3 -m score`. Its modules separate the column
 vocabulary, input preparation, classification and ranking, reference
 persistence, and the command line. Normal analysis calls its functions directly
 from the driver.

@@ -1,4 +1,4 @@
-"""Decide whether and how a run scores confidence, and finalize its outputs."""
+"""Decide whether and how a run calculates scores, and finalize its outputs."""
 
 from __future__ import annotations
 
@@ -9,22 +9,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 from typing_extensions import override
 
 from codes import RunMode
-from confidence_score import (
-    ANALYSIS_COLUMNS as CONFIDENCE_ANALYSIS_COLUMNS,
-    CONFIDENCE_INPUT_COLUMNS,
-    REFERENCE_METADATA_FILE,
-    ConfidenceReference,
-    classify_without_reference,
-    complete_confidence_site_count,
-    finalize_database_confidence,
-    load_reference as load_confidence_reference,
-    prepare_result_confidence_inputs,
-    score_against_reference,
-    validate_scored_reference,
-)
-from confidence_score.reference import (
-    DEFAULT_CONFIDENCE_REFERENCE_DIR as DEFAULT_CONFIDENCE_REFERENCE_DIR,
-)
 from driver.errors import DriverError
 from driver.layout import OutputLayout
 from driver.review_queue import write_review_queue
@@ -32,6 +16,22 @@ from driver.runlog import RunLog
 from driver.writers import STATS_COLUMNS
 from run_config import RunConfig
 from run_logging import logger_for
+from score import (
+    ANALYSIS_COLUMNS as SCORE_ANALYSIS_COLUMNS,
+    REFERENCE_METADATA_FILE,
+    SCORE_INPUT_COLUMNS,
+    ScoreReference,
+    classify_without_reference,
+    complete_score_site_count,
+    finalize_database_score,
+    load_reference as load_score_reference,
+    prepare_result_score_inputs,
+    score_against_reference,
+    validate_scored_reference,
+)
+from score.reference import (
+    DEFAULT_SCORE_REFERENCE_DIR as DEFAULT_SCORE_REFERENCE_DIR,
+)
 from worker.contracts import EntryResult
 
 if TYPE_CHECKING:
@@ -40,17 +40,17 @@ if TYPE_CHECKING:
 logger = logger_for(__name__)
 
 
-def resolve_confidence_reference_dir(
+def resolve_score_reference_dir(
     layout: OutputLayout, configured_dir: str | None = None
 ) -> tuple[str | None, tuple[str, ...]]:
-    """Find a frozen confidence reference, honoring an explicit override."""
+    """Find a frozen score reference, honoring an explicit override."""
     candidates: tuple[str, ...]
     if configured_dir is not None:
         candidates = (configured_dir,)
     else:
         candidates = (
             layout.reference_dir,
-            DEFAULT_CONFIDENCE_REFERENCE_DIR,
+            DEFAULT_SCORE_REFERENCE_DIR,
         )
     for candidate in candidates:
         metadata_path = os.path.join(candidate, REFERENCE_METADATA_FILE)
@@ -59,12 +59,12 @@ def resolve_confidence_reference_dir(
     return None, candidates
 
 
-ConfidenceMode = Literal["database", "reference", "classification"]
+ScoreMode = Literal["database", "reference", "classification"]
 
 #: Columns of a scores file: the inputs plus the verdict and ranking columns.
-SCORED_CONFIDENCE_COLUMNS = (
-    *CONFIDENCE_INPUT_COLUMNS,
-    *CONFIDENCE_ANALYSIS_COLUMNS,
+SCORED_COLUMNS = (
+    *SCORE_INPUT_COLUMNS,
+    *SCORE_ANALYSIS_COLUMNS,
 )
 
 
@@ -81,21 +81,21 @@ def reference_marker(layout: OutputLayout) -> str:
     return os.path.join(layout.reference_dir, REFERENCE_METADATA_FILE)
 
 
-class ConfidencePlan:
-    """Whether this run scores confidence, and against what.
+class ScorePlan:
+    """Whether this run calculates scores, and against what.
 
     This base plan is the disabled one: bonds are off, so there is no
-    evidence to score. ``plan_confidence`` returns one of the enabled
+    evidence to score. ``plan_score`` returns one of the enabled
     subclasses otherwise, and each step of the driver that depends on the
     mode asks the plan rather than comparing mode names.
     """
 
-    #: ``None`` means confidence analysis is off.
-    mode: ClassVar[ConfidenceMode | None] = None
+    #: ``None`` means scoring is off.
+    mode: ClassVar[ScoreMode | None] = None
 
     @property
     def enabled(self) -> bool:
-        """Return whether confidence analysis is enabled."""
+        """Return whether scoring is enabled."""
         return self.mode is not None
 
     @property
@@ -109,7 +109,7 @@ class ConfidencePlan:
 
     @property
     def stream_path(self) -> str | None:
-        """The confidence stream this run writes; ``None`` when disabled."""
+        """The score stream this run writes; ``None`` when disabled."""
         return None
 
     @property
@@ -123,19 +123,19 @@ class ConfidencePlan:
         return False
 
     def stale_outputs(self, layout: OutputLayout) -> tuple[str, ...]:
-        """Confidence outputs a fresh run in this mode must not leave behind."""
+        """Score outputs a fresh run in this mode must not leave behind."""
         return (
-            layout.confidence_inputs,
-            layout.confidence_scores,
+            layout.score_inputs,
+            layout.scores,
             reference_marker(layout),
         )
 
     def validate_resumed_output(self) -> None:
-        """Refuse to extend a confidence stream this plan cannot continue."""
+        """Refuse to extend a score stream this plan cannot continue."""
         return None
 
     def score_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Add this mode's verdicts to prepared confidence-input rows."""
+        """Add this mode's verdicts to prepared score-input rows."""
         return rows
 
     def finalize(
@@ -144,14 +144,14 @@ class ConfidencePlan:
         tally: BatchTally,
         run_log: RunLog,
         *,
-        confidence_rows_written: int,
+        score_rows_written: int,
     ) -> list[str]:
-        """Complete the confidence outputs after the batch.
+        """Complete the score outputs after the batch.
 
         Returns the lines the operator is shown; the caller prints and
         indents them.
         """
-        del layout, tally, run_log, confidence_rows_written
+        del layout, tally, run_log, score_rows_written
         return []
 
     def finalize_resumed_inputs(
@@ -167,14 +167,14 @@ class ConfidencePlan:
         return None
 
 
-class DatabasePlan(ConfidencePlan):
+class DatabasePlan(ScorePlan):
     """Stream compact inputs; finalize them into a new reference when complete."""
 
-    mode: ClassVar[ConfidenceMode | None] = "database"
+    mode: ClassVar[ScoreMode | None] = "database"
 
     def __init__(self, layout: OutputLayout) -> None:
         """Stream to the inputs file the finalization reads back."""
-        self._stream_path = layout.confidence_inputs
+        self._stream_path = layout.score_inputs
 
     @property
     @override
@@ -189,11 +189,14 @@ class DatabasePlan(ConfidencePlan):
     @property
     @override
     def columns(self) -> tuple[str, ...]:
-        return CONFIDENCE_INPUT_COLUMNS
+        return SCORE_INPUT_COLUMNS
 
     @override
     def stale_outputs(self, layout: OutputLayout) -> tuple[str, ...]:
-        return (layout.confidence_scores, reference_marker(layout))
+        return (
+            layout.scores,
+            reference_marker(layout),
+        )
 
     @override
     def finalize(
@@ -202,17 +205,17 @@ class DatabasePlan(ConfidencePlan):
         tally: BatchTally,
         run_log: RunLog,
         *,
-        confidence_rows_written: int,
+        score_rows_written: int,
     ) -> list[str]:
-        del confidence_rows_written
+        del score_rows_written
         # Finalize when no recoverable entries remain. Known deterministic exclusions
         # are recorded in reference metadata and do not prevent completion.
         unfinished = tally.recoverable_incompleteness()
         if unfinished:
-            run_log.summary.confidence_status = "not_finalized_incomplete_run"
-            run_log.summary.confidence_recoverable_entries = unfinished
+            run_log.summary.score_status = "not_finalized_incomplete_run"
+            run_log.summary.score_recoverable_entries = unfinished
             return [
-                f"confidence inputs were retained, but the database "
+                f"score inputs were retained, but the database "
                 f"reference was not finalized: {unfinished} entr"
                 f"{'y' if unfinished == 1 else 'ies'} could still be added by "
                 f"--resume (missing inputs, lost workers, or retryable "
@@ -221,7 +224,7 @@ class DatabasePlan(ConfidencePlan):
         permanent = tally.terminal_errors
         if permanent:
             logger.warning(
-                "finalizing the confidence reference with %d permanently "
+                "finalizing the score reference with %d permanently "
                 "failed entr%s: no retry can add them, and their absence "
                 "is recorded in the reference metadata",
                 permanent,
@@ -229,35 +232,35 @@ class DatabasePlan(ConfidencePlan):
             )
         finalized = finalize_database_reference(layout, run_log)
         return [
-            f"{finalized.rows} confidence rows ({finalized.scored_rows} "
+            f"{finalized.rows} score rows ({finalized.scored_rows} "
             f"scored; reference cohort {finalized.cohort}) -> "
-            f"{layout.confidence_scores}",
-            f"confidence reference -> {layout.reference_dir}",
+            f"{layout.scores}",
+            f"score reference -> {layout.reference_dir}",
         ]
 
     @override
     def finalize_resumed_inputs(
         self, layout: OutputLayout, run_log: RunLog, *, resume: bool
     ) -> FinalizedReference | None:
-        if not (resume and os.path.isfile(layout.confidence_inputs)):
+        if not (resume and os.path.isfile(layout.score_inputs)):
             return None
         return finalize_database_reference(layout, run_log)
 
 
-class ReferencePlan(ConfidencePlan):
+class ReferencePlan(ScorePlan):
     """Score each entry against a frozen reference as it completes."""
 
-    mode: ClassVar[ConfidenceMode | None] = "reference"
+    mode: ClassVar[ScoreMode | None] = "reference"
 
     def __init__(
         self,
         layout: OutputLayout,
-        reference: ConfidenceReference,
+        reference: ScoreReference,
         *,
         synchronize_inputs: bool,
     ) -> None:
         """Score into the scores file, optionally extending the inputs stream too."""
-        self._stream_path = layout.confidence_scores
+        self._stream_path = layout.scores
         self.reference = reference
         # A resumed ``reference`` run also extends the inputs stream a prior
         # database run left behind, so the two stay row-for-row aligned.
@@ -271,7 +274,7 @@ class ReferencePlan(ConfidencePlan):
     @property
     @override
     def columns(self) -> tuple[str, ...]:
-        return SCORED_CONFIDENCE_COLUMNS
+        return SCORED_COLUMNS
 
     @property
     @override
@@ -280,7 +283,7 @@ class ReferencePlan(ConfidencePlan):
 
     @override
     def stale_outputs(self, layout: OutputLayout) -> tuple[str, ...]:
-        return (layout.confidence_inputs,)
+        return (layout.score_inputs,)
 
     @override
     def validate_resumed_output(self) -> None:
@@ -289,7 +292,7 @@ class ReferencePlan(ConfidencePlan):
         try:
             validate_scored_reference(self._stream_path, self.reference)
         except (OSError, ValueError, csv.Error) as exc:
-            raise DriverError(f"Cannot resume confidence output: {exc}") from None
+            raise DriverError(f"Cannot resume score output: {exc}") from None
 
     @override
     def score_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -302,28 +305,28 @@ class ReferencePlan(ConfidencePlan):
         tally: BatchTally,
         run_log: RunLog,
         *,
-        confidence_rows_written: int,
+        score_rows_written: int,
     ) -> list[str]:
         del tally
         cohort_size = self.reference.cohort_size
-        run_log.summary.confidence_status = "scored_against_reference"
-        run_log.summary.confidence_reference_cohort = cohort_size
-        run_log.summary.confidence_scores_path = layout.confidence_scores
+        run_log.summary.score_status = "scored_against_reference"
+        run_log.summary.score_reference_cohort = cohort_size
+        run_log.summary.scores_path = layout.scores
         return [
-            f"{confidence_rows_written} confidence rows compared with "
+            f"{score_rows_written} score rows compared with "
             f"database cohort {cohort_size} -> "
-            f"{layout.confidence_scores}"
+            f"{layout.scores}"
         ]
 
 
-class ClassificationPlan(ConfidencePlan):
+class ClassificationPlan(ScorePlan):
     """Emit raw-threshold verdicts without empirical ranking: no reference exists."""
 
-    mode: ClassVar[ConfidenceMode | None] = "classification"
+    mode: ClassVar[ScoreMode | None] = "classification"
 
     def __init__(self, layout: OutputLayout) -> None:
         """Write classifications straight into the scores file."""
-        self._stream_path = layout.confidence_scores
+        self._stream_path = layout.scores
 
     @property
     @override
@@ -333,7 +336,7 @@ class ClassificationPlan(ConfidencePlan):
     @property
     @override
     def columns(self) -> tuple[str, ...]:
-        return SCORED_CONFIDENCE_COLUMNS
+        return SCORED_COLUMNS
 
     @override
     def score_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -346,21 +349,21 @@ class ClassificationPlan(ConfidencePlan):
         tally: BatchTally,
         run_log: RunLog,
         *,
-        confidence_rows_written: int,
+        score_rows_written: int,
     ) -> list[str]:
         del tally
-        run_log.summary.confidence_status = "classified_without_reference"
-        run_log.summary.confidence_scores_path = layout.confidence_scores
+        run_log.summary.score_status = "classified_without_reference"
+        run_log.summary.scores_path = layout.scores
         return [
-            f"{confidence_rows_written} confidence classifications "
-            f"(empirical ranking unavailable) -> {layout.confidence_scores}"
+            f"{score_rows_written} classifications "
+            f"(empirical ranking unavailable) -> {layout.scores}"
         ]
 
 
 def classify_run(args: RunConfig) -> RunMode:
     """Return how the run chose its entries.
 
-    Only the uncapped database mode can build a new confidence reference.
+    Only the uncapped database mode can build a new score reference.
     """
     if args.pdb_file or args.mtz_file or args.cif_file:
         return RunMode.MANUAL
@@ -373,50 +376,50 @@ def classify_run(args: RunConfig) -> RunMode:
     return RunMode.CAPPED_DATABASE
 
 
-def plan_confidence(
+def plan_score(
     args: RunConfig,
     layout: OutputLayout,
     run_mode: RunMode,
     run_log: RunLog,
-) -> ConfidencePlan:
-    """Decide this run's confidence mode before any entry is processed."""
+) -> ScorePlan:
+    """Decide this run's scoring mode before any entry is processed."""
     if not args.bonds:
-        return ConfidencePlan()
+        return ScorePlan()
     if run_mode is RunMode.DATABASE:
         # A full-database run builds its own reference. Warn about an existing-reference
         # option without rejecting commands shared with smaller runs.
-        if args.confidence_reference_dir:
+        if args.score_reference_dir:
             logger.warning(
-                "--confidence-reference-dir is ignored on an uncapped "
+                "--score-reference-dir is ignored on an uncapped "
                 "full-database run: that run builds the reference later runs "
                 "are scored against, so it cannot be scored against an "
                 "existing one. Cap the run with --max-pdbs to use %s.",
-                args.confidence_reference_dir,
+                args.score_reference_dir,
             )
         return DatabasePlan(layout)
 
-    reference_dir, searched_dirs = resolve_confidence_reference_dir(
-        layout, args.confidence_reference_dir
+    reference_dir, searched_dirs = resolve_score_reference_dir(
+        layout, args.score_reference_dir
     )
     if reference_dir is None:
         logger.info(
-            "no frozen confidence reference is installed, so Alchemy will "
+            "no frozen score reference is installed, so Alchemy will "
             "emit authoritative PASS/REVIEW/SUSPECT classifications without "
             "empirical ranking scores. Complete an uncapped full-database run "
-            "or pass --confidence-reference-dir to add rankings. (searched: %s)",
+            "or pass --score-reference-dir to add rankings. (searched: %s)",
             ", ".join(searched_dirs),
         )
         return ClassificationPlan(layout)
 
     try:
-        reference = load_confidence_reference(reference_dir)
+        reference = load_score_reference(reference_dir)
     except (OSError, ValueError, csv.Error) as exc:
-        raise DriverError(f"Invalid confidence reference: {exc}") from None
-    run_log.details["confidence_reference_dir"] = reference_dir
+        raise DriverError(f"Invalid score reference: {exc}") from None
+    run_log.details["score_reference_dir"] = reference_dir
     return ReferencePlan(
         layout,
         reference,
-        synchronize_inputs=args.resume and os.path.isfile(layout.confidence_inputs),
+        synchronize_inputs=args.resume and os.path.isfile(layout.score_inputs),
     )
 
 
@@ -429,43 +432,39 @@ def finalize_database_reference(
     run found nothing left to retry.
     """
     try:
-        result = finalize_database_confidence(
-            layout.confidence_inputs,
-            layout.confidence_scores,
+        result = finalize_database_score(
+            layout.score_inputs,
+            layout.scores,
             layout.reference_dir,
             manifest_path=layout.manifest,
         )
     except (OSError, ValueError, csv.Error) as exc:
-        raise DriverError(f"Confidence finalization failed: {exc}") from None
+        raise DriverError(f"Score finalization failed: {exc}") from None
     finalized = FinalizedReference(
         rows=result.rows,
         scored_rows=result.scored_rows,
         cohort=result.cohort_size,
     )
     summary = run_log.summary
-    summary.confidence_status = "finalized"
-    summary.confidence_rows = finalized.rows
-    summary.confidence_scored_rows = finalized.scored_rows
-    summary.confidence_reference_cohort = finalized.cohort
-    summary.confidence_scores_path = layout.confidence_scores
-    summary.confidence_reference_path = layout.reference_dir
+    summary.score_status = "finalized"
+    summary.score_rows = finalized.rows
+    summary.scored_rows = finalized.scored_rows
+    summary.score_reference_cohort = finalized.cohort
+    summary.scores_path = layout.scores
+    summary.score_reference_path = layout.reference_dir
     return finalized
 
 
-def confidence_rows_for(
-    result: EntryResult, plan: ConfidencePlan
-) -> list[dict[str, Any]]:
-    """Prepare one entry's confidence rows with the plan's verdicts added."""
+def score_rows_for(result: EntryResult, plan: ScorePlan) -> list[dict[str, Any]]:
+    """Prepare one entry's score rows with the plan's verdicts added."""
     if result.metal_site_limit_exceeded:
         return []
-    rows = prepare_result_confidence_inputs(
-        result.rows, result.bond_rows, STATS_COLUMNS
-    )
-    rows = complete_confidence_site_count(
+    rows = prepare_result_score_inputs(result.rows, result.bond_rows, STATS_COLUMNS)
+    rows = complete_score_site_count(
         rows,
         result.pdb_id,
         result.n_metals,
-        result.confidence_inputs_missing_reason,
+        result.score_inputs_missing_reason,
     )
     return plan.score_rows(rows)
 
@@ -474,10 +473,10 @@ def finalize_review_queue(layout: OutputLayout, run_log: RunLog) -> int:
     """Regenerate the derived triage view from canonical completed outputs."""
     try:
         rows = write_review_queue(
-            layout.confidence_scores,
+            layout.scores,
             layout.crystallization_summary,
             layout.review_queue,
-            SCORED_CONFIDENCE_COLUMNS,
+            SCORED_COLUMNS,
         )
     except (OSError, ValueError, csv.Error) as exc:
         raise DriverError(f"Review queue finalization failed: {exc}") from None

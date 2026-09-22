@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1630" viewBox="0 0 1600 1630">
+<title>Alchemy execution and ownership</title>
+<desc>The driver prepares a batch, workers analyze individual entries, and the driver writes and scores combined outputs.</desc>
+<defs><marker id="blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#3e5e8e"/></marker><marker id="green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#2b8170"/></marker></defs>
+<style>text {font-family: 'DejaVu Sans', sans-serif; fill:#344150;} .module {font-family:'DejaVu Sans Mono',monospace; font-size:12px; font-weight:bold;} .body {font-size:12px;} .note {font-size:11px; font-style:italic; fill:#6b7888;} .lane {font-size:15px;font-weight:bold;letter-spacing:1px;}</style>
+<rect width="1600" height="1630" fill="#fbfaf8"/>
+<text x="45" y="70" style="font-size:28px;font-weight:bold">Alchemy execution and ownership</text>
+<text x="45" y="99" class="body">One launcher. The driver prepares the batch, workers analyze entries independently, and the driver writes every combined output.</text>
+<text x="45" y="120" class="body">Read each lane from top to bottom. Entries overlap across workers; the numbered steps within each entry run in order.</text>
+<rect x="45" y="150" width="450" height="1270" rx="10" fill="#eef2f8"/>
+<path d="M55,150 H485 Q495,150 495,160 V164 H45 V160 Q45,150 55,150" fill="#3e5e8e"/>
+<text x="60" y="183" class="lane" style="fill:#3e5e8e">DRIVER PROCESS</text>
+<text x="60" y="204" class="body">Prepare and schedule the batch</text>
+<rect x="575" y="150" width="450" height="1270" rx="10" fill="#e9f3ef"/>
+<path d="M585,150 H1015 Q1025,150 1025,160 V164 H575 V160 Q575,150 585,150" fill="#2b8170"/>
+<text x="590" y="183" class="lane" style="fill:#2b8170">WORKER PROCESS</text>
+<text x="590" y="204" class="body">Analyze one entry; several run concurrently</text>
+<rect x="1105" y="150" width="450" height="1270" rx="10" fill="#eef2f8"/>
+<path d="M1115,150 H1545 Q1555,150 1555,160 V164 H1105 V160 Q1105,150 1115,150" fill="#3e5e8e"/>
+<text x="1120" y="183" class="lane" style="fill:#3e5e8e">DRIVER PROCESS</text>
+<text x="1120" y="204" class="body">Collect results and finalize the run</text>
+<rect x="60" y="225" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="243" r="10" fill="#3e5e8e"/>
+<text x="60" y="247" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">1</text>
+<text x="75" y="248" class="module" style="fill:#3e5e8e">alchemy › cli.py</text>
+<text x="75" y="268" class="body">Add src/ to the import path; parse arguments into an</text>
+<text x="75" y="286" class="body">immutable RunConfig; configure diagnostics and create the</text>
+<text x="75" y="304" class="body">run report.</text>
+<path d="M265,323 L265,347" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="348" width="410" height="114" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="366" r="10" fill="#3e5e8e"/>
+<text x="60" y="370" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">2</text>
+<text x="75" y="371" class="module" style="fill:#3e5e8e">driver/pool.py + driver/environment.py</text>
+<text x="75" y="391" class="body">Load the bundled cofactor catalog; resolve the CCP4</text>
+<text x="75" y="409" class="body">environment and record Alchemy, Gemmi, and CCP4 versions</text>
+<text x="75" y="427" class="body">for provenance.</text>
+<text x="75" y="448" class="note">--configure-ccp4 saves the setup path and exits here.</text>
+<path d="M265,462 L265,486" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="487" width="410" height="80" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="505" r="10" fill="#3e5e8e"/>
+<text x="60" y="509" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">3</text>
+<text x="75" y="510" class="module" style="fill:#3e5e8e">driver/output_lock.py + scratch.py</text>
+<text x="75" y="530" class="body">Acquire the exclusive output-directory lock, then sweep</text>
+<text x="75" y="548" class="body">scratch directories an earlier run left behind.</text>
+<path d="M265,567 L265,591" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="592" width="410" height="80" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="610" r="10" fill="#3e5e8e"/>
+<text x="60" y="614" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">4</text>
+<text x="75" y="615" class="module" style="fill:#3e5e8e">driver/scoring.py + driver/resume.py</text>
+<text x="75" y="635" class="body">Classify the run mode, choose the scoring plan, and check</text>
+<text x="75" y="653" class="body">that existing outputs are compatible with resume.</text>
+<path d="M265,672 L265,696" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="697" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="715" r="10" fill="#3e5e8e"/>
+<text x="60" y="719" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">5</text>
+<text x="75" y="720" class="module" style="fill:#3e5e8e">driver/entries.py</text>
+<text x="75" y="740" class="body">Select entries from the mirror, downloaded cache, ID</text>
+<text x="75" y="758" class="body">file, or manual files; drop completed entries under the</text>
+<text x="75" y="776" class="body">resume policy.</text>
+<path d="M265,795 L265,819" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="820" width="410" height="96" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="838" r="10" fill="#3e5e8e"/>
+<text x="60" y="842" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">6</text>
+<text x="75" y="843" class="module" style="fill:#3e5e8e">rcsb_metadata_cache.py</text>
+<text x="75" y="863" class="body">Warm the original-PDB crystallization metadata cache</text>
+<text x="75" y="881" class="body">before expensive analysis starts.</text>
+<text x="75" y="902" class="note">Manual input mode uses cached entries only, with no download.</text>
+<path d="M265,916 L265,940" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="941" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="959" r="10" fill="#3e5e8e"/>
+<text x="60" y="963" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">7</text>
+<text x="75" y="964" class="module" style="fill:#3e5e8e">driver/resources.py + memory_admission.py</text>
+<text x="75" y="984" class="body">Estimate per-entry memory and choose the worker-process</text>
+<text x="75" y="1002" class="body">ceiling. Memory admission determines which entries can be</text>
+<text x="75" y="1020" class="body">active at once.</text>
+<path d="M265,1039 L265,1063" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="60" y="1064" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="60" cy="1082" r="10" fill="#3e5e8e"/>
+<text x="60" y="1086" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">8</text>
+<text x="75" y="1087" class="module" style="fill:#3e5e8e">driver/dispatch.py</text>
+<text x="75" y="1107" class="body">Run the worker pool: admit entries as memory permits,</text>
+<text x="75" y="1125" class="body">watch for worker deaths, and record retryable failures</text>
+<text x="75" y="1143" class="body">for tasks that cannot return a result.</text>
+<rect x="590" y="225" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="243" r="10" fill="#2b8170"/>
+<text x="590" y="247" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">1</text>
+<text x="605" y="248" class="module" style="fill:#2b8170">worker/lifecycle.py</text>
+<text x="605" y="268" class="body">The pool initializer installs WorkerConfig and logging</text>
+<text x="605" y="286" class="body">once per process. Each task calls process(pdb_id) and</text>
+<text x="605" y="304" class="body">owns the entry’s temporary directory.</text>
+<path d="M795,323 L795,347" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="348" width="410" height="80" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="366" r="10" fill="#2b8170"/>
+<text x="590" y="370" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">2</text>
+<text x="605" y="371" class="module" style="fill:#2b8170">worker/resolve.py + inputs.py</text>
+<text x="605" y="391" class="body">Locate or retrieve the MTZ and coordinates; read the</text>
+<text x="605" y="409" class="body">reflection limits and PDB-REDO metadata.</text>
+<path d="M795,428 L795,452" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="453" width="410" height="80" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="471" r="10" fill="#2b8170"/>
+<text x="590" y="475" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">3</text>
+<text x="605" y="476" class="module" style="fill:#2b8170">coordinate_conversion.py + pdb_remarks.py</text>
+<text x="605" y="496" class="body">Convert coordinates and extract the first model; stamp</text>
+<text x="605" y="514" class="body">source-residue provenance as REMARK 950 records.</text>
+<path d="M795,533 L795,557" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="558" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="576" r="10" fill="#2b8170"/>
+<text x="590" y="580" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">4</text>
+<text x="605" y="581" class="module" style="fill:#2b8170">structure_analysis.py</text>
+<text x="605" y="601" class="body">Load StructureContext and select canonical metal atoms</text>
+<text x="605" y="619" class="body">using structure_loading, structure_model, pdb_records,</text>
+<text x="605" y="637" class="body">and conformer_selection.</text>
+<path d="M795,656 L795,680" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="681" width="410" height="80" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="699" r="10" fill="#2b8170"/>
+<text x="590" y="703" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">5</text>
+<text x="605" y="704" class="module" style="fill:#2b8170">crystallization_conditions.py</text>
+<text x="605" y="724" class="body">Extract crystallization conditions and the entry summary</text>
+<text x="605" y="742" class="body">from the original coordinates or the metadata cache.</text>
+<path d="M795,761 L795,785" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="786" width="410" height="80" rx="6" fill="white" stroke="#2b8170" stroke-width="1" stroke-dasharray="5 3"/>
+<circle cx="590" cy="804" r="10" fill="#2b8170"/>
+<text x="590" y="808" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">6</text>
+<text x="605" y="809" class="module" style="fill:#2b8170">worker/stages.py · early_outcome</text>
+<text x="605" y="829" class="body">No selected metals, indeterminate metal presence, or more</text>
+<text x="605" y="847" class="body">than MAX_ANALYZED_METAL_SITES?</text>
+<path d="M795,866 L795,890" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="891" width="410" height="114" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="909" r="10" fill="#2b8170"/>
+<text x="590" y="913" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">7</text>
+<text x="605" y="914" class="module" style="fill:#2b8170">worker/stages.py · run_density_stage</text>
+<text x="605" y="934" class="body">Run mtzfix › fft › mapmask › edstats as subprocesses,</text>
+<text x="605" y="952" class="body">each with its own timeout. Validate the residue table,</text>
+<text x="605" y="970" class="body">then extract metal rows and density context.</text>
+<text x="605" y="991" class="note">Twin normalization is guarded recovery after MTZFIX fails.</text>
+<path d="M795,1005 L795,1029" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="1030" width="410" height="148" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="590" cy="1048" r="10" fill="#2b8170"/>
+<text x="590" y="1052" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">8</text>
+<text x="605" y="1053" class="module" style="fill:#2b8170">worker/stages.py · run_bond_stage</text>
+<text x="605" y="1073" class="body">Run coordination/analysis.py on the same</text>
+<text x="605" y="1091" class="body">StructureContext: candidates › eligibility › geometry ›</text>
+<text x="605" y="1109" class="body">site_summary, with declared connections, donor chemistry,</text>
+<text x="605" y="1127" class="body">DPI, and density z-scores.</text>
+<text x="605" y="1148" class="note">--no-bonds returns an empty analysis; failure keeps density</text>
+<text x="605" y="1164" class="note">rows.</text>
+<path d="M795,1178 L795,1202" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<rect x="590" y="1203" width="410" height="98" rx="6" fill="white" stroke="#2b8170" stroke-width="2"/>
+<circle cx="590" cy="1221" r="10" fill="#2b8170"/>
+<text x="590" y="1225" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">9</text>
+<text x="605" y="1226" class="module" style="fill:#2b8170">worker/lifecycle.py · EntryResult</text>
+<text x="605" y="1246" class="body">Merge site summaries into statistics rows; return rows,</text>
+<text x="605" y="1264" class="body">status counts, timings, warnings, and provenance. Delete</text>
+<text x="605" y="1282" class="body">scratch files unless --keep-intermediates is set.</text>
+<path d="M470,1127 H535 V275 H588" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<path d="M1000,826 H1015 V1191 H870 V1201" fill="none" stroke="#2b8170" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#green)"/>
+<rect x="1120" y="225" width="410" height="114" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="1120" cy="243" r="10" fill="#3e5e8e"/>
+<text x="1120" y="247" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">1</text>
+<text x="1135" y="248" class="module" style="fill:#3e5e8e">driver/pool.py › driver/writers.py</text>
+<text x="1135" y="268" class="body">Write site, bond, candidate, crystallization, density-</text>
+<text x="1135" y="286" class="body">context, and score rows as entries finish. Write the</text>
+<text x="1135" y="304" class="body">manifest row last as the completion marker.</text>
+<text x="1135" y="325" class="note">Workers never append to the combined CSVs themselves.</text>
+<path d="M1325,339 L1325,363" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="1120" y="364" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="1120" cy="382" r="10" fill="#3e5e8e"/>
+<text x="1120" y="386" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">2</text>
+<text x="1135" y="387" class="module" style="fill:#3e5e8e">score/ · prepare, scoring, reference</text>
+<text x="1135" y="407" class="body">Score completed entries against an explicit, output-</text>
+<text x="1135" y="425" class="body">directory, or bundled frozen reference. Uncapped database</text>
+<text x="1135" y="443" class="body">runs stream compact inputs and finalize them at the end.</text>
+<path d="M1325,462 L1325,486" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="1120" y="487" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="1120" cy="505" r="10" fill="#3e5e8e"/>
+<text x="1120" y="509" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">3</text>
+<text x="1135" y="510" class="module" style="fill:#3e5e8e">driver/resume.py</text>
+<text x="1135" y="530" class="body">Resume writes through staged replacements. Unsuccessful</text>
+<text x="1135" y="548" class="body">retries never overwrite protected results, and</text>
+<text x="1135" y="566" class="body">interrupted batches still commit finished entries.</text>
+<path d="M1325,585 L1325,609" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="1120" y="610" width="410" height="98" rx="6" fill="white" stroke="#d3dbe3" stroke-width="1"/>
+<circle cx="1120" cy="628" r="10" fill="#3e5e8e"/>
+<text x="1120" y="632" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">4</text>
+<text x="1135" y="633" class="module" style="fill:#3e5e8e">driver/report.py + driver/review_queue.py</text>
+<text x="1135" y="653" class="body">Print the batch tally, finalize score outputs and a</text>
+<text x="1135" y="671" class="body">reusable reference, then join REVIEW/SUSPECT sites to the</text>
+<text x="1135" y="689" class="body">crystallization summary as the review queue.</text>
+<path d="M1325,708 L1325,732" fill="none" stroke="#3e5e8e" stroke-width="1.6" marker-end="url(#blue)"/>
+<rect x="1120" y="733" width="410" height="80" rx="6" fill="white" stroke="#3e5e8e" stroke-width="2"/>
+<circle cx="1120" cy="751" r="10" fill="#3e5e8e"/>
+<text x="1120" y="755" text-anchor="middle" style="font-size:11px;fill:white;font-weight:bold">5</text>
+<text x="1135" y="756" class="module" style="fill:#3e5e8e">driver/runlog.py via cli.py cleanup</text>
+<text x="1135" y="776" class="body">Write the run report, including interrupted or failed</text>
+<text x="1135" y="794" class="body">runs, and return the exit code.</text>
+<path d="M1000,1261 H1070 V285 H1118" fill="none" stroke="#2b8170" stroke-width="1.6" marker-end="url(#green)"/>
+<text x="1125" y="863" class="lane">READING THE DIAGRAM</text>
+<text x="1125" y="891" class="body">Numbered cards: steps in execution order</text>
+<text x="1125" y="915" class="body">Dashed card: decision that can end an entry early</text>
+<text x="1125" y="939" class="body">Outlined card: final step of a lane</text>
+<text x="1125" y="963" class="body">Solid arrows: control flow between steps</text>
+<text x="1125" y="987" class="body">Dashed arrow: early return without maps or contacts</text>
+<rect x="45" y="1450" width="1510" height="140" rx="10" fill="#f4f0e9"/>
+<text x="60" y="1477" class="lane" style="fill:#97732f">SHARED BY BOTH PROCESSES</text>
+<text x="60" y="1508" class="body">Reference data</text>
+<text x="60" y="1530" class="body">reference_data.py; src/metallocofactors/;</text>
+<text x="60" y="1546" class="body">coordination/metal_distances/. Catalog and</text>
+<text x="60" y="1562" class="body">literature table verified on load.</text>
+<text x="435" y="1508" class="body">Contracts</text>
+<text x="435" y="1530" class="body">run_config.py; worker/contracts.py;</text>
+<text x="435" y="1546" class="body">output_rows.py; codes.py; analysis_config.py.</text>
+<text x="435" y="1562" class="body">Typed configuration, results, rows, and</text>
+<text x="435" y="1578" class="body">vocabulary.</text>
+<text x="810" y="1508" class="body">Cross-process plumbing</text>
+<text x="810" y="1530" class="body">run_logging.py; worker/memory.py;</text>
+<text x="810" y="1546" class="body">gemmi_typing.py. Worker diagnostics reach the</text>
+<text x="810" y="1562" class="body">driver log; idle memory is released after</text>
+<text x="810" y="1578" class="body">entries.</text>
+<text x="1185" y="1508" class="body">Maintenance tools</text>
+<text x="1185" y="1530" class="body">tools/build_metallocofactor_catalog.py;</text>
+<text x="1185" y="1546" class="body">tools/stamp_distance_table.py. Separate</text>
+<text x="1185" y="1562" class="body">commands rebuild or stamp committed reference</text>
+<text x="1185" y="1578" class="body">artifacts.</text>
+</svg>

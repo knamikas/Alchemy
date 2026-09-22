@@ -19,7 +19,7 @@ from helpers import REPO_ROOT, SRC_DIR
 
 import codes as codes_module
 from codes import SHARED_VALUES, ReasonCode, WarningCode
-from driver import confidence as driver_confidence, environment
+from driver import environment, scoring as driver_scoring
 from driver.runlog import (
     ENTRY_DIAGNOSTIC_BASE_COLUMNS,
     ENTRY_DIAGNOSTIC_TRAILING_COLUMNS,
@@ -143,7 +143,7 @@ def test_values_shared_between_vocabularies_are_declared() -> None:
 
     ``StrEnum`` members compare equal to their strings, so an undeclared
     overlap lets a comparison against the wrong enum pass silently until the
-    two vocabularies diverge. ``ConfidenceLevel`` is the one upper-case
+    two vocabularies diverge. ``ScoreLevel`` is the one upper-case
     vocabulary; keeping it unique means its case is the only thing separating
     it from the lower-case statuses, which the module documents on purpose.
     """
@@ -163,8 +163,8 @@ def test_values_shared_between_vocabularies_are_declared() -> None:
         f"stale={sorted(set(SHARED_VALUES) - set(observed))}, "
         f"changed={sorted(v for v in observed if v in SHARED_VALUES and observed[v] != SHARED_VALUES[v])}"
     )
-    assert upper_case == {"ConfidenceLevel", "CandidateSource"}, (
-        "only ConfidenceLevel (and CandidateSource's LINK record name) may "
+    assert upper_case == {"ScoreLevel", "CandidateSource"}, (
+        "only ScoreLevel (and CandidateSource's LINK record name) may "
         f"carry upper-case values; found {sorted(upper_case)}"
     )
 
@@ -287,8 +287,8 @@ def test_default_paths_resolve_from_the_checkout_root() -> None:
 
     assert paths.REPO_DIR == REPO_ROOT
     assert (
-        os.path.join(SRC_DIR, "confidence_score", "confidence_reference")
-        == driver_confidence.DEFAULT_CONFIDENCE_REFERENCE_DIR
+        os.path.join(SRC_DIR, "score", "score_reference")
+        == driver_scoring.DEFAULT_SCORE_REFERENCE_DIR
     )
 
 
@@ -510,12 +510,12 @@ _INTERNAL_VOCABULARIES = frozenset(("RunMode", "ElementStatus"))
 
 # Literals that spell a vocabulary value by coincidence in a module where the
 # word means something else: threshold names in the reference metadata, one
-# member of the ``ConfidenceMode`` type alias, and a worker-selection detail
+# member of the ``ScoreMode`` type alias, and a worker-selection detail
 # in the run log. Each is (module, literal).
 _COINCIDENTAL_LITERALS = frozenset(
     (
-        ("confidence_score/schema.py", "suspect"),
-        ("driver/confidence.py", "database"),
+        ("score/schema.py", "suspect"),
+        ("driver/scoring.py", "database"),
         ("driver/pool.py", "explicit"),
     )
 )
@@ -526,7 +526,7 @@ _COINCIDENTAL_LITERALS = frozenset(
 # strict about everything else.
 _NON_FIELD_TERMS = frozenset(
     (
-        "confidence_score",
+        "score",
         "sigma_lit",
         "label_seq_id",
         "extract_metal_statistics",
@@ -540,19 +540,19 @@ _NON_FIELD_TERMS = frozenset(
 
 def _all_output_columns() -> tuple[Sequence[str], ...]:
     """Every column sequence a run's CSV outputs declare."""
-    from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
     from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
     from crystallization_conditions import CONDITION_COLUMNS, SUMMARY_COLUMNS
     from driver.review_queue import REVIEW_CONTEXT_COLUMNS
     from driver.writers import MANIFEST_COLUMNS
     from edstats_statistics import DENSITY_CONTEXT_COLUMNS
+    from score import ANALYSIS_COLUMNS, SCORE_INPUT_COLUMNS
 
     return (
         MANIFEST_COLUMNS,
         STATS_COLUMNS,
         BOND_COLUMNS,
         CANDIDATE_COLUMNS,
-        CONFIDENCE_INPUT_COLUMNS,
+        SCORE_INPUT_COLUMNS,
         ANALYSIS_COLUMNS,
         CONDITION_COLUMNS,
         SUMMARY_COLUMNS,
@@ -566,7 +566,7 @@ def _all_output_columns() -> tuple[Sequence[str], ...]:
 
 def test_every_field_name_in_the_prose_still_exists() -> None:
     """Verify documented output fields and status codes still exist."""
-    from confidence_score import REFERENCE_METADATA_FIELDS
+    from score import REFERENCE_METADATA_FIELDS
 
     known: set[str] = set()
     for columns in _all_output_columns():

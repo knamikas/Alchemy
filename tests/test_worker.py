@@ -19,7 +19,7 @@ import density_analysis as density
 import scratch
 import structure_analysis
 from codes import DensityMapScope, EntryStatus
-from driver import confidence as driver_confidence
+from driver import scoring as driver_scoring
 from driver.writers import manifest_row
 from edstats_statistics import EdstatsExtraction
 from inputs import EntryMetadata, PdbRedoMetadata
@@ -390,12 +390,7 @@ def test_a_metal_dense_entry_finishes_before_density_processing(
     assert result.rows == []
     assert result.bond_rows == []
     assert result.candidate_rows == []
-    assert (
-        driver_confidence.confidence_rows_for(
-            result, driver_confidence.ConfidencePlan()
-        )
-        == []
-    )
+    assert driver_scoring.score_rows_for(result, driver_scoring.ScorePlan()) == []
 
 
 def test_the_metal_site_limit_includes_exactly_one_hundred_sites(
@@ -500,7 +495,7 @@ def test_an_unanticipated_failure_logs_its_traceback(
     assert cast(tuple[Any, ...], records[0].exc_info)[0] is ValueError
 
 
-def test_bond_stage_failure_invalidates_confidence_inputs(
+def test_bond_stage_failure_invalidates_score_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A crashed geometry stage is not legitimate density-only evidence."""
@@ -539,7 +534,7 @@ def test_bond_stage_failure_invalidates_confidence_inputs(
     assert outcome.failed and outcome.status_detail.startswith("bond: RuntimeError")
     lifecycle._apply_bond_outcome(result, outcome)  # pyright: ignore[reportPrivateUsage]
     assert result.reason_codes == ["bond_stage_failure"]
-    assert result.confidence_inputs_missing_reason == "bond_stage_failure"
+    assert result.score_inputs_missing_reason == "bond_stage_failure"
     assert lifecycle.retryable_for(EntryStatus.PARTIAL, result.reason_codes) is True
 
 
@@ -549,7 +544,7 @@ def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
     """The later failure is appended; it must not erase the earlier one.
 
     A timed-out density stage names the stalled tool in ``status_detail`` and
-    is the first reason confidence inputs are missing. A geometry crash that
+    is the first reason score inputs are missing. A geometry crash that
     follows keeps its own code, but leaves the counts unmeasured rather than
     reporting a measured zero.
     """
@@ -573,7 +568,7 @@ def test_a_bond_failure_after_a_density_failure_keeps_both_on_record(
     assert result.reason_codes == ["ccp4_tool_timeout", "bond_stage_failure"]
     assert "edstats" in result.status_detail
     assert "bond: RuntimeError: geometry unavailable" in result.status_detail
-    assert result.confidence_inputs_missing_reason == "ccp4_tool_timeout"
+    assert result.score_inputs_missing_reason == "ccp4_tool_timeout"
     assert result.n_metals == 1
     assert result.n_bonds is None
     assert result.n_candidates is None
@@ -712,13 +707,8 @@ class TestNoRecognizedMetalOutcome:
         assert result.n_candidates is None
         assert result.no_metals is False
         assert "unknown_elements" in result.warning_codes
-        assert result.confidence_inputs_missing_reason == "metal_presence_indeterminate"
-        assert (
-            driver_confidence.confidence_rows_for(
-                result, driver_confidence.ConfidencePlan()
-            )
-            == []
-        )
+        assert result.score_inputs_missing_reason == "metal_presence_indeterminate"
+        assert driver_scoring.score_rows_for(result, driver_scoring.ScorePlan()) == []
 
     def test_known_nonmetal_structure_remains_an_authoritative_negative(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -972,7 +962,7 @@ class TestCcp4TimeoutOutcome:
         )
         assert result.status == "partial"
         assert "edstats" in result.status_detail
-        assert result.confidence_inputs_missing_reason == "ccp4_tool_timeout"
+        assert result.score_inputs_missing_reason == "ccp4_tool_timeout"
         # The abandoned attempt still cost time, and the run log reports it.
         assert result.timings.get("edstats_s") == 900.4
 

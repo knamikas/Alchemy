@@ -252,9 +252,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
-        "--confidence-reference-dir",
+        "--score-reference-dir",
+        metavar="DIR",
         help=(
-            "explicit frozen full-database confidence reference for single, "
+            "explicit frozen full-database score reference for single, "
             "ID-file, manual, and capped runs; otherwise Alchemy searches "
             "the output directory and repository default"
         ),
@@ -348,7 +349,7 @@ def _run_config(args: argparse.Namespace) -> RunConfig:
         log_dir=args.log_dir,
         log_file=args.log_file,
         ccp4_timeout=args.ccp4_timeout,
-        confidence_reference_dir=args.confidence_reference_dir,
+        score_reference_dir=args.score_reference_dir,
         ccp4_setup=args.ccp4_setup,
         configure_ccp4=args.configure_ccp4,
         keep_intermediates=args.keep_intermediates,

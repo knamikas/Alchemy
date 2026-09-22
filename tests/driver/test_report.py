@@ -1,4 +1,4 @@
-"""Test the end-of-batch report and confidence finalization gate."""
+"""Test the end-of-batch report and score finalization gate."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ from helpers import entry_result, tally_of
 
 import cli
 from codes import EntryStatus
-from confidence_score.reference import FinalizedConfidence
 from driver import (
-    confidence as driver_confidence,
     layout as driver_layout,
     report as driver_report,
     runlog,
+    scoring as driver_scoring,
     writers,
 )
+from score.reference import FinalizedScore
 
 
 def _empty_writer_counts() -> writers.OutputWriters:
@@ -32,7 +32,7 @@ def _empty_writer_counts() -> writers.OutputWriters:
             n_crystallization_conditions=0,
             n_crystallization_summaries=0,
             n_density_contexts=0,
-            n_confidence=0,
+            n_score=0,
         ),
     )
 
@@ -43,7 +43,7 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
     """The finalization gate and process status must use the same policy."""
     args = cli.parse_args(["--output-dir", str(tmp_path)])
     layout = driver_layout.OutputLayout(str(tmp_path))
-    plan = driver_confidence.DatabasePlan(layout)
+    plan = driver_scoring.DatabasePlan(layout)
     tally = tally_of(
         entry_result(
             status=EntryStatus.ERROR, reason_codes=["deterministic_processing_error"]
@@ -54,12 +54,12 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
 
     def finalize(
         inputs_path: str, scores_path: str, reference_dir: str, *, manifest_path: str
-    ) -> FinalizedConfidence:
+    ) -> FinalizedScore:
         del scores_path, reference_dir, manifest_path
         finalized.append(os.path.dirname(inputs_path))
-        return FinalizedConfidence(rows=0, scored_rows=0, cohort_size=0)
+        return FinalizedScore(rows=0, scored_rows=0, cohort_size=0)
 
-    monkeypatch.setattr(driver_confidence, "finalize_database_confidence", finalize)
+    monkeypatch.setattr(driver_scoring, "finalize_database_score", finalize)
 
     exit_code = driver_report.report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
@@ -67,9 +67,9 @@ def test_database_report_finalizes_and_exits_zero_for_terminal_errors(
 
     assert exit_code == 0
     assert finalized == [str(tmp_path)]
-    assert run_log.summary.confidence_status == "finalized"
-    assert run_log.summary.confidence_scores_path == layout.confidence_scores
-    assert run_log.summary.confidence_reference_path == layout.reference_dir
+    assert run_log.summary.score_status == "finalized"
+    assert run_log.summary.scores_path == layout.scores
+    assert run_log.summary.score_reference_path == layout.reference_dir
 
 
 def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
@@ -78,7 +78,7 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
     """A retryable error must neither publish a reference nor report success."""
     args = cli.parse_args(["--output-dir", str(tmp_path)])
     layout = driver_layout.OutputLayout(str(tmp_path))
-    plan = driver_confidence.DatabasePlan(layout)
+    plan = driver_scoring.DatabasePlan(layout)
     tally = tally_of(
         entry_result(
             status=EntryStatus.ERROR, reason_codes=["unexpected_processing_error"]
@@ -89,14 +89,12 @@ def test_database_report_defers_and_exits_nonzero_for_unexpected_errors(
     def must_not_finalize(*args: object, **kwargs: object) -> tuple[int, int, str]:
         raise AssertionError("a recoverable error must defer finalization")
 
-    monkeypatch.setattr(
-        driver_confidence, "finalize_database_confidence", must_not_finalize
-    )
+    monkeypatch.setattr(driver_scoring, "finalize_database_score", must_not_finalize)
 
     exit_code = driver_report.report_batch(
         args, layout, plan, tally, _empty_writer_counts(), run_log
     )
 
     assert exit_code == 1
-    assert run_log.summary.confidence_status == "not_finalized_incomplete_run"
-    assert run_log.summary.confidence_recoverable_entries == 1
+    assert run_log.summary.score_status == "not_finalized_incomplete_run"
+    assert run_log.summary.score_recoverable_entries == 1

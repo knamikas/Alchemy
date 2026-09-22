@@ -32,11 +32,11 @@ import reference_data
 import run_logging
 from codes import EntryStatus
 from driver import (
-    confidence as driver_confidence,
     dispatch,
     environment,
     pool as driver_pool,
     runlog,
+    scoring as driver_scoring,
     writers,
 )
 from driver.writers import MANIFEST_COLUMNS
@@ -1101,10 +1101,10 @@ def test_the_driver_maps_its_options_onto_the_worker_config(tmp_path: Path) -> N
         None,
         identity=driver_pool.AnalysisIdentity.current(),
     )
-    driver_pool.record_run_provenance(run_log, cfg, driver_confidence.ConfidencePlan())
+    driver_pool.record_run_provenance(run_log, cfg, driver_scoring.ScorePlan())
 
     assert isinstance(cfg, contracts.WorkerConfig)
-    assert run_log.details["confidence_mode"] == "disabled"
+    assert run_log.details["score_mode"] == "disabled"
     # Keep both file hashes so changes in the combined ID can be traced.
     assert cfg.reference_data_id == reference_data.reference_data_id()
     assert run_log.details["reference_data_id"] == cfg.reference_data_id

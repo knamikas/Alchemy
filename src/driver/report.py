@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from codes import EntryStatus
-from driver import confidence
+from driver import scoring
 from driver.dispatch import BatchTally
 from driver.layout import OutputLayout
 from driver.runlog import RunLog
@@ -19,12 +19,12 @@ logger = logger_for(__name__)
 def report_batch(
     args: RunConfig,
     layout: OutputLayout,
-    plan: confidence.ConfidencePlan,
+    plan: scoring.ScorePlan,
     tally: BatchTally,
     writers: OutputWriters,
     run_log: RunLog,
 ) -> int:
-    """Report batch results, finalize eligible confidence outputs, and return the exit code.
+    """Report batch results, finalize eligible score outputs, and return the exit code.
 
     The plan decides what finalizing means for its mode; this function is the
     one place that prints.
@@ -60,11 +60,11 @@ def report_batch(
     )
     exit_code = tally.exit_code(database_run=plan.builds_reference)
     for line in plan.finalize(
-        layout, tally, run_log, confidence_rows_written=writers.n_confidence
+        layout, tally, run_log, score_rows_written=writers.n_score
     ):
         print(f"      {line}", flush=True)
-    if plan.enabled and os.path.isfile(layout.confidence_scores):
-        review_rows = confidence.finalize_review_queue(layout, run_log)
+    if plan.enabled and os.path.isfile(layout.scores):
+        review_rows = scoring.finalize_review_queue(layout, run_log)
         print(
             f"      {review_rows} REVIEW/SUSPECT rows -> {layout.review_queue}",
             flush=True,

@@ -83,17 +83,17 @@ if "utf" in locale.getencoding().lower().replace("-", ""):
 from crystallization_conditions import SUMMARY_COLUMNS
 from driver.review_queue import write_review_queue
 from driver import pool, resume
-from driver.confidence import ConfidencePlan
+from driver.scoring import ScorePlan
 from driver.layout import OutputLayout
 from driver.writers import MANIFEST_COLUMNS, OutputTargets
 
 layout = OutputLayout(output_dir)
-targets = OutputTargets.from_layout(layout, ConfidencePlan())
+targets = OutputTargets.from_layout(layout, ScorePlan())
 # Escapes keep the script ASCII: the C-locale child cannot decode argv otherwise.
 detail = "resolution 1.8 \u00c5, pH 7.5 \u00b1 0.2"
 
 with contextlib.ExitStack() as handles:
-    writers = pool._open_writers(handles, targets, bonds=True, confidence_columns=None)
+    writers = pool._open_writers(handles, targets, bonds=True, score_columns=None)
     row = dict.fromkeys(MANIFEST_COLUMNS, "")
     row.update(pdbID="1abc", status="ok", retryable="False", status_detail=detail)
     writers.write_manifest_row(row)
@@ -113,7 +113,7 @@ staging.discard()
 assert resume.manifest_values_by_id(layout.manifest, "status_detail") == {"1abc": retried}
 
 columns = ("pdbID", "metal_element", "alchemy_level")
-with open(layout.confidence_scores, "w", newline="", encoding="utf-8") as handle:
+with open(layout.scores, "w", newline="", encoding="utf-8") as handle:
     writer = csv.writer(handle)
     writer.writerow(columns)
     writer.writerow(["1abc", "ZN", "REVIEW"])
@@ -128,7 +128,7 @@ with open(layout.crystallization_summary, "w", newline="", encoding="utf-8") as 
     )
     summary_writer.writerow(summary)
 count = write_review_queue(
-    layout.confidence_scores,
+    layout.scores,
     layout.crystallization_summary,
     layout.review_queue,
     columns,

@@ -95,7 +95,7 @@ reports an input error. It doesn't fall back to the no-metadata behavior.
 | `--retry-partials` | With `--resume`, also retry non-retryable `partial` entries. `--id` or `--id-file` can restrict the retry set. |
 | `--log-dir LOG_DIR` | Set the run-report directory. The default is `OUTPUT_DIR/logs/`. |
 | `--no-bonds` | Skip bond-distance analysis. A fresh run removes existing bond and candidate CSV files from the output directory. |
-| `--confidence-reference-dir REFERENCE_DIR` | Score a single, ID-file, manual, or capped run against an existing frozen reference. An uncapped database run builds its own reference and ignores this option. |
+| `--score-reference-dir DIR` | Score a single, ID-file, manual, or capped run against an existing frozen reference. An uncapped database run builds its own reference and ignores this option. |
 | `-v`, `--verbose` | Add per-entry and per-CCP4-program diagnostics. |
 | `--quiet` | Report only warnings and errors. |
 | `--log-file LOG_FILE` | Also write full debug diagnostics to a file. This file is separate from the per-run report. |
@@ -108,5 +108,5 @@ script, Alchemy looks for one in the `CCP4_SETUP` environment variable, then in
 the path saved by `--configure-ccp4`, then in common CCP4 install locations.
 
 Run `./alchemy --help` for the authoritative command-line defaults. See the
-[confidence-scoring method](method.md#database-referenced-confidence-scoring)
+[scoring method](method.md#database-referenced-scoring)
 before comparing site classifications or empirical scores.

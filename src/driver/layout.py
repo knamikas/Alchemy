@@ -1,4 +1,4 @@
-"""Paths of the CSV and confidence-reference artifacts one run writes.
+"""Paths of the CSV and score-reference artifacts one run writes.
 
 Other files under ``--output-dir`` (the lock file, ``logs/``, scratch
 directories) are named by the modules that own them.
@@ -21,8 +21,8 @@ class OutputLayout:
         self.density_context = os.path.join(output_dir, "density_context_all.csv")
         self.bonds = os.path.join(output_dir, "metal_bonds_all.csv")
         self.candidates = os.path.join(output_dir, "metal_contact_candidates_all.csv")
-        self.confidence_inputs = os.path.join(output_dir, "confidence_inputs_all.csv")
-        self.confidence_scores = os.path.join(output_dir, "confidence_scores_all.csv")
+        self.score_inputs = os.path.join(output_dir, "score_inputs_all.csv")
+        self.scores = os.path.join(output_dir, "scores_all.csv")
         self.crystallization_conditions = os.path.join(
             output_dir, "crystallization_conditions_all.csv"
         )
@@ -30,7 +30,7 @@ class OutputLayout:
             output_dir, "crystallization_summary_all.csv"
         )
         self.review_queue = os.path.join(output_dir, "review_queue_all.csv")
-        self.reference_dir = os.path.join(output_dir, "confidence_reference")
+        self.reference_dir = os.path.join(output_dir, "score_reference")
         self.legacy_scientific_outputs = (
             os.path.join(output_dir, "metal_stats_all.csv"),
             os.path.join(output_dir, "metal_candidates_all.csv"),

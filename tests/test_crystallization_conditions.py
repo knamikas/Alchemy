@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
 from crystallization_conditions import (
     CONDITION_COLUMNS,
     detected_metals,
@@ -15,6 +14,7 @@ from crystallization_conditions import (
     extract_crystallization_context,
 )
 from rcsb_metadata_cache import prefetch_rcsb_crystallization_metadata
+from score import ANALYSIS_COLUMNS, SCORE_INPUT_COLUMNS
 
 
 def _write(path: Path, text: str) -> str:
@@ -22,10 +22,10 @@ def _write(path: Path, text: str) -> str:
     return str(path)
 
 
-def test_crystallization_fields_are_not_confidence_inputs_or_outputs() -> None:
+def test_crystallization_fields_are_not_score_inputs_or_outputs() -> None:
     assert all(
         not column.startswith("crystallization_")
-        for column in (*CONFIDENCE_INPUT_COLUMNS, *ANALYSIS_COLUMNS)
+        for column in (*SCORE_INPUT_COLUMNS, *ANALYSIS_COLUMNS)
     )
 
 

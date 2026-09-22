@@ -5,8 +5,8 @@ import csv
 import sys
 from collections.abc import Sequence
 
-from confidence_score.reference import (
-    finalize_database_confidence,
+from score.reference import (
+    finalize_database_score,
     load_reference,
     score_file_against_reference,
 )
@@ -14,8 +14,8 @@ from confidence_score.reference import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="PYTHONPATH=src python3 -m confidence_score",
-        description="Finalize or apply Alchemy confidence scores.",
+        prog="PYTHONPATH=src python3 -m score",
+        description="Finalize or apply the Alchemy score (0–100).",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -23,11 +23,9 @@ def _parser() -> argparse.ArgumentParser:
         "finalize", help="finalize a streamed complete-database cohort"
     )
     finalize.add_argument(
-        "--input", required=True, help="streamed database confidence-input CSV"
+        "--input", required=True, help="streamed database score-input CSV"
     )
-    finalize.add_argument(
-        "--output", required=True, help="output database confidence-score CSV"
-    )
+    finalize.add_argument("--output", required=True, help="output database score CSV")
     finalize.add_argument(
         "--reference-dir",
         required=True,
@@ -41,10 +39,8 @@ def _parser() -> argparse.ArgumentParser:
     score = commands.add_parser(
         "score", help="score inputs against a frozen database reference"
     )
-    score.add_argument("--input", required=True, help="prepared confidence-input CSV")
-    score.add_argument(
-        "--output", required=True, help="output confidence-score CSV path"
-    )
+    score.add_argument("--input", required=True, help="prepared score-input CSV")
+    score.add_argument("--output", required=True, help="output score CSV path")
     score.add_argument(
         "--reference-dir", required=True, help="frozen database reference directory"
     )
@@ -52,11 +48,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the confidence-reference CLI and return an exit status."""
+    """Run the score-reference CLI and return an exit status."""
     args = _parser().parse_args(argv)
     try:
         if args.command == "finalize":
-            total, scored, cohort = finalize_database_confidence(
+            total, scored, cohort = finalize_database_score(
                 args.input,
                 args.output,
                 args.reference_dir,
@@ -73,8 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"wrote {total} rows ({scored} scored) to {args.output}")
         else:  # pragma: no cover - the parser rejects unknown subcommands
-            raise AssertionError(f"unhandled confidence command: {args.command}")
+            raise AssertionError(f"unhandled scoring command: {args.command}")
     except (OSError, ValueError, csv.Error) as exc:
-        print(f"confidence {args.command} failed: {exc}", file=sys.stderr)
+        print(f"{args.command} failed: {exc}", file=sys.stderr)
         return 1
     return 0

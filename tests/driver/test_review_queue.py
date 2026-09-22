@@ -7,18 +7,18 @@ from pathlib import Path
 
 import pytest
 
-from confidence_score import ANALYSIS_COLUMNS, CONFIDENCE_INPUT_COLUMNS
 from crystallization_conditions import SUMMARY_COLUMNS
 from driver.review_queue import REVIEW_CONTEXT_COLUMNS, write_review_queue
+from score import ANALYSIS_COLUMNS, SCORE_INPUT_COLUMNS
 
 
 def test_review_queue_filters_levels_and_joins_site_specific_context(
     tmp_path: Path,
 ) -> None:
-    confidence_columns: list[str] = [*CONFIDENCE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
-    scores_path = tmp_path / "confidence.csv"
+    score_columns: list[str] = [*SCORE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
+    scores_path = tmp_path / "score.csv"
     with open(scores_path, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=confidence_columns)
+        writer = csv.DictWriter(handle, fieldnames=score_columns)
         writer.writeheader()
         for pdb_id, site_id, element, level in (
             ("1abc", "site-pass", "ZN", "PASS"),
@@ -26,7 +26,7 @@ def test_review_queue_filters_levels_and_joins_site_specific_context(
             ("2def", "site-suspect", "FE", "SUSPECT"),
         ):
             writer.writerow(
-                dict.fromkeys(confidence_columns, "")
+                dict.fromkeys(score_columns, "")
                 | {
                     "pdbID": pdb_id,
                     "metal_site_id": site_id,
@@ -62,13 +62,13 @@ def test_review_queue_filters_levels_and_joins_site_specific_context(
     output = tmp_path / "review.csv"
     assert (
         write_review_queue(
-            str(scores_path), str(summary_path), str(output), confidence_columns
+            str(scores_path), str(summary_path), str(output), score_columns
         )
         == 2
     )
     with open(output, newline="") as handle:
         reader = csv.DictReader(handle)
-        assert reader.fieldnames == [*confidence_columns, *REVIEW_CONTEXT_COLUMNS]
+        assert reader.fieldnames == [*score_columns, *REVIEW_CONTEXT_COLUMNS]
         rows = list(reader)
 
     review, suspect = rows
@@ -87,51 +87,51 @@ def test_review_queue_filters_levels_and_joins_site_specific_context(
 
 
 def test_review_queue_without_inputs_writes_only_the_header(tmp_path: Path) -> None:
-    confidence_columns: list[str] = [*CONFIDENCE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
+    score_columns: list[str] = [*SCORE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
     output = tmp_path / "review.csv"
 
     written = write_review_queue(
         str(tmp_path / "missing_scores.csv"),
         str(tmp_path / "missing_summary.csv"),
         str(output),
-        confidence_columns,
+        score_columns,
     )
 
     assert written == 0
     with open(output, newline="") as handle:
         reader = csv.DictReader(handle)
-        assert reader.fieldnames == [*confidence_columns, *REVIEW_CONTEXT_COLUMNS]
+        assert reader.fieldnames == [*score_columns, *REVIEW_CONTEXT_COLUMNS]
         assert list(reader) == []
 
 
 def test_review_queue_rejects_a_different_score_schema(tmp_path: Path) -> None:
-    confidence_columns: list[str] = [*CONFIDENCE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
-    scores_path = tmp_path / "confidence.csv"
+    score_columns: list[str] = [*SCORE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
+    scores_path = tmp_path / "score.csv"
     with open(scores_path, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=[*confidence_columns, "extra"])
+        writer = csv.DictWriter(handle, fieldnames=[*score_columns, "extra"])
         writer.writeheader()
 
     with pytest.raises(
-        ValueError, match="confidence score schema is incompatible with review queue"
+        ValueError, match="score schema is incompatible with review queue"
     ):
         write_review_queue(
             str(scores_path),
             str(tmp_path / "missing_summary.csv"),
             str(tmp_path / "review.csv"),
-            confidence_columns,
+            score_columns,
         )
 
 
 def test_unknown_context_leaves_the_metal_columns_blank(tmp_path: Path) -> None:
     """Without conditions, or without a modeled element, nothing is asserted."""
-    confidence_columns: list[str] = [*CONFIDENCE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
-    scores_path = tmp_path / "confidence.csv"
+    score_columns: list[str] = [*SCORE_INPUT_COLUMNS, *ANALYSIS_COLUMNS]
+    scores_path = tmp_path / "score.csv"
     with open(scores_path, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=confidence_columns)
+        writer = csv.DictWriter(handle, fieldnames=score_columns)
         writer.writeheader()
         for pdb_id, element in (("1abc", ""), ("9zzz", "ZN")):
             writer.writerow(
-                dict.fromkeys(confidence_columns, "")
+                dict.fromkeys(score_columns, "")
                 | {
                     "pdbID": pdb_id,
                     "metal_element": element,
@@ -154,9 +154,7 @@ def test_unknown_context_leaves_the_metal_columns_blank(tmp_path: Path) -> None:
         )
 
     output = tmp_path / "review.csv"
-    write_review_queue(
-        str(scores_path), str(summary_path), str(output), confidence_columns
-    )
+    write_review_queue(str(scores_path), str(summary_path), str(output), score_columns)
     with open(output, newline="") as handle:
         no_element, no_summary = list(csv.DictReader(handle))
 

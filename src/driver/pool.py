@@ -2,7 +2,7 @@
 
 Prepare the environment, select entries, and check whether a previous run
 can be resumed. Open the outputs, hand the batch to the dispatcher, and
-write results, confidence scores, and the final report.
+write results, scores, and the final report.
 """
 
 from __future__ import annotations
@@ -14,9 +14,8 @@ from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
 from analysis_config import analysis_config_id, analysis_configs_are_compatible
-from confidence_score import CONFIDENCE_INPUT_COLUMNS
 from crystallization_conditions import CONDITION_COLUMNS, SUMMARY_COLUMNS
-from driver import confidence, dispatch, environment
+from driver import dispatch, environment, scoring
 from driver.entries import schedule_entries
 from driver.errors import DriverError
 from driver.layout import OutputLayout, prepare_output_directory
@@ -54,6 +53,7 @@ from reference_data import (
 )
 from run_config import RunConfig
 from run_logging import logger_for, worker_level
+from score import SCORE_INPUT_COLUMNS
 from scratch import sweep_owned_scratch_directories
 from worker.contracts import EntryResult, ManualInputs, WorkerConfig
 
@@ -139,7 +139,7 @@ def _load_cofactor_catalog() -> frozenset[str]:
 def _check_resume_is_compatible(
     args: RunConfig,
     layout: OutputLayout,
-    plan: confidence.ConfidencePlan,
+    plan: scoring.ScorePlan,
     current_analysis_config_id: str,
 ) -> None:
     """Refuse to resume onto output this run cannot safely extend."""
@@ -149,8 +149,8 @@ def _check_resume_is_compatible(
         validate_resume_schemas(
             layout,
             bonds_enabled=args.bonds,
-            confidence_path=plan.stream_path,
-            confidence_columns=plan.columns,
+            score_path=plan.stream_path,
+            score_columns=plan.columns,
             additional_outputs=(
                 (layout.density_context, DENSITY_CONTEXT_COLUMNS),
                 (layout.crystallization_conditions, CONDITION_COLUMNS),
@@ -161,8 +161,8 @@ def _check_resume_is_compatible(
             validate_resume_schemas(
                 layout,
                 bonds_enabled=args.bonds,
-                confidence_path=layout.confidence_inputs,
-                confidence_columns=CONFIDENCE_INPUT_COLUMNS,
+                score_path=layout.score_inputs,
+                score_columns=SCORE_INPUT_COLUMNS,
             )
     except ValueError as exc:
         raise DriverError(str(exc)) from None
@@ -180,34 +180,34 @@ def _check_resume_is_compatible(
 def _finish_without_entries(
     args: RunConfig,
     layout: OutputLayout,
-    plan: confidence.ConfidencePlan,
+    plan: scoring.ScorePlan,
     run_log: RunLog,
 ) -> int:
     """Finish a run with nothing to process: settle what a resume left behind.
 
-    Confidence inputs from an earlier run are finalized and the review queue is
+    Score inputs from an earlier run are finalized and the review queue is
     rebuilt so that the outputs are complete. Such a run always succeeds.
     """
     finalized = plan.finalize_resumed_inputs(layout, run_log, resume=args.resume)
     if finalized is not None:
         logger.info(
-            "no entries required retry; finalized %d confidence rows "
+            "no entries required retry; finalized %d score rows "
             "(%d scored; database cohort %d) -> %s",
             finalized.rows,
             finalized.scored_rows,
             finalized.cohort,
-            layout.confidence_scores,
+            layout.scores,
         )
-        logger.info("confidence reference -> %s", layout.reference_dir)
+        logger.info("score reference -> %s", layout.reference_dir)
     if plan.enabled:
-        confidence.finalize_review_queue(layout, run_log)
+        scoring.finalize_review_queue(layout, run_log)
     if finalized is None:
         logger.info("no entries to process")
     return 0
 
 
 def _clear_stale_outputs(
-    args: RunConfig, layout: OutputLayout, plan: confidence.ConfidencePlan
+    args: RunConfig, layout: OutputLayout, plan: scoring.ScorePlan
 ) -> None:
     """Remove stale outputs that conflict with the current run mode."""
     try:
@@ -330,14 +330,14 @@ def worker_config_from_args(
 
 
 def record_run_provenance(
-    run_log: RunLog, cfg: WorkerConfig, plan: confidence.ConfidencePlan
+    run_log: RunLog, cfg: WorkerConfig, plan: scoring.ScorePlan
 ) -> None:
-    """Record the software, reference data, and confidence mode the run used."""
+    """Record the software, reference data, and scoring mode the run used."""
     run_log.details.update(
         alchemy_version=environment.ALCHEMY_VERSION,
         gemmi_version=cfg.gemmi_version,
         ccp4_version=cfg.ccp4_version,
-        confidence_mode=plan.mode or "disabled",
+        score_mode=plan.mode or "disabled",
         reference_data_id=cfg.reference_data_id,
         analysis_config_id=cfg.analysis_config_id,
         # Retain per-file hashes to explain changes in the combined reference ID.
@@ -393,7 +393,7 @@ def _open_writers(
     targets: OutputTargets,
     *,
     bonds: bool,
-    confidence_columns: Sequence[str] | None,
+    score_columns: Sequence[str] | None,
 ) -> OutputWriters:
     """Open every output stream this run writes and give them their headers."""
     paths = targets.present()
@@ -405,7 +405,7 @@ def _open_writers(
             name: handles.enter_context(open(path, "w", newline="", encoding="utf-8"))
             for name, path in paths.items()
         },
-        confidence_columns=confidence_columns,
+        score_columns=score_columns,
     )
 
 
@@ -426,7 +426,7 @@ def should_write_entry(
 
 def write_entry(
     result: EntryResult,
-    plan: confidence.ConfidencePlan,
+    plan: scoring.ScorePlan,
     writers: OutputWriters,
     staging: ResumeStaging | None,
     prior_counts: tuple[dict[str, str], dict[str, str]],
@@ -446,7 +446,7 @@ def write_entry(
     writers.write_crystallization_rows(result)
     writers.write_density_context_row(result)
     if plan.enabled:
-        writers.write_confidence_rows(confidence.confidence_rows_for(result, plan))
+        writers.write_score_rows(scoring.score_rows_for(result, plan))
     writers.write_manifest_row(
         manifest_row(result, resume, bonds, prior_bond_counts, prior_candidate_counts)
     )
@@ -457,7 +457,7 @@ def write_entry(
 def commit_staged_entries(
     staging: ResumeStaging,
     args: RunConfig,
-    plan: confidence.ConfidencePlan,
+    plan: scoring.ScorePlan,
     run_log: RunLog,
     *,
     run_aborted: bool,
@@ -480,7 +480,7 @@ def commit_staged_entries(
         staging.discard()
         return
     try:
-        staging.commit(args.bonds, confidence_enabled=plan.enabled)
+        staging.commit(args.bonds, score_enabled=plan.enabled)
     except BaseException as exc:
         if run_aborted and not isinstance(exc, Exception):
             raise  # a second interrupt, during the merge itself
@@ -528,7 +528,7 @@ def _record_written_outputs(
     summary.metal_rows_written = writers.n_sites
     summary.bond_rows_written = writers.n_bonds
     summary.candidate_rows_written = writers.n_candidates
-    summary.confidence_rows_written = writers.n_confidence
+    summary.score_rows_written = writers.n_score
     summary.crystallization_condition_rows_written = (
         writers.n_crystallization_conditions
     )
@@ -549,7 +549,7 @@ def process_entries(
     cfg: WorkerConfig,
     workers: int,
     layout: OutputLayout,
-    plan: confidence.ConfidencePlan,
+    plan: scoring.ScorePlan,
     run_log: RunLog,
     memory_plan: MemoryPlan,
 ) -> tuple[dispatch.BatchTally, OutputWriters]:
@@ -576,7 +576,7 @@ def process_entries(
                 handles,
                 write_targets,
                 bonds=args.bonds,
-                confidence_columns=plan.columns,
+                score_columns=plan.columns,
             )
 
             def deliver(result: EntryResult) -> None:
@@ -630,10 +630,10 @@ def _execute_with_output_lock(
             "y" if swept == 1 else "ies",
         )
     layout = OutputLayout(args.output_dir)
-    run_mode = confidence.classify_run(args)
+    run_mode = scoring.classify_run(args)
     run_log.details["run_mode"] = run_mode
 
-    plan = confidence.plan_confidence(args, layout, run_mode, run_log)
+    plan = scoring.plan_score(args, layout, run_mode, run_log)
     identity = AnalysisIdentity.current()
     run_log.details["analysis_config_id"] = identity.analysis_config_id
     _check_resume_is_compatible(args, layout, plan, identity.analysis_config_id)

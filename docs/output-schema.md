@@ -3,7 +3,7 @@
 This document defines the row grain, identifiers, serialization, and columns of
 Alchemy's CSV outputs. The ordered machine-enforced schemas live in
 `src/driver/writers.py`, `src/coordination/schema.py`,
-`src/edstats_statistics.py`, `src/confidence_score/`,
+`src/edstats_statistics.py`, `src/score/`,
 `src/crystallization_conditions.py`, and `src/driver/review_queue.py`.
 
 ## Shared conventions
@@ -41,7 +41,7 @@ negative result:
 2. Check `no_metals` and `metal_site_limit_exceeded`. If `no_metals=true`,
    Alchemy found no selected positive-occupancy metal sites. If
    `metal_site_limit_exceeded=true`, the entry was excluded from the standard
-   cohort and has no site, bond, candidate, or confidence rows.
+   cohort and has no site, bond, candidate, or score rows.
 3. Read one row per selected site in `metal_sites_all.csv`. Use `metal_site_id`
    for site-level joins. For a multi-metal cofactor, use
    `density_observation_id` to avoid counting one residue-level EDSTATS
@@ -50,19 +50,22 @@ negative result:
    `metal_contact_candidates_all.csv` when you need to audit rejected or
    unreferenced candidates. Join an exact contact between those files with
    `contact_id`.
-5. If `confidence_scores_all.csv` exists, treat `alchemy_level` as the
+5. If `scores_all.csv` exists, treat `alchemy_level` as the
    authoritative classification. `PASS` means all assessable components pass
    their raw thresholds. `REVIEW` means one assessable component needs review.
    `SUSPECT` means at least one component is suspect or both components need
-   review. `INCOMPLETE` means neither component is assessable. The empirical
-   `alchemy_score` ranks sites but doesn't determine the classification.
+   review. `INCOMPLETE` means neither component is assessable. The Alchemy score
+   (0–100), in `alchemy_score`, ranks sites but doesn't determine the classification.
+   Higher scores indicate more typical evidence relative to the frozen reference
+   cohort; lower scores indicate increasingly unusual disagreement. Scores are
+   not probabilities of correct metal assignment.
 6. Use `review_queue_all.csv` as a triage view. Its crystallization fields add
-   context but don't change confidence levels or scores.
+   context but don't change classification levels or scores.
 
 An empty cell means unavailable or inapplicable, not zero or `false`. Read the
 associated status or reason field before drawing a conclusion. For the exact
 classification thresholds and decision matrix, see
-[Database-referenced confidence scoring](method.md#database-referenced-confidence-scoring).
+[Database-referenced scoring](method.md#database-referenced-scoring).
 
 ## `manifest.csv`
 
@@ -198,7 +201,7 @@ The concrete metric columns are:
 | `strict_ncs_operation_count`, `crystallographic_operation_count` | Numbers of generated operations available to the contact search. |
 | `candidate_contact_count`, `reference_covered_contact_count` | Assigned contacts and the subset covered by the distance reference. |
 | `geometry_outlier_contact_count`, `geometry_consistent_contact_count` | Reference-covered contacts classified before score exclusions. |
-| `score_eligible_contact_count`, `score_excluded_contact_count` | Contacts admitted to or excluded from confidence geometry scoring. |
+| `score_eligible_contact_count`, `score_excluded_contact_count` | Contacts admitted to or excluded from geometry scoring. |
 | `scored_geometry_outlier_contact_count`, `scored_geometry_consistent_contact_count` | Score-eligible contacts in each geometry class. |
 | `multi_donor_residue_group_count`, `multi_donor_contact_count` | Chelating residue groups and contacts belonging to those groups. |
 | `suspect_multi_donor_residue_group_count`, `indeterminate_multi_donor_residue_group_count` | Multi-donor groups with suspect or unassessable geometry. |
@@ -255,7 +258,7 @@ Grain: one assigned inferred or source-declared metal–donor contact. Every
 | `neighbor_occupancy`, `neighbor_occupancy_valid`, `neighbor_occupancy_status`, `neighbor_conformer_mean_occupancy`, `neighbor_altloc_options`, `neighbor_altloc_selection_fallback` | Donor occupancy and conformer provenance. |
 | `alternative_conformers_present`, `altloc_selection_fallback` | Combined metal/donor conformer flags. |
 | `multi_donor_detected`, `multi_donor_contact_count`, `multi_donor_geometry_status`, `multi_donor_contains_suspect_bond` | Chelating-residue grouping and geometry. The status is `single_donor` when the residue contributes one contact, and otherwise `consistent` when every contact in the group was scored without an outlier, `suspect` when any was an outlier, or `indeterminate` when some contact could not be scored and none was an outlier. |
-| `score_eligible`, `score_exclusion_reason` | Whether this contact contributes to confidence geometry and why not. The only exclusion reason is `zscore_unavailable`: the contact has no Zbond, because no reference covers it or its occupancy forbids one. |
+| `score_eligible`, `score_exclusion_reason` | Whether this contact contributes to geometry and why not. The only exclusion reason is `zscore_unavailable`: the contact has no Zbond, because no reference covers it or its occupancy forbids one. |
 | `contact_scope`, `symmetry_contact`, `crystallographic_contact`, `strict_ncs_contact`, `strict_ncs_operation_id` | Explicit/generated-image classification and strict-NCS provenance. The scope is `explicit` for a donor in the deposited asymmetric unit, `crystallographic` or `strict_ncs` for a donor image produced by one operation, and `strict_ncs_and_crystallographic` for an image produced by both. |
 | `symmetry_image_index`, `symmetry_operation`, `cell_translation_x`, `cell_translation_y`, `cell_translation_z` | Crystallographic image provenance. |
 | `transformed_neighbor_x`, `transformed_neighbor_y`, `transformed_neighbor_z` | Donor coordinates in the image used for the measured distance. |
@@ -296,8 +299,8 @@ filters. It is deliberately not an alias for `assigned_as_bond`.
 ## `crystallization_conditions_all.csv`
 
 Grain: one row per deposited crystallization-condition record. Conditions are
-entry-level experimental context and join to site, bond, and confidence rows by
-`pdbID`. They are not confidence inputs.
+entry-level experimental context and join to site, bond, and score rows by
+`pdbID`. They are not score inputs.
 
 | Columns | Meaning |
 | --- | --- |
@@ -334,13 +337,13 @@ When `crystallization_data_status` is not `available`, detection flags are blank
 rather than `false`. A missing deposited record must not be interpreted as proof
 that a reagent was experimentally absent.
 
-## `confidence_inputs_all.csv`
+## `score_inputs_all.csv`
 
 Grain: one compact evidence row per manifest-counted selected metal site during
 an uncapped database run. The file is retained so the score and frozen reference
 can be reproduced without rerunning CCP4. Later targeted runs do not create a
 database cohort; when a reference is installed, their prepared inputs are
-embedded directly in `confidence_scores_all.csv`.
+embedded directly in `scores_all.csv`.
 
 | Columns | Meaning |
 | --- | --- |
@@ -359,12 +362,12 @@ embedded directly in `confidence_scores_all.csv`.
 | `declared_contact_count`, `inferred_contact_count`, `declared_scored_bond_count`, `inferred_scored_bond_count`, `geometry_contact_basis` | Coordination provenance before and after score eligibility. |
 | `multi_donor_contact_count`, `suspect_multi_donor_residue_group_count` | Chelation context retained as a non-scoring diagnostic. |
 | `context_warning`, `context_warning_reasons` | Interpretive warning carried into the score output without changing the score. |
-| `confidence_inputs_status`, `confidence_inputs_missing_reasons` | Evidence completeness and pipe-separated reasons for missing or partial evidence. |
+| `score_inputs_status`, `score_inputs_missing_reasons` | Evidence completeness and pipe-separated reasons for missing or partial evidence. |
 
-`confidence_inputs_status` is `complete`, `density_only`, `geometry_only`, or
+`score_inputs_status` is `complete`, `density_only`, `geometry_only`, or
 `unscorable`. Density and geometry are independently available: one missing
 component never prevents the other from determining the site level. Partial
-geometry coverage remains explicit in `confidence_inputs_missing_reasons`, but
+geometry coverage remains explicit in `score_inputs_missing_reasons`, but
 does not weaken or strengthen finite geometry evidence.
 
 `geometry_contact_basis` records where the scored contacts came from, not where
@@ -373,7 +376,7 @@ source-declared and a geometry-inferred contact were scored, `declared_only`
 when every scored contact was declared, `inferred_only` when every scored
 contact was inferred, and `none` when no contact was scored at all.
 
-`confidence_inputs_missing_reasons` is pipe-separated and draws on three
+`score_inputs_missing_reasons` is pipe-separated and draws on three
 vocabularies at once, so a reader resolves a value against all of them. Its own
 values are `rszd_unavailable` (no finite `ZDm`, so there is no density
 evidence), `no_assigned_contacts` (the site has no assigned contact to score),
@@ -389,25 +392,25 @@ as well). To those the column adds `density_row_unavailable`, from the
 and `non_finite_metal_coordinates` together with whichever manifest reason code
 (docs/operations.md) records why the entry itself could not be completed.
 
-## `confidence_scores_all.csv`
+## `scores_all.csv`
 
-Grain: one row per confidence input. All `confidence_inputs_all.csv` columns are
+Grain: one row per score input. All `score_inputs_all.csv` columns are
 preserved as the leading block, followed by these analysis columns:
 
 | Columns | Meaning |
 | --- | --- |
 | `density_level`, `geometry_level` | Raw-threshold component verdicts: `PASS`, `REVIEW`, `SUSPECT`, or `INCOMPLETE`. |
-| `density_score`, `geometry_score` | Reverse average-rank empirical support scores from 0 to 100; higher means more ordinary relative to the frozen component cohort. Blank when no compatible reference or component measurement is available. |
+| `density_score`, `geometry_score` | Reverse average-rank scores from 0 to 100; higher means more ordinary relative to the frozen component cohort. Blank when no compatible reference or component measurement is available. |
 | `alchemy_level` | Authoritative non-compensatory site verdict. Any SUSPECT component, or REVIEW in both components, makes the site SUSPECT. |
-| `alchemy_score` | Minimum available component support score for ranking only. It does not define `alchemy_level`. |
+| `alchemy_score` | Minimum available component score for ranking only. It does not define `alchemy_level`. |
 | `evidence_basis` | `density_and_geometry`, `density_only`, `geometry_only`, or `no_assessable_evidence`. |
 | `verdict_reason` | Machine-readable decision route: `no_assessable_evidence`, `density_and_geometry_suspect`, `density_suspect`, `geometry_suspect`, `review_plus_review`, `density_review`, `geometry_review`, or `all_available_components_pass`. |
-| `confidence_reference_id` | Identity of the compatible pair of frozen component distributions; blank for classification-only output. |
-| `confidence_cohort_id` | Identity of the exact confidence-input artifact that produced the reference cohort. |
-| `confidence_cohort_size` | Number of site rows in the frozen input cohort. |
+| `score_reference_id` | Identity of the compatible pair of frozen component distributions; blank for classification-only output. |
+| `score_cohort_id` | Identity of the exact score-input artifact that produced the reference cohort. |
+| `score_cohort_size` | Number of site rows in the frozen input cohort. |
 | `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution. |
 
-Support scores are published with up to six decimal places; trailing zeros are
+Scores are published with up to six decimal places; trailing zeros are
 dropped. Raw component values define the levels; neither a score nor a
 population percentile can move a site across a PASS/REVIEW/SUSPECT boundary.
 
@@ -417,8 +420,8 @@ must not be mistaken for a structure-weighted statistic.
 
 ## `review_queue_all.csv`
 
-Grain: one row per confidence row whose authoritative `alchemy_level` is
-`REVIEW` or `SUSPECT`. All confidence-score columns are preserved, followed by
+Grain: one row per score row whose authoritative `alchemy_level` is
+`REVIEW` or `SUSPECT`. All score columns are preserved, followed by
 the crystallization-summary columns except the repeated `pdbID`, plus:
 
 | Columns | Meaning |
@@ -428,10 +431,13 @@ the crystallization-summary columns except the repeated `pdbID`, plus:
 | `crystallization_context_flags` | Pipe-separated positive findings for rapid review. |
 
 The queue is a derived convenience view. Its membership is determined before the
-crystallization join, and none of its condition columns changes a confidence
+crystallization join, and none of its condition columns changes a scoring
 component, score, level, evidence basis, or verdict reason.
 
-## `confidence_reference/`
+## `score_reference/`
+
+Database runs write this directory. The bundled reference uses the current
+score metadata keys and reference ID, with the original component distributions.
 
 The frozen reference is portable only as the following pair of files. The
 metadata is its completion marker; Alchemy removes it before rebuilding so a
@@ -447,7 +453,7 @@ failed finalization cannot leave an older reference looking current.
 
 Rows with the same rounded value are combined by summing their counts. New
 measurements use the same rounding when ranked against the distribution. Raw
-confidence inputs retain twelve decimal places, and classification thresholds
+score inputs retain twelve decimal places, and classification thresholds
 use those raw values before ranking rounding.
 
 ### `metadata.json`
@@ -456,7 +462,7 @@ The scoring contract is recorded by `score_decimal_places`, `metric_decimal_plac
 `reference_decimal_places`,
 `density_thresholds`, `density_saturation_value`, `density_saturation_policy`,
 `geometry_thresholds`, `geometry_statistic`, `overall_rule`,
-`support_score_method`, `coverage_policy`, `input_status_policy`,
+`score_method`, `coverage_policy`, `input_status_policy`,
 `cohort_weighting`, `maximum_entry_metal_sites`, and `reference_data_id`.
 `analysis_config_id` additionally binds the model, alternate-conformer,
 symmetry, cohort-limit, and bundled-reference policies. Alchemy refuses to load
@@ -469,9 +475,14 @@ not emitted or required. Software versions remain recorded as provenance.
 The distributions are described by `reference_id`, `distribution_file`,
 `density_distinct_value_count`, `geometry_distinct_value_count`,
 `density_reference_size`, and `geometry_reference_size`. The source cohort is
-described separately by `cohort_id`, `confidence_inputs_file`,
-`confidence_inputs_sha256`, `input_row_count`, `input_entry_count`,
+described separately by `cohort_id`, `score_inputs_file`,
+`score_inputs_sha256`, `input_row_count`, `input_entry_count`,
 `scorable_entry_count`, and `input_status_counts`.
+
+The bundled manuscript reference retains `confidence_inputs_all.csv` as the
+value of `score_inputs_file`: that is the actual archived source filename,
+whose original bytes are identified by `score_inputs_sha256`. New database
+runs record `score_inputs_all.csv` instead.
 
 When database finalization receives the run manifest, metadata additionally
 contains `source_manifest_file`, `source_manifest_sha256`, `source_entry_count`,

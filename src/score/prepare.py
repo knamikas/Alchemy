@@ -1,4 +1,4 @@
-"""Derive compact confidence inputs from site and bond evidence."""
+"""Derive compact score inputs from site and bond evidence."""
 
 import math
 from collections import defaultdict
@@ -7,26 +7,26 @@ from dataclasses import dataclass
 from typing import Any
 
 from codes import (
-    ConfidenceInputStatus,
-    ConfidenceMissingReason,
     CoordinateMappingStatus,
     CoordinationStatus,
     GeometryContactBasis,
     ParentType,
     ReasonCode,
+    ScoreInputStatus,
+    ScoreMissingReason,
     SelectedSiteStatus,
 )
-from confidence_score.schema import (
-    CONFIDENCE_INPUT_COLUMNS,
+from metallocofactors.catalog import cofactor_ids
+from output_rows import MetalStatsRow, finite_float
+from score.schema import (
     IDENTITY_COLUMNS,
     METRIC_DECIMAL_PLACES,
+    SCORE_INPUT_COLUMNS,
     format_decimal,
     is_density_saturated,
     parse_csv_bool,
     site_key,
 )
-from metallocofactors.catalog import cofactor_ids
-from output_rows import MetalStatsRow, finite_float
 
 #: ``metal_atom_index`` of a placeholder row, prefixed to the site's one-based
 #: position among the entry's unresolved sites. A placeholder names a site the
@@ -183,22 +183,22 @@ def _geometry_missing_reasons(summary: BondSummary) -> list[str]:
     """Explain which geometry evidence a bond summary lacks, worst first."""
     reasons: list[str] = []
     if summary.reference_covered_contact_count == 0:
-        reasons.append(ConfidenceMissingReason.NO_GEOMETRY_REFERENCE)
+        reasons.append(ScoreMissingReason.NO_GEOMETRY_REFERENCE)
     elif summary.geometry_bond_count < summary.reference_covered_contact_count:
-        reasons.append(ConfidenceMissingReason.ZBOND_UNAVAILABLE_FOR_REFERENCE)
+        reasons.append(ScoreMissingReason.ZBOND_UNAVAILABLE_FOR_REFERENCE)
     if summary.reference_covered_contact_count < summary.assigned_contact_count:
-        reasons.append(ConfidenceMissingReason.PARTIAL_GEOMETRY_COVERAGE)
+        reasons.append(ScoreMissingReason.PARTIAL_GEOMETRY_COVERAGE)
     return reasons
 
 
 def _input_row(identity: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
     """Build one prepared row: a blank schema, the identity block, overrides.
 
-    Every row of ``confidence_inputs_all.csv`` is built here, so all three
+    Every row of ``score_inputs_all.csv`` is built here, so all three
     producers carry the full column set in schema order however little
     evidence they have.
     """
-    values: dict[str, Any] = dict.fromkeys(CONFIDENCE_INPUT_COLUMNS, "")
+    values: dict[str, Any] = dict.fromkeys(SCORE_INPUT_COLUMNS, "")
     values.update({column: identity.get(column, "") for column in IDENTITY_COLUMNS})
     values.update(overrides)
     return values
@@ -216,7 +216,7 @@ def _orphan_bond_site_input(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]
             if reason
         )
     missing_reasons = [
-        ConfidenceMissingReason.RSZD_UNAVAILABLE,
+        ScoreMissingReason.RSZD_UNAVAILABLE,
         CoordinateMappingStatus.DENSITY_ROW_UNAVAILABLE,
         *_geometry_missing_reasons(summary),
     ]
@@ -240,27 +240,27 @@ def _orphan_bond_site_input(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         selected_metal_site_status=SelectedSiteStatus.SELECTED_WITHOUT_DENSITY_ROW,
         **summary.as_columns(),
         # A real ``bool`` here and in the placeholder rows, but the raw stats
-        # value on the main path: ``schema.confidence_csv_value`` and
+        # value on the main path: ``schema.score_csv_value`` and
         # ``output_rows.scientific_csv_value`` normalize both at write time,
         # and normalizing here would turn a blank (unknown) cell into "false".
         context_warning=any(
             parse_csv_bool(row.get("context_warning", "")) for row in rows
         ),
         context_warning_reasons="|".join(dict.fromkeys(warning_reasons)),
-        confidence_inputs_status=(
-            ConfidenceInputStatus.GEOMETRY_ONLY
+        score_inputs_status=(
+            ScoreInputStatus.GEOMETRY_ONLY
             if summary.geometry_bond_count
-            else ConfidenceInputStatus.UNSCORABLE
+            else ScoreInputStatus.UNSCORABLE
         ),
-        confidence_inputs_missing_reasons="|".join(missing_reasons),
+        score_inputs_missing_reasons="|".join(missing_reasons),
     )
 
 
-def prepare_confidence_inputs(
+def prepare_score_inputs(
     stats_rows: Sequence[Mapping[str, Any]],
     bond_rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Return deterministic confidence inputs for every selected metal site."""
+    """Return deterministic score inputs for every selected metal site."""
     bonds_by_site: defaultdict[tuple[str, ...], list[Mapping[str, Any]]] = defaultdict(
         list
     )
@@ -294,22 +294,22 @@ def prepare_confidence_inputs(
         if str(stats.get("metal_coordinates_valid", "")).strip().lower() == "false":
             missing_reasons.append(ReasonCode.NON_FINITE_METAL_COORDINATES)
         if not math.isfinite(rszd_abs):
-            missing_reasons.append(ConfidenceMissingReason.RSZD_UNAVAILABLE)
+            missing_reasons.append(ScoreMissingReason.RSZD_UNAVAILABLE)
         if summary.assigned_contact_count == 0:
-            missing_reasons.append(ConfidenceMissingReason.NO_ASSIGNED_CONTACTS)
+            missing_reasons.append(ScoreMissingReason.NO_ASSIGNED_CONTACTS)
         else:
             missing_reasons.extend(_geometry_missing_reasons(summary))
 
         density_available = math.isfinite(rszd_abs)
         geometry_available = summary.geometry_bond_count > 0
         status = (
-            ConfidenceInputStatus.COMPLETE
+            ScoreInputStatus.COMPLETE
             if density_available and geometry_available
-            else ConfidenceInputStatus.DENSITY_ONLY
+            else ScoreInputStatus.DENSITY_ONLY
             if density_available
-            else ConfidenceInputStatus.GEOMETRY_ONLY
+            else ScoreInputStatus.GEOMETRY_ONLY
             if geometry_available
-            else ConfidenceInputStatus.UNSCORABLE
+            else ScoreInputStatus.UNSCORABLE
         )
 
         prepared.append(
@@ -335,8 +335,8 @@ def prepare_confidence_inputs(
                 # ``_orphan_bond_site_input``.
                 context_warning=stats.get("context_warning", ""),
                 context_warning_reasons=stats.get("context_warning_reasons", ""),
-                confidence_inputs_status=status,
-                confidence_inputs_missing_reasons="|".join(missing_reasons),
+                score_inputs_status=status,
+                score_inputs_missing_reasons="|".join(missing_reasons),
             )
         )
 
@@ -348,14 +348,14 @@ def prepare_confidence_inputs(
     return prepared
 
 
-def prepare_result_confidence_inputs(
+def prepare_result_score_inputs(
     stats_rows: Sequence[MetalStatsRow],
     bond_rows: Sequence[Mapping[str, Any]],
     stats_columns: Sequence[str],
 ) -> list[dict[str, Any]]:
-    """Prepare confidence rows from one in-memory Alchemy worker result."""
+    """Prepare score rows from one in-memory Alchemy worker result."""
     flattened = [row.as_output_dict(stats_columns) for row in stats_rows]
-    return prepare_confidence_inputs(flattened, bond_rows)
+    return prepare_score_inputs(flattened, bond_rows)
 
 
 def _joined_missing_reasons(reasons: list[str], missing_reason: str) -> str:
@@ -365,7 +365,7 @@ def _joined_missing_reasons(reasons: list[str], missing_reason: str) -> str:
     return "|".join(reasons)
 
 
-def complete_confidence_site_count(
+def complete_score_site_count(
     rows: Sequence[Mapping[str, Any]],
     pdb_id: str,
     selected_site_count: int,
@@ -377,29 +377,27 @@ def complete_confidence_site_count(
     manifest-counted site no prepared row identifies. An entry-level
     ``missing_reason`` -- the ``ReasonCode`` of whatever stopped the entry --
     is also annotated onto every existing row's
-    ``confidence_inputs_missing_reasons``, so the reason a site is thin is
+    ``score_inputs_missing_reasons``, so the reason a site is thin is
     recorded on the rows that exist as well as on the placeholders.
     """
     if len(rows) > selected_site_count:
-        raise ValueError(f"confidence inputs exceed selected metal count for {pdb_id}")
+        raise ValueError(f"score inputs exceed selected metal count for {pdb_id}")
     completed = [dict(row) for row in rows]
     if missing_reason:
         for row in completed:
-            row["confidence_inputs_missing_reasons"] = _joined_missing_reasons(
+            row["score_inputs_missing_reasons"] = _joined_missing_reasons(
                 [
                     reason
-                    for reason in row.get(
-                        "confidence_inputs_missing_reasons", ""
-                    ).split("|")
+                    for reason in row.get("score_inputs_missing_reasons", "").split("|")
                     if reason
                 ],
                 missing_reason,
             )
     for index in range(len(rows), selected_site_count):
         placeholder_reasons: list[str] = [
-            ConfidenceMissingReason.RSZD_UNAVAILABLE,
-            ConfidenceMissingReason.SITE_IDENTITY_UNAVAILABLE,
-            ConfidenceMissingReason.SITE_EVIDENCE_UNAVAILABLE,
+            ScoreMissingReason.RSZD_UNAVAILABLE,
+            ScoreMissingReason.SITE_IDENTITY_UNAVAILABLE,
+            ScoreMissingReason.SITE_EVIDENCE_UNAVAILABLE,
         ]
         completed.append(
             _input_row(
@@ -408,11 +406,9 @@ def complete_confidence_site_count(
                 selected_metal_site_status=SelectedSiteStatus.SELECTED_SITE_UNRESOLVED,
                 metal_atom_index=f"{UNRESOLVED_SITE_INDEX_PREFIX}{index + 1}",
                 context_warning=True,
-                context_warning_reasons=(
-                    ConfidenceMissingReason.SITE_EVIDENCE_UNAVAILABLE
-                ),
-                confidence_inputs_status=ConfidenceInputStatus.UNSCORABLE,
-                confidence_inputs_missing_reasons=_joined_missing_reasons(
+                context_warning_reasons=(ScoreMissingReason.SITE_EVIDENCE_UNAVAILABLE),
+                score_inputs_status=ScoreInputStatus.UNSCORABLE,
+                score_inputs_missing_reasons=_joined_missing_reasons(
                     placeholder_reasons, missing_reason
                 ),
             )

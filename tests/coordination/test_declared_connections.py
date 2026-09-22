@@ -720,7 +720,7 @@ def test_regression_declaration_on_a_deselected_conformer_yields_one_row(
     """A LINK naming conformer A produces exactly one bond, on selected conformer B.
 
     A second row for one chemical atom would inflate the coordination number,
-    fabricate a multi-donor group and count the site twice in the confidence
+    fabricate a multi-donor group and count the site twice in the score
     denominator.
     """
     builder, his, zinc = _zinc_histidine_site()

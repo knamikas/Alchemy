@@ -352,7 +352,7 @@ def _validate_stage_row_counts(
     layout: OutputLayout,
     *,
     bonds_enabled: bool,
-    confidence_path: str | None,
+    score_path: str | None,
 ) -> None:
     """Check that every enabled stage output has each terminal row's row count."""
     checks: list[tuple[str, str]] = []
@@ -363,8 +363,8 @@ def _validate_stage_row_counts(
                 (layout.candidates, "n_candidates"),
             )
         )
-    if confidence_path is not None:
-        checks.append((confidence_path, "n_metals"))
+    if score_path is not None:
+        checks.append((score_path, "n_metals"))
 
     terminal_ids = set(terminal_rows)
     for path, manifest_column in checks:
@@ -374,9 +374,9 @@ def _validate_stage_row_counts(
             else Counter[str]()
         )
         for pdb_id, row in terminal_rows.items():
-            # Confidence is disabled with --no-bonds. These entries must run
-            # again before their confidence rows can be required or retained.
-            if path == confidence_path and row.awaits_bond_stage:
+            # Scoring is disabled with --no-bonds. These entries must run
+            # again before their score rows can be required or retained.
+            if path == score_path and row.awaits_bond_stage:
                 continue
             expected = row.count(
                 manifest_column, blank_is_zero=manifest_column != "n_metals"
@@ -397,7 +397,7 @@ def _validate_terminal_artifacts(
     layout: OutputLayout,
     *,
     bonds_enabled: bool,
-    confidence_path: str | None,
+    score_path: str | None,
 ) -> None:
     """Check that the outputs back every terminal manifest row, in reading order."""
     selected_stats = _count_selected_sites(terminal_rows, layout.stats)
@@ -406,7 +406,7 @@ def _validate_terminal_artifacts(
         terminal_rows,
         layout,
         bonds_enabled=bonds_enabled,
-        confidence_path=confidence_path,
+        score_path=score_path,
     )
 
 
@@ -414,14 +414,14 @@ def validate_resume_schemas(
     layout: OutputLayout,
     *,
     bonds_enabled: bool = True,
-    confidence_path: str | None = None,
-    confidence_columns: Sequence[str] | None = None,
+    score_path: str | None = None,
+    score_columns: Sequence[str] | None = None,
     additional_outputs: Sequence[tuple[str, Sequence[str]]] = (),
 ) -> None:
     """Reject incompatible schemas or inconsistent completed results before resume.
 
     Validate full headers, required stage outputs, and row counts. Density-only
-    entries may lack bond and confidence output when those stages will be retried.
+    entries may lack bond and score output when those stages will be retried.
     Ignore orphan rows without a complete manifest record; retry removes them.
     """
     checks = [(layout.manifest, MANIFEST_COLUMNS), (layout.stats, STATS_COLUMNS)]
@@ -429,10 +429,10 @@ def validate_resume_schemas(
         checks.extend(
             ((layout.bonds, BOND_COLUMNS), (layout.candidates, CANDIDATE_COLUMNS))
         )
-    if confidence_path is not None:
-        if confidence_columns is None:
-            raise ValueError("confidence columns are required with a confidence output")
-        checks.append((confidence_path, list(confidence_columns)))
+    if score_path is not None:
+        if score_columns is None:
+            raise ValueError("score columns are required with a score output")
+        checks.append((score_path, list(score_columns)))
     checks.extend((path, list(columns)) for path, columns in additional_outputs)
     for path, expected in checks:
         expected = list(expected)
@@ -462,7 +462,7 @@ def validate_resume_schemas(
     bond_stage_paths: set[str | None] = {
         layout.bonds,
         layout.candidates,
-        confidence_path,
+        score_path,
     }
     for path, _expected in checks:
         if pending_bonds_only and path in bond_stage_paths:
@@ -478,7 +478,7 @@ def validate_resume_schemas(
         terminal_rows,
         layout,
         bonds_enabled=bonds_enabled,
-        confidence_path=confidence_path,
+        score_path=score_path,
     )
 
 
@@ -597,7 +597,7 @@ class ResumeStaging:
         self.staged = targets.staged_in(self.dir)
         self.replacement_ids: set[str] = set()
 
-    def commit(self, bonds_enabled: bool, confidence_enabled: bool = False) -> None:
+    def commit(self, bonds_enabled: bool, score_enabled: bool = False) -> None:
         """Replace the retried entries' rows in the real output files."""
         if not self.replacement_ids:
             return
@@ -605,10 +605,10 @@ class ResumeStaging:
         if bonds_enabled:
             names += OutputTargets.BOND_STAGE_OUTPUTS
         names += OutputTargets.ALWAYS_WRITTEN_EXTRAS
-        if confidence_enabled:
+        if score_enabled:
             names += [
                 name
-                for name in OutputTargets.CONFIDENCE_OUTPUTS
+                for name in OutputTargets.SCORE_OUTPUTS
                 if getattr(self.targets, name) is not None
             ]
         # Data files are committed before the manifest completion marker, so an

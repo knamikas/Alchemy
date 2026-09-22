@@ -26,8 +26,8 @@ Each test module is named after the source module it covers: flat modules in
 `tools/` mirror the corresponding source packages. Whole-run coverage lives
 under `integration/`. Shared fixtures and builders remain in `conftest.py` and
 `helpers.py`; `test_helpers.py` tests the builders themselves, and
-`confidence_oracle.py` is an independent re-implementation of the scoring
-policy used to cross-check `src/confidence_score`.
+`score_oracle.py` is an independent re-implementation of the scoring
+policy used to cross-check `src/score`.
 
 ## Common commands
 

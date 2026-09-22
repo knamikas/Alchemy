@@ -1,4 +1,4 @@
-"""Column vocabularies, thresholds, and value helpers for confidence outputs."""
+"""Column vocabularies, thresholds, and value helpers for score outputs."""
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
@@ -6,36 +6,36 @@ from types import MappingProxyType
 from typing import Any
 
 from analysis_config import MAX_ANALYZED_METAL_SITES
-from codes import ConfidenceInputStatus
+from codes import ScoreInputStatus
 from output_rows import scientific_csv_value
 
 #: Policy-and-provenance file of a frozen reference directory. It is also the
 #: completion marker: finalization removes it before rebuilding
-#: (docs/output-schema.md, "confidence_reference/").
+#: (docs/output-schema.md, "score_reference/").
 REFERENCE_METADATA_FILE = "metadata.json"
 #: Per-component ``value``/``count`` table beside the metadata file.
 REFERENCE_DISTRIBUTION_FILE = "component_distributions.csv"
 #: Each assessable metal site counts once in its component cohort; the ranks
 #: are site-weighted, not structure-weighted (docs/output-schema.md).
 COHORT_WEIGHTING = "per_metal_site"
-#: Decimal places published for the 0-100 support scores.
+#: Decimal places published for the 0-100 scores.
 SCORE_DECIMAL_PLACES = 6
 #: Decimal places for raw metrics (|RSZD|, RMS Zbond) in compact input rows.
 METRIC_DECIMAL_PLACES = 12
 #: Decimal places used only to group reference values and rank new measurements.
 REFERENCE_DECIMAL_PLACES = 3
 #: Absolute RSZD (a dimensionless density Z score) at or above which the
-#: density component is REVIEW (docs/method.md, "Confidence scoring").
+#: density component is REVIEW (docs/method.md, "Scoring").
 DENSITY_REVIEW_THRESHOLD = 3.0
 #: Absolute RSZD at or above which the density component is SUSPECT.
 DENSITY_SUSPECT_THRESHOLD = 6.0
 #: Site RMS bond Z score at or above which the geometry component is REVIEW
-#: (docs/method.md, "Confidence scoring").
+#: (docs/method.md, "Scoring").
 GEOMETRY_REVIEW_THRESHOLD = 1.0
 #: Site RMS bond Z score at or above which the geometry component is SUSPECT.
 GEOMETRY_SUSPECT_THRESHOLD = 2.0
 #: |RSZD| EDSTATS prints when its fixed-width field saturates; such a site is
-#: SUSPECT with zero density support rather than ranked (docs/method.md).
+#: SUSPECT with zero density score rather than ranked (docs/method.md).
 EDSTATS_SATURATION_MAGNITUDE = 99.9
 #: Columns that identify one site when ``metal_site_id`` is populated.
 SITE_KEY_COLUMNS = (
@@ -76,7 +76,7 @@ IDENTITY_COLUMNS = (
 )
 
 
-CONFIDENCE_INPUT_COLUMNS = (
+SCORE_INPUT_COLUMNS = (
     *IDENTITY_COLUMNS,
     "rszd",
     "rszd_abs",
@@ -106,8 +106,8 @@ CONFIDENCE_INPUT_COLUMNS = (
     "suspect_multi_donor_residue_group_count",
     "context_warning",
     "context_warning_reasons",
-    "confidence_inputs_status",
-    "confidence_inputs_missing_reasons",
+    "score_inputs_status",
+    "score_inputs_missing_reasons",
 )
 
 
@@ -120,21 +120,21 @@ ANALYSIS_COLUMNS = (
     "alchemy_score",
     "evidence_basis",
     "verdict_reason",
-    "confidence_reference_id",
-    "confidence_cohort_id",
-    "confidence_cohort_size",
+    "score_reference_id",
+    "score_cohort_id",
+    "score_cohort_size",
     "density_reference_size",
     "geometry_reference_size",
 )
 
 
-CONFIDENCE_INPUT_STATUSES = frozenset(ConfidenceInputStatus)
+SCORE_INPUT_STATUSES = frozenset(ScoreInputStatus)
 
 
 INPUT_STATUS_POLICY = "independent_component_availability"
 
 
-CONFIDENCE_BOOLEAN_COLUMNS = frozenset(
+SCORE_BOOLEAN_COLUMNS = frozenset(
     {"density_is_shared", "density_saturated", "context_warning"}
 )
 
@@ -148,7 +148,7 @@ SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
         "score_decimal_places": SCORE_DECIMAL_PLACES,
         "metric_decimal_places": METRIC_DECIMAL_PLACES,
         "reference_decimal_places": REFERENCE_DECIMAL_PLACES,
-        # The "review"/"suspect" keys spell confidence levels by coincidence,
+        # The "review"/"suspect" keys spell classification levels by coincidence,
         # which is why tests/test_documentation.py allowlists this module in
         # ``_COINCIDENTAL_LITERALS``.
         "density_thresholds": MappingProxyType(
@@ -158,14 +158,14 @@ SCORING_POLICY_METADATA: Mapping[str, Any] = MappingProxyType(
             }
         ),
         "density_saturation_value": EDSTATS_SATURATION_MAGNITUDE,
-        "density_saturation_policy": "suspect_with_zero_support",
+        "density_saturation_policy": "suspect_with_zero_score",
         "geometry_thresholds": MappingProxyType(
             {
                 "review": GEOMETRY_REVIEW_THRESHOLD,
                 "suspect": GEOMETRY_SUSPECT_THRESHOLD,
             }
         ),
-        "support_score_method": "reverse_average_rank_empirical_cdf",
+        "score_method": "reverse_average_rank_empirical_cdf",
         "geometry_statistic": "rms_finite_score_eligible_zbond",
         "overall_rule": "any_suspect_or_review_plus_review",
         "coverage_policy": "annotation_only",
@@ -195,8 +195,8 @@ REFERENCE_PROVENANCE_FIELDS = (
     "density_reference_size",
     "geometry_reference_size",
     "cohort_id",
-    "confidence_inputs_file",
-    "confidence_inputs_sha256",
+    "score_inputs_file",
+    "score_inputs_sha256",
     "input_row_count",
     "input_entry_count",
     "scorable_entry_count",
@@ -253,7 +253,7 @@ def parse_csv_bool(value: object) -> bool:
 
 
 def format_decimal(value: float, decimal_places: int = SCORE_DECIMAL_PLACES) -> str:
-    """Format a confidence number without trailing zeros; blank non-finite values.
+    """Format a score number without trailing zeros; blank non-finite values.
 
     Negative zero keeps its sign (``-0.0`` formats as ``"-0"``); that is
     retained deliberately, because the published rows were written with it.
@@ -274,14 +274,14 @@ def is_density_saturated(rszd_abs: float) -> bool:
     EDSTATS prints ``EDSTATS_SATURATION_MAGNITUDE`` when its fixed-width field
     saturates, so no larger magnitude is produced in practice; the check is
     non-strict so any value at or beyond the ceiling is treated the same way.
-    Both the ``density_saturated`` input column and the zero-support scoring
-    rule use this one predicate (docs/method.md, "Confidence scoring").
+    Both the ``density_saturated`` input column and the zero-score scoring
+    rule use this one predicate (docs/method.md, "Scoring").
     """
     return math.isfinite(rszd_abs) and rszd_abs >= EDSTATS_SATURATION_MAGNITUDE
 
 
-def canonical_support_score(value: float) -> float:
-    """Round a support score to its canonical serialized precision."""
+def canonical_score(value: float) -> float:
+    """Round a score to its canonical serialized precision."""
     return float(f"{value:.{SCORE_DECIMAL_PLACES}f}")
 
 
@@ -295,15 +295,15 @@ def canonical_reference_metric(value: float) -> float:
     return float(f"{value:.{REFERENCE_DECIMAL_PLACES}f}")
 
 
-def confidence_csv_value(column: str, value: object) -> object:
-    """Serialize one confidence cell for a confidence CSV row.
+def score_csv_value(column: str, value: object) -> object:
+    """Serialize one score cell for a score CSV row.
 
     A ``true``/``false`` spelling in one of the boolean columns is lowercased,
     so those flags read the same however they were captured. Everything else,
     including real booleans and non-boolean columns, is left to
     ``scientific_csv_value``.
     """
-    if column in CONFIDENCE_BOOLEAN_COLUMNS and isinstance(value, str):
+    if column in SCORE_BOOLEAN_COLUMNS and isinstance(value, str):
         normalized = value.strip().lower()
         if normalized in {"true", "false"}:
             return normalized

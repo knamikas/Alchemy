@@ -25,16 +25,16 @@ from typing import (
     TypeVar,
 )
 
-import confidence_oracle as oracle
 import gemmi
 import helpers
 import pytest
+import score_oracle as oracle
 from helpers import approx
 
 import cli
-import confidence_score
 import crystallization_conditions
 import inputs
+import score
 from coordination.metal_distances import distances as distance_reference
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
 from driver import review_queue, runlog
@@ -273,7 +273,7 @@ def run_alchemy(
     )
     argv += ["--pdb-redo-root", root]
     argv += [
-        "--confidence-reference-dir",
+        "--score-reference-dir",
         str(reference_dir)
         if reference_dir is not None
         else os.path.join(str(tmp_root or output_dir), "absent-reference"),
@@ -439,15 +439,15 @@ def test_single_entry_run_writes_documented_outputs(
 
     # No frozen reference is installed, so classifications are emitted without
     # empirical component rankings.
-    assert "confidence_scores_all.csv" in written
-    assert "confidence_inputs_all.csv" not in written
-    assert "no frozen confidence reference is installed" in result.text
-    confidence_rows = read_rows(output_dir, "confidence_scores_all.csv")
-    assert read_header(output_dir, "confidence_scores_all.csv") == CONFIDENCE_COLUMNS
+    assert "scores_all.csv" in written
+    assert "score_inputs_all.csv" not in written
+    assert "no frozen score reference is installed" in result.text
+    score_rows = read_rows(output_dir, "scores_all.csv")
+    assert read_header(output_dir, "scores_all.csv") == SCORE_COLUMNS
     assert all(
-        row["alchemy_level"] in {"PASS", "REVIEW", "SUSPECT"} for row in confidence_rows
+        row["alchemy_level"] in {"PASS", "REVIEW", "SUSPECT"} for row in score_rows
     )
-    assert all(row["alchemy_score"] == "" for row in confidence_rows)
+    assert all(row["alchemy_score"] == "" for row in score_rows)
 
     assert [name for name in written if name.startswith(".alchemy-")] == []
 
@@ -467,7 +467,7 @@ def test_single_entry_run_writes_documented_outputs(
         DENSITY_CONTEXT_COLUMNS
     )
     assert read_header(output_dir, "review_queue_all.csv") == [
-        *CONFIDENCE_COLUMNS,
+        *SCORE_COLUMNS,
         *review_queue.REVIEW_CONTEXT_COLUMNS,
     ]
 
@@ -1344,9 +1344,7 @@ def test_workers_below_one_is_rejected_before_any_work(
     assert not os.path.exists(output_dir)
 
 
-CONFIDENCE_COLUMNS = list(confidence_score.CONFIDENCE_INPUT_COLUMNS) + list(
-    confidence_score.ANALYSIS_COLUMNS
-)
+SCORE_COLUMNS = list(score.SCORE_INPUT_COLUMNS) + list(score.ANALYSIS_COLUMNS)
 
 
 @_requires_entry_data
@@ -1355,7 +1353,7 @@ CONFIDENCE_COLUMNS = list(confidence_score.CONFIDENCE_INPUT_COLUMNS) + list(
 def test_installed_reference_scores_every_selected_site_against_the_database(
     tmp_path: Path, entry_cache: str, ccp4_env: dict[str, str], batch: Batch
 ) -> None:
-    """``--confidence-reference-dir`` makes a run emit its confidence scores.
+    """``--score-reference-dir`` makes a run emit its scores.
 
     Such runs load the reference once, derive each new site's compact inputs
     while its normal result is still in memory, and never generate empirical
@@ -1373,14 +1371,14 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     assert scored_run.result.exit_code == 0, scored_run.result.text
 
     written = set(os.listdir(str(output_dir)))
-    assert "confidence_scores_all.csv" in written
+    assert "scores_all.csv" in written
     # Streaming compact inputs and publishing a reference belong to database runs.
-    assert "confidence_inputs_all.csv" not in written
-    assert "confidence_reference" not in written
-    assert read_header(output_dir, "confidence_scores_all.csv") == (CONFIDENCE_COLUMNS)
+    assert "score_inputs_all.csv" not in written
+    assert "score_reference" not in written
+    assert read_header(output_dir, "scores_all.csv") == (SCORE_COLUMNS)
 
-    rows = read_rows(output_dir, "confidence_scores_all.csv")
-    # One row per selected metal site: the complete_confidence_site_count
+    rows = read_rows(output_dir, "scores_all.csv")
+    # One row per selected metal site: the complete_score_site_count
     # guarantee.
     for pdb_id, manifest_row in scored_run.manifest.items():
         assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
@@ -1414,13 +1412,13 @@ def test_installed_reference_scores_every_selected_site_against_the_database(
     assert zinc["alchemy_level"] == "PASS"
 
     assert (
-        f"13 confidence rows compared with database cohort {cohort_size}"
+        f"13 score rows compared with database cohort {cohort_size}"
         in scored_run.result.stdout
     )
     log_text = read_text(log_paths(output_dir)[0])
-    assert "confidence_mode: reference" in log_text
+    assert "score_mode: reference" in log_text
     # Check the rendered report label rather than its internal key.
-    assert "Confidence status: scored_against_reference" in log_text
+    assert "Scoring status: scored_against_reference" in log_text
 
 
 @_requires_entry_data
@@ -1458,19 +1456,19 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
 
     written = set(os.listdir(str(output_dir)))
     assert {
-        "confidence_inputs_all.csv",
-        "confidence_scores_all.csv",
-        "confidence_reference",
+        "score_inputs_all.csv",
+        "scores_all.csv",
+        "score_reference",
     } <= written
-    assert read_header(output_dir, "confidence_inputs_all.csv") == list(
-        confidence_score.CONFIDENCE_INPUT_COLUMNS
+    assert read_header(output_dir, "score_inputs_all.csv") == list(
+        score.SCORE_INPUT_COLUMNS
     )
-    assert read_header(output_dir, "confidence_scores_all.csv") == (CONFIDENCE_COLUMNS)
+    assert read_header(output_dir, "scores_all.csv") == (SCORE_COLUMNS)
 
-    reference_dir = os.path.join(str(output_dir), "confidence_reference")
+    reference_dir = os.path.join(str(output_dir), "score_reference")
     manifest = manifest_by_id(output_dir)
-    streamed_inputs = read_rows(output_dir, "confidence_inputs_all.csv")
-    rows = read_rows(output_dir, "confidence_scores_all.csv")
+    streamed_inputs = read_rows(output_dir, "score_inputs_all.csv")
+    rows = read_rows(output_dir, "scores_all.csv")
 
     # Every selected metal site reaches both files exactly once.
     assert (
@@ -1483,7 +1481,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
         assert len(rows_for(rows, pdb_id)) == int(manifest_row["n_metals"]), pdb_id
     # Scoring adds columns to the streamed inputs; it does not re-derive them.
     for streamed, scored in zip(streamed_inputs, rows, strict=False):
-        for column in confidence_score.CONFIDENCE_INPUT_COLUMNS:
+        for column in score.SCORE_INPUT_COLUMNS:
             assert scored[column] == streamed[column], column
 
     metadata = oracle.reference_metadata(reference_dir)
@@ -1501,13 +1499,13 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
     assert sum(geometry_scores) / len(geometry_scores) == approx(50.0)
 
     assert (
-        f"13 confidence rows (13 scored; reference cohort 13) -> "
-        f"{os.path.join(str(output_dir), 'confidence_scores_all.csv')}" in result.stdout
+        f"13 score rows (13 scored; reference cohort 13) -> "
+        f"{os.path.join(str(output_dir), 'scores_all.csv')}" in result.stdout
     )
     log_text = read_text(log_paths(output_dir)[0])
-    assert "confidence_mode: database" in log_text
+    assert "score_mode: database" in log_text
     # Check the rendered report label.
-    assert "Confidence status: finalized" in log_text
+    assert "Scoring status: finalized" in log_text
 
     # The published reference is directly reusable by a later scored run.
     reused = tmp_path / "reused"
@@ -1523,7 +1521,7 @@ def test_uncapped_database_run_finalizes_and_publishes_its_own_reference(
         tmp_root=tmp_path / "reused-tmp",
     )
     assert second.exit_code == 0, second.text
-    reused_rows = read_rows(reused, "confidence_scores_all.csv")
+    reused_rows = read_rows(reused, "scores_all.csv")
     assert len(reused_rows) == 2
     assert oracle.assert_policy_was_applied(reused_rows, reference_dir) == 2
     assert [row["alchemy_score"] for row in reused_rows] == [
@@ -1565,7 +1563,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(
         tmp_root=tmp_path,
     )
     assert first.exit_code == 0, first.text
-    scores_path = os.path.join(str(output_dir), "confidence_scores_all.csv")
+    scores_path = os.path.join(str(output_dir), "scores_all.csv")
     original = Path(scores_path).read_bytes()
 
     same = run_alchemy(
@@ -1597,7 +1595,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(
     )
     assert mismatched.exit_code == 1
     assert "Traceback" not in mismatched.text
-    assert "Cannot resume confidence output" in mismatched.text
+    assert "Cannot resume score output" in mismatched.text
     assert "different database reference" in mismatched.text
     # Refused before anything was rewritten.
     assert Path(scores_path).read_bytes() == original
@@ -1616,7 +1614,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(
         tmp_root=tmp_path / "unscored-tmp",
     )
     assert seed.exit_code == 0, seed.text
-    assert os.path.exists(os.path.join(str(unscored), "confidence_scores_all.csv"))
+    assert os.path.exists(os.path.join(str(unscored), "scores_all.csv"))
     upgraded = run_alchemy(
         unscored,
         "--id",
@@ -1630,7 +1628,7 @@ def test_resume_refuses_to_mix_two_database_snapshots(
         tmp_root=tmp_path / "unscored-tmp",
     )
     assert upgraded.exit_code == 1
-    assert "Cannot resume confidence output" in upgraded.text
+    assert "Cannot resume score output" in upgraded.text
     assert "blank reference or cohort identifier" in upgraded.text
 
 
@@ -1653,9 +1651,7 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
 ) -> None:
     """Verify invalid policy or distribution identity aborts reference loading."""
     reference_dir = oracle.frozen_reference(tmp_path / "installed")
-    metadata_path = os.path.join(
-        reference_dir, confidence_score.REFERENCE_METADATA_FILE
-    )
+    metadata_path = os.path.join(reference_dir, score.REFERENCE_METADATA_FILE)
     if damage == "thresholds":
         metadata = oracle.reference_metadata(reference_dir)
         thresholds = metadata.get("geometry_thresholds")
@@ -1665,7 +1661,7 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
             json.dump(metadata, handle)
     else:
         distribution_path = os.path.join(
-            reference_dir, confidence_score.REFERENCE_DISTRIBUTION_FILE
+            reference_dir, score.REFERENCE_DISTRIBUTION_FILE
         )
         cohorts = oracle.frozen_cohort(reference_dir)
         with open(distribution_path, "w", newline="", encoding="utf-8") as handle:
@@ -1695,11 +1691,9 @@ def test_an_incompatible_reference_stops_the_run_instead_of_scoring(
     )
     assert result.exit_code == 1
     assert "Traceback" not in result.text
-    assert "Invalid confidence reference" in result.text
+    assert "Invalid score reference" in result.text
     assert message in result.text
 
     assert not os.path.exists(os.path.join(str(output_dir), "manifest.csv"))
-    assert not os.path.exists(
-        os.path.join(str(output_dir), "confidence_scores_all.csv")
-    )
+    assert not os.path.exists(os.path.join(str(output_dir), "scores_all.csv"))
     assert len(log_paths(output_dir)) == 1

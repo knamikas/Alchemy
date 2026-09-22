@@ -10,7 +10,7 @@ from typing import Literal
 
 import pytest
 
-import confidence_score
+import score
 from coordination import schema as coordination_schema
 from driver import resume, writers
 from driver.layout import OutputLayout
@@ -238,28 +238,26 @@ def test_bond_headers_are_ignored_when_the_bond_stage_is_disabled(
     resume.validate_resume_schemas(layout, bonds_enabled=False)
 
 
-def test_confidence_output_requires_its_columns(
+def test_score_output_requires_its_columns(
     layout: OutputLayout, tmp_path: Path
 ) -> None:
-    """A confidence path without its schema cannot be validated at all."""
-    with pytest.raises(ValueError, match="confidence columns are required"):
+    """A score path without its schema cannot be validated at all."""
+    with pytest.raises(ValueError, match="score columns are required"):
         resume.validate_resume_schemas(
             layout,
-            confidence_path=str(tmp_path / "confidence.csv"),
-            confidence_columns=None,
+            score_path=str(tmp_path / "score.csv"),
+            score_columns=None,
         )
 
 
-def test_an_incompatible_confidence_header_is_refused(
+def test_an_incompatible_score_header_is_refused(
     layout: OutputLayout, tmp_path: Path
 ) -> None:
-    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-    path = _write_header(tmp_path / "confidence.csv", columns[:-1])
+    columns = list(score.SCORE_INPUT_COLUMNS)
+    path = _write_header(tmp_path / "score.csv", columns[:-1])
 
     with pytest.raises(ValueError, match="incompatible schema"):
-        resume.validate_resume_schemas(
-            layout, confidence_path=path, confidence_columns=columns
-        )
+        resume.validate_resume_schemas(layout, score_path=path, score_columns=columns)
 
 
 @pytest.mark.parametrize("target", ["stats", "bonds", "candidates"])
@@ -359,37 +357,33 @@ def test_manifest_bond_stage_counts_must_match_rows(
         resume.validate_resume_schemas(layout)
 
 
-def test_confidence_count_must_match_every_terminal_metal(
+def test_score_count_must_match_every_terminal_metal(
     layout: OutputLayout, tmp_path: Path
 ) -> None:
-    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-    path = _write_header(tmp_path / "confidence.csv", columns)
+    columns = list(score.SCORE_INPUT_COLUMNS)
+    path = _write_header(tmp_path / "score.csv", columns)
     _append_terminal_manifest(layout, n_metals=1)
     _append_selected_stats(layout)
 
-    with pytest.raises(ValueError, match=r"n_metals=1.*confidence.csv has 0 row"):
-        resume.validate_resume_schemas(
-            layout, confidence_path=path, confidence_columns=columns
-        )
+    with pytest.raises(ValueError, match=r"n_metals=1.*score.csv has 0 row"):
+        resume.validate_resume_schemas(layout, score_path=path, score_columns=columns)
 
     _append_csv_row(path, columns, pdbID="1abc")
-    resume.validate_resume_schemas(
-        layout, confidence_path=path, confidence_columns=columns
-    )
+    resume.validate_resume_schemas(layout, score_path=path, score_columns=columns)
 
 
 @pytest.mark.parametrize("outputs_present", [False, True])
 @pytest.mark.parametrize("scored", [False, True])
-def test_density_only_entries_can_resume_without_bond_or_confidence_rows(
+def test_density_only_entries_can_resume_without_bond_or_score_rows(
     layout: OutputLayout,
     tmp_path: Path,
     outputs_present: bool,
     scored: bool,
 ) -> None:
-    columns: list[str] = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
+    columns: list[str] = list(score.SCORE_INPUT_COLUMNS)
     if scored:
-        columns.extend(confidence_score.ANALYSIS_COLUMNS)
-    path = _write_header(tmp_path / "confidence.csv", columns)
+        columns.extend(score.ANALYSIS_COLUMNS)
+    path = _write_header(tmp_path / "score.csv", columns)
     _append_terminal_manifest(layout, n_metals=1, n_bonds="", n_candidates="")
     _append_selected_stats(layout)
     if not outputs_present:
@@ -400,35 +394,29 @@ def test_density_only_entries_can_resume_without_bond_or_confidence_rows(
         ):
             os.unlink(output)
 
-    resume.validate_resume_schemas(
-        layout, confidence_path=path, confidence_columns=columns
-    )
+    resume.validate_resume_schemas(layout, score_path=path, score_columns=columns)
     assert resume.load_done(layout.manifest, bonds_required=True) == set()
 
 
-@pytest.mark.parametrize("confidence_present", [False, True])
-def test_density_only_entry_does_not_hide_missing_completed_confidence(
-    layout: OutputLayout, tmp_path: Path, confidence_present: bool
+@pytest.mark.parametrize("score_present", [False, True])
+def test_density_only_entry_does_not_hide_missing_completed_score(
+    layout: OutputLayout, tmp_path: Path, score_present: bool
 ) -> None:
-    columns = list(confidence_score.CONFIDENCE_INPUT_COLUMNS)
-    path = str(tmp_path / "confidence.csv")
-    if confidence_present:
+    columns = list(score.SCORE_INPUT_COLUMNS)
+    path = str(tmp_path / "score.csv")
+    if score_present:
         _write_header(Path(path), columns)
     _append_terminal_manifest(layout, n_metals=1, n_bonds="", n_candidates="")
     _append_selected_stats(layout)
     _append_terminal_manifest(layout, pdb_id="2def", n_metals=1)
     _append_selected_stats(layout, pdb_id="2def")
 
-    with pytest.raises(ValueError, match="confidence.csv"):
-        resume.validate_resume_schemas(
-            layout, confidence_path=path, confidence_columns=columns
-        )
+    with pytest.raises(ValueError, match="score.csv"):
+        resume.validate_resume_schemas(layout, score_path=path, score_columns=columns)
 
     _write_header(Path(path), columns)
     _append_csv_row(path, columns, pdbID="2def")
-    resume.validate_resume_schemas(
-        layout, confidence_path=path, confidence_columns=columns
-    )
+    resume.validate_resume_schemas(layout, score_path=path, score_columns=columns)
 
 
 def test_density_only_entry_still_requires_its_selected_stats(

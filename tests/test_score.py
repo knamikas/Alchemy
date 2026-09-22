@@ -1,4 +1,4 @@
-"""Behavioral tests for the final three-level confidence method."""
+"""Behavioral tests for the final three-level scoring method."""
 
 from __future__ import annotations
 
@@ -11,24 +11,24 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import confidence_oracle as oracle
 import helpers
 import pytest
+import score_oracle as oracle
 from helpers import approx
 
 import analysis_config
-import confidence_score as cs
 import reference_data
-from confidence_score import cli as cs_cli, schema as confidence_schema
+import score as cs
 from coordination.schema import STATS_EXTRA_COLUMNS
 from output_rows import MetalStatsRow
+from score import cli as cs_cli, schema as score_schema
 
 
 def test_bundled_reference_matches_its_pinned_checksums() -> None:
-    directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
+    directory = Path(helpers.SRC_DIR) / "score" / "score_reference"
     expected = {
         "component_distributions.csv": "bf472c735d2f89fd95d2f7ddd5f2aefdd2102f3f62402e082ea9bb0ce775236a",
-        "metadata.json": "19eefd13035384b0e1865f5c6a59615a3cc1fbf06fe2a21085017ee1d2165654",
+        "metadata.json": "c24eb2869813a1dc998621ffe6c9a6e7fd98982738e6eaa92ece1c291ebcf074",
     }
     for filename, digest in expected.items():
         assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == digest
@@ -41,9 +41,9 @@ def test_bundled_reference_loads_under_runtime_verification() -> None:
     distribution value and count, so this proves the bundled distributions,
     metadata, and current code agree, not only that the checksums match.
     """
-    directory = Path(helpers.SRC_DIR) / "confidence_score" / "confidence_reference"
+    directory = Path(helpers.SRC_DIR) / "score" / "score_reference"
     reference = cs.load_reference(str(directory))
-    assert reference.reference_id == "alchemy-confidence-e79e6467783a2d513e45"
+    assert reference.reference_id == "alchemy-score-bdb549a394158719db73"
     assert reference.metadata["cohort_id"] == "alchemy-cohort-2e97cf013eefa9d8e0b4"
     assert reference.metadata["input_row_count"] == 330978
     assert reference.metadata["input_entry_count"] == 76954
@@ -155,7 +155,7 @@ def _bond_row(
 
 
 def _input_row(**overrides: str) -> dict[str, str]:
-    row: dict[str, str] = dict.fromkeys(cs.CONFIDENCE_INPUT_COLUMNS, "")
+    row: dict[str, str] = dict.fromkeys(cs.SCORE_INPUT_COLUMNS, "")
     row.update(SITE)
     row.update(
         {
@@ -179,8 +179,8 @@ def _input_row(**overrides: str) -> dict[str, str]:
             "geometry_bond_count": "2",
             "context_warning": "False",
             "context_warning_reasons": "",
-            "confidence_inputs_status": "complete",
-            "confidence_inputs_missing_reasons": "",
+            "score_inputs_status": "complete",
+            "score_inputs_missing_reasons": "",
         }
     )
     row.update(overrides)
@@ -190,7 +190,7 @@ def _input_row(**overrides: str) -> dict[str, str]:
 def _write_input_csv(
     path: Path,
     rows: Sequence[Mapping[str, str]],
-    columns: Sequence[str] = cs.CONFIDENCE_INPUT_COLUMNS,
+    columns: Sequence[str] = cs.SCORE_INPUT_COLUMNS,
 ) -> str:
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(columns))
@@ -203,14 +203,14 @@ def _read_csv_rows(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
     return helpers.read_csv(path)[0], helpers.read_csv_dicts(path)
 
 
-def _reference() -> cs.ConfidenceReference:
-    return cs.ConfidenceReference(
+def _reference() -> cs.ScoreReference:
+    return cs.ScoreReference(
         density_values=[1.0, 3.0, 6.0],
         density_counts=[1, 2, 1],
         geometry_values=[0.5, 1.0, 2.0],
         geometry_counts=[1, 2, 1],
         metadata={
-            "reference_id": "alchemy-confidence-test",
+            "reference_id": "alchemy-score-test",
             "cohort_id": "alchemy-cohort-test",
             "input_row_count": 4,
         },
@@ -318,13 +318,13 @@ def test_verdict_row_uses_only_analysis_column_names() -> None:
     assert row["alchemy_score"] == approx(87.5)
 
 
-def test_empirical_support_is_reverse_average_rank_with_ties() -> None:
+def test_empirical_score_is_reverse_average_rank_with_ties() -> None:
     reference = _reference()
-    assert reference.density.support_score(0.0) == approx(100.0)
-    assert reference.density.support_score(1.0) == approx(87.5)
-    assert reference.density.support_score(3.0) == approx(50.0)
-    assert reference.density.support_score(4.0) == approx(25.0)
-    assert reference.density.support_score(7.0) == approx(0.0)
+    assert reference.density.score(0.0) == approx(100.0)
+    assert reference.density.score(1.0) == approx(87.5)
+    assert reference.density.score(3.0) == approx(50.0)
+    assert reference.density.score(4.0) == approx(25.0)
+    assert reference.density.score(7.0) == approx(0.0)
 
 
 def test_reference_rounding_merges_counts_and_matches_new_measurements(
@@ -345,8 +345,8 @@ def test_reference_rounding_merges_counts_and_matches_new_measurements(
     assert reference.density_reference_size == reference.geometry_reference_size == 10
     verdict = cs.score_site(1.0002, 1.0003, reference)
     assert verdict.density_score == verdict.geometry_score == approx(75.0)
-    assert reference.geometry.support_score(1.0008) == approx(25.0)
-    assert math.isnan(reference.geometry.support_score(-0.00001))
+    assert reference.geometry.score(1.0008) == approx(25.0)
+    assert math.isnan(reference.geometry.score(-0.00001))
 
 
 @pytest.mark.parametrize(
@@ -380,7 +380,7 @@ def test_finalization_preserves_raw_metrics_while_grouping_reference_values(
     input_path = _write_input_csv(tmp_path / "inputs.csv", rows)
     output_path = tmp_path / "scores.csv"
     reference_dir = tmp_path / "reference"
-    cs.finalize_database_confidence(input_path, str(output_path), str(reference_dir))
+    cs.finalize_database_score(input_path, str(output_path), str(reference_dir))
     reference = cs.load_reference(str(reference_dir))
     assert reference.density.values == (3.0,)
     assert reference.geometry.values == (1.0,)
@@ -393,7 +393,7 @@ def test_finalization_preserves_raw_metrics_while_grouping_reference_values(
         assert result["density_score"] == result["geometry_score"] == "50"
 
 
-def test_rounding_near_density_saturation_does_not_trigger_zero_support(
+def test_rounding_near_density_saturation_does_not_trigger_zero_score(
     tmp_path: Path,
 ) -> None:
     reference = cs.write_reference(str(tmp_path), {99.9: 2}, {1.0: 2}, 2)
@@ -417,7 +417,7 @@ def test_reference_rounding_cannot_hide_invalid_observations(
     assert not (tmp_path / cs.REFERENCE_METADATA_FILE).exists()
 
 
-def test_overall_ranking_score_is_minimum_available_support() -> None:
+def test_overall_ranking_score_is_minimum_available_score() -> None:
     reference = _reference()
     both = cs.score_site(1.0, 0.5, reference)
     assert both.density_score == approx(87.5)
@@ -429,7 +429,7 @@ def test_overall_ranking_score_is_minimum_available_support() -> None:
     assert math.isnan(density_only.geometry_score)
 
 
-def test_edstats_saturation_receives_zero_density_support() -> None:
+def test_edstats_saturation_receives_zero_density_score() -> None:
     result = cs.score_site(99.9, math.nan, _reference())
     assert result.density_score == 0.0
     assert result.alchemy_score == 0.0
@@ -451,7 +451,7 @@ def test_classification_without_reference_keeps_levels_and_blanks_rankings() -> 
     assert scored["density_score"] == ""
     assert scored["geometry_score"] == ""
     assert scored["alchemy_score"] == ""
-    assert scored["confidence_reference_id"] == ""
+    assert scored["score_reference_id"] == ""
 
 
 def test_geometry_summary_uses_rms_of_every_finite_score_eligible_contact() -> None:
@@ -473,7 +473,7 @@ def test_geometry_summary_uses_rms_of_every_finite_score_eligible_contact() -> N
         ),
         _bond_row(zscore=None, neighbor="HOH", atom="O"),
     ]
-    prepared = cs.prepare_confidence_inputs([_stats_row()], bonds)[0]
+    prepared = cs.prepare_score_inputs([_stats_row()], bonds)[0]
 
     assert int(prepared["geometry_bond_count"]) == 2
     assert float(prepared["geometry_rms_zbond"]) == approx(math.sqrt(2.5))
@@ -492,7 +492,7 @@ def test_multiple_moderate_inferred_bonds_can_make_geometry_suspect() -> None:
         _bond_row(zscore=value, neighbor=f"L{i}", atom="O")
         for i, value in enumerate((2.1, -2.2, 2.3, -2.4))
     ]
-    prepared = cs.prepare_confidence_inputs([_stats_row(zdm=1.0)], bonds)[0]
+    prepared = cs.prepare_score_inputs([_stats_row(zdm=1.0)], bonds)[0]
     assert float(prepared["geometry_max_abs_zbond"]) < 3.0
     result = cs.classify_site(1.0, float(prepared["geometry_rms_zbond"]))
     assert result.geometry_level == "SUSPECT"
@@ -510,27 +510,27 @@ def test_severe_declared_contact_can_dominate_site_rms() -> None:
             coordination_status="declared",
         )
     )
-    prepared = cs.prepare_confidence_inputs([_stats_row(zdm=1.0)], bonds)[0]
+    prepared = cs.prepare_score_inputs([_stats_row(zdm=1.0)], bonds)[0]
     assert cs.geometry_level(float(prepared["geometry_rms_zbond"])) == "SUSPECT"
     assert prepared["worst_bond_source"] == "declared"
 
 
 def test_geometry_coverage_is_annotation_only() -> None:
-    complete = cs.prepare_confidence_inputs(
-        [_stats_row(zdm=1.0)], [_bond_row(zscore=2.1)]
-    )[0]
-    partial = cs.prepare_confidence_inputs(
+    complete = cs.prepare_score_inputs([_stats_row(zdm=1.0)], [_bond_row(zscore=2.1)])[
+        0
+    ]
+    partial = cs.prepare_score_inputs(
         [_stats_row(zdm=1.0)],
         [_bond_row(zscore=2.1), _bond_row(covered=False, zscore=None, neighbor="UNK")],
     )[0]
     assert float(complete["geometry_rms_zbond"]) == float(partial["geometry_rms_zbond"])
-    assert complete["confidence_inputs_status"] == "complete"
-    assert partial["confidence_inputs_status"] == "complete"
+    assert complete["score_inputs_status"] == "complete"
+    assert partial["score_inputs_status"] == "complete"
     assert float(partial["geometry_coverage"]) == approx(0.5)
 
 
 def test_preparation_retains_density_signs_and_saturation_flag() -> None:
-    prepared = cs.prepare_confidence_inputs(
+    prepared = cs.prepare_score_inputs(
         [_stats_row(zdm=-99.9, zd_neg=-99.9, zd_pos=0.0)], []
     )[0]
     assert prepared["rszd_abs"] == "99.9"
@@ -541,66 +541,64 @@ def test_preparation_retains_density_signs_and_saturation_flag() -> None:
 
 
 def test_missing_density_with_geometry_is_geometry_only() -> None:
-    prepared = cs.prepare_confidence_inputs(
-        [_stats_row(zdm=None)], [_bond_row(zscore=1.5)]
-    )[0]
+    prepared = cs.prepare_score_inputs([_stats_row(zdm=None)], [_bond_row(zscore=1.5)])[
+        0
+    ]
     assert prepared["rszd_abs"] == ""
-    assert prepared["confidence_inputs_status"] == "geometry_only"
+    assert prepared["score_inputs_status"] == "geometry_only"
     assert prepared["geometry_rms_zbond"] != ""
 
 
 def test_missing_geometry_with_density_is_density_only() -> None:
-    prepared = cs.prepare_confidence_inputs([_stats_row(zdm=4.0)], [])[0]
-    assert prepared["confidence_inputs_status"] == "density_only"
+    prepared = cs.prepare_score_inputs([_stats_row(zdm=4.0)], [])[0]
+    assert prepared["score_inputs_status"] == "density_only"
     assert prepared["geometry_rms_zbond"] == ""
-    assert "no_assigned_contacts" in prepared["confidence_inputs_missing_reasons"]
+    assert "no_assigned_contacts" in prepared["score_inputs_missing_reasons"]
 
 
 def test_orphan_bond_site_can_be_scored_as_geometry_only() -> None:
-    orphan = cs.prepare_confidence_inputs([], [_bond_row(zscore=2.5)])[0]
-    assert orphan["confidence_inputs_status"] == "geometry_only"
+    orphan = cs.prepare_score_inputs([], [_bond_row(zscore=2.5)])[0]
+    assert orphan["score_inputs_status"] == "geometry_only"
     assert orphan["rszd_abs"] == ""
     assert float(orphan["geometry_rms_zbond"]) == approx(2.5)
-    assert "density_row_unavailable" in orphan["confidence_inputs_missing_reasons"]
+    assert "density_row_unavailable" in orphan["score_inputs_missing_reasons"]
 
 
 def test_prepare_emits_one_row_per_selected_site_and_rejects_duplicates() -> None:
     unselected = _stats_row(
         pdb_id="2def", selected_metal_site_status="diagnostic_unmatched"
     )
-    assert len(cs.prepare_confidence_inputs([_stats_row(), unselected], [])) == 1
+    assert len(cs.prepare_score_inputs([_stats_row(), unselected], [])) == 1
     with pytest.raises(ValueError, match="duplicate site key"):
-        cs.prepare_confidence_inputs([_stats_row(), _stats_row()], [])
+        cs.prepare_score_inputs([_stats_row(), _stats_row()], [])
 
 
 def test_prepare_result_rows_match_mapping_preparation() -> None:
     mapping = _stats_row()
     values = [mapping.get(column, "") for column in STATS_COLUMNS[2:]]
     result = MetalStatsRow.from_output_fields("1abc", "metal", values)
-    expected = cs.prepare_confidence_inputs([mapping], [_bond_row()])
+    expected = cs.prepare_score_inputs([mapping], [_bond_row()])
     assert (
-        cs.prepare_result_confidence_inputs([result], [_bond_row()], STATS_COLUMNS)
+        cs.prepare_result_score_inputs([result], [_bond_row()], STATS_COLUMNS)
         == expected
     )
 
 
 def test_completion_retains_evidence_and_adds_unresolved_placeholders() -> None:
-    rows = cs.prepare_confidence_inputs([_stats_row()], [])
-    completed = cs.complete_confidence_site_count(
+    rows = cs.prepare_score_inputs([_stats_row()], [])
+    completed = cs.complete_score_site_count(
         rows, "1abc", 2, missing_reason="bond_stage_failure"
     )
-    assert completed[0]["confidence_inputs_status"] == "density_only"
-    assert "bond_stage_failure" in completed[0]["confidence_inputs_missing_reasons"]
-    assert completed[1]["confidence_inputs_status"] == "unscorable"
-    assert completed[1]["confidence_inputs_missing_reasons"].startswith(
-        "rszd_unavailable"
-    )
-    assert rows[0]["confidence_inputs_missing_reasons"] == "no_assigned_contacts"
+    assert completed[0]["score_inputs_status"] == "density_only"
+    assert "bond_stage_failure" in completed[0]["score_inputs_missing_reasons"]
+    assert completed[1]["score_inputs_status"] == "unscorable"
+    assert completed[1]["score_inputs_missing_reasons"].startswith("rszd_unavailable")
+    assert rows[0]["score_inputs_missing_reasons"] == "no_assigned_contacts"
 
 
 def test_completion_rejects_more_rows_than_selected_sites() -> None:
     with pytest.raises(ValueError, match="exceed selected metal count"):
-        cs.complete_confidence_site_count([_input_row(), _input_row()], "1abc", 1)
+        cs.complete_score_site_count([_input_row(), _input_row()], "1abc", 1)
 
 
 def test_reference_round_trip_preserves_both_distributions(tmp_path: Path) -> None:
@@ -693,28 +691,28 @@ def test_finalize_builds_independent_component_cohorts_and_scores_every_basis(
             metal_site_id="3ccc:1",
             rszd_abs="",
             geometry_rms_zbond="3",
-            confidence_inputs_status="geometry_only",
+            score_inputs_status="geometry_only",
         ),
         _input_row(
             pdbID="4ddd",
             metal_site_id="4ddd:1",
             rszd_abs="9",
             geometry_rms_zbond="",
-            confidence_inputs_status="density_only",
+            score_inputs_status="density_only",
         ),
         _input_row(
             pdbID="5eee",
             metal_site_id="5eee:1",
             rszd_abs="",
             geometry_rms_zbond="",
-            confidence_inputs_status="unscorable",
+            score_inputs_status="unscorable",
         ),
     ]
     input_path = _write_input_csv(tmp_path / "inputs.csv", rows)
     output_path = tmp_path / "scores.csv"
     reference_dir = tmp_path / "reference"
 
-    total, scored, cohort = cs.finalize_database_confidence(
+    total, scored, cohort = cs.finalize_database_score(
         input_path, str(output_path), str(reference_dir)
     )
     assert (total, scored, cohort) == (5, 4, 5)
@@ -723,7 +721,7 @@ def test_finalize_builds_independent_component_cohorts_and_scores_every_basis(
     assert reference.geometry_reference_size == 3
 
     columns, output = _read_csv_rows(output_path)
-    assert columns == [*cs.CONFIDENCE_INPUT_COLUMNS, *cs.ANALYSIS_COLUMNS]
+    assert columns == [*cs.SCORE_INPUT_COLUMNS, *cs.ANALYSIS_COLUMNS]
     by_id = {row["pdbID"]: row for row in output}
     assert by_id["1aaa"]["alchemy_level"] == "PASS"
     assert by_id["2bbb"]["alchemy_level"] == "SUSPECT"
@@ -779,9 +777,7 @@ def test_score_file_requires_new_evidence_columns_and_cleans_partial_output(
     tmp_path: Path,
 ) -> None:
     incomplete_columns = [
-        column
-        for column in cs.CONFIDENCE_INPUT_COLUMNS
-        if column != "geometry_rms_zbond"
+        column for column in cs.SCORE_INPUT_COLUMNS if column != "geometry_rms_zbond"
     ]
     complete = _input_row()
     incomplete = {column: complete[column] for column in incomplete_columns}
@@ -796,7 +792,7 @@ def test_score_file_requires_new_evidence_columns_and_cleans_partial_output(
 
 
 def test_score_file_rejects_already_scored_input(tmp_path: Path) -> None:
-    columns = [*cs.CONFIDENCE_INPUT_COLUMNS, *cs.ANALYSIS_COLUMNS]
+    columns = [*cs.SCORE_INPUT_COLUMNS, *cs.ANALYSIS_COLUMNS]
     row = {**_input_row(), **dict.fromkeys(cs.ANALYSIS_COLUMNS, "")}
     input_path = _write_input_csv(tmp_path / "scored.csv", [row], columns)
     with pytest.raises(ValueError, match="already contains analysis"):
@@ -840,7 +836,7 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
             }
         )
     reference_dir = tmp_path / "reference"
-    cs.finalize_database_confidence(
+    cs.finalize_database_score(
         str(input_path),
         str(tmp_path / "scores.csv"),
         str(reference_dir),
@@ -850,7 +846,7 @@ def test_finalize_records_manifest_and_input_provenance(tmp_path: Path) -> None:
         (reference_dir / cs.REFERENCE_METADATA_FILE).read_text(encoding="utf-8")
     )
     input_hash = hashlib.sha256(input_path.read_bytes()).hexdigest()
-    assert metadata["confidence_inputs_sha256"] == input_hash
+    assert metadata["score_inputs_sha256"] == input_hash
     assert metadata["cohort_id"] == "alchemy-cohort-" + input_hash[:20]
     assert metadata["input_entry_count"] == 1
     assert metadata["scorable_entry_count"] == 1
@@ -874,12 +870,12 @@ def test_finalize_removes_stale_completion_marker_on_failure(tmp_path: Path) -> 
             _input_row(
                 rszd_abs="",
                 geometry_rms_zbond="",
-                confidence_inputs_status="unscorable",
+                score_inputs_status="unscorable",
             )
         ],
     )
     with pytest.raises(ValueError, match="no evidence"):
-        cs.finalize_database_confidence(
+        cs.finalize_database_score(
             input_path, str(tmp_path / "scores.csv"), str(reference_dir)
         )
     assert not marker.exists()
@@ -893,20 +889,19 @@ def test_validate_scored_reference_checks_reference_and_cohort_ids(
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["confidence_reference_id", "confidence_cohort_id"],
+            fieldnames=["score_reference_id", "score_cohort_id"],
         )
         writer.writeheader()
         writer.writerow(
             {
-                "confidence_reference_id": reference.reference_id,
-                "confidence_cohort_id": reference.cohort_id,
+                "score_reference_id": reference.reference_id,
+                "score_cohort_id": reference.cohort_id,
             }
         )
     cs.validate_scored_reference(str(path), reference)
 
     path.write_text(
-        "confidence_reference_id,confidence_cohort_id\n"
-        "alchemy-confidence-other,alchemy-cohort-test\n",
+        "score_reference_id,score_cohort_id\nalchemy-score-other,alchemy-cohort-test\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="different database reference"):
@@ -965,9 +960,9 @@ def test_reference_metadata_field_vocabulary_covers_emitted_metadata(
 
 
 def test_all_input_and_analysis_columns_are_unique() -> None:
-    assert len(cs.CONFIDENCE_INPUT_COLUMNS) == len(set(cs.CONFIDENCE_INPUT_COLUMNS))
+    assert len(cs.SCORE_INPUT_COLUMNS) == len(set(cs.SCORE_INPUT_COLUMNS))
     assert len(cs.ANALYSIS_COLUMNS) == len(set(cs.ANALYSIS_COLUMNS))
-    assert not set(cs.CONFIDENCE_INPUT_COLUMNS) & set(cs.ANALYSIS_COLUMNS)
+    assert not set(cs.SCORE_INPUT_COLUMNS) & set(cs.ANALYSIS_COLUMNS)
 
 
 def test_scientific_boolean_columns_are_canonicalized_in_csv(tmp_path: Path) -> None:
@@ -1009,22 +1004,20 @@ def test_distribution_file_has_no_nonfinite_values(tmp_path: Path) -> None:
     assert "inf" not in text.lower()
 
 
-def test_confidence_input_status_vocabulary_matches_preparation() -> None:
+def test_score_input_status_vocabulary_matches_preparation() -> None:
     rows = [
-        cs.prepare_confidence_inputs([_stats_row()], [_bond_row()])[0],
-        cs.prepare_confidence_inputs([_stats_row()], [])[0],
-        cs.prepare_confidence_inputs([_stats_row(zdm=None)], [_bond_row()])[0],
-        cs.prepare_confidence_inputs([_stats_row(zdm=None)], [])[0],
+        cs.prepare_score_inputs([_stats_row()], [_bond_row()])[0],
+        cs.prepare_score_inputs([_stats_row()], [])[0],
+        cs.prepare_score_inputs([_stats_row(zdm=None)], [_bond_row()])[0],
+        cs.prepare_score_inputs([_stats_row(zdm=None)], [])[0],
     ]
-    assert {row["confidence_inputs_status"] for row in rows} == (
-        cs.CONFIDENCE_INPUT_STATUSES
-    )
+    assert {row["score_inputs_status"] for row in rows} == (cs.SCORE_INPUT_STATUSES)
 
 
 def test_database_reference_cohort_id_uses_exact_input_hash(tmp_path: Path) -> None:
     input_path = Path(_write_input_csv(tmp_path / "inputs.csv", [_input_row()]))
     reference_dir = tmp_path / "reference"
-    cs.finalize_database_confidence(
+    cs.finalize_database_score(
         str(input_path), str(tmp_path / "scores.csv"), str(reference_dir)
     )
     reference = cs.load_reference(str(reference_dir))
@@ -1049,7 +1042,7 @@ def test_score_output_never_serializes_nan_or_infinity() -> None:
             _input_row(
                 rszd_abs="",
                 geometry_rms_zbond="",
-                confidence_inputs_status="unscorable",
+                score_inputs_status="unscorable",
             )
         ],
         _reference(),
@@ -1110,7 +1103,7 @@ def test_manifest_provenance_counts_no_metal_and_limited_entries(
         [_input_row(pdbID="2bbb", metal_site_id="2bbb:1")],
     )
     reference_dir = tmp_path / "reference"
-    cs.finalize_database_confidence(
+    cs.finalize_database_score(
         input_path,
         str(tmp_path / "scores.csv"),
         str(reference_dir),
@@ -1127,7 +1120,7 @@ def test_manifest_provenance_counts_no_metal_and_limited_entries(
 def test_reference_distribution_constructor_rejects_bad_shapes() -> None:
     metadata = {"input_row_count": 1}
     with pytest.raises(ValueError, match="differ in size"):
-        cs.ConfidenceReference(
+        cs.ScoreReference(
             density_values=[1.0],
             density_counts=[],
             geometry_values=[],
@@ -1135,7 +1128,7 @@ def test_reference_distribution_constructor_rejects_bad_shapes() -> None:
             metadata=metadata,
         )
     with pytest.raises(ValueError, match="not increasing"):
-        cs.ConfidenceReference(
+        cs.ScoreReference(
             density_values=[2.0, 1.0],
             density_counts=[1, 1],
             geometry_values=[],
@@ -1143,7 +1136,7 @@ def test_reference_distribution_constructor_rejects_bad_shapes() -> None:
             metadata=metadata,
         )
     with pytest.raises(ValueError, match="invalid count"):
-        cs.ConfidenceReference(
+        cs.ScoreReference(
             density_values=[1.0],
             density_counts=[0],
             geometry_values=[],
@@ -1172,7 +1165,7 @@ def test_main_reports_invalid_reference(
         )
         == 1
     )
-    assert "confidence score failed" in capsys.readouterr().err
+    assert "score failed" in capsys.readouterr().err
 
 
 def test_no_old_weighted_formula_fields_remain_in_public_schema() -> None:
@@ -1186,7 +1179,7 @@ def test_no_old_weighted_formula_fields_remain_in_public_schema() -> None:
         "confidence_percentile",
     }
     assert not old & set(cs.ANALYSIS_COLUMNS)
-    assert "geometry_rms_zbond" in cs.CONFIDENCE_INPUT_COLUMNS
+    assert "geometry_rms_zbond" in cs.SCORE_INPUT_COLUMNS
     assert "alchemy_level" in cs.ANALYSIS_COLUMNS
 
 
@@ -1199,7 +1192,7 @@ def test_cli_output_paths_are_created(tmp_path: Path) -> None:
 
 
 def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> None:
-    """The raw thresholds ``confidence_oracle`` re-implements are Alchemy's own.
+    """The raw thresholds ``score_oracle`` re-implements are Alchemy's own.
 
     ``assert_policy_was_applied`` is an independent oracle only while the two
     copies agree.
@@ -1218,7 +1211,7 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> Non
     assert published["geometry_thresholds"] == {"review": 1.0, "suspect": 2.0}
     assert published["geometry_statistic"] == "rms_finite_score_eligible_zbond"
     assert published["overall_rule"] == "any_suspect_or_review_plus_review"
-    assert published["support_score_method"] == ("reverse_average_rank_empirical_cdf")
+    assert published["score_method"] == ("reverse_average_rank_empirical_cdf")
 
 
 @pytest.mark.parametrize(
@@ -1244,11 +1237,11 @@ def test_the_scoring_policy_under_test_is_the_shipped_one(tmp_path: Path) -> Non
 def test_format_decimal_strips_only_fractional_zeros(
     value: float, decimal_places: int, expected: str
 ) -> None:
-    assert confidence_schema.format_decimal(value, decimal_places) == expected
+    assert score_schema.format_decimal(value, decimal_places) == expected
 
 
 def test_format_decimal_defaults_to_the_published_score_precision() -> None:
-    assert confidence_schema.format_decimal(0.1234567) == "0.123457"
+    assert score_schema.format_decimal(0.1234567) == "0.123457"
 
 
 @pytest.mark.parametrize(
@@ -1274,20 +1267,20 @@ def test_format_decimal_defaults_to_the_published_score_precision() -> None:
 def test_parse_csv_bool_reads_only_the_written_spellings(
     value: object, expected: bool
 ) -> None:
-    assert confidence_schema.parse_csv_bool(value) is expected
+    assert score_schema.parse_csv_bool(value) is expected
 
 
 def test_canonical_values_round_to_their_serialized_precision() -> None:
-    assert cs.canonical_support_score(1.23456749) == float("1.234567")
-    assert cs.canonical_support_score(100.0) == 100.0
+    assert cs.canonical_score(1.23456749) == float("1.234567")
+    assert cs.canonical_score(100.0) == 100.0
     assert cs.canonical_metric(0.1234567890123456) == float("0.123456789012")
     assert cs.canonical_metric(3.0) == 3.0
 
 
 def test_canonical_values_pass_non_finite_input_through() -> None:
-    assert math.isnan(cs.canonical_support_score(math.nan))
+    assert math.isnan(cs.canonical_score(math.nan))
     assert math.isnan(cs.canonical_metric(math.nan))
-    assert cs.canonical_support_score(math.inf) == math.inf
+    assert cs.canonical_score(math.inf) == math.inf
     assert cs.canonical_metric(-math.inf) == -math.inf
 
 
@@ -1307,10 +1300,10 @@ def test_canonical_values_pass_non_finite_input_through() -> None:
         ("density_saturated", "maybe", "maybe"),
     ],
 )
-def test_confidence_csv_value_only_lowercases_boolean_columns(
+def test_score_csv_value_only_lowercases_boolean_columns(
     column: str, value: object, expected: object
 ) -> None:
-    assert confidence_schema.confidence_csv_value(column, value) == expected
+    assert score_schema.score_csv_value(column, value) == expected
 
 
 def test_site_key_uses_the_modern_scheme_when_the_site_id_is_present() -> None:
@@ -1320,7 +1313,7 @@ def test_site_key_uses_the_modern_scheme_when_the_site_id_is_present() -> None:
         "metal_model_index": "1",
         "metal_atom_index": "7",
     }
-    assert confidence_schema.site_key(row) == ("1abc", "site-1")
+    assert score_schema.site_key(row) == ("1abc", "site-1")
 
 
 def test_site_key_falls_back_to_the_legacy_index_columns() -> None:
@@ -1332,16 +1325,16 @@ def test_site_key_falls_back_to_the_legacy_index_columns() -> None:
         "metal_residue_index": "3",
         "metal_atom_index": "4",
     }
-    assert confidence_schema.site_key(row) == ("1abc", "1", "2", "3", "4")
+    assert score_schema.site_key(row) == ("1abc", "1", "2", "3", "4")
 
 
 def test_site_key_of_a_row_without_identity_columns_is_all_blank() -> None:
-    assert confidence_schema.site_key({}) == ("", "", "", "", "")
+    assert score_schema.site_key({}) == ("", "", "", "", "")
 
 
 def test_require_columns_names_every_missing_column() -> None:
     with pytest.raises(ValueError) as excinfo:
-        confidence_schema.require_columns(
+        score_schema.require_columns(
             ["pdbID", "rszd"], ["pdbID", "rszd_abs", "geometry_rms_zbond"], "test table"
         )
     message = str(excinfo.value)
@@ -1350,12 +1343,12 @@ def test_require_columns_names_every_missing_column() -> None:
 
 
 def test_require_columns_accepts_a_complete_header() -> None:
-    confidence_schema.require_columns(["pdbID", "rszd"], ["pdbID"], "t")
+    score_schema.require_columns(["pdbID", "rszd"], ["pdbID"], "t")
 
 
 def test_require_columns_treats_a_missing_header_as_missing_everything() -> None:
     with pytest.raises(ValueError, match="t is missing required columns: pdbID"):
-        confidence_schema.require_columns(None, ["pdbID"], "t")
+        score_schema.require_columns(None, ["pdbID"], "t")
 
 
 @pytest.mark.parametrize(
@@ -1372,27 +1365,25 @@ def test_require_columns_treats_a_missing_header_as_missing_everything() -> None
 def test_is_density_saturated_covers_the_edstats_ceiling(
     rszd_abs: float, expected: bool
 ) -> None:
-    assert confidence_schema.is_density_saturated(rszd_abs) is expected
+    assert score_schema.is_density_saturated(rszd_abs) is expected
 
 
 def test_prepared_input_status_matches_the_scored_evidence_basis() -> None:
     """Preparation and scoring must agree on which evidence a site has.
 
-    ``confidence_inputs_status`` is decided by ``prepare_confidence_inputs``
+    ``score_inputs_status`` is decided by ``prepare_score_inputs``
     from the raw metrics, while ``evidence_basis`` is decided independently by
     ``classify_site`` from the parsed ones; a drift between the two modules
     would silently publish rows whose status contradicts their verdict.
     """
     prepared = [
-        cs.prepare_confidence_inputs([_stats_row()], [_bond_row()])[0],
-        cs.prepare_confidence_inputs([_stats_row()], [])[0],
-        cs.prepare_confidence_inputs([_stats_row(zdm=None)], [_bond_row()])[0],
-        cs.prepare_confidence_inputs([_stats_row(zdm=None)], [])[0],
+        cs.prepare_score_inputs([_stats_row()], [_bond_row()])[0],
+        cs.prepare_score_inputs([_stats_row()], [])[0],
+        cs.prepare_score_inputs([_stats_row(zdm=None)], [_bond_row()])[0],
+        cs.prepare_score_inputs([_stats_row(zdm=None)], [])[0],
     ]
     scored = cs.classify_without_reference(prepared)
-    assert {
-        row["confidence_inputs_status"]: row["evidence_basis"] for row in scored
-    } == {
+    assert {row["score_inputs_status"]: row["evidence_basis"] for row in scored} == {
         "complete": "density_and_geometry",
         "density_only": "density_only",
         "geometry_only": "geometry_only",
@@ -1406,12 +1397,12 @@ def test_reference_rejects_a_non_count_input_row_count(
 ) -> None:
     """Bad metadata must fail with ValueError, the contract callers catch.
 
-    ``cli.py`` and ``driver/confidence.py`` guard reference loading with
+    ``cli.py`` and ``driver/scoring.py`` guard reference loading with
     ``(OSError, ValueError)``, so a ``null`` or list in ``metadata.json`` must
     not escape as a ``TypeError``.
     """
     with pytest.raises(ValueError, match="input row count is invalid"):
-        cs.ConfidenceReference(
+        cs.ScoreReference(
             density_values=[1.0],
             density_counts=[1],
             geometry_values=[],
@@ -1423,7 +1414,7 @@ def test_reference_rejects_a_non_count_input_row_count(
 @pytest.mark.parametrize("field", ["reference_id", "cohort_id"])
 def test_reference_rejects_a_non_string_identifier(field: str) -> None:
     with pytest.raises(ValueError, match="is invalid"):
-        cs.ConfidenceReference(
+        cs.ScoreReference(
             density_values=[1.0],
             density_counts=[1],
             geometry_values=[],
@@ -1434,7 +1425,7 @@ def test_reference_rejects_a_non_string_identifier(field: str) -> None:
 
 def test_reference_metadata_is_a_read_only_copy() -> None:
     fields: dict[str, object] = {"input_row_count": 4, "cohort_id": "c"}
-    reference = cs.ConfidenceReference(
+    reference = cs.ScoreReference(
         density_values=[1.0],
         density_counts=[1],
         geometry_values=[],
@@ -1457,14 +1448,14 @@ def test_reference_reports_its_distinct_value_counts() -> None:
 
 
 def test_empirical_distribution_from_counts_sorts_and_validates() -> None:
-    from confidence_score.scoring import EmpiricalDistribution
+    from score.scoring import EmpiricalDistribution
 
     distribution = EmpiricalDistribution.from_counts({3.0: 1, 1.0: 2, 6.0: 1})
     assert distribution.values == (1.0, 3.0, 6.0)
     assert distribution.counts == (2, 1, 1)
     assert distribution.size == 4
     assert distribution.distinct_value_count == 3
-    assert distribution.support_score(1.0) == approx(75.0)
+    assert distribution.score(1.0) == approx(75.0)
 
     with pytest.raises(ValueError, match="invalid value"):
         EmpiricalDistribution.from_counts({-1.0: 1})
@@ -1474,10 +1465,10 @@ def test_empirical_distribution_from_counts_sorts_and_validates() -> None:
 
 def test_reference_from_counts_matches_the_direct_constructor() -> None:
     metadata = {"input_row_count": 4}
-    from_counts = cs.ConfidenceReference.from_counts(
+    from_counts = cs.ScoreReference.from_counts(
         {3.0: 2, 1.0: 1, 6.0: 1}, {1.0: 2, 0.5: 1, 2.0: 1}, metadata
     )
-    direct = cs.ConfidenceReference(
+    direct = cs.ScoreReference(
         density_values=[1.0, 3.0, 6.0],
         density_counts=[1, 2, 1],
         geometry_values=[0.5, 1.0, 2.0],
@@ -1599,8 +1590,8 @@ def test_main_reports_an_oversized_csv_field_without_a_traceback(
     row = _input_row(context_warning_reasons="x" * (csv.field_size_limit() + 1))
     input_path = tmp_path / "inputs.csv"
     with open(input_path, "w", newline="", encoding="utf-8") as handle:
-        handle.write(",".join(cs.CONFIDENCE_INPUT_COLUMNS) + "\n")
-        handle.write(",".join(row[column] for column in cs.CONFIDENCE_INPUT_COLUMNS))
+        handle.write(",".join(cs.SCORE_INPUT_COLUMNS) + "\n")
+        handle.write(",".join(row[column] for column in cs.SCORE_INPUT_COLUMNS))
         handle.write("\n")
     assert (
         cs_cli.main(
@@ -1616,7 +1607,7 @@ def test_main_reports_an_oversized_csv_field_without_a_traceback(
         )
         == 1
     )
-    assert "confidence finalize failed:" in capsys.readouterr().err
+    assert "finalize failed:" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -1639,7 +1630,7 @@ def test_an_orphan_site_classifies_its_category_from_the_bond_row_alone(
     site that is neither a catalog cofactor nor an ion therefore publishes a
     blank category, which is retained as published.
     """
-    orphan = cs.prepare_confidence_inputs(
+    orphan = cs.prepare_score_inputs(
         [], [_bond_row(metal_resname=resname, parent_type=parent_type)]
     )[0]
     assert orphan["category"] == expected
@@ -1679,13 +1670,13 @@ def test_geometry_contact_basis_describes_the_scored_contacts(
         )
         for index, (declared, status) in enumerate(bonds)
     ]
-    prepared = cs.prepare_confidence_inputs([_stats_row()], rows)[0]
+    prepared = cs.prepare_score_inputs([_stats_row()], rows)[0]
     assert prepared["geometry_contact_basis"] == expected
 
 
 def test_an_unscored_contact_leaves_no_basis_even_when_declared() -> None:
     """A declared contact with no z-score contributes no provenance."""
-    prepared = cs.prepare_confidence_inputs(
+    prepared = cs.prepare_score_inputs(
         [_stats_row()],
         [
             _bond_row(
@@ -1700,38 +1691,35 @@ def test_an_unscored_contact_leaves_no_basis_even_when_declared() -> None:
 
 def test_missing_reason_vocabulary_keeps_its_published_spelling() -> None:
     """Pin the pipe-joined reasons, which mix three vocabularies."""
-    no_contacts = cs.prepare_confidence_inputs([_stats_row(zdm=None)], [])[0]
+    no_contacts = cs.prepare_score_inputs([_stats_row(zdm=None)], [])[0]
     assert (
-        no_contacts["confidence_inputs_missing_reasons"]
+        no_contacts["score_inputs_missing_reasons"]
         == "rszd_unavailable|no_assigned_contacts"
     )
-    invalid = cs.prepare_confidence_inputs(
+    invalid = cs.prepare_score_inputs(
         [_stats_row(metal_coordinates_valid="false")],
         [_bond_row(covered=False)],
     )[0]
     assert (
-        invalid["confidence_inputs_missing_reasons"]
+        invalid["score_inputs_missing_reasons"]
         == "non_finite_metal_coordinates|no_geometry_reference|partial_geometry_coverage"
     )
-    partial = cs.prepare_confidence_inputs(
+    partial = cs.prepare_score_inputs(
         [_stats_row()], [_bond_row(), _bond_row(contact_id="1abc:c2", covered=False)]
     )[0]
-    assert partial["confidence_inputs_missing_reasons"] == "partial_geometry_coverage"
-    unscored = cs.prepare_confidence_inputs([_stats_row()], [_bond_row(zscore=None)])[0]
+    assert partial["score_inputs_missing_reasons"] == "partial_geometry_coverage"
+    unscored = cs.prepare_score_inputs([_stats_row()], [_bond_row(zscore=None)])[0]
+    assert unscored["score_inputs_missing_reasons"] == "zbond_unavailable_for_reference"
+    orphan = cs.prepare_score_inputs([], [_bond_row()])[0]
     assert (
-        unscored["confidence_inputs_missing_reasons"]
-        == "zbond_unavailable_for_reference"
-    )
-    orphan = cs.prepare_confidence_inputs([], [_bond_row()])[0]
-    assert (
-        orphan["confidence_inputs_missing_reasons"]
+        orphan["score_inputs_missing_reasons"]
         == "rszd_unavailable|density_row_unavailable"
     )
 
 
 def test_a_placeholder_keeps_its_published_reasons_and_sentinel_index() -> None:
     """The placeholder's reasons, warning, and sentinel index are published."""
-    completed = cs.complete_confidence_site_count([], "1abc", 2, "bond_stage_failure")
+    completed = cs.complete_score_site_count([], "1abc", 2, "bond_stage_failure")
     assert [row["metal_atom_index"] for row in completed] == [
         "unresolved-1",
         "unresolved-2",
@@ -1740,36 +1728,34 @@ def test_a_placeholder_keeps_its_published_reasons_and_sentinel_index() -> None:
         assert row["context_warning"] is True
         assert row["context_warning_reasons"] == "site_evidence_unavailable"
         assert row["selected_metal_site_status"] == "selected_site_unresolved"
-        assert row["confidence_inputs_missing_reasons"] == (
+        assert row["score_inputs_missing_reasons"] == (
             "rszd_unavailable|site_identity_unavailable|"
             "site_evidence_unavailable|bond_stage_failure"
         )
-    assert set(completed[0]) == set(cs.CONFIDENCE_INPUT_COLUMNS)
+    assert set(completed[0]) == set(cs.SCORE_INPUT_COLUMNS)
     assert (
-        cs.complete_confidence_site_count([], "1abc", 1)[0][
-            "confidence_inputs_missing_reasons"
-        ]
+        cs.complete_score_site_count([], "1abc", 1)[0]["score_inputs_missing_reasons"]
         == "rszd_unavailable|site_identity_unavailable|site_evidence_unavailable"
     )
 
 
 def test_every_prepared_row_carries_the_full_schema_in_order() -> None:
     """All three producers build rows through one builder, so order is fixed."""
-    rows = cs.prepare_confidence_inputs([_stats_row()], [_bond_row()])
-    rows += cs.prepare_confidence_inputs([], [_bond_row(pdb_id="9zzz")])
-    rows = cs.complete_confidence_site_count(rows, "1abc", len(rows) + 1)
+    rows = cs.prepare_score_inputs([_stats_row()], [_bond_row()])
+    rows += cs.prepare_score_inputs([], [_bond_row(pdb_id="9zzz")])
+    rows = cs.complete_score_site_count(rows, "1abc", len(rows) + 1)
     for row in rows:
-        assert list(row) == list(cs.CONFIDENCE_INPUT_COLUMNS)
+        assert list(row) == list(cs.SCORE_INPUT_COLUMNS)
 
 
 def test_a_saturated_site_is_flagged_through_the_shared_predicate() -> None:
-    """``density_saturated`` and the zero-support rule share one predicate."""
-    saturated = cs.prepare_confidence_inputs([_stats_row(zdm=99.9)], [])[0]
+    """``density_saturated`` and the zero-score rule share one predicate."""
+    saturated = cs.prepare_score_inputs([_stats_row(zdm=99.9)], [])[0]
     assert saturated["density_saturated"] is True
-    assert confidence_schema.is_density_saturated(99.9)
-    ordinary = cs.prepare_confidence_inputs([_stats_row(zdm=-3.0)], [])[0]
+    assert score_schema.is_density_saturated(99.9)
+    ordinary = cs.prepare_score_inputs([_stats_row(zdm=-3.0)], [])[0]
     assert ordinary["density_saturated"] is False
-    negative_saturated = cs.prepare_confidence_inputs([_stats_row(zdm=-99.9)], [])[0]
+    negative_saturated = cs.prepare_score_inputs([_stats_row(zdm=-99.9)], [])[0]
     assert negative_saturated["density_saturated"] is True
 
 
@@ -1857,7 +1843,7 @@ def test_load_reference_errors_name_the_file_row_and_offending_cell(
 
 def test_finalize_requires_the_entry_identifier_column(tmp_path: Path) -> None:
     """Without ``pdbID`` the entry counts would silently be recorded as zero."""
-    columns = [column for column in cs.CONFIDENCE_INPUT_COLUMNS if column != "pdbID"]
+    columns = [column for column in cs.SCORE_INPUT_COLUMNS if column != "pdbID"]
     row = _input_row()
     input_path = _write_input_csv(
         tmp_path / "inputs.csv",
@@ -1865,7 +1851,7 @@ def test_finalize_requires_the_entry_identifier_column(tmp_path: Path) -> None:
         columns,
     )
     with pytest.raises(ValueError, match="missing required columns: pdbID"):
-        cs.finalize_database_confidence(
+        cs.finalize_database_score(
             input_path, str(tmp_path / "scores.csv"), str(tmp_path / "reference")
         )
 
@@ -1880,11 +1866,11 @@ def test_finalize_reports_its_counts_by_name(tmp_path: Path) -> None:
                 metal_site_id="2bbb:1",
                 rszd_abs="",
                 geometry_rms_zbond="",
-                confidence_inputs_status="unscorable",
+                score_inputs_status="unscorable",
             ),
         ],
     )
-    finalized = cs.finalize_database_confidence(
+    finalized = cs.finalize_database_score(
         input_path, str(tmp_path / "scores.csv"), str(tmp_path / "reference")
     )
     assert (finalized.rows, finalized.scored_rows, finalized.cohort_size) == (2, 1, 2)
@@ -1901,7 +1887,7 @@ def test_finalize_rejects_an_incompatible_manifest_before_reading_the_input(
         writer.writeheader()
         writer.writerow({"pdbID": "1abc", "analysis_config_id": "incompatible"})
     with pytest.raises(ValueError, match="source manifest analysis configuration"):
-        cs.finalize_database_confidence(
+        cs.finalize_database_score(
             str(tmp_path / "absent-inputs.csv"),
             str(tmp_path / "scores.csv"),
             str(tmp_path / "reference"),
@@ -1920,7 +1906,7 @@ def test_finalized_metadata_keeps_the_code_owned_analysis_config_id(
         writer.writeheader()
         writer.writerow({"pdbID": "1abc", "analysis_config_id": ANALYSIS_CONFIG_ID})
     reference_dir = tmp_path / "reference"
-    cs.finalize_database_confidence(
+    cs.finalize_database_score(
         input_path,
         str(tmp_path / "scores.csv"),
         str(reference_dir),
@@ -1944,5 +1930,5 @@ def test_the_two_in_memory_entry_points_share_one_scoring_path() -> None:
     assert ranked["verdict_reason"] == unranked["verdict_reason"]
     assert ranked["alchemy_score"] != ""
     assert unranked["alchemy_score"] == ""
-    assert unranked["confidence_reference_id"] == ""
+    assert unranked["score_reference_id"] == ""
     assert row == _input_row(), "scoring must not edit the row it was handed"

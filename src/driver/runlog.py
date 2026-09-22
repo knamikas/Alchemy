@@ -237,17 +237,17 @@ class RunSummary:
     crystallization_summary_rows_written: int | None = None
     density_context_path: str | None = None
     density_context_rows_written: int | None = None
-    #: Rows this run streamed to its confidence output, whichever file that is.
-    confidence_rows_written: int | None = None
+    #: Rows this run streamed to its score output, whichever file that is.
+    score_rows_written: int | None = None
     #: Rows in the finalized scores file, which a resumed database run
     #: inherits from earlier runs; only database finalization records it.
-    confidence_rows: int | None = None
-    confidence_scores_path: str | None = None
-    confidence_reference_path: str | None = None
-    confidence_status: str | None = None
-    confidence_scored_rows: int | None = None
-    confidence_reference_cohort: int | None = None
-    confidence_recoverable_entries: int | None = None
+    score_rows: int | None = None
+    scores_path: str | None = None
+    score_reference_path: str | None = None
+    score_status: str | None = None
+    scored_rows: int | None = None
+    score_reference_cohort: int | None = None
+    score_recoverable_entries: int | None = None
     review_queue_path: str | None = None
     review_queue_rows: int | None = None
     resume_staging_recovery_dir: str | None = None
@@ -282,27 +282,27 @@ class RunSummary:
             "crystallization_summary_rows_written",
             "density_context_path",
             "density_context_rows_written",
-            "confidence_rows_written",
-            "confidence_rows",
-            "confidence_scores_path",
-            "confidence_reference_path",
-            "confidence_status",
-            "confidence_scored_rows",
-            "confidence_reference_cohort",
+            "score_rows_written",
+            "score_rows",
+            "scores_path",
+            "score_reference_path",
+            "score_status",
+            "scored_rows",
+            "score_reference_cohort",
             "review_queue_path",
             "review_queue_rows",
         }
     )
 
-    def confidence_row_count(self) -> int | None:
-        """The row count shown for the confidence scores file.
+    def score_row_count(self) -> int | None:
+        """The row count shown for the scores file.
 
         The finalized total is authoritative when a database run recorded
         one; otherwise the stream count is all there is.
         """
-        if self.confidence_rows is not None:
-            return self.confidence_rows
-        return self.confidence_rows_written
+        if self.score_rows is not None:
+            return self.score_rows
+        return self.score_rows_written
 
     def completion_details(self) -> dict[str, object]:
         """Recorded fields that have no labelled line of their own, by name."""
@@ -312,18 +312,18 @@ class RunSummary:
             if field.name not in self.RENDERED_BY_NAME
             and (value := getattr(self, field.name)) is not None
         }
-        # A confidence count belongs beside its scores file; without one it
+        # A score row count belongs beside its scores file; without one it
         # is reported here so the rows are still accounted for.
-        row_count = self.confidence_row_count()
-        if self.confidence_scores_path is None and row_count is not None:
-            details["confidence_rows"] = row_count
+        row_count = self.score_row_count()
+        if self.scores_path is None and row_count is not None:
+            details["score_rows"] = row_count
         # A finalized total that differs from this run's stream count means a
         # resumed run inherited rows; show both so the difference is visible.
-        if self.confidence_rows is not None and self.confidence_rows_written not in (
+        if self.score_rows is not None and self.score_rows_written not in (
             None,
-            self.confidence_rows,
+            self.score_rows,
         ):
-            details["confidence_rows_written"] = self.confidence_rows_written
+            details["score_rows_written"] = self.score_rows_written
         return details
 
 
@@ -606,7 +606,7 @@ class RunLog:
         return lines
 
     def _output_lines(self) -> list[str]:
-        """Output files with row counts, confidence status, and leftover details."""
+        """Output files with row counts, scoring status, and leftover details."""
         summary = self.summary
         lines: list[str] = []
         lines.extend(["", "Output files", "------------"])
@@ -635,11 +635,11 @@ class RunLog:
                 summary.density_context_rows_written,
             ),
             (
-                "Confidence scores",
-                summary.confidence_scores_path,
-                summary.confidence_row_count(),
+                "Scores",
+                summary.scores_path,
+                summary.score_row_count(),
             ),
-            ("Confidence reference", summary.confidence_reference_path, None),
+            ("Score reference", summary.score_reference_path, None),
             ("Review queue", summary.review_queue_path, summary.review_queue_rows),
         )
         any_output = False
@@ -651,16 +651,13 @@ class RunLog:
             lines.append(f"{label}: {self._clean(path)}{count_text}")
         if not any_output:
             lines.append("No output files were completed.")
-        if summary.confidence_status is not None:
-            lines.append(f"Confidence status: {self._clean(summary.confidence_status)}")
-        if summary.confidence_scored_rows is not None:
+        if summary.score_status is not None:
+            lines.append(f"Scoring status: {self._clean(summary.score_status)}")
+        if summary.scored_rows is not None:
+            lines.append(f"Rows scored: {self._clean(summary.scored_rows)}")
+        if summary.score_reference_cohort is not None:
             lines.append(
-                f"Confidence rows scored: {self._clean(summary.confidence_scored_rows)}"
-            )
-        if summary.confidence_reference_cohort is not None:
-            lines.append(
-                "Confidence reference cohort: "
-                f"{self._clean(summary.confidence_reference_cohort)}"
+                f"Score reference cohort: {self._clean(summary.score_reference_cohort)}"
             )
         details = summary.completion_details()
         if details:

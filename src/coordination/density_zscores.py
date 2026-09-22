@@ -36,7 +36,7 @@ class DensityZScoreIndex:
         """Index the extracted EDSTATS rows of one entry against their header.
 
         Raise when two rows claim the same metal site, matching the duplicate
-        check the confidence stage applies to the same table.
+        check the scoring stage applies to the same table.
         """
         by_site: dict[AtomKey, Sequence[CsvValue]] = {}
         by_author: dict[tuple[str, str, str], Sequence[CsvValue]] = {}

@@ -12,7 +12,7 @@ import pytest
 from helpers import entry_result, run_config, worker_config
 
 import analysis_config
-from driver import confidence as driver_confidence, environment, pool, resume
+from driver import environment, pool, resume, scoring as driver_scoring
 from driver.writers import (
     MANIFEST_COLUMNS,
     MANIFEST_FIELDS,
@@ -307,7 +307,7 @@ class TestWriteEntry:
 
     def test_the_manifest_row_is_written_after_every_data_row(self) -> None:
         writers = self._RecordingWriters()
-        plan = driver_confidence.ConfidencePlan()
+        plan = driver_scoring.ScorePlan()
         pool.write_entry(
             entry_result(),
             plan,
@@ -333,7 +333,7 @@ class TestWriteEntry:
         staging = cast(resume.ResumeStaging, SimpleNamespace(replacement_ids=set()))
         pool.write_entry(
             entry_result(),
-            driver_confidence.ConfidencePlan(),
+            driver_scoring.ScorePlan(),
             cast(OutputWriters, self._RecordingWriters()),
             staging,
             ({}, {}),

@@ -19,10 +19,10 @@ from helpers import simple_metal_site
 def test_src_modules_import() -> None:
     """Verify source modules import and expose their entry points."""
     import codes
-    import confidence_score
     import density_analysis
     import edstats_statistics
     import metal_elements
+    import score
     import structure_analysis
     from coordination import (
         contact_record,
@@ -58,7 +58,7 @@ def test_src_modules_import() -> None:
     assert callable(donor_chemistry.neighbor_class)
     assert callable(density_analysis.run_density_analysis)
     assert callable(edstats_statistics.extract_metal_statistics)
-    assert callable(confidence_score.score_site)
+    assert callable(score.score_site)
     assert set(ccp4_setup.REQUIRED_CCP4_TOOLS) == {
         "mtzfix",
         "fft",

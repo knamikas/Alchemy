@@ -7,8 +7,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Self
 
-from codes import ConfidenceLevel, EvidenceBasis, VerdictReason
-from confidence_score.schema import (
+from codes import EvidenceBasis, ScoreLevel, VerdictReason
+from score.schema import (
     DENSITY_REVIEW_THRESHOLD,
     DENSITY_SUSPECT_THRESHOLD,
     GEOMETRY_REVIEW_THRESHOLD,
@@ -18,7 +18,7 @@ from confidence_score.schema import (
 )
 
 
-def component_level(value: float, review: float, suspect: float) -> ConfidenceLevel:
+def component_level(value: float, review: float, suspect: float) -> ScoreLevel:
     """Classify one measurement at the final raw thresholds.
 
     The input is not validated: a non-finite or negative value is read as "not
@@ -29,22 +29,22 @@ def component_level(value: float, review: float, suspect: float) -> ConfidenceLe
     can only mean the value did not come from a measurement.
     """
     if not math.isfinite(value) or value < 0:
-        return ConfidenceLevel.INCOMPLETE
+        return ScoreLevel.INCOMPLETE
     if value < review:
-        return ConfidenceLevel.PASS
+        return ScoreLevel.PASS
     if value < suspect:
-        return ConfidenceLevel.REVIEW
-    return ConfidenceLevel.SUSPECT
+        return ScoreLevel.REVIEW
+    return ScoreLevel.SUSPECT
 
 
-def density_level(rszd_abs: float) -> ConfidenceLevel:
+def density_level(rszd_abs: float) -> ScoreLevel:
     """Classify an absolute RSZD value at the density thresholds."""
     return component_level(
         rszd_abs, DENSITY_REVIEW_THRESHOLD, DENSITY_SUSPECT_THRESHOLD
     )
 
 
-def geometry_level(geometry_rms_zbond: float) -> ConfidenceLevel:
+def geometry_level(geometry_rms_zbond: float) -> ScoreLevel:
     """Classify an RMS bond Z score at the geometry thresholds."""
     return component_level(
         geometry_rms_zbond, GEOMETRY_REVIEW_THRESHOLD, GEOMETRY_SUSPECT_THRESHOLD
@@ -53,7 +53,7 @@ def geometry_level(geometry_rms_zbond: float) -> ConfidenceLevel:
 
 @dataclass(frozen=True, slots=True)
 class SiteVerdict:
-    """One site's authoritative levels and, when ranked, its support scores.
+    """One site's authoritative levels and, when ranked, its scores.
 
     The levels and the decision route always come from the raw thresholds.
     The three scores are reverse average-rank percentages against a frozen
@@ -65,9 +65,9 @@ class SiteVerdict:
     a missing value.
     """
 
-    density_level: ConfidenceLevel
-    geometry_level: ConfidenceLevel
-    alchemy_level: ConfidenceLevel
+    density_level: ScoreLevel
+    geometry_level: ScoreLevel
+    alchemy_level: ScoreLevel
     evidence_basis: EvidenceBasis
     verdict_reason: VerdictReason
     density_score: float = math.nan
@@ -103,33 +103,33 @@ def classify_site(rszd_abs: float, geometry_rms_zbond: float) -> SiteVerdict:
     """Apply the non-compensatory final decision matrix to one site."""
     density = density_level(rszd_abs)
     geometry = geometry_level(geometry_rms_zbond)
-    density_available = density != ConfidenceLevel.INCOMPLETE
-    geometry_available = geometry != ConfidenceLevel.INCOMPLETE
+    density_available = density != ScoreLevel.INCOMPLETE
+    geometry_available = geometry != ScoreLevel.INCOMPLETE
     evidence_basis = _evidence_basis(density_available, geometry_available)
 
     if not density_available and not geometry_available:
-        overall = ConfidenceLevel.INCOMPLETE
+        overall = ScoreLevel.INCOMPLETE
         reason = VerdictReason.NO_ASSESSABLE_EVIDENCE
-    elif density == ConfidenceLevel.SUSPECT and geometry == ConfidenceLevel.SUSPECT:
-        overall = ConfidenceLevel.SUSPECT
+    elif density == ScoreLevel.SUSPECT and geometry == ScoreLevel.SUSPECT:
+        overall = ScoreLevel.SUSPECT
         reason = VerdictReason.DENSITY_AND_GEOMETRY_SUSPECT
-    elif density == ConfidenceLevel.SUSPECT:
-        overall = ConfidenceLevel.SUSPECT
+    elif density == ScoreLevel.SUSPECT:
+        overall = ScoreLevel.SUSPECT
         reason = VerdictReason.DENSITY_SUSPECT
-    elif geometry == ConfidenceLevel.SUSPECT:
-        overall = ConfidenceLevel.SUSPECT
+    elif geometry == ScoreLevel.SUSPECT:
+        overall = ScoreLevel.SUSPECT
         reason = VerdictReason.GEOMETRY_SUSPECT
-    elif density == ConfidenceLevel.REVIEW and geometry == ConfidenceLevel.REVIEW:
-        overall = ConfidenceLevel.SUSPECT
+    elif density == ScoreLevel.REVIEW and geometry == ScoreLevel.REVIEW:
+        overall = ScoreLevel.SUSPECT
         reason = VerdictReason.REVIEW_PLUS_REVIEW
-    elif density == ConfidenceLevel.REVIEW:
-        overall = ConfidenceLevel.REVIEW
+    elif density == ScoreLevel.REVIEW:
+        overall = ScoreLevel.REVIEW
         reason = VerdictReason.DENSITY_REVIEW
-    elif geometry == ConfidenceLevel.REVIEW:
-        overall = ConfidenceLevel.REVIEW
+    elif geometry == ScoreLevel.REVIEW:
+        overall = ScoreLevel.REVIEW
         reason = VerdictReason.GEOMETRY_REVIEW
     else:
-        overall = ConfidenceLevel.PASS
+        overall = ScoreLevel.PASS
         reason = VerdictReason.ALL_AVAILABLE_COMPONENTS_PASS
 
     return SiteVerdict(
@@ -156,19 +156,18 @@ class EmpiricalDistribution:
         """Validate one component's values and counts, then freeze their totals."""
         if len(values) != len(counts):
             raise ValueError(
-                "confidence reference values and counts differ in size: "
+                "score reference values and counts differ in size: "
                 f"{len(values)} values, {len(counts)} counts"
             )
         for index, value in enumerate(values):
             if not math.isfinite(value) or value < 0:
                 raise ValueError(
-                    "confidence reference contains an invalid value: "
-                    f"index {index}, {value}"
+                    f"score reference contains an invalid value: index {index}, {value}"
                 )
         for index, count in enumerate(counts):
             if isinstance(count, bool) or count < 1:
                 raise ValueError(
-                    "confidence reference contains an invalid count: "
+                    "score reference contains an invalid count: "
                     f"index {index}, {count!r}"
                 )
         for index, (left, right) in enumerate(
@@ -176,7 +175,7 @@ class EmpiricalDistribution:
         ):
             if right <= left:
                 raise ValueError(
-                    "confidence reference values are not increasing: "
+                    "score reference values are not increasing: "
                     f"index {index}, {left} then {right}"
                 )
         self.values = tuple(values)
@@ -200,8 +199,8 @@ class EmpiricalDistribution:
         """Return how many distinct values the distribution holds."""
         return len(self.values)
 
-    def support_score(self, value: float) -> float:
-        """Return reverse average-rank ECDF support; ordinary values rank high.
+    def score(self, value: float) -> float:
+        """Return reverse average-rank ECDF score; ordinary values rank high.
 
         Round the query to the reference's three-decimal precision before
         matching ties. Classification uses the original metric separately.
@@ -221,7 +220,7 @@ class EmpiricalDistribution:
         return 100.0 * (self.size - below - 0.5 * equal) / self.size
 
 
-class ConfidenceReference:
+class ScoreReference:
     """Frozen empirical density and RMS-Zbond distributions.
 
     "Frozen" means read-only rather than immutable by construction: every
@@ -259,7 +258,7 @@ class ConfidenceReference:
         self.density = EmpiricalDistribution(density_values, density_counts)
         self.geometry = EmpiricalDistribution(geometry_values, geometry_counts)
         if self.density.size == 0 and self.geometry.size == 0:
-            raise ValueError("confidence reference has no assessable evidence")
+            raise ValueError("score reference has no assessable evidence")
         fields = dict(metadata)
         cohort_size = fields.get("input_row_count", 0)
         if (
@@ -268,17 +267,15 @@ class ConfidenceReference:
             or cohort_size < 0
         ):
             raise ValueError(
-                f"confidence reference input row count is invalid: {cohort_size!r}"
+                f"score reference input row count is invalid: {cohort_size!r}"
             )
         reference_id = fields.get("reference_id", "")
         if not isinstance(reference_id, str):
-            raise ValueError(
-                f"confidence reference identifier is invalid: {reference_id!r}"
-            )
+            raise ValueError(f"score reference identifier is invalid: {reference_id!r}")
         cohort_id = fields.get("cohort_id", "")
         if not isinstance(cohort_id, str):
             raise ValueError(
-                f"confidence reference cohort identifier is invalid: {cohort_id!r}"
+                f"score reference cohort identifier is invalid: {cohort_id!r}"
             )
         self.metadata: Mapping[str, Any] = MappingProxyType(fields)
         self.reference_id: str = reference_id
@@ -324,27 +321,25 @@ class ConfidenceReference:
         return self.geometry.distinct_value_count
 
 
-def _density_support(reference: ConfidenceReference | None, rszd_abs: float) -> float:
-    """Rank one density metric, pinning a saturated measurement to zero support."""
+def _density_score(reference: ScoreReference | None, rszd_abs: float) -> float:
+    """Rank one density metric, pinning a saturated measurement to zero score."""
     if reference is None:
         return math.nan
     if is_density_saturated(rszd_abs):
         return 0.0
-    return reference.density.support_score(rszd_abs)
+    return reference.density.score(rszd_abs)
 
 
 def score_site(
     rszd_abs: float,
     geometry_rms_zbond: float,
-    reference: ConfidenceReference | None = None,
+    reference: ScoreReference | None = None,
 ) -> SiteVerdict:
     """Return authoritative levels plus secondary empirical ranking scores."""
     verdict = classify_site(rszd_abs, geometry_rms_zbond)
-    density_score = _density_support(reference, rszd_abs)
+    density_score = _density_score(reference, rszd_abs)
     geometry_score = (
-        math.nan
-        if reference is None
-        else reference.geometry.support_score(geometry_rms_zbond)
+        math.nan if reference is None else reference.geometry.score(geometry_rms_zbond)
     )
     available_scores = [
         score for score in (density_score, geometry_score) if math.isfinite(score)

@@ -145,4 +145,4 @@ class EntryResult:
     reason_codes: list[str] = field(default_factory=list[str])
     warning_codes: list[str] = field(default_factory=list[str])
     timings: dict[str, float] = field(default_factory=dict[str, float])
-    confidence_inputs_missing_reason: str = ""
+    score_inputs_missing_reason: str = ""
