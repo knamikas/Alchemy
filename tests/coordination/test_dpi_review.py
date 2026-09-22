@@ -195,7 +195,7 @@ def test_a_malformed_data_json_reports_missing_terms(
     data_json = tmp_path / "data.json"
     data_json.write_text(payload, encoding="utf-8")
 
-    assert dpi_module._read_pdb_redo_properties(str(data_json)) == {}
+    assert dpi_module._read_pdb_redo_properties(str(data_json)) == {}  # pyright: ignore[reportPrivateUsage]
 
     components = _components(
         load_structure("test", path), path, str(data_json), _absent_mtz(tmp_path)
@@ -265,12 +265,12 @@ def test_the_invalid_term_reason_is_empty_when_every_term_is_usable(
     """The reason helper is the single statement of what the formula needs."""
     context = load_structure("test", _metal_structure(tmp_path))
 
-    assert dpi_module._invalid_term_reason(context, 4096.0, 0.20, 1.0e6, 1.0) == ""
+    assert dpi_module._invalid_term_reason(context, 4096.0, 0.20, 1.0e6, 1.0) == ""  # pyright: ignore[reportPrivateUsage]
     assert (
-        dpi_module._invalid_term_reason(context, 4096.0, 0.20, 1.0e6, 0.0)
+        dpi_module._invalid_term_reason(context, 4096.0, 0.20, 1.0e6, 0.0)  # pyright: ignore[reportPrivateUsage]
         == ReasonCode.INVALID_DPI_ATOM_COUNT
     )
     assert (
-        dpi_module._invalid_term_reason(context, 4096.0, 0.20, 1.0e6, math.nan)
+        dpi_module._invalid_term_reason(context, 4096.0, 0.20, 1.0e6, math.nan)  # pyright: ignore[reportPrivateUsage]
         == ReasonCode.INVALID_DPI_ATOM_COUNT
     )

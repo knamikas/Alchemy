@@ -23,8 +23,8 @@ from coordination.schema import (
     CANDIDATE_COLUMNS,
     DENSITY_ROW_STATS_EXTRA_COLUMNS,
     STATS_EXTRA_COLUMNS,
-    _merge_row_fields,
-    _summary_supplied_columns,
+    _merge_row_fields,  # pyright: ignore[reportPrivateUsage]
+    _summary_supplied_columns,  # pyright: ignore[reportPrivateUsage]
     check_row_schema,
     contact_identifier,
     stats_extra_values,
@@ -39,7 +39,7 @@ from structure_analysis import (
 )
 
 
-class _PairRow(schema._CsvRow):
+class _PairRow(schema._CsvRow):  # pyright: ignore[reportPrivateUsage]
     """A two-column row used to exercise ``_CsvRow`` without a published schema."""
 
     columns: ClassVar[tuple[str, ...]] = ("left", "right")

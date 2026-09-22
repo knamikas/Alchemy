@@ -101,7 +101,7 @@ class RemarkLayout:
             raise ValueError(
                 f"{self.prefix!r} takes {len(self.fields)} fields, got {len(values)}"
             )
-        tokens = []
+        tokens: list[str] = []
         for name, value in zip(self.fields, values, strict=True):
             token = str(value)
             if name in self.placeholder_fields:

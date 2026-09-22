@@ -137,7 +137,7 @@ def test_invalid_cache_is_a_safe_offline_miss(
 ) -> None:
     cache_file = tmp_path / "metadata" / "ab" / "1abc.json"
     cache_file.parent.mkdir(parents=True)
-    payload = {
+    payload: dict[str, Any] = {
         "pdb_id": "1abc",
         "entry_available": True,
         "conditions": [],

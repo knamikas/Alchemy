@@ -212,7 +212,7 @@ def pytest_sessionfinish(
 
 
 @pytest.fixture(autouse=True)
-def _propagating_alchemy_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+def _propagating_alchemy_logger(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
     """Let ``alchemy`` log records reach ``caplog`` in every test.
 
     ``configure_driver_logging`` turns propagation off for the process, so any

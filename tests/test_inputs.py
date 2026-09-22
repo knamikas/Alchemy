@@ -67,6 +67,11 @@ def _resolution(mtz: str, data_json: str | None) -> float:
     return inputs.read_entry_metadata(mtz, data_json).data_reshi
 
 
+def _stub_cif_to_pdb(_cif: str, dst: str) -> str:
+    """Return the conversion path for tests that only exercise input selection."""
+    return dst
+
+
 @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzipped"])
 def test_an_entry_is_final_only_with_both_inputs(
     tmp_path: Path, compressed: bool
@@ -187,7 +192,7 @@ def test_an_unusable_plain_file_does_not_hide_its_gzipped_sibling(
         handle.write(gzip.compress(b"MTZ real"))
     work_dir = tmp_path / "work"
     work_dir.mkdir()
-    monkeypatch.setattr(inputs, "cif_to_pdb", lambda _cif, dst: dst)
+    monkeypatch.setattr(inputs, "cif_to_pdb", _stub_cif_to_pdb)
 
     assert inputs.has_final_files(entry_dir, "9myr")
     mtz = inputs.prepare_inputs("9myr", entry_dir, str(work_dir)).mtz
@@ -536,7 +541,7 @@ def test_manual_inputs_report_their_source_and_conversion(
     pdb.write_bytes(b"END\n")
     cif = tmp_path / "entry.cif"
     cif.write_bytes(b"data_entry\n")
-    monkeypatch.setattr(inputs, "cif_to_pdb", lambda _cif, dst: dst)
+    monkeypatch.setattr(inputs, "cif_to_pdb", _stub_cif_to_pdb)
 
     from_pdb = inputs.resolve_manual_inputs(
         "9myr", mtz_file=str(mtz), pdb_file=str(pdb)

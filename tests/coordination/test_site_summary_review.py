@@ -29,8 +29,8 @@ from coordination.site_environment import (
 )
 from coordination.site_summary import (
     SiteSummary,
-    _donor_b_factors,
-    _image_count,
+    _donor_b_factors,  # pyright: ignore[reportPrivateUsage]
+    _image_count,  # pyright: ignore[reportPrivateUsage]
     site_summary,
     unassessable_site_summary,
 )

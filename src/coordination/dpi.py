@@ -12,7 +12,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import gemmi
 
@@ -141,9 +141,8 @@ def _read_pdb_redo_properties(data_json: str) -> dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         return {}
-    properties = data.get("properties")
-    block: dict[str, Any] = properties if isinstance(properties, dict) else {}
-    return block
+    properties = cast(dict[str, Any], data).get("properties")
+    return cast(dict[str, Any], properties) if isinstance(properties, dict) else {}
 
 
 def _metadata_terms(properties: dict[str, Any], pdb_path: str) -> tuple[float, float]:

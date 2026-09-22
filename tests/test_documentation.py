@@ -148,7 +148,7 @@ def test_values_shared_between_vocabularies_are_declared() -> None:
     it from the lower-case statuses, which the module documents on purpose.
     """
     owners: dict[str, set[str]] = {}
-    upper_case = set()
+    upper_case: set[str] = set()
     for name, vocabulary in _vocabularies().items():
         for member in vocabulary:
             owners.setdefault(member.value, set()).add(name)

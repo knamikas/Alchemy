@@ -207,7 +207,7 @@ def test_fresh_run_invalidates_score_reference(tmp_path: Path, bonds: bool) -> N
     plan = driver_scoring.plan_score(
         args, layout, RunMode.DATABASE, cast("runlog.RunLog", None)
     )
-    pool._clear_stale_outputs(args, layout, plan)
+    pool._clear_stale_outputs(args, layout, plan)  # pyright: ignore[reportPrivateUsage]
     assert not marker.exists()
 
 

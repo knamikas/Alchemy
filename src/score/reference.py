@@ -15,7 +15,7 @@ import math
 import os
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Any, NamedTuple, TextIO
+from typing import Any, NamedTuple, TextIO, cast
 
 from analysis_config import analysis_config_id
 from output_rows import finite_float
@@ -74,7 +74,9 @@ def _scoring_metadata() -> dict[str, Any]:
         # The nested threshold mappings are read-only proxies in the schema;
         # json.dumps cannot serialize those, so copy them into plain dicts.
         **{
-            key: dict(value) if isinstance(value, Mapping) else value
+            key: dict(cast(Mapping[str, Any], value))
+            if isinstance(value, Mapping)
+            else value
             for key, value in SCORING_POLICY_METADATA.items()
         },
         "reference_data_id": reference_data_id(),
@@ -296,6 +298,7 @@ def load_reference(reference_dir: str) -> ScoreReference:
         metadata = json.load(handle)
     if not isinstance(metadata, dict):
         raise ValueError("score reference metadata is not a JSON object")
+    metadata = cast(dict[str, Any], metadata)
     expected = _scoring_metadata()
     # reference_data_id is checked separately below with a fuller explanation.
     for key in (key for key in expected if key != "reference_data_id"):

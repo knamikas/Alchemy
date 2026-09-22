@@ -510,7 +510,7 @@ class TestCifToPdb:
         structure = gemmi.read_structure(cif)
         structure.shorten_chain_names()
         assert [chain.name for chain in structure[0]][-1] == "AB"
-        assert conversion._legacy_identifiers_need_packing(structure) is True
+        assert conversion._legacy_identifiers_need_packing(structure) is True  # pyright: ignore[reportPrivateUsage]
 
         out = conversion.cif_to_pdb(cif, str(tmp_path / "adjacent-ids.pdb"))
         atom_lines = _pdb_atom_lines(out)

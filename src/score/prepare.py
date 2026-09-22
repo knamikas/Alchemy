@@ -215,7 +215,7 @@ def _orphan_bond_site_input(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]
             for reason in row.get("context_warning_reasons", "").split("|")
             if reason
         )
-    missing_reasons = [
+    missing_reasons: list[str] = [
         ScoreMissingReason.RSZD_UNAVAILABLE,
         CoordinateMappingStatus.DENSITY_ROW_UNAVAILABLE,
         *_geometry_missing_reasons(summary),

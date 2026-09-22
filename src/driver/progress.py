@@ -15,14 +15,17 @@ class BatchCounts(Protocol):
     @property
     def counts(self) -> Mapping[str, int]:
         """Entries finished so far, keyed by status."""
+        ...
 
     @property
     def no_metals(self) -> int:
         """Entries that held no analyzable metal."""
+        ...
 
     @property
     def metal_site_limit_exceeded(self) -> int:
         """Entries excluded for holding more metal sites than the policy allows."""
+        ...
 
 
 class ProgressReporter:

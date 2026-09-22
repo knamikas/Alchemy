@@ -36,10 +36,6 @@ def _residue_mapping(
     return pdb_remarks.read_conversion_provenance(path).residue_mapping
 
 
-def _occupancy_counts(path: str) -> dict[int, int]:
-    return pdb_remarks.read_conversion_provenance(path).defaulted_occupancy_counts
-
-
 class TestRemarkLayout:
     @pytest.mark.parametrize(
         ("layout", "token_count"),

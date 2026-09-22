@@ -15,7 +15,7 @@ from coordination.policy import (
     FIRST_SPHERE_TOLERANCE,
     NEARBY_METAL_RADIUS,
     SEARCH_EPSILON,
-    _check_reason_strings,
+    _check_reason_strings,  # pyright: ignore[reportPrivateUsage]
 )
 from metal_elements import METAL_ELEMENTS
 
