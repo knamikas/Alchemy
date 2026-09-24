@@ -32,13 +32,14 @@ model has more chains than the one-character PDB namespace can represent, or
 distinct mmCIF residues share one legacy
 `(chain, sequence number, insertion code)` identity, Alchemy packs its residues
 into synthetic one-character chains with unique four-column sequence numbers.
-``REMARK 950 ALCHEMY RESIDUE`` records preserve, for every residue that
+`REMARK 950 ALCHEMY RESIDUE` records preserve, for every residue that
 shortening or packing renamed, the original component, chain, sequence number,
-insertion code, source traversal indices, and polymer-terminal position. EDSTATS and Gemmi analyze the same packed coordinates, then
-statistics, contacts, declarations, and CSV identifiers are mapped back to the
-source mmCIF identities. Conversion validates the atom and residue membership
-before analysis, so an oversized or legacy-incompatible structure cannot
-silently lose sites at the PDB boundary.
+insertion code, source traversal indices, and polymer-terminal position. EDSTATS
+and Gemmi analyze the same packed coordinates, then statistics, contacts,
+declarations, and CSV identifiers are mapped back to the source mmCIF
+identities. Conversion validates the atom and residue membership before
+analysis, so an oversized or legacy-incompatible structure cannot silently lose
+sites at the PDB boundary.
 
 The overall diffraction resolution comes from PDB-REDO `data.json` when
 available, with an MTZ fallback through gemmi. EDSTATS instead receives the
@@ -62,7 +63,7 @@ are the columns used to calculate its two maps.
    `twin_refmac_coefficients_normalized` warning.
 2. CCP4 `fft` with `FWT/PHWT` from that validated MTZ to produce a 2mFo-DFc map.
 3. By default, CCP4 `mapmask` limits that full FFT map to the envelope of the
-   analyzed first-model coordinates plus a 10 Angstrom border. The same crop is
+   analyzed first-model coordinates plus a 10 Å border. The same crop is
    then applied to the mFo-DFc difference map calculated from `DELFWT/PHDELWT`.
    This retains every modeled atom while avoiding EDSTATS work over distant
    empty unit-cell volume. If the envelope would not be smaller, Alchemy uses
@@ -103,12 +104,13 @@ same author identity, the one-based EDSTATS `NR` residue ordinal resolves them
 one-to-one. `NR` is numbered within a chain rather than across the model —
 EDSTATS restarts it at 1 for each chain part `CP` — so it is read against the
 residues of its own chain, and uniqueness is required per chain rather than per
-model. A `NR` that repeats within one chain, or is out of range or inconsistent,
-fails the entry rather than expanding an ambiguous row across multiple sites.
-Completeness is checked with residue multiplicity intact. The table must contain
-finite numeric statistics or the documented `n/a` marker and a row for every
-selected metal or cofactor residue. Empty, malformed, incomplete, or wrong-model
-output fails the entry instead of being written to the aggregate CSV.
+model. An `NR` that repeats within one chain, or is out of range or
+inconsistent, fails the entry rather than expanding an ambiguous row across
+multiple sites. Completeness is checked with residue multiplicity intact. The
+table must contain finite numeric statistics or the documented `n/a` marker and
+a row for every selected metal or cofactor residue. Empty, malformed,
+incomplete, or wrong-model output fails the entry instead of being written to
+the aggregate CSV.
 
 ### 4. Bond-distance analysis — `src/coordination/`
 
@@ -124,10 +126,10 @@ density statistics from different models are never combined.
 Alternative conformations are selected coherently per residue. Blank-altloc
 atoms are shared, while the named conformer with the highest mean valid atomic
 occupancy is selected (means within 1e-12 are a tie, resolved by the lowest
-altloc label). This avoids creating
-an artificial residue by choosing A/B alternatives independently for each atom.
-Every neighboring residue is considered independently, and the selected and
-available alternatives are recorded.
+altloc label). This avoids creating an artificial residue by choosing A/B
+alternatives independently for each atom. Every neighboring residue is
+considered independently, and the selected and available alternatives are
+recorded.
 
 EDSTATS is run with `USEALT=true`, which reports named alternate conformers as
 separate residue observations while retaining an additional pooled summary row.
@@ -137,13 +139,13 @@ conformer output fails the entry rather than assigning density from a discarded
 conformer to the selected metal site.
 
 `run_bond_analysis()` uses a 4 Å search only to discover broad
-positive-occupancy N/O/S candidates around a configured metal, outside the
+positive-occupancy N/O/S candidates around a selected metal site, outside the
 metal's own residue, in a recognized amino acid or water. Discovery does not
 assign a candidate as a bond. A separate eligibility stage identifies likely
 first-coordination-sphere candidates for the current bond output, and an
 atom-level chemical rule determines which candidates Alchemy may infer as bonds.
-Following
-[Harding's coordination-group definition](https://doi.org/10.1107/S0907444904004081),
+Following the coordination-group definition of Harding (2004;
+[Acta Cryst. D60, 849-859](https://doi.org/10.1107/S0907444904004081)),
 the upper limit is the target metal-donor distance plus 0.75 Å, never more than
 the 4.0 Å candidate search radius. If the exact residue-specific reference is
 absent, the largest target for the same metal and donor element is used only for
@@ -174,8 +176,13 @@ N. A declaration can still establish such an atom as a declared bond;
 
 Inferring a contact and scoring one are separate questions. The
 geometry-inference donor table governs inference; scoring additionally requires
-a literature reference distance in `src/coordination/metal_distances/metal_distances_info.txt`, and that
-reference does not cover every donor Alchemy will infer:
+a literature reference distance in
+`src/coordination/metal_distances/metal_distances_info.txt`. Its values come
+from Harding (2006;
+[Acta Cryst. D62, 678-682](https://doi.org/10.1107/S0907444906014594)) for
+every metal except nickel, and from Zheng et al. (2008;
+[J. Inorg. Biochem. 102, 1765-1776](https://doi.org/10.1016/j.jinorgbio.2008.05.006))
+for nickel. That reference does not cover every donor Alchemy will infer:
 
 - **Only ten metals have reference rows.** The table covers NA, MG, K, CA, MN,
   FE, CO, NI, CU, and ZN. Alchemy recognizes 84 metal element symbols
@@ -201,19 +208,25 @@ reference does not cover every donor Alchemy will infer:
 - **SER, THR, and TYR values are approximations.** These values are derived from
   statements in Harding (2006) rather than from its tables, so their `sigma_lit`
   is not an empirical spread. Treat z-scores for these three donors as
-  indicative.
-- **Nucleic acids, modified residues, and other ligands have no reference at
-  all.** A metal coordinated by, say, a DNA phosphate oxygen is real
-  coordination, but no bundled distance can assess it.
+  indicative. Nickel has no SER, THR, or TYR rows at all, so its hydroxyl
+  contacts use the Ni–O same-element fallback for first-sphere eligibility and
+  never receive a Zbond.
+- **Nucleic acids, modified residues, and other ligands have no reference.** A
+  metal coordinated by, say, a DNA phosphate oxygen is real coordination, but no
+  bundled distance can assess it.
 
-A declared contact to a donor class with no reference is retained in
+A declared contact to a donor outside water and the 20 standard amino acids,
+such as a nucleic-acid, modified-residue, or other ligand atom, is retained in
 `metal_contact_candidates_all.csv` with its measured distance and full
 connection provenance, and the entry records
 `declared_donor_outside_supported_classes`. It is deliberately _not_ promoted to
-a bond row: doing so would raise the site's coordination count and apparent
-geometry coverage on the strength of a contact that nothing in the reference
-data can evaluate. The distinction that matters for a consumer is that "no
-reference for this donor class" and "this metal has no coordination" are now
+a bond row: neither the donor rules nor the reference data cover these residue
+classes, so promotion would raise the site's coordination count and apparent
+geometry coverage on the strength of a contact the analysis cannot interpret. A
+declared water or standard amino-acid donor that merely lacks a reference
+distance, such as LYS `NZ` declared to MG, is still promoted to a bond row with
+NaN derived values. The distinction that matters for a consumer is that "no
+reference for this donor class" and "this metal has no coordination" are
 different, visibly, in the output.
 
 Alchemy separately parses `_struct_conn` records from the authoritative source
@@ -326,18 +339,17 @@ Only after the database run completes without recoverable operational gaps does
 Alchemy finalize scoring. Explicitly deterministic entry errors remain
 documented terminal exclusions in the manifest; missing inputs, worker deaths,
 timeouts, and unexpected failures defer finalization until `--resume`. Alchemy
-scans the compact input—not the raw analysis outputs—to write
-`scores_all.csv` and a reusable `score_reference/` directory
-containing policy metadata and the empirical score distribution. An interrupted
-run retains its compact inputs for `--resume` but does not publish a completed
-reference.
+scans the compact input—not the raw analysis outputs—to write `scores_all.csv`
+and a reusable `score_reference/` directory containing policy metadata and the
+empirical score distribution. An interrupted run retains its compact inputs for
+`--resume` but does not publish a completed reference.
 
-The standard database cohort excludes an entry when coordinate inspection finds
-more than 100 selected canonical metal sites. These exceptionally metal-dense
-assemblies contain strongly correlated sites and would otherwise have
-disproportionate influence on the empirical distribution. They are recorded in
-the manifest with their detected site count but do not contribute score
-inputs.
+In every run mode, an entry is excluded before any map is calculated when
+coordinate inspection finds more than 100 selected canonical metal sites. These
+exceptionally metal-dense assemblies contain strongly correlated sites and would
+otherwise have disproportionate influence on the empirical distribution. They
+are recorded in the manifest with `metal_site_limit_exceeded=true` and their
+detected site count, but contribute no site, bond, candidate, or score rows.
 
 The final density level uses absolute RSZD directly:
 
@@ -379,56 +391,65 @@ before ranking rounding, so grouping reference values cannot change a level.
 `alchemy_score` is their minimum using whichever scores are available. These
 numbers rank sites only: the raw measurements and decision matrix always define
 `alchemy_level`, including the REVIEW-plus-REVIEW escalation that no single
-ranking cutoff can represent. A deterministic `score_reference_id`
-identifies the compatible pair of component distributions. A separate
-`score_cohort_id` identifies the exact compact-input artifact, and resume
-validation prevents either identity from being mixed. Reference metadata records
-per-metal-site weighting, component cohort counts, input and manifest hashes,
-input statuses, and software provenance. `context_warning` is carried into the
-result as an interpretive annotation and does not change a level or score.
+ranking cutoff can represent. A deterministic `score_reference_id` identifies
+the compatible pair of component distributions. A separate `score_cohort_id`
+identifies the exact compact-input artifact, and resume validation prevents
+either identity from being mixed. Reference metadata records per-metal-site
+weighting, component cohort counts, input and manifest hashes, input statuses,
+and software provenance. `context_warning` is carried into the result as an
+interpretive annotation and does not change a level or score.
 
 Alchemy includes the frozen
-[manuscript score reference](../src/score/score_reference/)
-generated by the original manuscript run and archived in the August 17, 2026
-dataset: 330,978 sites, with 330,887 density
-observations and 275,870 geometry observations. A fresh clone uses this
+[manuscript score reference](../src/score/score_reference/) generated by the
+original manuscript run and archived in the August 17, 2026
+[dataset](https://doi.org/10.5281/zenodo.22032936): 330,978 sites, with 330,887
+density observations and 275,870 geometry observations. A fresh clone uses this
 reference to provide empirical rankings for available evidence alongside the
 authoritative classifications. Completing an uncapped full-database run writes a
 reference of your own under the output directory; it does not replace the
 bundled files.
 
 For later single-entry, ID-file, manual, or capped runs, Alchemy first looks for
-the reference produced under the current output directory's
-`score_reference/`, then the repository's `src/score/score_reference/`.
-`--score-reference-dir` selects an
-explicit copy instead. Alchemy loads that reference once, derives each new
-site's compact inputs while its normal result is still in memory, and writes
-`scores_all.csv` directly. These runs are compared with the frozen
-database and never generate rankings from their own small cohort. If no
-reference is found, classifications are still produced from the raw thresholds
-and numerical rankings remain blank. An incompatible reference is rejected
-rather than silently substituted.
+the reference produced under the current output directory's `score_reference/`,
+then the repository's `src/score/score_reference/`. If neither exists,
+classifications are still produced from the raw thresholds and numerical
+rankings remain blank. `--score-reference-dir` selects an explicit copy instead,
+and that directory is authoritative: if its `metadata.json` is missing or
+unusable, the run stops with an error rather than falling back to another
+reference or to classifications alone. Alchemy loads the chosen reference once,
+derives each new site's compact inputs while its normal result is still in
+memory, and writes `scores_all.csv` directly. These runs are compared with the
+frozen database and never generate rankings from their own small cohort. An
+incompatible reference is rejected rather than silently substituted. An uncapped
+full-database run builds its own reference, so it ignores
+`--score-reference-dir` with a warning; cap the run with `--max-pdbs` to score
+against an existing reference.
 
-An explicit directory is authoritative: a missing or incompatible reference at
-that path does not cause a fallback to a different reference. Database runs
-write `score_reference/`.
-
-The `score` package retains `finalize` and `score` subcommands, run
-as `PYTHONPATH=src python3 -m score`, for recovery and
-reproducibility using already compact score-input CSVs; neither command
-reconstructs inputs by rescanning `metal_sites_all.csv` or
-`metal_bonds_all.csv`. Recovery finalization should pass `--manifest` when the
-completed manifest is available so the rebuilt reference retains entry counts,
-artifact hashes, and software provenance. Neither subcommand regenerates
-`review_queue_all.csv`, which only the driver's finalization rebuilds from the
-completed score and summary files. A recovery finalization over an
-existing output directory therefore leaves the previous triage view in place;
-rerun the driver with `--resume` to rebuild it, or treat it as stale.
+The `score` package retains `finalize` and `score` subcommands, run as
+`PYTHONPATH=src python3 -m score`, for recovery and reproducibility using
+already compact score-input CSVs; neither command reconstructs inputs by
+rescanning `metal_sites_all.csv` or `metal_bonds_all.csv`. Recovery finalization
+should pass `--manifest` when the completed manifest is available so the rebuilt
+reference retains entry counts, artifact hashes, and software provenance.
+Neither subcommand regenerates `review_queue_all.csv`, which only the driver's
+finalization rebuilds from the completed score and summary files. A recovery
+finalization over an existing output directory therefore leaves the previous
+triage view in place; rerun the driver with `--resume` to rebuild it, or treat
+it as stale.
 
 ## DPI and occupancy validation
 
-The DPI is calculated from PDB-REDO reflection and R-free metadata, the
-asymmetric-unit volume, and `Ni`, the sum of occupancies for all non-hydrogen
+The DPI follows equation 7 of Blow (2002;
+[Acta Cryst. D58, 792-797](https://doi.org/10.1107/S0907444902003931)):
+
+```text
+DPI = 1.28 * Ni^0.5 * Va^(1/3) * nobs^(-5/6) * Rfree
+```
+
+`nobs` and `Rfree` are the reflection count (`NREFCNT`) and R-free (`RFFIN`)
+from PDB-REDO `data.json`; when `RFFIN` is absent, R-free is read from the
+coordinate file's `FREE R VALUE` header record instead. `Va` is the
+asymmetric-unit volume, and `Ni` is the sum of occupancies for all non-hydrogen
 and non-deuterium atoms in the complete first-model asymmetric unit. Alternate
 positions contribute separately to this global sum. If non-given strict-NCS
 operations generate copies that are not explicitly deposited, each copy is

@@ -17,6 +17,7 @@ from driver import (
     runlog,
     scoring as driver_scoring,
 )
+from run_config import RunConfig
 
 
 def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> None:
@@ -57,19 +58,66 @@ def test_an_uncapped_database_run_says_it_ignores_an_explicit_reference() -> Non
     assert any("/tmp/reference" in message for message in messages)
 
 
-def test_targeted_run_without_reference_still_plans_classifications(
-    tmp_path: Path,
-) -> None:
-    args = cli.parse_args(
+def _targeted_args(tmp_path: Path, reference_dir: Path) -> RunConfig:
+    return cli.parse_args(
         [
             "--id",
             "1abc",
             "--output-dir",
             str(tmp_path),
             "--score-reference-dir",
-            str(tmp_path / "absent-reference"),
+            str(reference_dir),
         ]
     )
+
+
+def test_an_explicit_reference_that_does_not_exist_stops_the_run(
+    tmp_path: Path,
+) -> None:
+    """An explicit option must not quietly drop the rankings it asked for."""
+    reference_dir = tmp_path / "absent-reference"
+    with pytest.raises(driver_errors.DriverError) as excinfo:
+        driver_scoring.plan_score(
+            _targeted_args(tmp_path, reference_dir),
+            driver_layout.OutputLayout(str(tmp_path)),
+            RunMode.SINGLE,
+            cast("runlog.RunLog", None),
+        )
+    message = str(excinfo.value)
+    assert "--score-reference-dir" in message
+    assert str(reference_dir) in message
+    assert "does not exist" in message
+
+
+def test_an_explicit_reference_without_metadata_stops_the_run(
+    tmp_path: Path,
+) -> None:
+    """A directory without the completion marker is an incomplete reference."""
+    reference_dir = tmp_path / "incomplete-reference"
+    score.write_reference(str(reference_dir), {1.0: 1}, {0.5: 1}, 1)
+    (reference_dir / score.REFERENCE_METADATA_FILE).unlink()
+    with pytest.raises(driver_errors.DriverError) as excinfo:
+        driver_scoring.plan_score(
+            _targeted_args(tmp_path, reference_dir),
+            driver_layout.OutputLayout(str(tmp_path)),
+            RunMode.CAPPED_DATABASE,
+            cast("runlog.RunLog", None),
+        )
+    message = str(excinfo.value)
+    assert str(reference_dir) in message
+    assert f"{score.REFERENCE_METADATA_FILE} is missing" in message
+
+
+def test_targeted_run_without_reference_still_plans_classifications(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The automatic search falls back to classification-only scoring."""
+    monkeypatch.setattr(
+        driver_scoring,
+        "DEFAULT_SCORE_REFERENCE_DIR",
+        str(tmp_path / "absent-bundled-reference"),
+    )
+    args = cli.parse_args(["--id", "1abc", "--output-dir", str(tmp_path)])
     plan = driver_scoring.plan_score(
         args,
         driver_layout.OutputLayout(str(tmp_path)),

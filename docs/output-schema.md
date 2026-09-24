@@ -4,7 +4,8 @@ This document defines the row grain, identifiers, serialization, and columns of
 Alchemy's CSV outputs. The ordered machine-enforced schemas live in
 `src/driver/writers.py`, `src/coordination/schema.py`,
 `src/edstats_statistics.py`, `src/score/`,
-`src/crystallization_conditions.py`, and `src/driver/review_queue.py`.
+`src/crystallization_conditions.py`, `src/driver/review_queue.py`, and
+`src/driver/runlog.py`.
 
 ## Shared conventions
 
@@ -12,14 +13,18 @@ Alchemy's CSV outputs. The ordered machine-enforced schemas live in
 - `metal_site_id` identifies one selected coordinate-model metal atom. It is
   built from the PDB ID and zero-based model, chain, residue, and atom indices.
   It is the supported site join key across the site-level files. A diagnostic
-  density row that could not be matched to a coordinate site has a blank ID.
+  density row that could not be matched to a coordinate site has a blank ID,
+  as does an unresolved placeholder row in `score_inputs_all.csv` and
+  `scores_all.csv`.
 - `contact_id` identifies one deposited donor atom in one explicit or generated
   image around a metal site. It is the supported join key between bond and
   candidate rows. The ID includes every symmetry component needed to distinguish
   images but uses a fixed-width digest to keep joins manageable.
 - Booleans are serialized as `true` or `false`.
 - An empty cell means an Alchemy-derived value was unavailable or inapplicable.
-  The associated status or reason column should be used where provided.
+  The associated status or reason column should be used where provided. The
+  few columns that write `0` rather than a blank for nothing measured say so
+  in their own descriptions.
 - `nan` and infinities are never written for derived values. The raw EDSTATS
   block preserves EDSTATS' own `n/a` marker.
 - Distances and coordinate values are in ångströms. Occupancies and coverage
@@ -27,7 +32,23 @@ Alchemy's CSV outputs. The ordered machine-enforced schemas live in
   is in cubic ångströms. B-factor values are in square ångströms.
 - `*_model_index`, `*_chain_index`, `*_residue_index`, and `*_atom_index` are
   zero-based coordinate-model indices. Author-facing chain, residue, insertion,
-  atom, and alternate-location labels are retained separately.
+  atom, and alternate-location labels are retained separately. The one
+  exception is an unresolved placeholder score row, whose indices are blank
+  except `metal_atom_index`, which holds the sentinel `unresolved-<n>` (the
+  site's one-based position among the entry's unresolved sites).
+- `context_warning_reasons` is a pipe-separated, non-scoring vocabulary shared
+  by site, bond, candidate, and score rows, and `context_warning` is `true`
+  exactly when it is non-empty. `zero_occupancy_neighbor` marks a donor atom
+  with a valid zero occupancy. `declared_non_typical_donor` marks a
+  source-declared donor outside the typical inferred donor list.
+  `non_typical_first_sphere_candidate` marks an undeclared non-typical donor
+  within the first-sphere cutoff; a site row also carries it when any such
+  candidate exists, assigned or not. `non_typical_proximal_candidate` marks an
+  undeclared non-typical donor beyond that cutoff and appears only in candidate
+  rows. `suspect_multi_donor_group` marks a contact whose donor residue
+  contributes several contacts, at least one a geometry outlier; it never
+  appears in candidate rows. `site_evidence_unavailable` appears only on
+  unresolved placeholder score rows.
 
 ## Interpret a result
 
@@ -50,15 +71,15 @@ negative result:
    `metal_contact_candidates_all.csv` when you need to audit rejected or
    unreferenced candidates. Join an exact contact between those files with
    `contact_id`.
-5. If `scores_all.csv` exists, treat `alchemy_level` as the
-   authoritative classification. `PASS` means all assessable components pass
-   their raw thresholds. `REVIEW` means one assessable component needs review.
-   `SUSPECT` means at least one component is suspect or both components need
-   review. `INCOMPLETE` means neither component is assessable. The Alchemy score
-   (0–100), in `alchemy_score`, ranks sites but doesn't determine the classification.
-   Higher scores indicate more typical evidence relative to the frozen reference
-   cohort; lower scores indicate increasingly unusual disagreement. Scores are
-   not probabilities of correct metal assignment.
+5. If `scores_all.csv` exists, treat `alchemy_level` as the authoritative
+   classification. `PASS` means all assessable components pass their raw
+   thresholds. `REVIEW` means one assessable component needs review. `SUSPECT`
+   means at least one component is suspect or both components need review.
+   `INCOMPLETE` means neither component is assessable. The Alchemy score
+   (0–100), in `alchemy_score`, ranks sites but doesn't determine the
+   classification. Higher scores indicate more typical evidence relative to the
+   frozen reference cohort; lower scores indicate increasingly unusual
+   disagreement. Scores are not probabilities of correct metal assignment.
 6. Use `review_queue_all.csv` as a triage view. Its crystallization fields add
    context but don't change classification levels or scores.
 
@@ -78,7 +99,7 @@ whether the output is complete enough for your analysis.
 | `pdbID` | Normalized entry identifier and entry-level join key. |
 | `status`, `retryable` | Entry outcome and whether an ordinary resume should retry it. |
 | `no_metals`, `metal_site_limit_exceeded` | Successful metal-free result and standard-cohort exclusion flag. |
-| `n_metals`, `n_bonds`, `n_candidates` | Selected coordinate sites, assigned contacts, and candidate rows. Blank bond or candidate counts mean bond analysis was disabled or the entry failed before it could run; `0` means it ran and found no rows, or that the entry ended early with nothing to analyze (`no_metals=true` or `metal_site_limit_exceeded=true`). |
+| `n_metals`, `n_bonds`, `n_candidates` | Selected coordinate sites, assigned contacts, and candidate rows. Blank bond or candidate counts mean bond analysis was disabled, the entry failed before it could run, or metal absence could not be established (`metal_presence_indeterminate`); a `--no-bonds` resume instead keeps the counts an earlier bond-enabled run recorded. `0` means it ran and found no rows, or that the entry ended early with nothing to analyze (`no_metals=true` or `metal_site_limit_exceeded=true`). |
 | `runtime_s` | Total entry runtime in seconds. |
 | `reason_codes`, `warning_codes`, `status_detail` | Pipe-separated outcome reasons, non-status warnings, and a bounded human-readable explanation. |
 | `alchemy_version`, `gemmi_version`, `ccp4_version` | Software provenance. |
@@ -89,8 +110,10 @@ whether the output is complete enough for your analysis.
 | `altloc_policy`, `symmetry_contact_policy` | Alternate-conformer and generated-contact policies. |
 
 Resume requires a compatible manifest schema, `reference_data_id`, and
-`analysis_config_id`. For retry behavior and the complete reason-code
-vocabulary, see the [operations guide](operations.md#resume-a-run).
+`analysis_config_id`. For retry behavior, see
+[Resume a run](operations.md#resume-a-run). For the complete vocabularies, see
+[Manifest reason codes](operations.md#manifest-reason-codes) and
+[Manifest warning codes](operations.md#manifest-warning-codes).
 
 ## `density_context_all.csv`
 
@@ -135,10 +158,15 @@ use `metal_site_id`.
 
 ### Raw EDSTATS block
 
-`RT`, `CI`, `RN`, `MN`, `CP`, and `NR` are EDSTATS' residue type, output-group
-chain identifier, residue number, model number, deposited chain part, and
-one-based residue ordinal within that chain part. They are retained verbatim so
-the Alchemy row remains auditable against `stats.out`.
+`RT`, `CI`, `RN`, `MN`, `CP`, and `NR` are the residue type, chain, residue
+number, model number, deposited chain part, and one-based residue ordinal within
+that chain part of the EDSTATS observation. `MN`, `CP`, and `NR` are retained
+verbatim so the Alchemy row remains auditable against `stats.out`. The other
+three are normalized for the coordinate join. `CI` holds the deposited chain ID
+rather than EDSTATS' own label, which can carry an alternate-location suffix
+such as `A:B` (ordered waters report `0`). `RN` is the decimal residue number
+with any insertion code appended, and `RT` is the matched coordinate residue
+name.
 
 The 36 metric columns are the Cartesian product of these metric stems and atom
 groups:
@@ -171,7 +199,7 @@ The concrete metric columns are:
 
 | Columns | Meaning |
 | --- | --- |
-| `metal_site_id` | Stable join key for the selected coordinate metal site. |
+| `pdbID`, `metal_site_id` | Entry (the first column) and stable join key for the selected coordinate metal site. |
 | `category` | `metal` for a single-atom ion or `cofactor` for a metal-containing multi-atom residue (including catalogued components). Uncatalogued components with selected metals retain their residue density and add the entry warning `cofactor_catalog_fallback`; this does not infer a heme/cluster structural class. |
 | `model_policy`, `input_model_count`, `model_analyzed`, `model_id`, `multi_model_structure` | Model-selection policy, deposited model count, selected model, its source identifier, and whether additional models existed. |
 | `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location used by `metal_site_id`. |
@@ -188,14 +216,14 @@ The concrete metric columns are:
 | `nearby_metal_count_6a` | Other canonical metals within 6 Å in the analyzed coordinate model. This is proximity context, not a metal-metal bond or multinuclear-site assignment. Crystallographic symmetry images are excluded. |
 | `metal_conformer_mean_occupancy`, `metal_altloc_options`, `alternative_conformers_present`, `altloc_selection_fallback` | Residue conformer evidence and whether selection required a fallback. |
 | `density_observation_id` | Join key for the underlying EDSTATS observation; not a metal-site key. |
-| `density_scope`, `density_shared_site_count`, `density_is_shared` | Whether density describes an ion or whole cofactor residue and how many selected sites share it. |
+| `density_scope`, `density_shared_site_count`, `density_is_shared` | Whether density describes an ion or whole cofactor residue and how many selected sites share it: `density_scope=metal_residue` for a `metal` row and `density_scope=cofactor_residue` for a `cofactor` row. |
 | `coordinate_mapping_status`, `selected_metal_site_status` | Outcome of joining an EDSTATS residue to the selected coordinate site. |
 
 ### Resolution, DPI, and contact summaries
 
 | Columns | Meaning |
 | --- | --- |
-| `dpi`, `resolution`, `dpi_unavailable_reason` | Diffraction precision index, input resolution, and the reason DPI could not be calculated. |
+| `dpi`, `resolution`, `dpi_unavailable_reason` | Diffraction precision index, input resolution, and the reason DPI could not be calculated, as one of the DPI manifest reason codes (`missing_dpi_metadata_source`, `invalid_dpi_metadata`, `invalid_occupancy`, `missing_or_invalid_reflection_count`, `missing_or_invalid_rfree`, `missing_or_invalid_asu_volume`, `invalid_dpi_atom_count`, or `dpi_calculation_failed`). |
 | `r_free`, `reflection_count`, `asu_volume` | Final free R factor, observed-reflection count, and asymmetric-unit volume used by the DPI calculation. Valid components remain available when another missing input prevents calculation of DPI. |
 | `occupancy_weighted_atom_count`, `deposited_occupancy_weighted_atom_count`, `dpi_atom_count_multiplier` | Atom-count inputs and multiplier used by the DPI calculation. |
 | `strict_ncs_operation_count`, `crystallographic_operation_count` | Numbers of generated operations available to the contact search. |
@@ -212,10 +240,10 @@ The concrete metric columns are:
 | `geometry_outlier_count_explicit`, `geometry_outlier_count_image_inclusive` | Outlier counts under the two search scopes. |
 | `geometry_coverage_explicit`, `geometry_coverage_image_inclusive` | Reference coverage under the two search scopes. |
 | `explicit_geometry_status`, `image_inclusive_geometry_status` | Site classification under each search scope: `plausible` when contacts were scored and none was an outlier, `suspect` when at least one scored contact is an outlier, or `insufficient data` when no contact could be scored. |
-| `generated_contact_scope` | Which generated-image sources contribute contacts: `crystallographic`, `strict_ncs`, or `strict_ncs_and_crystallographic`; `none` when the generated-image search ran and no generated contact came of it. Blank is reserved for the search being unavailable, which is the different claim that nobody looked. |
+| `generated_contact_scope` | Which generated-image sources contribute contacts: `crystallographic`, `strict_ncs`, or `strict_ncs_and_crystallographic`; `none` when the generated-image search ran and no generated contact came of it. Blank means the generated-image search was unavailable, so no generated contact was sought. |
 | `geometry_classification_changes_with_generated_images` | Whether generated contacts change the site classification. |
 | `coordination_depends_on_crystallographic_symmetry`, `coordination_depends_on_strict_ncs` | Whether each generated-image source contributes to reported coordination. |
-| `geometry_not_assessed_reason` | Pipe-separated reasons geometry could not be assessed. |
+| `geometry_not_assessed_reason` | Pipe-separated reasons geometry could not be fully assessed: the `dpi_unavailable_reason` code, `symmetry_search_unavailable` when only explicit contacts could be searched, `geometry_not_assessed_reason=no_assessable_reference_contacts` when no score-eligible contact was classified, or `non_finite_metal_coordinates` alone when the metal has a non-finite coordinate. Blank when none applies. |
 | `zscore_outlier_cutoff` | Absolute bond-distance Z threshold used for outlier classification. |
 
 ### Structure-validation provenance
@@ -223,8 +251,8 @@ The concrete metric columns are:
 | Columns | Meaning |
 | --- | --- |
 | `symmetry_search_available`, `symmetry_search_failure_reason` | Whether generated-image search completed and why it did not. |
-| `occupancy_validation_failed`, `missing_occupancy_count`, `invalid_occupancy_count` | Entry-level occupancy parsing and validation results. The counts cover every deposited record, hydrogen included; validation fails only for defects on atoms that enter `Ni`. |
-| `overfull_occupancy_site_count`, `overfull_occupancy_excess`, `metal_overfull_occupancy` | Alternate-conformer occupancy excess and whether it affects this metal site. `metal_overfull_occupancy` is blank when any deposited record of the metal's own chemical site carries an unusable occupancy, since the excess over that site cannot then be measured; `False` says the records were read and do not exceed one. |
+| `occupancy_validation_failed`, `missing_occupancy_count`, `invalid_occupancy_count` | Entry-level occupancy parsing and validation results. The counts cover every deposited record, hydrogen included; validation fails only for defects on atoms that enter `Ni`, the occupancy-weighted non-hydrogen atom count of the DPI calculation (see [DPI and occupancy validation](method.md#dpi-and-occupancy-validation)). |
+| `overfull_occupancy_site_count`, `overfull_occupancy_excess`, `metal_overfull_occupancy` | Alternate-conformer occupancy excess and whether it affects this metal site. `metal_overfull_occupancy` is blank when any deposited record of the metal's own chemical site carries an unusable occupancy, since the excess over that site cannot then be measured; `false` says the records were read and do not exceed one. |
 | `defaulted_occupancy_atom_count`, `zero_occupancy_atom_count` | Counts of defaulted and explicitly absent atoms. |
 | `duplicate_atom_records_present`, `duplicate_atom_record_count`, `duplicate_atom_coordinate_conflict_count`, `malformed_duplicate_atom_name_count` | Duplicate-coordinate-record diagnostics. |
 | `raw_occupancy_mapping_failed`, `raw_occupancy_mapping_failure_reason` | Whether raw occupancy records could be mapped to parsed atoms. |
@@ -244,7 +272,7 @@ Grain: one assigned inferred or source-declared metal–donor contact. Every
 | `neighbor_resname`, `neighbor_chain`, `neighbor_resnum`, `neighbor_atom`, `neighbor_element`, `neighbor_icode`, `neighbor_altloc` | Human-readable donor identity. |
 | `neighbor_b_iso` | Coordinate-model isotropic or equivalent-isotropic B factor of the assigned donor atom. |
 | `distance` | Measured metal–donor distance. |
-| `coordination_status`, `coordination_source`, `declared_connection` | Whether assignment came from a declaration (`declared`) or inference (`inferred`) and its source. |
+| `coordination_status`, `coordination_source`, `declared_connection` | Whether assignment came from a declaration (`declared`) or inference (`inferred`) and its source. The source is the pipe-separated declaration kinds, `struct_conn` or `LINK` (as in `candidate_source`), for a declared contact and `coordination_source=proximity_rule` for an inferred one. |
 | `connection_id`, `connection_type`, `connection_link_id`, `connection_asu`, `connection_reported_distance` | Pipe-aligned source-declaration records; blank for inference-only contacts. |
 | `inferred_donor_allowed`, `inferred_donor_rule`, `donor_rule_override` | Donor-chemistry decision and any declaration override. The rule names which donor-atom rule decided it: `water_oxygen` for the oxygen of a modeled water, `backbone_carbonyl_oxygen` for an amino-acid backbone carbonyl, `typical_sidechain_donor` for a side-chain atom on the residue's typical donor list, `n_terminal_nitrogen` or `c_terminal_oxygen` for a modeled polymer terminus, and `outside_typical_donor_list` when no rule admits the atom. The override is `declared_connection` when a source declaration admitted a donor the inference rule forbids, and blank otherwise. |
 | `context_warning`, `context_warning_reasons` | Non-scoring warning and pipe-separated reasons. |
@@ -268,8 +296,9 @@ When several source declarations describe the same contact, the five
 
 ## `metal_contact_candidates_all.csv`
 
-Grain: one donor-like atom found by the broad 4 Å search or supplied by a source
-declaration. Candidate discovery does not itself assign a bond.
+Grain: one donor-element atom image around one metal site (one `contact_id`),
+found by the broad 4 Å search or supplied by a source declaration. Candidate
+discovery does not itself assign a bond.
 
 | Columns | Meaning |
 | --- | --- |
@@ -282,7 +311,7 @@ declaration. Candidate discovery does not itself assign a bond.
 | `assignment_reference_kind`, `assignment_reference` | Cutoff reference and its identity: `exact` for a residue-specific literature entry, `element_fallback` when the donor element's generic entry was used, or `missing` when no entry exists. |
 | `inferred_contact_eligible`, `inferred_donor_allowed`, `inferred_donor_rule`, `donor_rule_override` | Final inference eligibility, chemical donor policy, and declaration override. The rule takes the values listed for `inferred_donor_rule` in `metal_bonds_all.csv`. |
 | `context_warning`, `context_warning_reasons` | Non-scoring warning and pipe-separated reasons. |
-| `coordination_status`, `coordination_source`, `declared_connection` | Candidate-level declaration or inference provenance (`declared`, `inferred`, or `unassigned`); use `assigned_as_bond`, not this status, for bond membership. |
+| `coordination_status`, `coordination_source`, `declared_connection` | Candidate-level declaration or inference provenance (`declared`, `inferred`, or `unassigned`); use `assigned_as_bond`, not this status, for bond membership. The source takes the values listed for `coordination_source` in `metal_bonds_all.csv` and is blank for an `unassigned` candidate. |
 | `connection_id`, `connection_type`, `connection_link_id`, `connection_asu`, `connection_reported_distance` | Pipe-aligned source-declaration records. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_element`, `metal_atom`, `metal_icode`, `metal_altloc`, `metal_occupancy` | Human-readable metal identity and occupancy. |
 | `model_id`, `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Selected model and unambiguous metal location. |
@@ -348,20 +377,20 @@ embedded directly in `scores_all.csv`.
 | Columns | Meaning |
 | --- | --- |
 | `pdbID`, `metal_site_id` | Entry and supported join key to `metal_sites_all.csv` and `metal_bonds_all.csv`. |
-| `category` | `metal` or `cofactor`; blank only when an unresolved site cannot be classified. |
-| `density_observation_id`, `density_scope`, `density_shared_site_count`, `density_is_shared` | Density-observation join key, measurement scope, multiplicity, and shared-observation flag. |
+| `category` | `metal` or `cofactor`. Blank on an unresolved placeholder row, and on a row built from bond rows alone when the metal's residue is neither a catalogued cofactor nor an ion (`parent_type` other than `ion`). |
+| `density_observation_id`, `density_scope`, `density_shared_site_count`, `density_is_shared` | Density-observation join key, measurement scope, multiplicity, and shared-observation flag. Blank for a site without a density row. |
 | `coordinate_mapping_status`, `selected_metal_site_status` | Whether density and coordinate evidence were resolved for the selected site. A site with a density row carries that row's `matched` and `selected` values. A site known only from bond rows is `density_row_unavailable` and `selected_without_density_row`; a site the manifest counts as selected but no output row identifies is `selected_site_unresolved`. |
-| `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location. |
+| `metal_model_index`, `metal_chain_index`, `metal_residue_index`, `metal_atom_index` | Unambiguous zero-based coordinate location. An unresolved placeholder row leaves the first three blank and writes `unresolved-<n>` in `metal_atom_index`. |
 | `metal_resname`, `metal_chain`, `metal_resnum`, `metal_atom`, `metal_element`, `metal_icode`, `metal_altloc` | Human-readable deposited metal-site identity. |
 | `rszd`, `rszd_abs`, `rszd_negative`, `rszd_positive`, `density_saturated` | Raw metal-site RSZD (`ZDm`; the all-atom `ZDa` feeds only `density_context_all.csv`), its absolute magnitude, signed negative/positive difference-density statistics, and the EDSTATS saturation flag. |
 | `assigned_contact_count`, `reference_covered_contact_count`, `geometry_bond_count` | Assigned contacts, contacts covered by the literature reference, and finite score-eligible contacts used for RMS geometry. |
-| `geometry_coverage` | Literature-reference-covered contacts divided by all assigned contacts. This is a coverage annotation and does not modify the score or level. |
+| `geometry_coverage` | Literature-reference-covered contacts divided by all assigned contacts. This is a coverage annotation and does not modify the score or level. A site with no assigned contact reports `0`, not a blank; read `assigned_contact_count` to tell the two apart. |
 | `geometry_rms_zbond`, `geometry_max_abs_zbond`, `geometry_mean_abs_zbond`, `geometry_mean_signed_zbond` | Primary RMS geometry statistic and supporting Zbond diagnostics. |
 | `worst_bond`, `worst_bond_source` | Contact ID and declared/inferred source of the largest absolute scored Zbond. |
 | `worst_bond_neighbor_resname`, `worst_bond_neighbor_chain`, `worst_bond_neighbor_resnum`, `worst_bond_neighbor_atom` | Human-readable donor identity for `worst_bond`. |
 | `declared_contact_count`, `inferred_contact_count`, `declared_scored_bond_count`, `inferred_scored_bond_count`, `geometry_contact_basis` | Coordination provenance before and after score eligibility. |
 | `multi_donor_contact_count`, `suspect_multi_donor_residue_group_count` | Chelation context retained as a non-scoring diagnostic. |
-| `context_warning`, `context_warning_reasons` | Interpretive warning carried into the score output without changing the score. |
+| `context_warning`, `context_warning_reasons` | Interpretive warning carried into the score output without changing the score. The reasons use the vocabulary in [Shared conventions](#shared-conventions). |
 | `score_inputs_status`, `score_inputs_missing_reasons` | Evidence completeness and pipe-separated reasons for missing or partial evidence. |
 
 `score_inputs_status` is `complete`, `density_only`, `geometry_only`, or
@@ -389,8 +418,12 @@ no output row identifies, and which carries no evidence of any kind;
 `site_evidence_unavailable` is written to that row's `context_warning_reasons`
 as well). To those the column adds `density_row_unavailable`, from the
 `coordinate_mapping_status` vocabulary, for a row built from bond rows alone,
-and `non_finite_metal_coordinates` together with whichever manifest reason code
-(docs/operations.md) records why the entry itself could not be completed.
+and two values from the
+[manifest reason codes](operations.md#manifest-reason-codes).
+`non_finite_metal_coordinates` marks a site whose own metal has a non-finite
+coordinate (`metal_coordinates_valid=false`). Separately, when the entry itself
+could not be completed, the manifest reason code that says why is appended to
+every score-input row of that entry, placeholders included.
 
 ## `scores_all.csv`
 
@@ -399,16 +432,16 @@ preserved as the leading block, followed by these analysis columns:
 
 | Columns | Meaning |
 | --- | --- |
-| `density_level`, `geometry_level` | Raw-threshold component verdicts: `PASS`, `REVIEW`, `SUSPECT`, or `INCOMPLETE`. |
-| `density_score`, `geometry_score` | Reverse average-rank scores from 0 to 100; higher means more ordinary relative to the frozen component cohort. Blank when no compatible reference or component measurement is available. |
+| `density_level`, `density_score` | Raw-threshold density verdict (`PASS`, `REVIEW`, `SUSPECT`, or `INCOMPLETE`) and its reverse average-rank score from 0 to 100; a higher score means more ordinary relative to the frozen component cohort. The score is blank when no compatible reference or density measurement is available, and `0` rather than a rank when `density_saturated=true`. |
+| `geometry_level`, `geometry_score` | Raw-threshold geometry verdict, with the same four values, and its reverse average-rank score, blank when no compatible reference or geometry measurement is available. |
 | `alchemy_level` | Authoritative non-compensatory site verdict. Any SUSPECT component, or REVIEW in both components, makes the site SUSPECT. |
 | `alchemy_score` | Minimum available component score for ranking only. It does not define `alchemy_level`. |
 | `evidence_basis` | `density_and_geometry`, `density_only`, `geometry_only`, or `no_assessable_evidence`. |
 | `verdict_reason` | Machine-readable decision route: `no_assessable_evidence`, `density_and_geometry_suspect`, `density_suspect`, `geometry_suspect`, `review_plus_review`, `density_review`, `geometry_review`, or `all_available_components_pass`. |
 | `score_reference_id` | Identity of the compatible pair of frozen component distributions; blank for classification-only output. |
-| `score_cohort_id` | Identity of the exact score-input artifact that produced the reference cohort. |
-| `score_cohort_size` | Number of site rows in the frozen input cohort. |
-| `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution. |
+| `score_cohort_id` | Identity of the exact score-input artifact that produced the reference cohort; blank for classification-only output. |
+| `score_cohort_size` | Number of site rows in the frozen input cohort (the reference's `input_row_count`); blank for classification-only output. |
+| `density_reference_size`, `geometry_reference_size` | Assessable observations in each empirical component distribution; blank for classification-only output. |
 
 Scores are published with up to six decimal places; trailing zeros are
 dropped. Raw component values define the levels; neither a score nor a
@@ -428,7 +461,18 @@ the crystallization-summary columns except the repeated `pdbID`, plus:
 | --- | --- |
 | `crystallization_contains_modeled_metal` | Whether the row's `metal_element` was detected in the entry condition. Blank when condition data are unavailable. |
 | `crystallization_contains_different_promiscuous_transition_metal` | Whether another Mn, Fe, Co, Ni, Cu, Zn, or Cd was detected. Blank when condition data are unavailable. |
-| `crystallization_context_flags` | Pipe-separated positive findings for rapid review. |
+| `crystallization_context_flags` | Pipe-separated positive findings for rapid review, in the fixed order listed below. |
+
+`crystallization_context_flags` joins only the findings that hold, and is blank
+when none does or when condition data are unavailable. In order, the flags are
+`crystallization_context_flags=modeled_metal` and
+`crystallization_context_flags=different_promiscuous_transition_metal` for the
+two columns above, then
+`crystallization_context_flags=heavy_additive_phasing_metal` and
+`crystallization_context_flags=ni_co_like_metal` for the matching summary
+metal-class flags, then `sulfate`, `cacodylate`, and `acetate` for the
+ingredient flags. The buffer-light-metal and any-metal summary flags are not
+repeated here.
 
 The queue is a derived convenience view. Its membership is determined before the
 crystallization join, and none of its condition columns changes a scoring
@@ -452,21 +496,25 @@ failed finalization cannot leave an older reference looking current.
 | `count` | Assessable cohort sites with that component value. |
 
 Rows with the same rounded value are combined by summing their counts. New
-measurements use the same rounding when ranked against the distribution. Raw
-score inputs retain twelve decimal places, and classification thresholds
-use those raw values before ranking rounding.
+measurements use the same rounding when ranked against the distribution.
+Saturated density values are counted in the distribution, although a saturated
+site always scores `0` rather than being ranked against it. The raw metrics,
+`rszd`, `rszd_abs`, and the four `geometry_*_zbond` statistics, retain twelve
+decimal places, and classification thresholds use those raw values before
+ranking rounding. The other decimal score inputs, `rszd_negative`,
+`rszd_positive`, and `geometry_coverage`, use six.
 
 ### `metadata.json`
 
-The scoring contract is recorded by `score_decimal_places`, `metric_decimal_places`,
-`reference_decimal_places`,
-`density_thresholds`, `density_saturation_value`, `density_saturation_policy`,
-`geometry_thresholds`, `geometry_statistic`, `overall_rule`,
-`score_method`, `coverage_policy`, `input_status_policy`,
-`cohort_weighting`, `maximum_entry_metal_sites`, and `reference_data_id`.
-`analysis_config_id` additionally binds the model, alternate-conformer,
-symmetry, cohort-limit, and bundled-reference policies. Alchemy refuses to load
-a reference whose contract differs from the running code.
+The scoring contract is recorded by `score_decimal_places`,
+`metric_decimal_places`, `reference_decimal_places`, `density_thresholds`,
+`density_saturation_value`, `density_saturation_policy`, `geometry_thresholds`,
+`geometry_statistic`, `overall_rule`, `score_method`, `coverage_policy`,
+`input_status_policy`, `cohort_weighting`, `maximum_entry_metal_sites`, and
+`reference_data_id`. `analysis_config_id` additionally binds the model,
+alternate-conformer, symmetry, cohort-limit, and bundled-reference policies.
+Alchemy refuses to load a reference whose contract differs from the running
+code.
 
 Compatibility is checked against these explicit settings, required columns,
 and content-derived identities. Internal schema and method version numbers are
@@ -488,8 +536,10 @@ When database finalization receives the run manifest, metadata additionally
 contains `source_manifest_file`, `source_manifest_sha256`, `source_entry_count`,
 `manifest_status_counts`, `no_metals_entry_count`,
 `metal_site_limit_exceeded_entry_count`, `metal_bearing_entry_count`, and
-`software_versions`. `analysis_config_id` is copied from the manifest and
-identifies the model, alternate-conformer, symmetry, cohort-limit, and
+`software_versions`. `analysis_config_id` is always recorded from the running
+code, with or without a manifest. When a manifest is supplied, its single
+`analysis_config_id` must equal that value or finalization is refused. The
+identity covers the model, alternate-conformer, symmetry, cohort-limit, and
 bundled-reference policies. Execution-only choices such as paths, worker count,
 optional stage selection, map-cropping scope, logging, caching, and timeouts are
 excluded from that identity. Hashes identify exact artifacts; the reference ID
@@ -506,6 +556,6 @@ resource measurements that the manifest does not carry.
 | --- | --- |
 | `pdbID`, `status`, `retryable`, `no_metals`, `metal_site_limit_exceeded`, `runtime_s`, `n_metals`, `n_bonds`, `n_candidates` | The entry outcome as recorded in the manifest. |
 | `input_structure_s`, `mtzfix_s`, `twin_coefficient_normalization_s`, `fft_2fofc_s`, `mapmask_2fofc_s`, `fft_fofc_s`, `mapmask_fofc_s`, `edstats_s`, `density_total_s`, `statistics_extraction_s`, `bond_analysis_s`, `cleanup_s` | Wall-clock seconds per stage, to three decimals. Only stages that ran in at least one entry get a column, in this order; any other timing the worker recorded follows alphabetically. Blank means the stage did not run for that entry. |
-| `density_map_scope`, `full_map_bytes`, `edstats_map_bytes` | The map scope EDSTATS received and the sizes of the full and cropped maps. The scope is `model-envelope` or `full` as requested, or `full-size-fallback` when the cropped map was no smaller than the full map, or `full-extent-fallback` when the crop started beyond the unit cell's positive edge, which EDSTATS would wrap. |
+| `density_map_scope`, `full_map_bytes`, `edstats_map_bytes` | The map scope EDSTATS received and the sizes of the full and cropped maps. The scope is `model-envelope` or `full` as requested, or `full-size-fallback` when the cropped map was no smaller than the full map, or `full-extent-fallback` when the crop started beyond the unit cell's positive edge, which EDSTATS would wrap. When the density stage did not run, the scope is blank but both sizes are `0`. |
 | `memory_estimate_bytes` | The per-entry memory estimate the scheduler admitted the entry under; blank when no estimate was made. |
 | `reason_codes`, `warning_codes`, `status_detail` | The manifest's outcome vocabulary, repeated. |

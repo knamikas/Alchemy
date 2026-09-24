@@ -617,7 +617,7 @@ def test_documented_thresholds_match_the_constants() -> None:
             SPECIAL_POSITION_OCCUPANCY_TOLERANCE,
             "0.015",
         ),
-        ("model-envelope border", MODEL_ENVELOPE_BORDER_ANGSTROM, "10 Angstrom"),
+        ("model-envelope border", MODEL_ENVELOPE_BORDER_ANGSTROM, "10 Å"),
         ("per-program CCP4 budget", CCP4_TOOL_TIMEOUT_S, "900"),
         ("per-worker memory budget", AUTO_WORKER_MEMORY_BYTES, "2 GiB"),
         ("overfull occupancy fraction", OVERFULL_OCCUPANCY_NI_FRACTION, "0.2%"),

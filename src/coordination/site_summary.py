@@ -15,6 +15,7 @@ from typing import TypedDict
 
 from codes import (
     ContactScope,
+    ContextWarningReason,
     DonorRuleOverride,
     GeometryStatus,
     MultiDonorStatus,
@@ -314,16 +315,16 @@ def context_warning_reasons(
     policy = candidate.donor_policy()
     eligibility = candidate.eligibility()
     if candidate.neighbor.occupancy_valid and candidate.neighbor.occupancy == 0.0:
-        reasons.append("zero_occupancy_neighbor")
+        reasons.append(ContextWarningReason.ZERO_OCCUPANCY_NEIGHBOR)
     if not policy.inferred_allowed:
         if candidate.declared_connections:
-            reasons.append("declared_non_typical_donor")
+            reasons.append(ContextWarningReason.DECLARED_NON_TYPICAL_DONOR)
         elif eligibility.first_sphere_eligible:
-            reasons.append("non_typical_first_sphere_candidate")
+            reasons.append(ContextWarningReason.NON_TYPICAL_FIRST_SPHERE_CANDIDATE)
         elif include_proximal:
-            reasons.append("non_typical_proximal_candidate")
+            reasons.append(ContextWarningReason.NON_TYPICAL_PROXIMAL_CANDIDATE)
     if multi_donor is not None and multi_donor.contains_suspect_bond:
-        reasons.append("suspect_multi_donor_group")
+        reasons.append(ContextWarningReason.SUSPECT_MULTI_DONOR_GROUP)
     # Each branch above appends at most one reason, so there is nothing to
     # deduplicate here; ``_site_context`` pools several candidates and does.
     return reasons
@@ -347,7 +348,7 @@ def _site_context(
         )
     ]
     if non_typical_first_sphere:
-        reasons.append("non_typical_first_sphere_candidate")
+        reasons.append(ContextWarningReason.NON_TYPICAL_FIRST_SPHERE_CANDIDATE)
     reasons = list(dict.fromkeys(reasons))
     return _SiteContext(
         warning=bool(reasons),

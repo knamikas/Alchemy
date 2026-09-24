@@ -48,8 +48,9 @@ def test_help_does_not_claim_that_no_bonds_defaults_to_true() -> None:
     """
     paragraph = _option_help("--no-bonds")
     assert "skip the metal-ligand bond-distance stage" in paragraph
+    assert "bond analysis is enabled by default" in " ".join(paragraph.split())
     assert "(default: True)" not in paragraph, paragraph
-    assert "bonds=True" in paragraph, paragraph
+    assert "bonds=" not in paragraph, paragraph
 
 
 def test_help_does_not_claim_that_no_crystallization_download_defaults_to_true() -> (
@@ -58,8 +59,26 @@ def test_help_does_not_claim_that_no_crystallization_download_defaults_to_true()
     """The same guard as for ``--no-bonds``, for the other ``store_false`` flag."""
     paragraph = _option_help("--no-crystallization-download")
     assert "do not fetch missing original-PDB crystallization" in paragraph
+    assert "missing metadata is downloaded by default" in " ".join(paragraph.split())
     assert "(default: True)" not in paragraph, paragraph
-    assert "crystallization_download=True" in paragraph, paragraph
+    assert "crystallization_download=" not in paragraph, paragraph
+
+
+@pytest.mark.parametrize(
+    "option", ["--verbose", "--quiet", "--keep-intermediates", "--retry-partials"]
+)
+def test_help_omits_the_internal_default_of_flags(option: str) -> None:
+    """A flag's destination default (``False`` or a zero count) is not shown."""
+    paragraph = _option_help(option)
+    assert "(default: False)" not in paragraph, paragraph
+    assert "(default: 0)" not in paragraph, paragraph
+
+
+def test_keep_intermediates_help_states_one_default() -> None:
+    """Only the meaningful default of ``--keep-intermediates`` is printed."""
+    paragraph = " ".join(_option_help("--keep-intermediates").split())
+    assert paragraph.count("default:") == 1, paragraph
+    assert "(default: delete after extract)" in paragraph, paragraph
 
 
 def test_help_omits_the_default_of_unset_options() -> None:
@@ -265,17 +284,26 @@ def test_score_reference_is_discovered_in_output_before_repo_default(
 
 
 def test_explicit_score_reference_is_authoritative(tmp_path: Path) -> None:
+    """A missing explicit reference fails rather than falling back to another."""
     output_dir = tmp_path / "output"
     automatic_reference = output_dir / "score_reference"
     automatic_reference.mkdir(parents=True)
     (automatic_reference / score.REFERENCE_METADATA_FILE).write_text("{}")
     explicit_reference = tmp_path / "explicit-reference"
 
+    with pytest.raises(errors.DriverError, match="does not exist") as excinfo:
+        driver_scoring.resolve_score_reference_dir(
+            OutputLayout(str(output_dir)), str(explicit_reference)
+        )
+    assert str(explicit_reference) in str(excinfo.value)
+
+    explicit_reference.mkdir()
+    (explicit_reference / score.REFERENCE_METADATA_FILE).write_text("{}")
     selected, searched = driver_scoring.resolve_score_reference_dir(
         OutputLayout(str(output_dir)), str(explicit_reference)
     )
 
-    assert selected is None
+    assert selected == str(explicit_reference)
     assert searched == (str(explicit_reference),)
 
 

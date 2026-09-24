@@ -44,16 +44,18 @@ applicable.
 2. [driver/pool.py](../src/driver/pool.py) orchestrates the batch. Its
    collaborators are [driver/layout.py](../src/driver/layout.py) for output
    paths, [driver/entries.py](../src/driver/entries.py) for entry selection,
-   [driver/scoring.py](../src/driver/scoring.py) for the scoring plan,
-   and [driver/report.py](../src/driver/report.py) for the batch summary and
-   score finalization. The pool loads the bundled cofactor catalog and
-   resolves the CCP4 environment through
+   [driver/scoring.py](../src/driver/scoring.py) for the scoring plan, and
+   [driver/report.py](../src/driver/report.py) for the batch summary and score
+   finalization. The pool loads the bundled cofactor catalog and resolves the
+   CCP4 environment through
    [driver/environment.py](../src/driver/environment.py), which also records the
    Alchemy, Gemmi, and CCP4 versions for provenance.
-   [driver/ccp4_setup.py](../src/driver/ccp4_setup.py) locates the setup script for it: the
-   `--ccp4-setup` option, the `CCP4_SETUP` environment variable, the path saved
-   by `--configure-ccp4`, then common install locations. `--configure-ccp4`
-   saves the setup path and exits before analysis. A `DriverError` from
+   An explicit `--ccp4-setup` script takes precedence; otherwise CCP4 programs
+   already on `PATH` are used as they are. Only when neither applies does
+   [driver/ccp4_setup.py](../src/driver/ccp4_setup.py) look for a setup script:
+   the `CCP4_SETUP` environment variable, the path saved by `--configure-ccp4`,
+   then common install locations. `--configure-ccp4` saves the setup path and
+   exits before analysis. A `DriverError` from
    [driver/errors.py](../src/driver/errors.py) at any startup step ends the run
    with exit code 1.
 3. The driver creates the output directory if needed, then acquires the
@@ -72,12 +74,12 @@ applicable.
 
 ### One entry
 
-[worker/lifecycle.py](../src/worker/lifecycle.py) owns the entry lifecycle and its temporary
-directory. The pool initializer installs `WorkerConfig` and logging once in each
-process; subsequent tasks call `process()` with a PDB ID. Input resolution lives
-in [worker/resolve.py](../src/worker/resolve.py) and the analysis stages in
-[worker/stages.py](../src/worker/stages.py); `lifecycle.py` folds their outcomes
-into the `EntryResult`.
+[worker/lifecycle.py](../src/worker/lifecycle.py) owns the entry lifecycle and
+its temporary directory. The pool initializer installs `WorkerConfig` and
+logging once in each process; subsequent tasks call `process()` with a PDB ID.
+Input resolution lives in [worker/resolve.py](../src/worker/resolve.py) and the
+analysis stages in [worker/stages.py](../src/worker/stages.py); `lifecycle.py`
+folds their outcomes into the `EntryResult`.
 
 [worker/resolve.py](../src/worker/resolve.py) uses [inputs.py](../src/inputs.py)
 to locate or retrieve files and read reflection limits and PDB-REDO metadata.
@@ -151,8 +153,6 @@ metadata. Its collaborators have distinct responsibilities:
 | [donor_chemistry.py](../src/coordination/donor_chemistry.py) | Determine which donor chemistries permit inferred contacts. |
 | [dpi.py](../src/coordination/dpi.py) | Calculate coordinate-precision components used in geometry assessment. |
 | [contact_record.py](../src/coordination/contact_record.py) | Carry candidate provenance, eligibility, geometry, and multi-donor assessments. |
-| [reference_data.py](../src/reference_data.py) | Verify combined reference checksums and compute their reproducibility identity. |
-| [reference_integrity.py](../src/reference_integrity.py) | Shared file hashing and metadata-sidecar verification. |
 | [metallocofactors/catalog.py](../src/metallocofactors/catalog.py) | Load and cache cofactor classifications from the adjacent catalog. |
 | [coordination/metal_distances/distances.py](../src/coordination/metal_distances/distances.py) | Load and cache literature distances and first-sphere targets from the adjacent table. |
 | [edstats_statistics.py](../src/edstats_statistics.py) | Validate the EDSTATS residue table, join its rows to coordinate residues, and aggregate the density-context row; contact analysis builds its per-site density z-score index from those rows. |
@@ -175,7 +175,7 @@ returned site and bond evidence:
 
 | Run mode | Scoring behavior |
 | --- | --- |
-| Single entry, ID file, manual input, or capped run | Score each completed entry against an explicit, output-directory, or bundled frozen reference, in that search order. Without a reference, emit classifications without empirical rankings. |
+| Single entry, ID file, manual input, or capped run | Score each completed entry against an explicit, output-directory, or bundled frozen reference, in that search order. An explicit `--score-reference-dir` replaces the search, and one that holds no usable reference stops the run. When the search finds no reference, emit classifications without empirical rankings. |
 | Uncapped database run | Stream compact score inputs, then finalize scores and a reusable reference when the batch has no recoverable unfinished entries. |
 | `--no-bonds` | Skip contact analysis and disable score output. |
 
@@ -187,8 +187,10 @@ Crystallization metadata does not participate in scoring.
 Recovery spans several layers:
 
 - The worker preserves geometry analysis after explicitly handled density
-  timeouts or MTZFIX validation failures. A bond-stage failure preserves density
-  rows already produced. Other entry exceptions become entry outcomes rather
+  timeouts or MTZFIX validation failures. A bond-stage exception that does not
+  describe the entry's data preserves density rows already produced; a parse,
+  lookup, or arithmetic error there ends the entry as an error, like the same
+  error in any other stage. Other entry exceptions become entry outcomes rather
   than stopping the whole batch.
 - [driver/dispatch.py](../src/driver/dispatch.py) runs the worker pool, admits
   entries as memory permits, monitors worker deaths, and records retryable
@@ -222,6 +224,8 @@ Recovery spans several layers:
 | [driver/resources.py](../src/driver/resources.py) | Per-entry memory estimates and the worker ceiling for a memory budget. |
 | [driver/memory_admission.py](../src/driver/memory_admission.py) | Admission of entries under memory pressure, with backoff and delayed recovery. |
 | [metal_elements.py](../src/metal_elements.py) | Recognized metal elements. |
+| [reference_data.py](../src/reference_data.py) | Verify combined reference checksums and compute their reproducibility identity. |
+| [reference_integrity.py](../src/reference_integrity.py) | Shared file hashing and metadata-sidecar verification. |
 | [pdb_remarks.py](../src/pdb_remarks.py) | The `REMARK 950 ALCHEMY` provenance records of converted PDB files: record layouts, writer, and parser. |
 | [gemmi_typing.py](../src/gemmi_typing.py) | Typed views of Gemmi members its stub leaves untyped. |
 | [driver/progress.py](../src/driver/progress.py) | Batch progress reporting. |

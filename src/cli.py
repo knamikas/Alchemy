@@ -102,11 +102,16 @@ def utilization_fraction(value: str) -> float:
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
-    """Append each option's default to its help, except ``None``, which is unset."""
+    """Append each option's default to its help, except where it says nothing.
+
+    ``None`` means unset. A flag takes no value, so its default is only the
+    internal state of its destination (``False`` for ``--quiet``, ``True`` for
+    ``--no-bonds``, ``0`` for ``-v``) and would read as a claim about the flag.
+    """
 
     @override
     def _get_help_string(self, action: argparse.Action) -> str | None:
-        if action.default is None:
+        if action.default is None or action.nargs == 0:
             return action.help
         return super()._get_help_string(action)
 
@@ -161,8 +166,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help=(
             "do not fetch missing original-PDB crystallization metadata; use "
-            "only the metadata cache and coordinate-file records "
-            "(crystallization_download=%(default)s)"
+            "only the metadata cache and coordinate-file records; missing "
+            "metadata is downloaded by default"
         ),
     )
     ap.add_argument(
@@ -255,9 +260,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--score-reference-dir",
         metavar="DIR",
         help=(
-            "explicit frozen full-database score reference for single, "
-            "ID-file, manual, and capped runs; otherwise Alchemy searches "
-            "the output directory and repository default"
+            "frozen full-database score reference for single, ID-file, "
+            "manual, and capped runs; the run stops if DIR holds no complete "
+            "reference. Without this option, Alchemy searches the output "
+            "directory and repository default"
         ),
     )
     ap.add_argument(
@@ -291,9 +297,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-bonds",
         dest="bonds",
         action="store_false",
-        help="skip the metal-ligand bond-distance stage (edstats "
-        "stats only); bond analysis is enabled by default "
-        "(bonds=%(default)s)",
+        help=(
+            "skip the metal-ligand bond-distance stage (edstats stats only); "
+            "bond analysis is enabled by default"
+        ),
     )
     return ap
 

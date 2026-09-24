@@ -21,13 +21,16 @@ mypy src tests tools
 
 Alchemy supports Python 3.11 or later and requires `gemmi` 0.7 or later.
 
-Each test module is named after the source module it covers: flat modules in
-`src/` have flat test modules here, and `coordination/`, `driver/`, and
-`tools/` mirror the corresponding source packages. Whole-run coverage lives
-under `integration/`. Shared fixtures and builders remain in `conftest.py` and
-`helpers.py`; `test_helpers.py` tests the builders themselves, and
-`score_oracle.py` is an independent re-implementation of the scoring
-policy used to cross-check `src/score`.
+Test modules broadly follow the source layout: most flat modules in `src/` have
+a flat test module here, `coordination/` and `driver/` mirror those source
+packages, and `tools/` covers the maintenance scripts in the top-level `tools/`
+directory. The `worker` and `score` packages are tested by the flat
+`test_worker.py` and `test_score.py`, and some modules cover a behavior rather
+than one source file. Whole-run coverage lives under `integration/`. Shared
+fixtures and builders remain in `conftest.py` and `helpers.py`;
+`test_helpers.py` tests the builders themselves, and `score_oracle.py` is an
+independent re-implementation of the scoring policy used to cross-check
+`src/score`.
 
 ## Common commands
 
@@ -41,7 +44,7 @@ python3 -m pytest tests/integration/test_pipeline_integration.py \
 
 # Coverage, as CI measures it
 python3 -m pytest --no-ccp4 --no-network --skip-slow \
-    --cov=src --cov-report=term-missing
+    --cov=src --cov-report=term-missing --cov-fail-under=86
 ```
 
 CCP4 must provide `mtzfix`, `fft`, `mapmask`, and `edstats`. If they are not
@@ -55,7 +58,7 @@ already on `PATH`, source the CCP4 setup script first:
 
 CI runs the offline lane—`--no-ccp4 --no-network --skip-slow`—on Linux,
 Windows, and macOS, with Linux additionally enforcing `ruff check`,
-`ruff format --check`, Mypy, and the coverage floor. CI doesn't provision CCP4
+`ruff format --check`, mypy, and the coverage floor. CI doesn't provision CCP4
 or the pinned entry data because of the setup cost.
 
 A second workflow, `ccp4-integration.yml`, runs the full lane weekly and on
@@ -65,17 +68,17 @@ variable). CCP4 cannot be redistributed through a public action or image, so
 until such a runner exists the workflow is queued and never runs.
 
 The consequence is worth stating plainly, because it is not visible from a green
-run. Nothing in CI executes `mtzfix`, `fft`, `mapmask`, or `edstats`, and nothing
-runs the pipeline end to end. Every `slow` test is also `ccp4`-marked, so
-`--skip-slow` removes nothing that `--no-ccp4` had not already removed. A defect
-in how Alchemy invokes a CCP4 program, or parses what one writes, can pass CI
-with the whole suite green.
+run. Nothing in CI executes `mtzfix`, `fft`, `mapmask`, or `edstats`, and
+nothing runs the pipeline end to end. Every `slow` test is also `ccp4`-marked,
+so `--skip-slow` removes nothing that `--no-ccp4` had not already removed. A
+defect in how Alchemy invokes a CCP4 program, or parses what one writes, can
+pass CI with the whole suite green.
 
 That is not hypothetical. Commit `e0429d0` read the EDSTATS `NR` column as an
 ordinal over the whole model when EDSTATS restarts it per chain, which produced
 zero output for every multi-chain entry — most of the PDB. All 1142 offline
-tests passed, because the synthetic `stats.out` in `helpers.py` numbered `NR` the
-same incorrect way. Only a real `edstats` run distinguished them.
+tests passed, because the synthetic `stats.out` in `helpers.py` numbered `NR`
+the same incorrect way. Only a real `edstats` run distinguished them.
 
 So run the full lane locally before merging changes to CCP4 invocation, to the
 parsing of any CCP4 program's output (`edstats_statistics.py`,
@@ -113,7 +116,7 @@ network access, entry-backed tests skip.
 
 ## Markers and options
 
-- `ccp4`: requires the CCP4 programs listed in the requirements section
+- `ccp4`: requires `mtzfix`, `fft`, `mapmask`, and `edstats`
 - `network`: may contact PDB-REDO
 - `entry_data`: requires the pinned integration entries
 - `slow`: runs the end-to-end pipeline
@@ -121,6 +124,7 @@ network access, entry-backed tests skip.
 `--no-ccp4` and `--no-network` disable those capabilities. The corresponding
 `--require-ccp4` and `--require-network` options make a missing capability fail
 the run. `--require-entry-data` ensures the integration tests did not all skip.
+`--skip-slow` skips tests marked `slow`.
 
 ## Known defects
 

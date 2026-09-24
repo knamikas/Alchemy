@@ -24,9 +24,9 @@ reference data, see [Reference-data maintenance](maintenance.md).
   and removed after their rows are extracted unless `--keep-intermediates` is
   supplied. Cleanup never targets a pre-existing `OUTPUT_DIR/PDB_ID` directory.
 - Model-envelope mode still calculates each complete FFT map before cropping, so
-  map values come from the same Fourier calculation as legacy full-map mode.
-  Full temporary maps are deleted as soon as they are no longer needed unless
-  `--keep-intermediates` is supplied.
+  map values come from the same Fourier calculation as
+  `--density-map-scope full`. Full temporary maps are deleted as soon as they
+  are no longer needed unless `--keep-intermediates` is supplied.
 
 ## Manage worker resources
 
@@ -88,7 +88,8 @@ reference data, see [Reference-data maintenance](maintenance.md).
   later startup preserves that directory. Merges replace individual files
   atomically, but a failed multi-file merge may require recovery from staging.
 - In the manifest, blank `n_bonds` and `n_candidates` values mean bond analysis
-  was disabled or the entry failed before reaching it; `0` means it ran and
+  was disabled or did not run to completion: the entry failed before or during
+  it, or ended early as `metal_presence_indeterminate`. `0` means it ran and
   found no rows of that type, or that the entry ended early with nothing to
   analyze (`no_metals` or `metal_site_limit_exceeded`). Resume uses this
   distinction to add bond-stage results after an earlier `--no-bonds` run.
@@ -107,12 +108,13 @@ reference data, see [Reference-data maintenance](maintenance.md).
 
 ## Resume a run
 
-- Resume retries are staged separately. Existing rows are replaced only after a
-  retry produces a terminal result and the retry batch completes; failed or
-  interrupted retries leave the previous rows intact. `--resume --no-bonds`
-  preserves existing bond and candidate rows and their manifest counts. Entries
-  originating from a bond-disabled run retain blank `n_bonds` and
-  `n_candidates`, so a later bond-enabled resume will process them.
+- Resume retries are staged separately. Existing rows are replaced only by a
+  retry that produces a terminal result. If the batch is interrupted, retries
+  that already finished are still merged; unfinished or failed retries leave
+  the previous rows intact. `--resume --no-bonds` preserves existing bond and
+  candidate rows and their manifest counts. Entries originating from a
+  bond-disabled run retain blank `n_bonds` and `n_candidates`, so a later
+  bond-enabled resume will process them.
 - `--resume --retry-partials` also reprocesses non-retryable `partial` entries
   from the manifest after a processing improvement while continuing to protect
   `ok` entries. Optional `--id` or `--id-file` selectors restrict that set.
@@ -131,9 +133,12 @@ reference data, see [Reference-data maintenance](maintenance.md).
 
 ## Interpret entry outcomes
 
-- A failure in bond analysis does not discard real-space-statistics rows already
-  calculated for that entry; the manifest records the entry as `partial` with
-  the bond-stage error.
+- A bond-analysis exception that does not describe the entry's data keeps the
+  real-space-statistics rows already calculated for that entry; the manifest
+  records the entry as a retryable `partial` with `bond_stage_failure`. A
+  parse, lookup, or arithmetic error in bond analysis instead ends the entry as
+  `error` with `deterministic_processing_error`, and its density rows are not
+  written.
 - If `mtzfix` cannot make an MTZ's Fourier coefficients pass its consistency
   re-test, Alchemy does not use the rejected maps or retry indefinitely. An
   explicitly twin-refined PDB-REDO entry is eligible for the guarded Refmac
@@ -175,29 +180,35 @@ reference data, see [Reference-data maintenance](maintenance.md).
   deaths, skips, and retryable partials remain nonzero.
 - The exit code is `0` for a complete batch, `1` when entries remain incomplete
   under the rule above or when the driver stops on a fatal error before or
-  during the batch (a busy output lock, a CCP4 setup that cannot be resolved,
-  incompatible existing outputs under `--resume`, a crystallization metadata
-  fetch failure, or an unwritable `--log-file`), and `130` after an interrupt.
-  The run report records the driver error in every case.
+  during the batch, and `130` after an interrupt. Invalid command-line options
+  exit with `2` before anything runs. Fatal driver errors include a busy output
+  lock, a CCP4 setup that cannot be resolved, an invalid bundled cofactor
+  catalog, an invalid score reference or a `--score-reference-dir` that holds
+  no usable one, incompatible existing outputs under `--resume`, a
+  crystallization metadata fetch failure, and a failure to clear stale outputs
+  or to finalize scores or the review queue. The run report records the driver
+  error in each of these cases. An unwritable `--log-file` also exits with `1`,
+  but it stops the run before the report exists, so only `stderr` reports it.
 
 ## Protect the output directory and scratch data
 
-- One Alchemy process on one machine owns an output directory at a time. The
-  lease uses `flock` on POSIX and a non-blocking byte-range lock on Windows.
-  Across a network filesystem it is only as reliable as that filesystem's lock
-  support, so two cluster nodes pointed at one `--output-dir` may both believe
-  they own it and both truncate the result CSVs. Give concurrent runs separate
-  output directories rather than relying on the lease to arbitrate between
-  hosts. A run takes a non-blocking advisory lease on `OUTPUT_DIR/.alchemy.lock`
-  before it reads, replaces, or resumes any result file. A second run fails
-  immediately and reports the current owner's process, host, start time, and
-  command instead of touching those results. The lock file intentionally remains
-  after exit; the operating-system lease, not the file's presence, determines
-  whether the directory is busy, and the lease is released automatically if the
-  process exits or crashes. Alchemy refuses a lock path that is a symbolic link
-  or Windows reparse point, a non-regular file, or an inode with multiple hard
-  links; POSIX additionally requires current-user ownership. Recording lease
-  metadata therefore cannot overwrite another file through that path.
+- One Alchemy process on one machine owns an output directory at a time. A run
+  takes a non-blocking advisory lease on `OUTPUT_DIR/.alchemy.lock` before it
+  reads, replaces, or resumes any result file. A second run fails immediately
+  and reports the current owner's process, host, start time, and command
+  instead of touching those results. The lease uses `flock` on POSIX and a
+  non-blocking byte-range lock on Windows. Across a network filesystem it is
+  only as reliable as that filesystem's lock support, so two cluster nodes
+  pointed at one `--output-dir` may both believe they own it and both truncate
+  the result CSVs. Give concurrent runs separate output directories rather than
+  relying on the lease to arbitrate between hosts. The lock file intentionally
+  remains after exit; the operating-system lease, not the file's presence,
+  determines whether the directory is busy, and the lease is released
+  automatically if the process exits or crashes. Alchemy refuses a lock path
+  that is a symbolic link or Windows reparse point, a non-regular file, or an
+  inode with multiple hard links; POSIX additionally requires current-user
+  ownership. Recording lease metadata therefore cannot overwrite another file
+  through that path.
 - Startup cleanup removes only Alchemy scratch directories carrying a valid
   disposable ownership marker. Unmarked directories, symlinks, malformed
   markers, and intermediates retained by `--keep-intermediates` are left alone.
@@ -228,11 +239,11 @@ reference data, see [Reference-data maintenance](maintenance.md).
   `AssertionError` is what a defect in Alchemy's own code raises. Because a
   deterministic error is a terminal exclusion for a full-database run, those
   defect-shaped types are deliberately kept recoverable so a regression fails
-  the run instead of silently removing entries from a new reference. The distinction is
-  advisory for resume and does not change what `--resume` does: every `error`
-  entry is retried either way because a resumed run may have been given a
-  repaired input file or a re-downloaded mirror entry, and Alchemy does not
-  checksum its inputs to tell. Skipping an entry the operator had just fixed
+  the run instead of silently removing entries from a new reference. The
+  distinction is advisory for resume and does not change what `--resume` does:
+  every `error` entry is retried either way because a resumed run may have been
+  given a repaired input file or a re-downloaded mirror entry, and Alchemy does
+  not checksum its inputs to tell. Skipping an entry the operator had just fixed
   would be worse than repeating one.
 - The manifest's `status_detail` column gives a bounded human-readable
   explanation of the machine-readable reason codes. It covers expected partial
@@ -249,8 +260,8 @@ reference data, see [Reference-data maintenance](maintenance.md).
 
 - Output-schema migrations are not appended onto older artifacts. `--resume`
   refuses to mix rows with incompatible headers or with missing crystallization
-  outputs; use a new `--output-dir` for the first run after this migration.
-  Headers are compared in full, including the EDSTATS block of
+  outputs; use a new `--output-dir` for the first run of a build whose output
+  schema differs. Headers are compared in full, including the EDSTATS block of
   `metal_sites_all.csv`, so appended rows cannot be silently misaligned by
   output from a different build.
 - Original-PDB crystallization metadata for normal PDB-REDO runs are fetched
@@ -331,4 +342,4 @@ atoms, raises no code at all.
 | `declared_connection_conformer_substituted` | A `_struct_conn` or `LINK` record named an alternate conformer that per-residue selection did not choose, so it was re-pointed onto the chosen one. A record that names no altloc already points at the selected conformer, so it never raises this code. |
 | `declared_connection_zero_occupancy_partner` | A declared connection resolves to an atom with valid zero occupancy. It remains candidate evidence but cannot become a bond. |
 | `declared_donor_element_unsupported` | A declared partner atom is not nitrogen, oxygen, or sulfur, so the declaration was not turned into a contact candidate. |
-| `declared_donor_outside_supported_classes` | A declared donor belongs to a residue class with no bundled reference, so it stays a candidate and is never z-scored or promoted to a bond. |
+| `declared_donor_outside_supported_classes` | A declared donor belongs to a residue that is neither water nor one of the 20 standard amino acids, so it stays a candidate and is never z-scored or promoted to a bond. A declared water or amino-acid donor without a reference distance still becomes a bond row; its reference-derived values, such as the z-score, are blank. |

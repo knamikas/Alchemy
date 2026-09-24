@@ -24,9 +24,9 @@ the grouped distributions and their scoring settings.
 
 ## Cofactor reference maintenance
 
-Normal analysis always loads the fixed catalog bundled in `src/metallocofactors/`. It never
-checks the catalog's age, accesses the network, selects a user cache, or
-rebuilds the catalog.
+Normal analysis always loads the fixed catalog bundled in
+`src/metallocofactors/`. It never checks the catalog's age, accesses the
+network, selects a user cache, or rebuilds the catalog.
 
 Catalog updates are an explicit developer maintenance operation:
 
@@ -49,24 +49,28 @@ list or classification rules change.
 
 ## Reference data
 
-- `src/metallocofactors/metallocofactors_id.txt` — fixed bundled catalog of metal-containing
-  Chemical Component Dictionary components used by every analysis run. Each
-  tab-separated row carries the component ID, its formula, and the structural
-  class (cluster, heme, or other) that the analysis reports for it.
-- `src/metallocofactors/metallocofactors_id.meta.json` — generation metadata for the
-  committed cofactor list.
-- `src/coordination/metal_distances/metal_distances_info.txt` — reference metal-ligand distances and
-  standard deviations, keyed by donor residue, donor element, and metal. Values
-  are from Harding (2006),
+- `src/metallocofactors/metallocofactors_id.txt` — fixed bundled catalog of
+  metal-containing Chemical Component Dictionary components used by every
+  analysis run. Each tab-separated row carries the component ID, its formula,
+  and its structural class: `cluster`, `heme`, or blank for any other
+  component, which the analysis reports as `other`.
+- `src/metallocofactors/metallocofactors_id.meta.json` — generation metadata for
+  the committed cofactor list.
+- `src/coordination/metal_distances/metal_distances_info.txt` — reference
+  metal-ligand distances and standard deviations, keyed by donor residue, donor
+  element, and metal. Values are from Harding (2006),
   [Acta Cryst. D62, 678-682](https://doi.org/10.1107/S0907444906014594), except
   NI, which is from Zheng et al. (2008), and SER/THR/TYR, which are approximated
-  from statements in Harding (2006) rather than tabulated. See
+  from statements in Harding (2006) rather than tabulated. The NI rows cover
+  only HOH, ASP, GLU, backbone-carbonyl, HIS, and CYS donors; SER/THR/TYR rows
+  exist only for NA, MG, K, CA, MN, FE, CO, CU, and ZN. See
   [Reference coverage of the donor table](method.md#reference-coverage-of-the-donor-table)
   for the donors that this file does and doesn't cover. The format has one
   important distinction: column 1 `CA` is the backbone-carbonyl pseudo residue,
   while column 3 `CA` is calcium.
-- `src/coordination/metal_distances/metal_distances_info.meta.json` — checksum, row count, and citations
-  for the distance table, written by `tools/stamp_distance_table.py`.
+- `src/coordination/metal_distances/metal_distances_info.meta.json` — checksum,
+  row count, and citations for the distance table, written by
+  `tools/stamp_distance_table.py`.
 
 Both bundled files are verified against their sidecars when they are first read,
 and a run stops rather than analyze against data that has drifted from what the

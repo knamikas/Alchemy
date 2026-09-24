@@ -479,6 +479,29 @@ class InferredDonorRule(StrEnum):
     OUTSIDE_TYPICAL_DONOR_LIST = "outside_typical_donor_list"
 
 
+class ContextWarningReason(StrEnum):
+    """Why a contact or site carries a contextual coordination warning.
+
+    Written pipe-joined to ``context_warning_reasons`` on site, bond,
+    candidate, and score rows. The warnings are context only and never change
+    a score or a classification. A placeholder score row writes
+    ``ScoreMissingReason.SITE_EVIDENCE_UNAVAILABLE`` to the same column.
+    """
+
+    #: The donor atom has a valid occupancy of exactly zero.
+    ZERO_OCCUPANCY_NEIGHBOR = "zero_occupancy_neighbor"
+    #: A source-declared donor outside the typical inferred donor list.
+    DECLARED_NON_TYPICAL_DONOR = "declared_non_typical_donor"
+    #: An undeclared non-typical donor within the first-sphere cutoff. A site
+    #: row carries it when any such candidate exists, assigned or not.
+    NON_TYPICAL_FIRST_SPHERE_CANDIDATE = "non_typical_first_sphere_candidate"
+    #: Candidate rows only: an undeclared non-typical donor beyond the cutoff.
+    NON_TYPICAL_PROXIMAL_CANDIDATE = "non_typical_proximal_candidate"
+    #: The donor residue contributes several contacts, at least one a geometry
+    #: outlier. Never on candidate rows.
+    SUSPECT_MULTI_DONOR_GROUP = "suspect_multi_donor_group"
+
+
 class ScoreExclusionReason(StrEnum):
     """Why an assigned contact contributes no geometry evidence.
 

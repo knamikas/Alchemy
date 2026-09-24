@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import (
     TypeVar,
 )
+from unittest import mock
 
 import gemmi
 import helpers
@@ -37,7 +38,7 @@ import inputs
 import score
 from coordination.metal_distances import distances as distance_reference
 from coordination.schema import BOND_COLUMNS, CANDIDATE_COLUMNS
-from driver import review_queue, runlog
+from driver import review_queue, runlog, scoring as driver_scoring
 from driver.writers import MANIFEST_COLUMNS, STATS_COLUMNS
 from edstats_statistics import DENSITY_CONTEXT_COLUMNS
 
@@ -259,8 +260,10 @@ def run_alchemy(
 ) -> RunResult:
     """Run the driver in-process and return its exit code and output.
 
-    Keep all paths outside the repository. Missing mirror or reference options
-    use nonexistent paths to force cache input and prevent reference scoring.
+    Keep all paths outside the repository. A missing mirror option uses a
+    nonexistent path to force cache input. A missing reference option leaves the
+    automatic search on, with the repository default patched to a nonexistent
+    path so the bundled reference cannot score the run.
     """
     output_dir = str(output_dir)
     argv = ["--output-dir", output_dir, "--no-crystallization-download"]
@@ -272,17 +275,21 @@ def run_alchemy(
         else os.path.join(str(tmp_root or output_dir), "absent-mirror")
     )
     argv += ["--pdb-redo-root", root]
-    argv += [
-        "--score-reference-dir",
-        str(reference_dir)
-        if reference_dir is not None
-        else os.path.join(str(tmp_root or output_dir), "absent-reference"),
-    ]
+    no_reference: contextlib.AbstractContextManager[object] = contextlib.nullcontext()
+    if reference_dir is not None:
+        argv += ["--score-reference-dir", str(reference_dir)]
+    else:
+        # An explicit reference must exist, so hide the bundled one instead.
+        no_reference = mock.patch.object(
+            driver_scoring,
+            "DEFAULT_SCORE_REFERENCE_DIR",
+            os.path.join(str(tmp_root or output_dir), "absent-reference"),
+        )
     argv += [str(a) for a in args]
 
     out, err = io.StringIO(), io.StringIO()
     code = 0
-    with _environment(ccp4_environ):
+    with _environment(ccp4_environ), no_reference:
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = cli.main(argv)
@@ -544,7 +551,7 @@ def test_single_entry_run_writes_documented_outputs(
 def test_9myr_reports_two_chemically_sane_zinc_ribbon_sites(batch: Batch) -> None:
     """9myr yields two Cys3-His zinc sites with measured density and geometry.
 
-    The z-scores are re-derived from the README formula and the bundled
+    The z-scores are re-derived from the docs/method.md formula and the bundled
     literature table, so a change in the scoring path fails here too.
     """
     stats = {row["CI"]: row for row in rows_for(batch.stats, "9myr")}

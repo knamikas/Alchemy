@@ -43,15 +43,33 @@ logger = logger_for(__name__)
 def resolve_score_reference_dir(
     layout: OutputLayout, configured_dir: str | None = None
 ) -> tuple[str | None, tuple[str, ...]]:
-    """Find a frozen score reference, honoring an explicit override."""
-    candidates: tuple[str, ...]
+    """Find a frozen score reference, honoring an explicit override.
+
+    The automatic search returns ``None`` when no candidate holds a reference,
+    and the run then classifies without one. An explicit directory is the
+    operator's choice, so one that holds no reference raises ``DriverError``
+    rather than quietly dropping the rankings.
+    """
     if configured_dir is not None:
-        candidates = (configured_dir,)
-    else:
-        candidates = (
-            layout.reference_dir,
-            DEFAULT_SCORE_REFERENCE_DIR,
-        )
+        metadata_path = os.path.join(configured_dir, REFERENCE_METADATA_FILE)
+        if not os.path.isdir(configured_dir):
+            raise DriverError(
+                f"--score-reference-dir {configured_dir} does not exist or is "
+                "not a directory."
+            )
+        if not os.path.isfile(metadata_path):
+            raise DriverError(
+                f"--score-reference-dir {configured_dir} is not a complete score "
+                f"reference: {REFERENCE_METADATA_FILE} is missing. Point it at a "
+                "finished reference, such as the score_reference directory an "
+                "uncapped full-database run writes, or omit it to search the "
+                "output directory and the repository default."
+            )
+        return configured_dir, (configured_dir,)
+    candidates = (
+        layout.reference_dir,
+        DEFAULT_SCORE_REFERENCE_DIR,
+    )
     for candidate in candidates:
         metadata_path = os.path.join(candidate, REFERENCE_METADATA_FILE)
         if os.path.isfile(metadata_path):
@@ -402,6 +420,8 @@ def plan_score(
         layout, args.score_reference_dir
     )
     if reference_dir is None:
+        # Only the automatic search gets here; an explicit directory without a
+        # reference has already raised.
         logger.info(
             "no frozen score reference is installed, so Alchemy will "
             "emit authoritative PASS/REVIEW/SUSPECT classifications without "
