@@ -1,10 +1,13 @@
 # Alchemy
 
-Alchemy evaluates how well experimental electron density supports metal atoms in
-protein crystal structures. For each PDB entry, it calculates 2mFo-DFc and
-mFo-DFc maps, extracts per-residue real-space statistics, identifies metal ions
-and metal-containing cofactors, and compares first-sphere coordination geometry
-with literature reference distances.
+Alchemy assesses how well the crystallographic data support each modeled metal
+site in a protein crystal structure. For every entry, it identifies metal ions
+and metal-containing cofactors, calculates 2mFo−DFc and mFo−DFc maps and reads
+each site's residue-level difference-density Z score (RSZD) from EDSTATS, and
+compares its metal–donor distances with literature reference values as
+precision-scaled Z scores. The density and geometry evidence combine into a
+PASS, REVIEW, or SUSPECT classification and an Alchemy score (0–100) that ranks
+the site against a PDB-REDO-wide reference.
 
 Run Alchemy from a source checkout with `./alchemy`. On Windows, run
 `python alchemy` instead. The command can read a local PDB-REDO mirror, download
