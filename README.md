@@ -32,7 +32,7 @@ Clone the repository, then install the Python dependencies in a virtual
 environment:
 
 ```bash
-git clone https://github.com/knamikas/Alchemy.git
+git clone https://github.com/snelllab/Alchemy.git
 cd Alchemy
 python3 -m venv .venv
 . .venv/bin/activate
@@ -200,3 +200,52 @@ handling, see the [operations guide](docs/operations.md).
 - [Reference-data maintenance](docs/maintenance.md): Rebuild and verify the
   bundled cofactor catalog and distance table.
 - [Test guide](tests/README.md): Run the offline and CCP4-backed test lanes.
+
+## Citation
+
+If you use Alchemy, please cite:
+
+> Namikas, K.; Rolfe, N.; Komp, E.; McGeehan, J. E.; Snell, E. H. Alchemy:
+> PDB-wide assessment of crystallographic support for modeled metal sites.
+> Manuscript in preparation for submission to *J. Chem. Inf. Model.*
+
+K.N. and N.R. contributed equally. This reference will be updated once the
+article is published. Machine-readable metadata are in
+[CITATION.cff](CITATION.cff). The complete outputs of the PDB-REDO database run
+are archived on [Zenodo](https://doi.org/10.5281/zenodo.22032936).
+
+## Authors and contact
+
+Questions about the method or the manuscript go to the corresponding author,
+Edward H. Snell (<esnell@buffalo.edu>). Please report software bugs through
+[GitHub issues](https://github.com/snelllab/Alchemy/issues).
+
+- **Kalina Namikas**, Department of Chemistry, Wake Forest University,
+  <namikg23@wfu.edu>, ORCID
+  [0009-0002-3294-8552](https://orcid.org/0009-0002-3294-8552)
+- **Nicolas Rolfe**, Department of Materials Design and Innovation, University
+  at Buffalo, SUNY, <nrolfe@buffalo.edu>, ORCID
+  [0009-0009-3404-8567](https://orcid.org/0009-0009-3404-8567)
+- **Evan Komp**, National Laboratory of the Rockies, <Evan.Komp@nlr.gov>, ORCID
+  [0000-0001-8386-8814](https://orcid.org/0000-0001-8386-8814)
+- **John E. McGeehan**, National Laboratory of the Rockies,
+  <John.McGeehan@nlr.gov>, ORCID
+  [0000-0002-6750-1462](https://orcid.org/0000-0002-6750-1462)
+- **Edward H. Snell** (corresponding author), Department of Materials Design
+  and Innovation, University at Buffalo, SUNY, <esnell@buffalo.edu>, ORCID
+  [0000-0001-8714-3191](https://orcid.org/0000-0001-8714-3191)
+
+## Development history
+
+Kalina Namikas and Edward H. Snell conceived Alchemy and wrote its first code.
+Kalina Namikas was the original developer and wrote the Python pipeline from
+which the current software grew. That pipeline already calculated RSZD for
+modeled metal sites, recognized metal-containing cofactors from the Chemical
+Component Dictionary, and compared metal–donor distances with reference values.
+The repository's first commit
+([c48d2b7](https://github.com/snelllab/Alchemy/commit/c48d2b7)) contains that
+pipeline, and Kalina Namikas continued to develop Alchemy afterward. Evan Komp
+first adapted the pipeline to process a local PDB-REDO mirror across parallel
+worker processes and executed the PDB-wide analysis. Nicolas Rolfe developed the
+site-level classification and scoring framework and substantially revised and
+extended the software into its current form.

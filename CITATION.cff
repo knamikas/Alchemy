@@ -1,0 +1,69 @@
+cff-version: 1.2.0
+message: >-
+  If you use Alchemy, please cite the manuscript below. It is in preparation for
+  submission to the Journal of Chemical Information and Modeling; this entry
+  will be updated with the published reference.
+title: Alchemy
+abstract: >-
+  Crystallographic validation of modeled metal sites. Alchemy combines local
+  difference density with metal–donor coordination geometry into
+  PASS/REVIEW/SUSPECT classifications and a 0–100 score for each site.
+type: software
+version: 1.0.0
+license: MIT
+repository-code: https://github.com/snelllab/Alchemy
+authors:
+  - given-names: Kalina
+    family-names: Namikas
+    email: namikg23@wfu.edu
+    orcid: https://orcid.org/0009-0002-3294-8552
+    affiliation: Department of Chemistry, Wake Forest University
+  - given-names: Nicolas
+    family-names: Rolfe
+    email: nrolfe@buffalo.edu
+    orcid: https://orcid.org/0009-0009-3404-8567
+    affiliation: Department of Materials Design and Innovation, University at Buffalo, SUNY
+  - given-names: Evan
+    family-names: Komp
+    email: Evan.Komp@nlr.gov
+    orcid: https://orcid.org/0000-0001-8386-8814
+    affiliation: National Laboratory of the Rockies
+  - given-names: John E.
+    family-names: McGeehan
+    email: John.McGeehan@nlr.gov
+    orcid: https://orcid.org/0000-0002-6750-1462
+    affiliation: National Laboratory of the Rockies
+  - given-names: Edward H.
+    family-names: Snell
+    email: esnell@buffalo.edu
+    orcid: https://orcid.org/0000-0001-8714-3191
+    affiliation: Department of Materials Design and Innovation, University at Buffalo, SUNY
+contact:
+  - given-names: Edward H.
+    family-names: Snell
+    email: esnell@buffalo.edu
+    orcid: https://orcid.org/0000-0001-8714-3191
+    affiliation: Department of Materials Design and Innovation, University at Buffalo, SUNY
+preferred-citation:
+  type: article
+  status: in-preparation
+  title: >-
+    Alchemy: PDB-wide assessment of crystallographic support for modeled metal
+    sites
+  journal: Journal of Chemical Information and Modeling
+  authors:
+    - given-names: Kalina
+      family-names: Namikas
+      orcid: https://orcid.org/0009-0002-3294-8552
+    - given-names: Nicolas
+      family-names: Rolfe
+      orcid: https://orcid.org/0009-0009-3404-8567
+    - given-names: Evan
+      family-names: Komp
+      orcid: https://orcid.org/0000-0001-8386-8814
+    - given-names: John E.
+      family-names: McGeehan
+      orcid: https://orcid.org/0000-0002-6750-1462
+    - given-names: Edward H.
+      family-names: Snell
+      orcid: https://orcid.org/0000-0001-8714-3191
