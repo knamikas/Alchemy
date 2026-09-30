@@ -10,6 +10,7 @@ abstract: >-
   PASS/REVIEW/SUSPECT classifications and a 0–100 score for each site.
 type: software
 version: 1.0.0
+date-released: '2026-09-30'
 license: MIT
 repository-code: https://github.com/snell-lab/alchemy
 authors:
