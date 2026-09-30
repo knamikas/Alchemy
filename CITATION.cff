@@ -1,8 +1,7 @@
 cff-version: 1.2.0
 message: >-
-  If you use Alchemy, please cite the manuscript below. It is in preparation for
-  submission to the Journal of Chemical Information and Modeling; this entry
-  will be updated with the published reference.
+  If you use Alchemy, please cite the manuscript below. It is being prepared
+  for submission; this entry will be updated with the published reference.
 title: Alchemy
 abstract: >-
   Crystallographic validation of modeled metal sites. Alchemy combines local
@@ -51,7 +50,6 @@ preferred-citation:
   title: >-
     Alchemy: PDB-wide assessment of crystallographic support for modeled metal
     sites
-  journal: Journal of Chemical Information and Modeling
   authors:
     - given-names: Kalina
       family-names: Namikas
