@@ -237,15 +237,20 @@ Edward H. Snell (<esnell@buffalo.edu>). Please report software bugs through
 
 ## Development history
 
-Kalina Namikas and Edward H. Snell conceived Alchemy and wrote its first code.
-Kalina Namikas was the original developer and wrote the Python pipeline from
-which the current software grew. That pipeline already calculated RSZD for
-modeled metal sites, recognized metal-containing cofactors from the Chemical
-Component Dictionary, and compared metal–donor distances with reference values.
-The repository's first commit
+Kalina Namikas and Edward H. Snell conceived and developed Alchemy from an
+initial shell script. The original Alchemy repository is at
+<https://github.com/snelllab/Alchemy>; this version supersedes it. Kalina
+Namikas was the original developer, writing the Python pipeline and
+incorporating the two-dimensional analysis building on the initial difference
+electron density characterization. Kalina Namikas developed the Z-score
+analysis and the more expansive platform from which the current software grew.
+That pipeline already calculated RSZD for modeled metal sites, recognized
+metal-containing cofactors from the Chemical Component Dictionary, and compared
+metal–donor distances with reference values. The repository's first commit
 ([c48d2b7](https://github.com/snelllab/Alchemy/commit/c48d2b7)) contains that
-pipeline, and Kalina Namikas continued to develop Alchemy afterward. Evan Komp
-first adapted the pipeline to process a local PDB-REDO mirror across parallel
-worker processes and executed the PDB-wide analysis. Nicolas Rolfe developed the
-site-level classification and scoring framework and substantially revised and
-extended the software into its current form.
+pipeline, and Kalina Namikas continued to develop Alchemy afterward.
+
+Evan Komp first adapted the pipeline to process a local PDB-REDO mirror across
+parallel worker processes and executed the PDB-wide analysis. Nicolas Rolfe
+developed the site-level classification and scoring framework and substantially
+revised and extended the software into its current form.
