@@ -96,10 +96,9 @@ sites. Run the commands from the checkout directory.
    unusual disagreement. The score is a relative ranking, not a probability that
    the modeled metal assignment is correct. A fresh checkout uses the bundled
    [manuscript score reference](src/score/score_reference/), built from 330,978
-   sites in 76,954 entries and archived in the August 17, 2026
-   [dataset](https://doi.org/10.5281/zenodo.22032936). No reference download or
-   extra option is needed. When a site lacks density or geometry evidence, the
-   corresponding component score stays blank.
+   sites in 76,954 entries in the PDB-wide analysis reported in the manuscript.
+   No reference download or extra option is needed. When a site lacks density
+   or geometry evidence, the corresponding component score stays blank.
 
 An explicit `--score-reference-dir` selects another reference; if that directory
 has no usable `metadata.json`, the run stops with an error. Otherwise, Alchemy
@@ -211,11 +210,7 @@ If you use Alchemy, please cite:
 
 K.N. and N.R. contributed equally. This reference will be updated once the
 article is published. Machine-readable metadata are in
-[CITATION.cff](CITATION.cff). Version 1.0.0 of the software is archived on
-Zenodo at <https://doi.org/10.5281/zenodo.23068570>, and
-<https://doi.org/10.5281/zenodo.23068569> always resolves to the latest
-archived version. The complete outputs of the PDB-REDO database run are
-archived on [Zenodo](https://doi.org/10.5281/zenodo.22032936).
+[CITATION.cff](CITATION.cff).
 
 ## Authors and contact
 

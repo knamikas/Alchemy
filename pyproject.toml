@@ -19,7 +19,6 @@ dependencies = [
 Homepage = "https://github.com/snell-lab/alchemy"
 Repository = "https://github.com/snell-lab/alchemy"
 Issues = "https://github.com/snell-lab/alchemy/issues"
-Dataset = "https://doi.org/10.5281/zenodo.22032936"
 
 [project.optional-dependencies]
 test = [
