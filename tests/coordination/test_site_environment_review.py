@@ -322,6 +322,19 @@ def _one_metal_crystal(tmp_path: Path, name: str) -> tuple[StructureContext, Ato
     return context, context.metal_atoms(METAL_ELEMENTS)[0]
 
 
+def _assert_unavailable(summary: MetalSpecialPosition) -> None:
+    """Check the unavailable summary field by field.
+
+    Two of its fields are NaN, which never compares equal to itself, so a plain
+    ``==`` against ``MetalSpecialPosition.unavailable()`` depends on how the
+    dataclass compares fields and fails from Python 3.13 onward.
+    """
+    assert summary.special_position == ""
+    assert math.isnan(summary.site_symmetry_order)
+    assert math.isnan(summary.expected_occupancy)
+    assert summary.occupancy_matches_site_symmetry == ""
+
+
 def test_special_position_setup_failure_is_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -334,7 +347,7 @@ def test_special_position_setup_failure_is_recorded(
 
     summaries = metal_special_position_summaries(context, [metal], messages)
 
-    assert summaries[metal.source_key] == MetalSpecialPosition.unavailable()
+    _assert_unavailable(summaries[metal.source_key])
     assert messages == [
         "special position evaluation failed: RuntimeError: spacegroup lookup exploded"
     ]
@@ -350,7 +363,7 @@ def test_special_position_search_failure_names_the_site(
 
     summaries = metal_special_position_summaries(context, [metal], messages)
 
-    assert summaries[metal.source_key] == MetalSpecialPosition.unavailable()
+    _assert_unavailable(summaries[metal.source_key])
     assert messages == [
         "special position evaluation failed for "
         f"{metal_site_identifier(PDB_ID, metal)}: "
@@ -369,4 +382,4 @@ def test_special_position_failure_without_messages_is_silent(
 
     summaries = metal_special_position_summaries(context, [metal])
 
-    assert summaries[metal.source_key] == MetalSpecialPosition.unavailable()
+    _assert_unavailable(summaries[metal.source_key])
