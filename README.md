@@ -231,8 +231,8 @@ Edward H. Snell (<esnell@buffalo.edu>). Please report software bugs through
   [0009-0009-3404-8567](https://orcid.org/0009-0009-3404-8567)
 - **Evan Komp**, National Laboratory of the Rockies, <Evan.Komp@nlr.gov>, ORCID
   [0000-0001-8386-8814](https://orcid.org/0000-0001-8386-8814)
-- **John E. McGeehan**, National Laboratory of the Rockies,
-  <John.McGeehan@nlr.gov>, ORCID
+- **John E. McGeehan**, School of Biosciences, University of Birmingham,
+  <j.e.mcgeehan@bham.ac.uk>, ORCID
   [0000-0002-6750-1462](https://orcid.org/0000-0002-6750-1462)
 - **Edward H. Snell** (corresponding author), Department of Materials Design
   and Innovation, University at Buffalo, SUNY, <esnell@buffalo.edu>, ORCID
