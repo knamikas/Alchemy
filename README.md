@@ -207,7 +207,7 @@ If you use Alchemy, please cite:
 
 > Namikas, K.; Rolfe, N.; Komp, E.; McGeehan, J. E.; Snell, E. H. Alchemy:
 > PDB-wide assessment of crystallographic support for modeled metal sites.
-> Manuscript in preparation for submission to *J. Chem. Inf. Model.*
+> Manuscript in preparation.
 
 K.N. and N.R. contributed equally. This reference will be updated once the
 article is published. Machine-readable metadata are in
