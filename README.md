@@ -211,8 +211,11 @@ If you use Alchemy, please cite:
 
 K.N. and N.R. contributed equally. This reference will be updated once the
 article is published. Machine-readable metadata are in
-[CITATION.cff](CITATION.cff). The complete outputs of the PDB-REDO database run
-are archived on [Zenodo](https://doi.org/10.5281/zenodo.22032936).
+[CITATION.cff](CITATION.cff). Version 1.0.0 of the software is archived on
+Zenodo at <https://doi.org/10.5281/zenodo.23068570>, and
+<https://doi.org/10.5281/zenodo.23068569> always resolves to the latest
+archived version. The complete outputs of the PDB-REDO database run are
+archived on [Zenodo](https://doi.org/10.5281/zenodo.22032936).
 
 ## Authors and contact
 
