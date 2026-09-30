@@ -11,7 +11,7 @@ abstract: >-
 type: software
 version: 1.0.0
 license: MIT
-repository-code: https://github.com/snelllab/Alchemy
+repository-code: https://github.com/snell-lab/alchemy
 authors:
   - given-names: Kalina
     family-names: Namikas

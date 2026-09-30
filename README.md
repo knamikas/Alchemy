@@ -32,8 +32,8 @@ Clone the repository, then install the Python dependencies in a virtual
 environment:
 
 ```bash
-git clone https://github.com/snelllab/Alchemy.git
-cd Alchemy
+git clone https://github.com/snell-lab/alchemy.git
+cd alchemy
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
@@ -218,7 +218,7 @@ are archived on [Zenodo](https://doi.org/10.5281/zenodo.22032936).
 
 Questions about the method or the manuscript go to the corresponding author,
 Edward H. Snell (<esnell@buffalo.edu>). Please report software bugs through
-[GitHub issues](https://github.com/snelllab/Alchemy/issues).
+[GitHub issues](https://github.com/snell-lab/alchemy/issues).
 
 - **Kalina Namikas**, Department of Chemistry, Wake Forest University,
   <namikg23@wfu.edu>, ORCID
